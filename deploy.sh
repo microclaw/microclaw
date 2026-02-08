@@ -52,3 +52,10 @@ git push
 
 
 echo "Deploy complete."
+
+
+cd website
+sh ./deploy_pages.sh
+cd ..
+
+echo "ALL DONE"
