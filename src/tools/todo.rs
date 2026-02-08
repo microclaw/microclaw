@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::claude::ToolDefinition;
@@ -14,11 +14,11 @@ pub struct TodoItem {
     pub status: String, // "pending", "in_progress", "completed"
 }
 
-fn todo_path(groups_dir: &PathBuf, chat_id: i64) -> PathBuf {
+fn todo_path(groups_dir: &Path, chat_id: i64) -> PathBuf {
     groups_dir.join(chat_id.to_string()).join("TODO.json")
 }
 
-fn read_todos(groups_dir: &PathBuf, chat_id: i64) -> Vec<TodoItem> {
+fn read_todos(groups_dir: &Path, chat_id: i64) -> Vec<TodoItem> {
     let path = todo_path(groups_dir, chat_id);
     match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
@@ -26,13 +26,12 @@ fn read_todos(groups_dir: &PathBuf, chat_id: i64) -> Vec<TodoItem> {
     }
 }
 
-fn write_todos(groups_dir: &PathBuf, chat_id: i64, todos: &[TodoItem]) -> std::io::Result<()> {
+fn write_todos(groups_dir: &Path, chat_id: i64, todos: &[TodoItem]) -> std::io::Result<()> {
     let path = todo_path(groups_dir, chat_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(todos)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(todos).map_err(std::io::Error::other)?;
     std::fs::write(path, json)
 }
 

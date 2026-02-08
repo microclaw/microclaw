@@ -25,7 +25,9 @@ impl BrowserTool {
     }
 
     fn profile_path(&self, chat_id: i64) -> PathBuf {
-        self.data_dir.join(chat_id.to_string()).join("browser-profile")
+        self.data_dir
+            .join(chat_id.to_string())
+            .join("browser-profile")
     }
 }
 
@@ -181,7 +183,10 @@ mod tests {
     fn test_browser_profile_path() {
         let tool = BrowserTool::new("/tmp/test-data");
         let path = tool.profile_path(12345);
-        assert_eq!(path, PathBuf::from("/tmp/test-data/groups/12345/browser-profile"));
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/test-data/groups/12345/browser-profile")
+        );
     }
 
     #[tokio::test]

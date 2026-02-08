@@ -107,7 +107,10 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Amazon AWS Bedrock",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://bedrock-runtime.YOUR-REGION.amazonaws.com/openai/v1",
-        models: &["anthropic.claude-opus-4-6-v1", "anthropic.claude-sonnet-4-5-v2"],
+        models: &[
+            "anthropic.claude-opus-4-6-v1",
+            "anthropic.claude-sonnet-4-5-v2",
+        ],
     },
     ProviderPreset {
         id: "zhipu",
@@ -149,10 +152,7 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Hugging Face",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://router.huggingface.co/v1",
-        models: &[
-            "Qwen/Qwen3-Coder-Next",
-            "meta-llama/Llama-3.3-70B-Instruct",
-        ],
+        models: &["Qwen/Qwen3-Coder-Next", "meta-llama/Llama-3.3-70B-Instruct"],
     },
     ProviderPreset {
         id: "together",
@@ -477,8 +477,16 @@ impl SetupApp {
         let provider = self.field_value("LLM_PROVIDER").to_lowercase();
         let api_key = self.field_value("LLM_API_KEY");
         let base_url = self.field_value("LLM_BASE_URL");
+        let model = self.field_value("LLM_MODEL");
         std::thread::spawn(move || {
-            perform_online_validation(&tg_token, &env_username, &provider, &api_key, &base_url)
+            perform_online_validation(
+                &tg_token,
+                &env_username,
+                &provider,
+                &api_key,
+                &base_url,
+                &model,
+            )
         })
         .join()
         .map_err(|_| MicroClawError::Config("Validation thread panicked".into()))?
@@ -514,9 +522,6 @@ impl SetupApp {
     }
 
     fn cycle_provider(&mut self, direction: i32) {
-        if PROVIDER_PRESETS.is_empty() {
-            return;
-        }
         let current = self.field_value("LLM_PROVIDER");
         let current_idx = PROVIDER_PRESETS
             .iter()
@@ -726,12 +731,14 @@ fn perform_online_validation(
     provider: &str,
     api_key: &str,
     base_url: &str,
+    model: &str,
 ) -> Result<Vec<String>, MicroClawError> {
     let mut checks = Vec::new();
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
         .build()?;
 
+    // --- Telegram validation ---
     let tg_resp: serde_json::Value = client
         .get(format!("https://api.telegram.org/bot{tg_token}/getMe"))
         .send()?
@@ -756,17 +763,14 @@ fn perform_online_validation(
         checks.push(format!("Telegram OK ({actual_username})"));
     }
 
+    // --- LLM validation: send a minimal "hi" message ---
     let preset = find_provider_preset(provider);
     let protocol = provider_protocol(provider);
-    let should_skip_models_check = matches!(provider, "azure" | "bedrock" | "tencent");
-
-    if should_skip_models_check {
-        checks.push(format!(
-            "LLM check skipped for provider '{}' (non-standard models endpoint)",
-            preset.map(|p| p.label).unwrap_or(provider)
-        ));
-        return Ok(checks);
-    }
+    let model = if model.is_empty() {
+        default_model_for_provider(provider).to_string()
+    } else {
+        model.to_string()
+    };
 
     if protocol == ProviderProtocol::Anthropic {
         let mut base = if base_url.is_empty() {
@@ -777,18 +781,35 @@ fn perform_online_validation(
         if base.ends_with("/v1/messages") {
             base = base.trim_end_matches("/v1/messages").to_string();
         }
-        let status = client
-            .get(format!("{base}/v1/models"))
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let resp = client
+            .post(format!("{base}/v1/messages"))
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
-            .send()?
-            .status();
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()?;
+        let status = resp.status();
         if !status.is_success() {
+            let text = resp.text().unwrap_or_default();
+            let detail = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| format!("HTTP {status}"));
             return Err(MicroClawError::Config(format!(
-                "Anthropic validation failed: HTTP {status}"
+                "LLM validation failed: {detail}"
             )));
         }
-        checks.push("LLM OK (anthropic-compatible)".into());
+        checks.push(format!("LLM OK (anthropic, model={model})"));
     } else {
         let mut base = if base_url.is_empty() {
             preset
@@ -802,17 +823,34 @@ fn perform_online_validation(
         if !base.ends_with("/v1") {
             base = format!("{}/v1", base.trim_end_matches('/'));
         }
-        let status = client
-            .get(format!("{base}/models"))
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let resp = client
+            .post(format!("{base}/chat/completions"))
             .bearer_auth(api_key)
-            .send()?
-            .status();
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()?;
+        let status = resp.status();
         if !status.is_success() {
+            let text = resp.text().unwrap_or_default();
+            let detail = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| format!("HTTP {status}"));
             return Err(MicroClawError::Config(format!(
-                "OpenAI-compatible validation failed: HTTP {status}"
+                "LLM validation failed: {detail}"
             )));
         }
-        checks.push("LLM OK (openai-compatible)".into());
+        checks.push(format!("LLM OK (openai-compatible, model={model})"));
     }
 
     Ok(checks)

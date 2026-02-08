@@ -61,9 +61,7 @@ impl Tool for SubAgentTool {
         let tools = ToolRegistry::new_sub_agent(&self.config);
         let tool_defs = tools.definitions();
 
-        let system_prompt = format!(
-            "You are a sub-agent assistant. Complete the given task thoroughly and return a clear, concise result. You have access to tools for file operations, search, and web access. Focus on the task and provide actionable output."
-        );
+        let system_prompt = "You are a sub-agent assistant. Complete the given task thoroughly and return a clear, concise result. You have access to tools for file operations, search, and web access. Focus on the task and provide actionable output.".to_string();
 
         let user_content = if context.is_empty() {
             task.to_string()
@@ -210,6 +208,7 @@ mod tests {
             whatsapp_webhook_port: 8080,
             discord_bot_token: None,
             discord_allowed_channels: vec![],
+            show_thinking: false,
         }
     }
 

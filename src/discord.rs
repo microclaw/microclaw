@@ -55,23 +55,24 @@ impl EventHandler for Handler {
         // Handle /archive command
         if text.trim() == "/archive" {
             if let Ok(Some((json, _))) = self.app_state.db.load_session(channel_id) {
-                let messages: Vec<ClaudeMessage> =
-                    serde_json::from_str(&json).unwrap_or_default();
+                let messages: Vec<ClaudeMessage> = serde_json::from_str(&json).unwrap_or_default();
                 if messages.is_empty() {
-                    let _ = msg.channel_id.say(&ctx.http, "No session to archive.").await;
+                    let _ = msg
+                        .channel_id
+                        .say(&ctx.http, "No session to archive.")
+                        .await;
                 } else {
-                    archive_conversation(
-                        &self.app_state.config.data_dir,
-                        channel_id,
-                        &messages,
-                    );
+                    archive_conversation(&self.app_state.config.data_dir, channel_id, &messages);
                     let _ = msg
                         .channel_id
                         .say(&ctx.http, format!("Archived {} messages.", messages.len()))
                         .await;
                 }
             } else {
-                let _ = msg.channel_id.say(&ctx.http, "No session to archive.").await;
+                let _ = msg
+                    .channel_id
+                    .say(&ctx.http, "No session to archive.")
+                    .await;
             }
             return;
         }

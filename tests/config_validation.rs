@@ -27,6 +27,7 @@ fn minimal_config() -> Config {
         whatsapp_webhook_port: 8080,
         discord_bot_token: None,
         discord_allowed_channels: vec![],
+        show_thinking: false,
     }
 }
 

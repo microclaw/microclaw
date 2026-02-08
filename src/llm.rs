@@ -3,12 +3,69 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::warn;
 
+use std::collections::HashSet;
+
 use crate::claude::{
     ContentBlock, ImageSource, Message, MessageContent, MessagesRequest, MessagesResponse,
     ResponseContentBlock, ToolDefinition, Usage,
 };
 use crate::config::Config;
 use crate::error::MicroClawError;
+
+/// Remove orphaned `ToolResult` blocks whose `tool_use_id` does not match any
+/// `ToolUse` block in the conversation.  This can happen after session
+/// compaction splits a tool_use / tool_result pair.
+fn sanitize_messages(messages: Vec<Message>) -> Vec<Message> {
+    // Collect all tool_use IDs from assistant messages (owned to avoid borrow conflicts).
+    let known_ids: HashSet<String> = messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .flat_map(|m| match &m.content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => vec![],
+        })
+        .collect();
+
+    messages
+        .into_iter()
+        .filter_map(|msg| {
+            if msg.role != "user" {
+                return Some(msg);
+            }
+            match msg.content {
+                MessageContent::Blocks(blocks) => {
+                    let filtered: Vec<ContentBlock> = blocks
+                        .into_iter()
+                        .filter(|b| match b {
+                            ContentBlock::ToolResult { tool_use_id, .. } => {
+                                known_ids.contains(tool_use_id)
+                            }
+                            _ => true,
+                        })
+                        .collect();
+                    if filtered.is_empty() {
+                        None // Drop entirely empty user messages
+                    } else {
+                        Some(Message {
+                            role: msg.role,
+                            content: MessageContent::Blocks(filtered),
+                        })
+                    }
+                }
+                other => Some(Message {
+                    role: msg.role,
+                    content: other,
+                }),
+            }
+        })
+        .collect()
+}
 
 // ---------------------------------------------------------------------------
 // Provider trait
@@ -78,6 +135,8 @@ impl LlmProvider for AnthropicProvider {
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<MessagesResponse, MicroClawError> {
+        let messages = sanitize_messages(messages);
+
         let request = MessagesRequest {
             model: self.model.clone(),
             max_tokens: self.max_tokens,
@@ -105,7 +164,7 @@ impl LlmProvider for AnthropicProvider {
             if status.is_success() {
                 let body = response.text().await?;
                 let parsed: MessagesResponse = serde_json::from_str(&body).map_err(|e| {
-                    MicroClawError::AnthropicApi(format!(
+                    MicroClawError::LlmApi(format!(
                         "Failed to parse response: {e}\nBody: {body}"
                     ))
                 })?;
@@ -125,12 +184,12 @@ impl LlmProvider for AnthropicProvider {
 
             let body = response.text().await.unwrap_or_default();
             if let Ok(api_err) = serde_json::from_str::<AnthropicApiError>(&body) {
-                return Err(MicroClawError::AnthropicApi(format!(
+                return Err(MicroClawError::LlmApi(format!(
                     "{}: {}",
                     api_err.error.error_type, api_err.error.message
                 )));
             }
-            return Err(MicroClawError::AnthropicApi(format!(
+            return Err(MicroClawError::LlmApi(format!(
                 "HTTP {status}: {body}"
             )));
         }
@@ -255,7 +314,7 @@ impl LlmProvider for OpenAiProvider {
             if status.is_success() {
                 let text = response.text().await?;
                 let oai: OaiResponse = serde_json::from_str(&text).map_err(|e| {
-                    MicroClawError::AnthropicApi(format!(
+                    MicroClawError::LlmApi(format!(
                         "Failed to parse OpenAI response: {e}\nBody: {text}"
                     ))
                 })?;
@@ -275,9 +334,9 @@ impl LlmProvider for OpenAiProvider {
 
             let text = response.text().await.unwrap_or_default();
             if let Ok(err) = serde_json::from_str::<OaiErrorResponse>(&text) {
-                return Err(MicroClawError::AnthropicApi(err.error.message));
+                return Err(MicroClawError::LlmApi(err.error.message));
             }
-            return Err(MicroClawError::AnthropicApi(format!(
+            return Err(MicroClawError::LlmApi(format!(
                 "HTTP {status}: {text}"
             )));
         }
@@ -289,6 +348,23 @@ impl LlmProvider for OpenAiProvider {
 // ---------------------------------------------------------------------------
 
 fn translate_messages_to_oai(system: &str, messages: &[Message]) -> Vec<serde_json::Value> {
+    // Collect all tool_use IDs present in assistant messages so we can
+    // skip orphaned tool_results (e.g. after session compaction).
+    let known_tool_ids: std::collections::HashSet<&str> = messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .flat_map(|m| match &m.content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolUse { id, .. } => Some(id.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => vec![],
+        })
+        .collect();
+
     let mut out: Vec<serde_json::Value> = Vec::new();
 
     // System message
@@ -344,6 +420,7 @@ fn translate_messages_to_oai(system: &str, messages: &[Message]) -> Vec<serde_js
 
                     if has_tool_results {
                         // Each tool result → separate "tool" message
+                        // Skip orphaned tool_results whose IDs are not in any assistant message
                         for block in blocks {
                             if let ContentBlock::ToolResult {
                                 tool_use_id,
@@ -351,6 +428,9 @@ fn translate_messages_to_oai(system: &str, messages: &[Message]) -> Vec<serde_js
                                 is_error,
                             } = block
                             {
+                                if !known_tool_ids.contains(tool_use_id.as_str()) {
+                                    continue;
+                                }
                                 let c = if is_error == &Some(true) {
                                     format!("[Error] {content}")
                                 } else {
@@ -557,33 +637,69 @@ mod tests {
 
     #[test]
     fn test_translate_messages_tool_result() {
-        let msgs = vec![Message {
-            role: "user".into(),
-            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
-                tool_use_id: "t1".into(),
-                content: "file1.rs\nfile2.rs".into(),
-                is_error: None,
-            }]),
-        }];
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "glob".into(),
+                    input: json!({}),
+                }]),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "file1.rs\nfile2.rs".into(),
+                    is_error: None,
+                }]),
+            },
+        ];
         let out = translate_messages_to_oai("", &msgs);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["role"], "tool");
-        assert_eq!(out[0]["tool_call_id"], "t1");
-        assert_eq!(out[0]["content"], "file1.rs\nfile2.rs");
+        // assistant + tool = 2 messages
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1]["role"], "tool");
+        assert_eq!(out[1]["tool_call_id"], "t1");
+        assert_eq!(out[1]["content"], "file1.rs\nfile2.rs");
     }
 
     #[test]
     fn test_translate_messages_tool_result_error() {
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "glob".into(),
+                    input: json!({}),
+                }]),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "not found".into(),
+                    is_error: Some(true),
+                }]),
+            },
+        ];
+        let out = translate_messages_to_oai("", &msgs);
+        assert_eq!(out[1]["content"], "[Error] not found");
+    }
+
+    #[test]
+    fn test_translate_messages_orphaned_tool_result_skipped() {
+        // tool_result without matching tool_use should be stripped
         let msgs = vec![Message {
             role: "user".into(),
             content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
-                tool_use_id: "t1".into(),
-                content: "not found".into(),
-                is_error: Some(true),
+                tool_use_id: "orphan_id".into(),
+                content: "stale result".into(),
+                is_error: None,
             }]),
         }];
         let out = translate_messages_to_oai("", &msgs);
-        assert_eq!(out[0]["content"], "[Error] not found");
+        assert!(out.is_empty());
     }
 
     #[test]
@@ -785,6 +901,7 @@ mod tests {
             whatsapp_webhook_port: 8080,
             discord_bot_token: None,
             discord_allowed_channels: vec![],
+            show_thinking: false,
         };
         // Should not panic
         let _provider = create_provider(&config);
@@ -815,6 +932,7 @@ mod tests {
             whatsapp_webhook_port: 8080,
             discord_bot_token: None,
             discord_allowed_channels: vec![],
+            show_thinking: false,
         };
         let _provider = create_provider(&config);
     }
@@ -837,5 +955,82 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["role"], "user");
         assert_eq!(out[0]["content"], "first\nsecond");
+    }
+
+    // -----------------------------------------------------------------------
+    // sanitize_messages
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sanitize_messages_removes_orphaned_tool_results() {
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    input: json!({}),
+                }]),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t1".into(),
+                        content: "ok".into(),
+                        is_error: None,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "orphan".into(),
+                        content: "stale".into(),
+                        is_error: None,
+                    },
+                ]),
+            },
+        ];
+        let sanitized = sanitize_messages(msgs);
+        assert_eq!(sanitized.len(), 2);
+        // The user message should only contain t1's result
+        if let MessageContent::Blocks(blocks) = &sanitized[1].content {
+            assert_eq!(blocks.len(), 1);
+            if let ContentBlock::ToolResult { tool_use_id, .. } = &blocks[0] {
+                assert_eq!(tool_use_id, "t1");
+            } else {
+                panic!("Expected ToolResult");
+            }
+        } else {
+            panic!("Expected Blocks");
+        }
+    }
+
+    #[test]
+    fn test_sanitize_messages_drops_empty_user_message() {
+        // User message with only orphaned tool_results → dropped entirely
+        let msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "orphan".into(),
+                content: "stale".into(),
+                is_error: None,
+            }]),
+        }];
+        let sanitized = sanitize_messages(msgs);
+        assert!(sanitized.is_empty());
+    }
+
+    #[test]
+    fn test_sanitize_messages_preserves_text_messages() {
+        let msgs = vec![
+            Message {
+                role: "user".into(),
+                content: MessageContent::Text("hello".into()),
+            },
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Text("hi".into()),
+            },
+        ];
+        let sanitized = sanitize_messages(msgs);
+        assert_eq!(sanitized.len(), 2);
     }
 }

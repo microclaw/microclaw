@@ -91,6 +91,8 @@ pub struct Config {
     pub discord_bot_token: Option<String>,
     #[serde(default)]
     pub discord_allowed_channels: Vec<u64>,
+    #[serde(default)]
+    pub show_thinking: bool,
 }
 
 impl Config {
@@ -224,6 +226,7 @@ mod tests {
             whatsapp_webhook_port: 8080,
             discord_bot_token: None,
             discord_allowed_channels: vec![],
+            show_thinking: false,
         }
     }
 
@@ -316,7 +319,8 @@ mod tests {
 
     #[test]
     fn test_post_deserialize_invalid_timezone() {
-        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\ntimezone: Mars/Olympus\n";
+        let yaml =
+            "telegram_bot_token: tok\nbot_username: bot\napi_key: key\ntimezone: Mars/Olympus\n";
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         let err = config.post_deserialize().unwrap_err();
         let msg = err.to_string();
@@ -351,7 +355,8 @@ mod tests {
 
     #[test]
     fn test_post_deserialize_openai_default_model() {
-        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nllm_provider: openai\n";
+        let yaml =
+            "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nllm_provider: openai\n";
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
         assert_eq!(config.model, "gpt-5.2");

@@ -42,6 +42,5 @@ mod tests {
     #[test]
     fn test_transcribe_module_exists() {
         // Basic smoke test that the module compiles
-        assert!(true);
     }
 }

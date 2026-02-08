@@ -141,7 +141,9 @@ async fn handle_message(
         if let Ok(Some((json, _))) = state.db.load_session(chat_id) {
             let messages: Vec<Message> = serde_json::from_str(&json).unwrap_or_default();
             if messages.is_empty() {
-                let _ = bot.send_message(msg.chat.id, "No session to archive.").await;
+                let _ = bot
+                    .send_message(msg.chat.id, "No session to archive.")
+                    .await;
             } else {
                 archive_conversation(&state.config.data_dir, chat_id, &messages);
                 let _ = bot
@@ -152,7 +154,9 @@ async fn handle_message(
                     .await;
             }
         } else {
-            let _ = bot.send_message(msg.chat.id, "No session to archive.").await;
+            let _ = bot
+                .send_message(msg.chat.id, "No session to archive.")
+                .await;
         }
         return Ok(());
     }
@@ -239,35 +243,36 @@ async fn handle_message(
     let chat_title = msg.chat.title().map(|t| t.to_string());
 
     // Check group allowlist
-    if chat_type == "group" && !state.config.allowed_groups.is_empty() {
-        if !state.config.allowed_groups.contains(&chat_id) {
-            // Store message but don't process
-            let _ = state
-                .db
-                .upsert_chat(chat_id, chat_title.as_deref(), chat_type);
-            let stored_content = if image_data.is_some() {
-                format!(
-                    "[image]{}",
-                    if text.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {text}")
-                    }
-                )
-            } else {
-                text
-            };
-            let stored = StoredMessage {
-                id: msg.id.0.to_string(),
-                chat_id,
-                sender_name,
-                content: stored_content,
-                is_from_bot: false,
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            };
-            let _ = state.db.store_message(&stored);
-            return Ok(());
-        }
+    if chat_type == "group"
+        && !state.config.allowed_groups.is_empty()
+        && !state.config.allowed_groups.contains(&chat_id)
+    {
+        // Store message but don't process
+        let _ = state
+            .db
+            .upsert_chat(chat_id, chat_title.as_deref(), chat_type);
+        let stored_content = if image_data.is_some() {
+            format!(
+                "[image]{}",
+                if text.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {text}")
+                }
+            )
+        } else {
+            text
+        };
+        let stored = StoredMessage {
+            id: msg.id.0.to_string(),
+            chat_id,
+            sender_name,
+            content: stored_content,
+            is_from_bot: false,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        let _ = state.db.store_message(&stored);
+        return Ok(());
     }
 
     // Store the chat and message
@@ -517,7 +522,7 @@ pub async fn process_with_claude(
                 .collect::<Vec<_>>()
                 .join("");
 
-            // Add final assistant message and save session
+            // Add final assistant message and save session (keep full text including thinking)
             messages.push(Message {
                 role: "assistant".into(),
                 content: MessageContent::Text(text.clone()),
@@ -527,7 +532,13 @@ pub async fn process_with_claude(
                 let _ = state.db.save_session(chat_id, &json);
             }
 
-            return Ok(text);
+            // Strip <think> blocks unless show_thinking is enabled
+            let display_text = if state.config.show_thinking {
+                text
+            } else {
+                strip_thinking(&text)
+            };
+            return Ok(display_text);
         }
 
         if stop_reason == "tool_use" {
@@ -739,6 +750,26 @@ fn history_to_claude_messages(history: &[StoredMessage], _bot_username: &str) ->
 /// Split long text for Telegram's 4096-char limit.
 /// Exposed for testing.
 #[allow(dead_code)]
+/// Strip `<think>...</think>` blocks from model output.
+/// Handles multiline content and multiple think blocks.
+fn strip_thinking(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<think>") {
+        result.push_str(&rest[..start]);
+        if let Some(end) = rest[start..].find("</think>") {
+            rest = &rest[start + end + "</think>".len()..];
+        } else {
+            // Unclosed <think> — strip everything after it
+            rest = "";
+            break;
+        }
+    }
+    result.push_str(rest);
+    result.trim().to_string()
+}
+
+#[cfg(test)]
 fn split_response_text(text: &str) -> Vec<String> {
     const MAX_LEN: usize = 4096;
     if text.len() <= MAX_LEN {
@@ -865,7 +896,11 @@ pub fn archive_conversation(data_dir: &str, chat_id: i64, messages: &[Message]) 
     if let Err(e) = std::fs::write(&path, &content) {
         tracing::warn!("Failed to archive conversation to {}: {e}", path.display());
     } else {
-        info!("Archived conversation ({} messages) to {}", messages.len(), path.display());
+        info!(
+            "Archived conversation ({} messages) to {}",
+            messages.len(),
+            path.display()
+        );
     }
 }
 
@@ -1096,6 +1131,35 @@ mod tests {
     fn test_build_system_prompt_without_skills() {
         let prompt = build_system_prompt("testbot", "", 42, "");
         assert!(!prompt.contains("# Agent Skills"));
+    }
+
+    #[test]
+    fn test_strip_thinking_basic() {
+        let input = "<think>\nI should greet.\n</think>\nHello!";
+        assert_eq!(strip_thinking(input), "Hello!");
+    }
+
+    #[test]
+    fn test_strip_thinking_no_tags() {
+        assert_eq!(strip_thinking("Hello world"), "Hello world");
+    }
+
+    #[test]
+    fn test_strip_thinking_multiple_blocks() {
+        let input = "<think>first</think>A<think>second</think>B";
+        assert_eq!(strip_thinking(input), "AB");
+    }
+
+    #[test]
+    fn test_strip_thinking_unclosed() {
+        let input = "before<think>never closed";
+        assert_eq!(strip_thinking(input), "before");
+    }
+
+    #[test]
+    fn test_strip_thinking_empty_result() {
+        let input = "<think>only thinking</think>";
+        assert_eq!(strip_thinking(input), "");
     }
 
     #[test]
@@ -1412,10 +1476,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_xml_mixed_content() {
-        assert_eq!(
-            sanitize_xml("a < b & c > d"),
-            "a &lt; b &amp; c &gt; d"
-        );
+        assert_eq!(sanitize_xml("a < b & c > d"), "a &lt; b &amp; c &gt; d");
     }
 
     #[test]

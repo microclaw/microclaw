@@ -246,7 +246,13 @@ fn test_catch_up_query_complex() {
         ("m2", "bob", "hey!", false, "2024-01-01T00:00:02Z"),
         ("m3", "bot", "hello group!", true, "2024-01-01T00:00:03Z"),
         ("m4", "charlie", "what's up?", false, "2024-01-01T00:00:04Z"),
-        ("m5", "alice", "working on stuff", false, "2024-01-01T00:00:05Z"),
+        (
+            "m5",
+            "alice",
+            "working on stuff",
+            false,
+            "2024-01-01T00:00:05Z",
+        ),
         ("m6", "dave", "me too", false, "2024-01-01T00:00:06Z"),
     ];
 
@@ -329,8 +335,7 @@ fn test_chat_and_messages_together() {
     .unwrap();
 
     // Update chat title
-    db.upsert_chat(100, Some("Renamed Group"), "group")
-        .unwrap();
+    db.upsert_chat(100, Some("Renamed Group"), "group").unwrap();
 
     // Messages still there
     let msgs = db.get_all_messages(100).unwrap();

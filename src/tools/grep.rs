@@ -84,7 +84,7 @@ fn grep_recursive(
     if metadata.is_file() {
         grep_file(path, re, results)?;
     } else if metadata.is_dir() {
-        let glob_pattern = file_glob.map(|g| glob::Pattern::new(g).ok()).flatten();
+        let glob_pattern = file_glob.and_then(|g| glob::Pattern::new(g).ok());
 
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;

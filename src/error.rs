@@ -3,8 +3,8 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[allow(dead_code)]
 pub enum MicroClawError {
-    #[error("Anthropic API error: {0}")]
-    AnthropicApi(String),
+    #[error("LLM API error: {0}")]
+    LlmApi(String),
 
     #[error("Rate limited, retry after backoff")]
     RateLimited,
@@ -37,8 +37,8 @@ mod tests {
 
     #[test]
     fn test_error_display_messages() {
-        let e = MicroClawError::AnthropicApi("bad request".into());
-        assert_eq!(e.to_string(), "Anthropic API error: bad request");
+        let e = MicroClawError::LlmApi("bad request".into());
+        assert_eq!(e.to_string(), "LLM API error: bad request");
 
         let e = MicroClawError::RateLimited;
         assert_eq!(e.to_string(), "Rate limited, retry after backoff");

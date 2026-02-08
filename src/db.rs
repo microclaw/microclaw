@@ -411,6 +411,7 @@ impl Database {
 
     // --- Task run logs ---
 
+    #[allow(clippy::too_many_arguments)]
     pub fn log_task_run(
         &self,
         task_id: i64,
