@@ -277,7 +277,7 @@ LLM_API_KEY=sk-ant-...
 LLM_MODEL=claude-sonnet-4-20250514
 # 可选
 LLM_BASE_URL=
-DATA_DIR=./data
+DATA_DIR=./microclaw.data
 TIMEZONE=UTC
 ```
 
@@ -297,7 +297,7 @@ microclaw start
 | `LLM_PROVIDER` | 否 | `anthropic` | 提供方预设 ID（或自定义 ID）。`anthropic` 走原生 Anthropic API，其他走 OpenAI 兼容 API |
 | `LLM_MODEL` | 否 | 随 provider 默认 | 模型名（仍兼容 `CLAUDE_MODEL`） |
 | `LLM_BASE_URL` | 否 | provider 预设默认值 | 自定义 API 基础地址 |
-| `DATA_DIR` | 否 | `./data` | 数据根目录（运行时数据在 `DATA_DIR/runtime`，技能在 `DATA_DIR/skills`） |
+| `DATA_DIR` | 否 | `./microclaw.data` | 数据根目录（运行时数据在 `DATA_DIR/runtime`，技能在 `DATA_DIR/skills`） |
 | `MAX_TOKENS` | 否 | `8192` | 每次 Claude 回复的最大 token |
 | `MAX_TOOL_ITERATIONS` | 否 | `25` | 每条消息的最大工具循环次数 |
 | `MAX_HISTORY_MESSAGES` | 否 | `50` | 作为上下文发送的历史消息数 |

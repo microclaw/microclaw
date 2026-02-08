@@ -279,7 +279,7 @@ LLM_API_KEY=sk-ant-...
 LLM_MODEL=claude-sonnet-4-20250514
 # optional
 LLM_BASE_URL=
-DATA_DIR=./data
+DATA_DIR=./microclaw.data
 TIMEZONE=UTC
 ```
 
@@ -301,7 +301,7 @@ All configuration is via environment variables (or `.env` file):
 | `LLM_PROVIDER` | No | `anthropic` | Provider preset ID (or custom ID). `anthropic` uses native Anthropic API, others use OpenAI-compatible API |
 | `LLM_MODEL` | No | provider-specific | Model name (`CLAUDE_MODEL` fallback still supported) |
 | `LLM_BASE_URL` | No | provider preset default | Custom provider base URL |
-| `DATA_DIR` | No | `./data` | Data root (`runtime` data in `DATA_DIR/runtime`, skills in `DATA_DIR/skills`) |
+| `DATA_DIR` | No | `./microclaw.data` | Data root (`runtime` data in `DATA_DIR/runtime`, skills in `DATA_DIR/skills`) |
 | `MAX_TOKENS` | No | `8192` | Max tokens per model response |
 | `MAX_TOOL_ITERATIONS` | No | `25` | Max tool-use loop iterations per message |
 | `MAX_HISTORY_MESSAGES` | No | `50` | Number of recent messages sent as context |

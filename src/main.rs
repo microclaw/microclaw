@@ -1,3 +1,4 @@
+mod builtin_skills;
 mod claude;
 mod config;
 mod db;
@@ -54,7 +55,7 @@ FEATURES:
 SETUP:
     1. Run: microclaw setup
        (or run microclaw start and follow auto-setup on first launch)
-    2. Edit config.yaml with required values:
+    2. Edit microclaw.config.yaml with required values:
 
        telegram_bot_token    Bot token from @BotFather
        api_key               LLM API key
@@ -62,8 +63,8 @@ SETUP:
 
     3. Run: microclaw start
 
-CONFIG FILE (config.yaml):
-    MicroClaw reads configuration from config.yaml (or config.yml).
+CONFIG FILE (microclaw.config.yaml):
+    MicroClaw reads configuration from microclaw.config.yaml (or microclaw.config.yml).
     Override the path with MICROCLAW_CONFIG env var.
     See config.example.yaml for all available fields.
 
@@ -76,7 +77,7 @@ CONFIG FILE (config.yaml):
       llm_base_url           Custom base URL (optional)
 
     Runtime:
-      data_dir               Data root (runtime in ./data/runtime, skills in ./data/skills)
+      data_dir               Data root (runtime in ./microclaw.data/runtime, skills in ./microclaw.data/skills)
       max_tokens             Max tokens per response (default: 8192)
       max_tool_iterations    Max tool loop iterations (default: 25)
       max_history_messages   Chat history context size (default: 50)
@@ -188,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
         Some("setup") => {
             let saved = setup::run_setup_wizard()?;
             if saved {
-                println!("Setup saved to config.yaml");
+                println!("Setup saved to microclaw.config.yaml");
             } else {
                 println!("Setup canceled");
             }
@@ -237,6 +238,7 @@ async fn main() -> anyhow::Result<()> {
     let runtime_data_dir = config.runtime_data_dir();
     let skills_data_dir = config.skills_data_dir();
     migrate_legacy_runtime_layout(&data_root_dir, Path::new(&runtime_data_dir));
+    builtin_skills::ensure_builtin_skills(&data_root_dir)?;
 
     let db = db::Database::new(&runtime_data_dir)?;
     info!("Database initialized");

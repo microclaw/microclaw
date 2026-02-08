@@ -268,7 +268,7 @@ struct PickerState {
 
 impl SetupApp {
     fn new() -> Self {
-        // Try loading from existing config.yaml first, then fall back to env vars
+        // Try loading from existing config file first, then fall back to env vars
         let existing = Self::load_existing_config();
         let provider = existing
             .get("LLM_PROVIDER")
@@ -327,7 +327,10 @@ impl SetupApp {
                 Field {
                     key: "DATA_DIR",
                     label: "Data root directory",
-                    value: existing.get("DATA_DIR").cloned().unwrap_or_else(|| "./data".into()),
+                    value: existing
+                        .get("DATA_DIR")
+                        .cloned()
+                        .unwrap_or_else(|| "./microclaw.data".into()),
                     required: false,
                     secret: false,
                 },
@@ -351,13 +354,13 @@ impl SetupApp {
         }
     }
 
-    /// Load existing config values from config.yaml, config.yml, or .env (legacy).
+    /// Load existing config values from microclaw.config.yaml/.yml, or .env (legacy).
     fn load_existing_config() -> HashMap<String, String> {
-        // Try config.yaml / config.yml first
-        let yaml_path = if Path::new("./config.yaml").exists() {
-            Some("./config.yaml")
-        } else if Path::new("./config.yml").exists() {
-            Some("./config.yml")
+        // Try microclaw config name first.
+        let yaml_path = if Path::new("./microclaw.config.yaml").exists() {
+            Some("./microclaw.config.yaml")
+        } else if Path::new("./microclaw.config.yml").exists() {
+            Some("./microclaw.config.yml")
         } else {
             None
         };
@@ -475,7 +478,7 @@ impl SetupApp {
 
         let data_dir = self.field_value("DATA_DIR");
         let dir = if data_dir.is_empty() {
-            "./data".to_string()
+            "./microclaw.data".to_string()
         } else {
             data_dir
         };
@@ -860,7 +863,7 @@ fn save_config_yaml(
     let data_dir = values
         .get("DATA_DIR")
         .cloned()
-        .unwrap_or_else(|| "./data".into());
+        .unwrap_or_else(|| "./microclaw.data".into());
     yaml.push_str(&format!("data_dir: \"{}\"\n", data_dir));
     let tz = values
         .get("TIMEZONE")
@@ -1003,7 +1006,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
         Line::from("• ←/→ on provider/model: quick rotate presets"),
         Line::from("• e: force manual text edit"),
         Line::from("• F2: validate + online checks"),
-        Line::from("• s or Ctrl+S: save to config.yaml"),
+        Line::from("• s or Ctrl+S: save to microclaw.config.yaml"),
     ])
     .block(
         Block::default()
@@ -1073,13 +1076,13 @@ fn try_save(app: &mut SetupApp) {
         .and_then(|_| app.validate_online())
         .and_then(|checks| {
             let values = app.to_env_map();
-            let backup = save_config_yaml(Path::new("config.yaml"), &values)?;
+            let backup = save_config_yaml(Path::new("microclaw.config.yaml"), &values)?;
             app.backup_path = backup;
             app.completion_summary = checks;
             Ok(())
         }) {
         Ok(_) => {
-            app.status = "Saved config.yaml".into();
+            app.status = "Saved microclaw.config.yaml".into();
             app.completed = true;
         }
         Err(e) => app.status = format!("Cannot save: {e}"),

@@ -1,9 +1,5 @@
 /target
-.env
-.env.*
-*.db
-*.db-shm
-*.db-wal
+microclaw.config.yaml
+microclaw.data/
+!microclaw.data/skills/
 website/
-data/
-!data/skills/

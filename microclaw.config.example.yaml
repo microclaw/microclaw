@@ -1,5 +1,5 @@
 # MicroClaw configuration
-# Copy this file to config.yaml and fill in the required values.
+# Copy this file to microclaw.config.yaml and fill in the required values.
 
 # Telegram bot token from @BotFather
 telegram_bot_token: ""
@@ -24,7 +24,7 @@ max_history_messages: 50
 # Data root directory:
 # - runtime files go to <data_dir>/runtime
 # - built-in/custom skills are loaded from <data_dir>/skills
-data_dir: "./data"
+data_dir: "./microclaw.data"
 # IANA timezone for scheduling (e.g. "US/Eastern", "Europe/London")
 timezone: "UTC"
 

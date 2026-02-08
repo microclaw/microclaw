@@ -1,7 +1,6 @@
 use crate::error::MicroClawError;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use tracing::warn;
+use std::path::PathBuf;
 
 fn default_telegram_bot_token() -> String {
     String::new()
@@ -28,7 +27,7 @@ fn default_max_history_messages() -> usize {
     50
 }
 fn default_data_dir() -> String {
-    "./data".into()
+    "./microclaw.data".into()
 }
 fn default_timezone() -> String {
     "UTC".into()
@@ -90,18 +89,9 @@ pub struct Config {
 }
 
 impl Config {
-    /// Data root directory. If configured data_dir already ends with `runtime`,
-    /// treat its parent as root for backward compatibility.
+    /// Data root directory from config.
     pub fn data_root_dir(&self) -> PathBuf {
-        let data_path = PathBuf::from(&self.data_dir);
-        if data_path.file_name().and_then(|s| s.to_str()) == Some("runtime") {
-            data_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| data_path.clone())
-        } else {
-            data_path
-        }
+        PathBuf::from(&self.data_dir)
     }
 
     /// Runtime data directory (db, memory, exports, etc.).
@@ -112,17 +102,12 @@ impl Config {
             .to_string()
     }
 
-    /// Skills directory. Prefer `<data_root>/skills`.
-    /// If the app was previously using `<data_root>/runtime/skills`, keep using it.
+    /// Skills directory under data root.
     pub fn skills_data_dir(&self) -> String {
-        let preferred = self.data_root_dir().join("skills");
-        let legacy = PathBuf::from(&self.data_dir).join("skills");
-        let selected = if preferred.exists() || !legacy.exists() {
-            preferred
-        } else {
-            legacy
-        };
-        selected.to_string_lossy().to_string()
+        self.data_root_dir()
+            .join("skills")
+            .to_string_lossy()
+            .to_string()
     }
 
     /// Load config from YAML file, with fallback to env vars for backward compatibility.
@@ -136,10 +121,10 @@ impl Config {
                     "MICROCLAW_CONFIG points to non-existent file: {custom}"
                 )));
             }
-        } else if std::path::Path::new("./config.yaml").exists() {
-            Some("./config.yaml".into())
-        } else if std::path::Path::new("./config.yml").exists() {
-            Some("./config.yml".into())
+        } else if std::path::Path::new("./microclaw.config.yaml").exists() {
+            Some("./microclaw.config.yaml".into())
+        } else if std::path::Path::new("./microclaw.config.yml").exists() {
+            Some("./microclaw.config.yml".into())
         } else {
             None
         };
@@ -153,15 +138,9 @@ impl Config {
             return Ok(config);
         }
 
-        // Backward compat: try loading from env vars if .env exists
-        if std::path::Path::new("./.env").exists() {
-            warn!("Loading from .env is deprecated. Please migrate to config.yaml (run `microclaw setup`).");
-            return Self::from_env();
-        }
-
         // No config file found at all
         Err(MicroClawError::Config(
-            "No config.yaml found. Run `microclaw setup` to create one.".into(),
+            "No microclaw.config.yaml found. Run `microclaw setup` to create one.".into(),
         ))
     }
 
@@ -210,144 +189,6 @@ impl Config {
         std::fs::write(path, content)?;
         Ok(())
     }
-
-    /// Legacy: load from environment variables (.env file).
-    fn from_env() -> Result<Self, MicroClawError> {
-        // Load .env file into process env
-        if let Ok(content) = std::fs::read_to_string(".env") {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue;
-                }
-                if let Some((key, value)) = trimmed.split_once('=') {
-                    let key = key.trim();
-                    let value = value.trim();
-                    if std::env::var(key).is_err() {
-                        std::env::set_var(key, value);
-                    }
-                }
-            }
-        }
-
-        let telegram_bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
-            .map_err(|_| MicroClawError::Config("TELEGRAM_BOT_TOKEN not set".into()))?;
-        let bot_username = std::env::var("BOT_USERNAME")
-            .map_err(|_| MicroClawError::Config("BOT_USERNAME not set".into()))?;
-
-        let llm_provider = std::env::var("LLM_PROVIDER")
-            .unwrap_or_else(|_| "anthropic".into())
-            .trim()
-            .to_lowercase();
-
-        let api_key = std::env::var("LLM_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .map_err(|_| {
-                MicroClawError::Config("LLM_API_KEY (or ANTHROPIC_API_KEY) not set".into())
-            })?;
-
-        let default_model = match llm_provider.as_str() {
-            "anthropic" => "claude-sonnet-4-20250514",
-            _ => "gpt-4o",
-        };
-        let model = std::env::var("LLM_MODEL")
-            .or_else(|_| std::env::var("CLAUDE_MODEL"))
-            .unwrap_or_else(|_| default_model.into());
-
-        let llm_base_url = std::env::var("LLM_BASE_URL").ok().filter(|s| !s.is_empty());
-
-        let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".into());
-        let max_tokens = std::env::var("MAX_TOKENS")
-            .unwrap_or_else(|_| "8192".into())
-            .parse::<u32>()
-            .map_err(|e| MicroClawError::Config(format!("Invalid MAX_TOKENS: {e}")))?;
-        let max_tool_iterations = std::env::var("MAX_TOOL_ITERATIONS")
-            .unwrap_or_else(|_| "25".into())
-            .parse::<usize>()
-            .map_err(|e| MicroClawError::Config(format!("Invalid MAX_TOOL_ITERATIONS: {e}")))?;
-        let max_history_messages = std::env::var("MAX_HISTORY_MESSAGES")
-            .unwrap_or_else(|_| "50".into())
-            .parse::<usize>()
-            .map_err(|e| MicroClawError::Config(format!("Invalid MAX_HISTORY_MESSAGES: {e}")))?;
-
-        let openai_api_key = std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty());
-
-        let timezone = std::env::var("TIMEZONE").unwrap_or_else(|_| "UTC".into());
-        timezone
-            .parse::<chrono_tz::Tz>()
-            .map_err(|_| MicroClawError::Config(format!("Invalid TIMEZONE: {timezone}")))?;
-
-        let max_session_messages = std::env::var("MAX_SESSION_MESSAGES")
-            .unwrap_or_else(|_| "40".into())
-            .parse::<usize>()
-            .map_err(|e| MicroClawError::Config(format!("Invalid MAX_SESSION_MESSAGES: {e}")))?;
-        let compact_keep_recent = std::env::var("COMPACT_KEEP_RECENT")
-            .unwrap_or_else(|_| "20".into())
-            .parse::<usize>()
-            .map_err(|e| MicroClawError::Config(format!("Invalid COMPACT_KEEP_RECENT: {e}")))?;
-
-        let whatsapp_access_token = std::env::var("WHATSAPP_ACCESS_TOKEN")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let whatsapp_phone_number_id = std::env::var("WHATSAPP_PHONE_NUMBER_ID")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let whatsapp_verify_token = std::env::var("WHATSAPP_VERIFY_TOKEN")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let whatsapp_webhook_port = std::env::var("WHATSAPP_WEBHOOK_PORT")
-            .unwrap_or_else(|_| "8080".into())
-            .parse::<u16>()
-            .map_err(|e| MicroClawError::Config(format!("Invalid WHATSAPP_WEBHOOK_PORT: {e}")))?;
-
-        let allowed_groups = std::env::var("ALLOWED_GROUPS")
-            .unwrap_or_default()
-            .split(',')
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| {
-                s.trim().parse::<i64>().map_err(|e| {
-                    MicroClawError::Config(format!("Invalid ALLOWED_GROUPS entry '{s}': {e}"))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let discord_bot_token = std::env::var("DISCORD_BOT_TOKEN")
-            .ok()
-            .filter(|s| !s.is_empty());
-
-        let discord_allowed_channels = std::env::var("DISCORD_ALLOWED_CHANNELS")
-            .unwrap_or_default()
-            .split(',')
-            .filter(|s| !s.trim().is_empty())
-            .filter_map(|s| s.trim().parse::<u64>().ok())
-            .collect();
-
-        Ok(Config {
-            telegram_bot_token,
-            bot_username,
-            llm_provider,
-            api_key,
-            model,
-            llm_base_url,
-            max_tokens,
-            max_tool_iterations,
-            max_history_messages,
-            data_dir,
-            openai_api_key,
-            timezone,
-            allowed_groups,
-            max_session_messages,
-            compact_keep_recent,
-            whatsapp_access_token,
-            whatsapp_phone_number_id,
-            whatsapp_verify_token,
-            whatsapp_webhook_port,
-            discord_bot_token,
-            discord_allowed_channels,
-        })
-    }
 }
 
 #[cfg(test)]
@@ -365,7 +206,7 @@ mod tests {
             max_tokens: 8192,
             max_tool_iterations: 25,
             max_history_messages: 50,
-            data_dir: "./data".into(),
+            data_dir: "./microclaw.data".into(),
             openai_api_key: None,
             timezone: "UTC".into(),
             allowed_groups: vec![],
@@ -405,7 +246,7 @@ mod tests {
         config.timezone = "US/Eastern".into();
         config.allowed_groups = vec![123, 456];
         assert_eq!(config.model, "claude-sonnet-4-20250514");
-        assert_eq!(config.data_dir, "./data");
+        assert_eq!(config.data_dir, "./microclaw.data");
         assert_eq!(config.openai_api_key.as_deref(), Some("sk-test"));
         assert_eq!(config.timezone, "US/Eastern");
         assert_eq!(config.allowed_groups, vec![123, 456]);
@@ -428,7 +269,7 @@ mod tests {
         assert_eq!(config.llm_provider, "anthropic");
         assert_eq!(config.max_tokens, 8192);
         assert_eq!(config.max_tool_iterations, 25);
-        assert_eq!(config.data_dir, "./data");
+        assert_eq!(config.data_dir, "./microclaw.data");
         assert_eq!(config.timezone, "UTC");
     }
 
@@ -445,16 +286,16 @@ mod tests {
     #[test]
     fn test_runtime_and_skills_dirs_from_root_data_dir() {
         let mut config = test_config();
-        config.data_dir = "./data".into();
-        assert!(config.runtime_data_dir().ends_with("data/runtime"));
-        assert!(config.skills_data_dir().ends_with("data/skills"));
+        config.data_dir = "./microclaw.data".into();
+        assert!(config.runtime_data_dir().ends_with("microclaw.data/runtime"));
+        assert!(config.skills_data_dir().ends_with("microclaw.data/skills"));
     }
 
     #[test]
     fn test_runtime_and_skills_dirs_from_runtime_data_dir() {
         let mut config = test_config();
-        config.data_dir = "./data/runtime".into();
-        assert!(config.runtime_data_dir().ends_with("data/runtime"));
-        assert!(config.skills_data_dir().ends_with("data/skills"));
+        config.data_dir = "./microclaw.data/runtime".into();
+        assert!(config.runtime_data_dir().ends_with("microclaw.data/runtime/runtime"));
+        assert!(config.skills_data_dir().ends_with("microclaw.data/runtime/skills"));
     }
 }

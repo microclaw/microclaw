@@ -1318,6 +1318,7 @@ dependencies = [
  "cron",
  "crossterm",
  "glob",
+ "include_dir",
  "ratatui",
  "regex",
  "reqwest",
