@@ -342,6 +342,7 @@ microclaw gateway uninstall
 | `llm_base_url` | 否 | provider 预设默认值 | 自定义 API 基础地址 |
 | `data_dir` | 否 | `./microclaw.data` | 数据根目录（运行时数据在 `data_dir/runtime`，技能在 `data_dir/skills`） |
 | `working_dir` | 否 | `./tmp` | 工具默认工作目录；`bash/read_file/write_file/edit_file/glob/grep` 的相对路径都以此为基准 |
+| `working_dir_isolation` | 否 | `chat` | 工具工作目录隔离模式：`shared` 使用 `working_dir/shared`，`chat` 使用 `working_dir/chat/<channel>/<chat_id>` |
 | `max_tokens` | 否 | `8192` | 每次 Claude 回复的最大 token |
 | `max_tool_iterations` | 否 | `100` | 每条消息的最大工具循环次数 |
 | `max_document_size_mb` | 否 | `100` | Telegram 入站文档允许的最大大小（MB）；超过会拒绝并提示 |

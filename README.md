@@ -297,7 +297,7 @@ model: "claude-sonnet-4-20250514"
 # llm_base_url: "https://..."
 data_dir: "./microclaw.data"
 working_dir: "./tmp"
-working_dir_isolation: "chat" # optional; defaults to "shared" if omitted
+working_dir_isolation: "chat" # optional; defaults to "chat" if omitted
 max_document_size_mb: 100
 timezone: "UTC"
 ```
@@ -345,7 +345,7 @@ All configuration is via `microclaw.config.yaml`:
 | `llm_base_url` | No | provider preset default | Custom provider base URL |
 | `data_dir` | No | `./microclaw.data` | Data root (`runtime` data in `data_dir/runtime`, skills in `data_dir/skills`) |
 | `working_dir` | No | `./tmp` | Default working directory for tool operations; relative paths in `bash/read_file/write_file/edit_file/glob/grep` resolve from here |
-| `working_dir_isolation` | No | `shared` | Working directory isolation mode for `bash/read_file/write_file/edit_file/glob/grep`: `shared` uses `working_dir/shared`, `chat` isolates each chat under `working_dir/chat/<channel>/<chat_id>` |
+| `working_dir_isolation` | No | `chat` | Working directory isolation mode for `bash/read_file/write_file/edit_file/glob/grep`: `shared` uses `working_dir/shared`, `chat` isolates each chat under `working_dir/chat/<channel>/<chat_id>` |
 | `max_tokens` | No | `8192` | Max tokens per model response |
 | `max_tool_iterations` | No | `100` | Max tool-use loop iterations per message |
 | `max_document_size_mb` | No | `100` | Maximum allowed size for inbound Telegram documents; larger files are rejected with a hint message |

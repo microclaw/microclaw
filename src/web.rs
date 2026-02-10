@@ -621,12 +621,14 @@ async fn resolve_chat_id_for_session_key(
     }
 
     let key = session_key.to_string();
-    let by_title = call_blocking(state.app_state.db.clone(), move |db| db.get_recent_chats(4000))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .into_iter()
-        .find(|c| c.chat_title.as_deref() == Some(key.as_str()))
-        .map(|c| c.chat_id);
+    let by_title = call_blocking(state.app_state.db.clone(), move |db| {
+        db.get_recent_chats(4000)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .into_iter()
+    .find(|c| c.chat_title.as_deref() == Some(key.as_str()))
+    .map(|c| c.chat_id);
 
     Ok(by_title.unwrap_or_else(|| resolve_chat_id(session_key)))
 }

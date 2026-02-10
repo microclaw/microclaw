@@ -45,9 +45,8 @@ SETUP:
        (or run microclaw start and follow auto-config on first launch)
     2. Edit microclaw.config.yaml with required values:
 
-       telegram_bot_token    Bot token from @BotFather
-       api_key               LLM API key
-       bot_username          Your bot's username (without @)
+       api_key               LLM API key (optional when llm_provider=ollama)
+       At least one channel token must be set (Telegram or Discord)
 
     3. Run: microclaw start
 
@@ -57,8 +56,6 @@ CONFIG FILE (microclaw.config.yaml):
     See microclaw.config.example.yaml for all available fields.
 
     Core fields:
-      telegram_bot_token     Telegram bot token from @BotFather
-      bot_username           Bot username without @
       llm_provider           Provider preset (default: anthropic)
       api_key                LLM API key (optional when llm_provider=ollama)
       model                  Model name (auto-detected from provider if empty)
@@ -67,13 +64,17 @@ CONFIG FILE (microclaw.config.yaml):
     Runtime:
       data_dir               Data root (runtime in ./microclaw.data/runtime, skills in ./microclaw.data/skills)
       working_dir            Default tool working directory (default: ./tmp)
-      working_dir_isolation  Tool working-dir mode: shared or chat (default: shared)
+      working_dir_isolation  Tool working-dir mode: shared or chat (default: chat)
       max_tokens             Max tokens per response (default: 8192)
       max_tool_iterations    Max tool loop iterations (default: 100)
       max_history_messages   Chat history context size (default: 50)
       openai_api_key         OpenAI key for voice transcription (optional)
       timezone               IANA timezone for scheduling (default: UTC)
-      allowed_groups         List of chat IDs to allow (empty = all)
+
+    Telegram (optional):
+      telegram_bot_token         Telegram bot token from @BotFather
+      bot_username               Telegram mention username (without @)
+      allowed_groups             Group allowlist by chat ID (empty = all groups)
 
     WhatsApp (optional):
       whatsapp_access_token       Meta API access token
@@ -90,14 +91,14 @@ MCP (optional):
     See https://modelcontextprotocol.io for details.
 
 EXAMPLES:
-    microclaw start          Start the bot
-    microclaw gateway install Install and enable gateway service
-    microclaw gateway status Show gateway service status
-    microclaw gateway logs 100 Show last 100 lines of gateway logs
-    microclaw config         Run interactive Q&A config flow
-    microclaw setup          Run full-screen setup wizard
-    microclaw version        Show version
-    microclaw help           Show this message
+    microclaw start               Start the bot
+    microclaw gateway install     Install and enable gateway service
+    microclaw gateway status      Show gateway service status
+    microclaw gateway logs 100    Show last 100 lines of gateway logs
+    microclaw config              Run interactive Q&A config flow
+    microclaw setup               Run full-screen setup wizard
+    microclaw version             Show version
+    microclaw help                Show this message
 
 ABOUT:
     https://microclaw.ai"#

@@ -369,7 +369,7 @@ fn default_config() -> Config {
         max_document_size_mb: 100,
         data_dir: "./microclaw.data".into(),
         working_dir: "./tmp".into(),
-        working_dir_isolation: WorkingDirIsolation::Shared,
+        working_dir_isolation: WorkingDirIsolation::Chat,
         openai_api_key: None,
         timezone: "UTC".into(),
         allowed_groups: vec![],

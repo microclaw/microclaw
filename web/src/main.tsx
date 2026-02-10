@@ -117,7 +117,7 @@ const MODEL_OPTIONS: Record<string, string[]> = {
 
 const DEFAULT_CONFIG_VALUES = {
   llm_provider: 'anthropic',
-  working_dir_isolation: 'shared',
+  working_dir_isolation: 'chat',
   max_tokens: 8192,
   max_tool_iterations: 100,
   max_document_size_mb: 100,

@@ -36,7 +36,7 @@ fn default_working_dir() -> String {
     "./tmp".into()
 }
 fn default_working_dir_isolation() -> WorkingDirIsolation {
-    WorkingDirIsolation::Shared
+    WorkingDirIsolation::Chat
 }
 fn default_timezone() -> String {
     "UTC".into()
@@ -325,7 +325,7 @@ mod tests {
             max_document_size_mb: 100,
             data_dir: "./microclaw.data".into(),
             working_dir: "./tmp".into(),
-            working_dir_isolation: WorkingDirIsolation::Shared,
+            working_dir_isolation: WorkingDirIsolation::Chat,
             openai_api_key: None,
             timezone: "UTC".into(),
             allowed_groups: vec![],
@@ -408,7 +408,7 @@ mod tests {
         assert_eq!(config.working_dir, "./tmp");
         assert!(matches!(
             config.working_dir_isolation,
-            WorkingDirIsolation::Shared
+            WorkingDirIsolation::Chat
         ));
         assert_eq!(config.max_document_size_mb, 100);
         assert_eq!(config.timezone, "UTC");
@@ -423,12 +423,12 @@ mod tests {
     }
 
     #[test]
-    fn test_config_working_dir_isolation_defaults_to_shared() {
+    fn test_config_working_dir_isolation_defaults_to_chat() {
         let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\n";
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(matches!(
             config.working_dir_isolation,
-            WorkingDirIsolation::Shared
+            WorkingDirIsolation::Chat
         ));
     }
 
