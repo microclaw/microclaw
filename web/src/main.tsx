@@ -27,6 +27,7 @@ import {
   Dialog,
   Flex,
   Heading,
+  Switch,
   Text,
   TextField,
   Theme,
@@ -70,6 +71,84 @@ type ToolResultPayload = {
 }
 
 type Appearance = 'dark' | 'light'
+type UiTheme =
+  | 'green'
+  | 'blue'
+  | 'slate'
+  | 'amber'
+  | 'violet'
+  | 'rose'
+  | 'cyan'
+  | 'teal'
+  | 'orange'
+  | 'indigo'
+
+const PROVIDER_SUGGESTIONS = [
+  'anthropic',
+  'openai',
+  'ollama',
+  'openrouter',
+  'deepseek',
+  'google',
+  'groq',
+  'xai',
+  'mistral',
+  'moonshot',
+  'minimax',
+  'azure_openai',
+]
+
+const MODEL_OPTIONS: Record<string, string[]> = {
+  anthropic: ['claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805', 'claude-3-7-sonnet-latest'],
+  openai: ['gpt-5.2', 'gpt-5', 'gpt-4.1'],
+  ollama: ['llama3.2', 'qwen2.5', 'deepseek-r1'],
+  openrouter: ['openai/gpt-5', 'anthropic/claude-sonnet-4-5', 'google/gemini-2.5-pro'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  google: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+}
+
+const DEFAULT_CONFIG_VALUES = {
+  llm_provider: 'anthropic',
+  max_tokens: 8192,
+  max_tool_iterations: 100,
+  show_thinking: false,
+  web_enabled: true,
+  web_host: '127.0.0.1',
+  web_port: 10961,
+}
+
+const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string }[] = [
+  { key: 'green', label: 'Green', color: '#34d399' },
+  { key: 'blue', label: 'Blue', color: '#60a5fa' },
+  { key: 'slate', label: 'Slate', color: '#94a3b8' },
+  { key: 'amber', label: 'Amber', color: '#fbbf24' },
+  { key: 'violet', label: 'Violet', color: '#a78bfa' },
+  { key: 'rose', label: 'Rose', color: '#fb7185' },
+  { key: 'cyan', label: 'Cyan', color: '#22d3ee' },
+  { key: 'teal', label: 'Teal', color: '#2dd4bf' },
+  { key: 'orange', label: 'Orange', color: '#fb923c' },
+  { key: 'indigo', label: 'Indigo', color: '#818cf8' },
+]
+
+const RADIX_ACCENT_BY_THEME: Record<UiTheme, string> = {
+  green: 'green',
+  blue: 'blue',
+  slate: 'gray',
+  amber: 'amber',
+  violet: 'violet',
+  rose: 'ruby',
+  cyan: 'cyan',
+  teal: 'teal',
+  orange: 'orange',
+  indigo: 'indigo',
+}
+
+function defaultModelForProvider(providerRaw: string): string {
+  const provider = providerRaw.trim().toLowerCase()
+  if (provider === 'anthropic') return 'claude-sonnet-4-5-20250929'
+  if (provider === 'ollama') return 'llama3.2'
+  return 'gpt-5.2'
+}
 
 function readAppearance(): Appearance {
   const saved = localStorage.getItem('microclaw_appearance')
@@ -80,8 +159,18 @@ function saveAppearance(value: Appearance): void {
   localStorage.setItem('microclaw_appearance', value)
 }
 
+function readUiTheme(): UiTheme {
+  const saved = localStorage.getItem('microclaw_ui_theme') as UiTheme | null
+  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'green'
+}
+
+function saveUiTheme(value: UiTheme): void {
+  localStorage.setItem('microclaw_ui_theme', value)
+}
+
 if (typeof document !== 'undefined') {
   document.documentElement.classList.toggle('dark', readAppearance() === 'dark')
+  document.documentElement.setAttribute('data-ui-theme', readUiTheme())
 }
 
 function makeHeaders(options: RequestInit = {}): HeadersInit {
@@ -289,10 +378,28 @@ function MessageTimestamp({ align }: { align: 'left' | 'right' }) {
 }
 
 function CustomAssistantMessage() {
+  const hasRenderableContent = useMessage((m) =>
+    Array.isArray(m.content)
+      ? m.content.some((part) => {
+          if (part.type === 'text') return Boolean(part.text?.trim())
+          return part.type === 'tool-call'
+        })
+      : false,
+  )
+
   return (
     <AssistantMessage.Root>
       <AssistantMessage.Avatar />
-      <AssistantMessage.Content />
+      {hasRenderableContent ? (
+        <AssistantMessage.Content />
+      ) : (
+        <div className="mc-assistant-placeholder" aria-live="polite">
+          <span className="mc-assistant-placeholder-dot" />
+          <span className="mc-assistant-placeholder-dot" />
+          <span className="mc-assistant-placeholder-dot" />
+          <span className="mc-assistant-placeholder-text">Thinking</span>
+        </div>
+      )}
       <BranchPicker />
       <AssistantActionBar />
       <MessageTimestamp align="left" />
@@ -364,6 +471,7 @@ function ThreadPane({ adapter, initialMessages, runtimeKey }: ThreadPaneProps) {
 
 function App() {
   const [appearance, setAppearance] = useState<Appearance>(readAppearance())
+  const [uiTheme, setUiTheme] = useState<UiTheme>(readUiTheme())
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [extraSessions, setExtraSessions] = useState<string[]>([])
   const [sessionKey, setSessionKey] = useState<string>('main')
@@ -375,6 +483,8 @@ function App() {
   const [replayNotice, setReplayNotice] = useState<string>('')
   const [sending, setSending] = useState<boolean>(false)
   const [configOpen, setConfigOpen] = useState<boolean>(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState<boolean>(false)
+  const [deleteTargetSession, setDeleteTargetSession] = useState<string | null>(null)
   const [config, setConfig] = useState<ConfigPayload | null>(null)
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>({})
   const [saveStatus, setSaveStatus] = useState<string>('')
@@ -608,13 +718,48 @@ function App() {
     }
   }
 
+  function requestDeleteSession(targetSession: string): void {
+    setDeleteTargetSession(targetSession)
+    setDeleteConfirmOpen(true)
+  }
+
+  async function confirmDeleteSession(): Promise<void> {
+    const targetSession = deleteTargetSession
+    if (!targetSession) return
+    try {
+      await api('/api/delete_session', {
+        method: 'POST',
+        body: JSON.stringify({ session_key: targetSession }),
+      })
+
+      setExtraSessions((prev) => prev.filter((s) => s !== targetSession))
+      setHistoryCountBySession((prev) => {
+        const next = { ...prev }
+        delete next[targetSession]
+        return next
+      })
+
+      const fallback = targetSession === 'main' ? 'main' : 'main'
+      if (targetSession === sessionKey) {
+        setSessionKey(fallback)
+        await loadHistory(fallback)
+      }
+      await loadSessions()
+      setStatusText('Session deleted')
+      setDeleteConfirmOpen(false)
+      setDeleteTargetSession(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   async function openConfig(): Promise<void> {
     setSaveStatus('')
     const data = await api<{ config?: ConfigPayload }>('/api/config')
     setConfig(data.config || null)
     setConfigDraft({
       llm_provider: data.config?.llm_provider || '',
-      model: data.config?.model || '',
+      model: data.config?.model || defaultModelForProvider(String(data.config?.llm_provider || 'anthropic')),
       api_key: '',
       max_tokens: Number(data.config?.max_tokens ?? 8192),
       max_tool_iterations: Number(data.config?.max_tool_iterations ?? 100),
@@ -624,6 +769,46 @@ function App() {
       web_port: Number(data.config?.web_port ?? 10961),
     })
     setConfigOpen(true)
+  }
+
+  function setConfigField(field: string, value: unknown): void {
+    setConfigDraft((prev) => ({ ...prev, [field]: value }))
+  }
+
+  function resetConfigField(field: string): void {
+    setConfigDraft((prev) => {
+      const next = { ...prev }
+      switch (field) {
+        case 'llm_provider':
+          next.llm_provider = DEFAULT_CONFIG_VALUES.llm_provider
+          next.model = defaultModelForProvider(DEFAULT_CONFIG_VALUES.llm_provider)
+          break
+        case 'model':
+          next.model = defaultModelForProvider(String(next.llm_provider || DEFAULT_CONFIG_VALUES.llm_provider))
+          break
+        case 'max_tokens':
+          next.max_tokens = DEFAULT_CONFIG_VALUES.max_tokens
+          break
+        case 'max_tool_iterations':
+          next.max_tool_iterations = DEFAULT_CONFIG_VALUES.max_tool_iterations
+          break
+        case 'show_thinking':
+          next.show_thinking = DEFAULT_CONFIG_VALUES.show_thinking
+          break
+        case 'web_enabled':
+          next.web_enabled = DEFAULT_CONFIG_VALUES.web_enabled
+          break
+        case 'web_host':
+          next.web_host = DEFAULT_CONFIG_VALUES.web_host
+          break
+        case 'web_port':
+          next.web_port = DEFAULT_CONFIG_VALUES.web_port
+          break
+        default:
+          break
+      }
+      return next
+    })
   }
 
   async function saveConfigChanges(): Promise<void> {
@@ -654,6 +839,11 @@ function App() {
   }, [appearance])
 
   useEffect(() => {
+    saveUiTheme(uiTheme)
+    document.documentElement.setAttribute('data-ui-theme', uiTheme)
+  }, [uiTheme])
+
+  useEffect(() => {
     ;(async () => {
       try {
         setError('')
@@ -671,13 +861,14 @@ function App() {
   }, [sessionKey])
 
   const runtimeKey = `${sessionKey}-${runtimeNonce}`
+  const radixAccent = RADIX_ACCENT_BY_THEME[uiTheme] ?? 'green'
 
   return (
-    <Theme appearance={appearance} accentColor="green" grayColor="slate" radius="medium" scaling="100%">
+    <Theme appearance={appearance} accentColor={radixAccent as never} grayColor="slate" radius="medium" scaling="100%">
       <div
         className={
           appearance === 'dark'
-            ? 'h-screen w-screen bg-[#02110d]'
+            ? 'h-screen w-screen bg-[var(--mc-bg-main)]'
             : 'h-screen w-screen bg-[radial-gradient(1200px_560px_at_-8%_-10%,#d1fae5_0%,transparent_58%),radial-gradient(1200px_560px_at_108%_-12%,#e0f2fe_0%,transparent_58%),#f8fafc]'
         }
       >
@@ -685,11 +876,15 @@ function App() {
           <SessionSidebar
             appearance={appearance}
             onToggleAppearance={toggleAppearance}
+            uiTheme={uiTheme}
+            onUiThemeChange={(theme) => setUiTheme(theme as UiTheme)}
+            uiThemeOptions={UI_THEME_OPTIONS}
             sessionKeys={sessionKeys}
             sessionKey={sessionKey}
             onSessionSelect={setSessionKey}
             onRefreshSession={(key) => void onRefreshSessionByKey(key)}
             onResetSession={(key) => void onResetSessionByKey(key)}
+            onDeleteSession={(key) => requestDeleteSession(key)}
             onOpenConfig={openConfig}
             onNewSession={createSession}
           />
@@ -697,18 +892,18 @@ function App() {
           <main
             className={
               appearance === 'dark'
-                ? 'flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#071a14]'
+                ? 'flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--mc-bg-panel)]'
                 : 'flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-white/95'
             }
           >
             <header
               className={
                 appearance === 'dark'
-                  ? 'sticky top-0 z-10 border-b border-emerald-950/80 bg-[#071a14]/95 px-4 py-3 backdrop-blur-sm'
+                  ? 'sticky top-0 z-10 border-b border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-panel)]/95 px-4 py-3 backdrop-blur-sm'
                   : 'sticky top-0 z-10 border-b border-slate-200 bg-white/92 px-4 py-3 backdrop-blur-sm'
               }
             >
-              <Heading size="6" className="capitalize">
+              <Heading size="6">
                 {sessionKey}
               </Heading>
             </header>
@@ -716,7 +911,7 @@ function App() {
             <div
               className={
                 appearance === 'dark'
-                  ? 'flex min-h-0 flex-1 flex-col bg-[linear-gradient(to_bottom,#071a14,#02100c_28%)]'
+                  ? 'flex min-h-0 flex-1 flex-col bg-[linear-gradient(to_bottom,var(--mc-bg-panel),var(--mc-bg-main)_28%)]'
                   : 'flex min-h-0 flex-1 flex-col bg-[linear-gradient(to_bottom,#f8fafc,white_20%)]'
               }
             >
@@ -740,68 +935,179 @@ function App() {
           </main>
         </div>
 
+        <Dialog.Root
+          open={deleteConfirmOpen}
+          onOpenChange={(open) => {
+            setDeleteConfirmOpen(open)
+            if (!open) setDeleteTargetSession(null)
+          }}
+        >
+          <Dialog.Content maxWidth="460px">
+            <Dialog.Title>Delete Session</Dialog.Title>
+            <Dialog.Description size="2" mb="3">
+              {deleteTargetSession
+                ? `Delete "${deleteTargetSession}"? This removes all messages for this chat.`
+                : 'Delete this chat and all messages?'}
+            </Dialog.Description>
+            <Flex justify="end" gap="2">
+              <Dialog.Close>
+                <Button variant="soft">Cancel</Button>
+              </Dialog.Close>
+              <Button color="red" onClick={() => void confirmDeleteSession()}>
+                Delete
+              </Button>
+            </Flex>
+          </Dialog.Content>
+        </Dialog.Root>
+
         <Dialog.Root open={configOpen} onOpenChange={setConfigOpen}>
-          <Dialog.Content maxWidth="640px">
+          <Dialog.Content maxWidth="760px">
             <Dialog.Title>Runtime Config</Dialog.Title>
             <Dialog.Description size="2" mb="3">
               Save writes to microclaw.config.yaml. Restart is required.
             </Dialog.Description>
             {config ? (
-              <Flex direction="column" gap="2">
-                <Text size="2" color="gray">
-                  Current provider: {String(config.llm_provider || '')}
-                </Text>
-                <TextField.Root
-                  value={String(configDraft.llm_provider || '')}
-                  onChange={(e) => setConfigDraft({ ...configDraft, llm_provider: e.target.value })}
-                  placeholder="llm_provider"
-                />
-                <TextField.Root
-                  value={String(configDraft.model || '')}
-                  onChange={(e) => setConfigDraft({ ...configDraft, model: e.target.value })}
-                  placeholder="model"
-                />
-                <TextField.Root
-                  value={String(configDraft.api_key || '')}
-                  onChange={(e) => setConfigDraft({ ...configDraft, api_key: e.target.value })}
-                  placeholder="api_key (leave blank to keep existing)"
-                />
-                <TextField.Root
-                  value={String(configDraft.max_tokens || 8192)}
-                  onChange={(e) => setConfigDraft({ ...configDraft, max_tokens: e.target.value })}
-                  placeholder="max_tokens"
-                />
-                <TextField.Root
-                  value={String(configDraft.max_tool_iterations || 100)}
-                  onChange={(e) => setConfigDraft({ ...configDraft, max_tool_iterations: e.target.value })}
-                  placeholder="max_tool_iterations"
-                />
-                <TextField.Root
-                  value={String(configDraft.web_host || '127.0.0.1')}
-                  onChange={(e) => setConfigDraft({ ...configDraft, web_host: e.target.value })}
-                  placeholder="web_host"
-                />
-                <TextField.Root
-                  value={String(configDraft.web_port || 10961)}
-                  onChange={(e) => setConfigDraft({ ...configDraft, web_port: e.target.value })}
-                  placeholder="web_port"
-                />
-                <Flex gap="2">
-                  <Button
-                    variant={Boolean(configDraft.show_thinking) ? 'solid' : 'soft'}
-                    onClick={() =>
-                      setConfigDraft({ ...configDraft, show_thinking: !Boolean(configDraft.show_thinking) })
-                    }
-                  >
-                    show_thinking: {Boolean(configDraft.show_thinking) ? 'on' : 'off'}
-                  </Button>
-                  <Button
-                    variant={Boolean(configDraft.web_enabled) ? 'solid' : 'soft'}
-                    onClick={() => setConfigDraft({ ...configDraft, web_enabled: !Boolean(configDraft.web_enabled) })}
-                  >
-                    web_enabled: {Boolean(configDraft.web_enabled) ? 'on' : 'off'}
-                  </Button>
-                </Flex>
+              <Flex direction="column" gap="3">
+                <div className="rounded-xl border border-slate-200/80 p-4">
+                  <Text size="3" weight="bold">
+                    LLM
+                  </Text>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <Flex justify="between" align="center" mb="1">
+                        <Text size="1" color="gray">Provider</Text>
+                        <Button size="1" variant="ghost" onClick={() => resetConfigField('llm_provider')}>Reset</Button>
+                      </Flex>
+                      <TextField.Root
+                        list="provider-suggestions"
+                        value={String(configDraft.llm_provider || DEFAULT_CONFIG_VALUES.llm_provider)}
+                        onChange={(e) => setConfigField('llm_provider', e.target.value)}
+                        placeholder="anthropic"
+                      />
+                      <datalist id="provider-suggestions">
+                        {PROVIDER_SUGGESTIONS.map((provider) => (
+                          <option key={provider} value={provider} />
+                        ))}
+                      </datalist>
+                    </div>
+
+                    <div>
+                      <Flex justify="between" align="center" mb="1">
+                        <Text size="1" color="gray">Model</Text>
+                        <Button size="1" variant="ghost" onClick={() => resetConfigField('model')}>Reset</Button>
+                      </Flex>
+                      <TextField.Root
+                        list="model-suggestions"
+                        value={String(configDraft.model || defaultModelForProvider(String(configDraft.llm_provider || 'anthropic')))}
+                        onChange={(e) => setConfigField('model', e.target.value)}
+                        placeholder="claude-sonnet-4-5-20250929"
+                      />
+                      <datalist id="model-suggestions">
+                        {(() => {
+                          const provider = String(configDraft.llm_provider || DEFAULT_CONFIG_VALUES.llm_provider).toLowerCase()
+                          const options = MODEL_OPTIONS[provider] || []
+                          return options.map((model) => <option key={model} value={model} />)
+                        })()}
+                      </datalist>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <Text size="1" color="gray">API key (leave blank to keep existing)</Text>
+                    <TextField.Root
+                      className="mt-2"
+                      value={String(configDraft.api_key || '')}
+                      onChange={(e) => setConfigField('api_key', e.target.value)}
+                      placeholder="api_key"
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200/80 p-4">
+                  <Text size="3" weight="bold">
+                    Runtime
+                  </Text>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <Flex justify="between" align="center" mb="1">
+                        <Text size="1" color="gray">Max tokens</Text>
+                        <Button size="1" variant="ghost" onClick={() => resetConfigField('max_tokens')}>Reset</Button>
+                      </Flex>
+                      <TextField.Root
+                        value={String(configDraft.max_tokens || DEFAULT_CONFIG_VALUES.max_tokens)}
+                        onChange={(e) => setConfigField('max_tokens', e.target.value)}
+                        placeholder="max_tokens"
+                      />
+                    </div>
+                    <div>
+                      <Flex justify="between" align="center" mb="1">
+                        <Text size="1" color="gray">Max tool iterations</Text>
+                        <Button size="1" variant="ghost" onClick={() => resetConfigField('max_tool_iterations')}>Reset</Button>
+                      </Flex>
+                      <TextField.Root
+                        value={String(configDraft.max_tool_iterations || DEFAULT_CONFIG_VALUES.max_tool_iterations)}
+                        onChange={(e) => setConfigField('max_tool_iterations', e.target.value)}
+                        placeholder="max_tool_iterations"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200/80 p-4">
+                  <Text size="3" weight="bold">
+                    Web
+                  </Text>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <Flex justify="between" align="center" mb="1">
+                        <Text size="1" color="gray">Host</Text>
+                        <Button size="1" variant="ghost" onClick={() => resetConfigField('web_host')}>Reset</Button>
+                      </Flex>
+                      <TextField.Root
+                        value={String(configDraft.web_host || DEFAULT_CONFIG_VALUES.web_host)}
+                        onChange={(e) => setConfigField('web_host', e.target.value)}
+                        placeholder="web_host"
+                      />
+                    </div>
+                    <div>
+                      <Flex justify="between" align="center" mb="1">
+                        <Text size="1" color="gray">Port</Text>
+                        <Button size="1" variant="ghost" onClick={() => resetConfigField('web_port')}>Reset</Button>
+                      </Flex>
+                      <TextField.Root
+                        value={String(configDraft.web_port || DEFAULT_CONFIG_VALUES.web_port)}
+                        onChange={(e) => setConfigField('web_port', e.target.value)}
+                        placeholder="web_port"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="rounded-lg border border-slate-200/80 p-3">
+                      <Flex justify="between" align="center">
+                        <Text size="2">show_thinking</Text>
+                        <Switch
+                          checked={Boolean(configDraft.show_thinking)}
+                          onCheckedChange={(checked) => setConfigField('show_thinking', checked)}
+                        />
+                      </Flex>
+                      <Button size="1" variant="ghost" className="mt-2" onClick={() => resetConfigField('show_thinking')}>
+                        Reset to default
+                      </Button>
+                    </div>
+                    <div className="rounded-lg border border-slate-200/80 p-3">
+                      <Flex justify="between" align="center">
+                        <Text size="2">web_enabled</Text>
+                        <Switch
+                          checked={Boolean(configDraft.web_enabled)}
+                          onCheckedChange={(checked) => setConfigField('web_enabled', checked)}
+                        />
+                      </Flex>
+                      <Button size="1" variant="ghost" className="mt-2" onClick={() => resetConfigField('web_enabled')}>
+                        Reset to default
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
                 {saveStatus ? (
                   <Text size="2" color={saveStatus.startsWith('Save failed') ? 'red' : 'green'}>
                     {saveStatus}

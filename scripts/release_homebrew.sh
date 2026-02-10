@@ -5,7 +5,8 @@ set -euo pipefail
 # release_homebrew.sh
 #
 # 1. Bump patch version in Cargo.toml
-# 2. cargo build --release
+# 2. Build web/dist
+# 3. cargo build --release
 # 3. Create a tar.gz of the binary
 # 4. Create a GitHub release and upload the tarball
 # 5. Update the homebrew-tap Formula with new version + sha256
@@ -43,6 +44,7 @@ require_cmd git
 require_cmd gh
 require_cmd shasum
 require_cmd tar
+require_cmd npm
 
 if ! gh auth status >/dev/null 2>&1; then
   echo "GitHub CLI not authenticated. Run: gh auth login" >&2
@@ -50,6 +52,17 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 cd "$REPO_DIR"
+
+# --- Build web assets (embedded via include_dir! in src/web.rs) ---
+if [ -f "web/package.json" ]; then
+  echo "Building web assets..."
+  if [ -f "web/package-lock.json" ]; then
+    npm --prefix web ci
+  else
+    npm --prefix web install
+  fi
+  npm --prefix web run build
+fi
 
 # --- Bump patch version in Cargo.toml ---
 CURRENT_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')

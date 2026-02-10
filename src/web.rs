@@ -1028,6 +1028,25 @@ async fn api_reset(
     Ok(Json(json!({ "ok": true, "deleted": deleted })))
 }
 
+async fn api_delete_session(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<ResetRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+
+    let session_key = normalize_session_key(body.session_key.as_deref());
+    let chat_id = session_key_to_chat_id(&session_key);
+
+    let deleted = call_blocking(state.app_state.db.clone(), move |db| {
+        db.delete_chat_data(chat_id)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(json!({ "ok": true, "deleted": deleted })))
+}
+
 pub async fn start_web_server(state: Arc<AppState>) {
     let limits = WebLimits::from_config(&state.config);
     let web_state = WebState {
@@ -1105,6 +1124,7 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/stream", get(api_stream))
         .route("/api/run_status", get(api_run_status))
         .route("/api/reset", post(api_reset))
+        .route("/api/delete_session", post(api_delete_session))
         .with_state(web_state)
 }
 

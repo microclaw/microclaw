@@ -586,6 +586,20 @@ impl Database {
         Ok(rows > 0)
     }
 
+    pub fn delete_chat_data(&self, chat_id: i64) -> Result<bool, MicroClawError> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let mut affected = 0usize;
+
+        affected += tx.execute("DELETE FROM sessions WHERE chat_id = ?1", params![chat_id])?;
+        affected += tx.execute("DELETE FROM messages WHERE chat_id = ?1", params![chat_id])?;
+        affected += tx.execute("DELETE FROM scheduled_tasks WHERE chat_id = ?1", params![chat_id])?;
+        affected += tx.execute("DELETE FROM chats WHERE chat_id = ?1", params![chat_id])?;
+
+        tx.commit()?;
+        Ok(affected > 0)
+    }
+
     pub fn get_new_user_messages_since(
         &self,
         chat_id: i64,
