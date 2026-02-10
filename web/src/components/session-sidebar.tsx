@@ -38,6 +38,7 @@ export function SessionSidebar({
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const themeMenuRef = useRef<HTMLDivElement | null>(null)
   const themeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const sessionMenuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -46,6 +47,7 @@ export function SessionSidebar({
 
       if (themeButtonRef.current?.contains(target)) return
       if (themeMenuRef.current?.contains(target)) return
+      if (sessionMenuRef.current?.contains(target)) return
 
       setMenu(null)
       setThemeMenuOpen(false)
@@ -248,6 +250,7 @@ export function SessionSidebar({
 
       {menu ? (
         <div
+          ref={sessionMenuRef}
           className={
             isDark
               ? 'fixed z-50 min-w-[170px] rounded-lg border border-emerald-900/80 bg-[#092018] p-1.5 shadow-xl'
