@@ -96,10 +96,23 @@ html.dark .aui-assistant-message-content p:last-child {
 html.dark .aui-assistant-message-content ul,
 html.dark .aui-assistant-message-content ol {
   margin: 8px 0 10px 20px;
+  padding-left: 18px;
+}
+
+html.dark .aui-assistant-message-content ul {
+  list-style-type: disc;
+}
+
+html.dark .aui-assistant-message-content ol {
+  list-style-type: decimal;
 }
 
 html.dark .aui-assistant-message-content li {
   margin: 4px 0;
+}
+
+html.dark .aui-assistant-message-content li::marker {
+  color: hsl(148 38% 72%);
 }
 
 html.dark .aui-assistant-message-content a {
@@ -138,8 +151,9 @@ html.dark .aui-assistant-message-content blockquote {
 }
 
 html.dark .aui-user-message-content {
-  border: 1px solid hsl(145 45% 34% / 0.85);
-  background: linear-gradient(180deg, hsl(147 44% 24%), hsl(147 42% 20%));
+  border: 1px solid hsl(146 32% 28% / 0.8);
+  border-radius: 14px;
+  background: linear-gradient(180deg, hsl(147 34% 20%), hsl(147 31% 16%));
   color: hsl(145 38% 96%);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
 }
@@ -190,6 +204,23 @@ html.dark .aui-assistant-action-bar-root button {
 html.dark .aui-thread-scroll-to-bottom {
   border: 1px solid hsl(154 26% 24%);
   background: hsl(155 36% 10%);
+}
+
+.mc-user-content-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.mc-msg-time {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1;
+  color: hsl(148 15% 62%);
+}
+
+.mc-msg-time-right {
+  padding-right: 6px;
 }
 
 .tool-card {

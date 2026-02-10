@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Badge, Button, Flex, ScrollArea, Separator, Text } from '@radix-ui/themes'
 
 type SessionSidebarProps = {
@@ -7,6 +7,8 @@ type SessionSidebarProps = {
   sessionKeys: string[]
   sessionKey: string
   onSessionSelect: (key: string) => void
+  onRefreshSession: (key: string) => void
+  onResetSession: (key: string) => void
   onOpenConfig: () => Promise<void>
   onNewSession: () => void
 }
@@ -17,10 +19,23 @@ export function SessionSidebar({
   sessionKeys,
   sessionKey,
   onSessionSelect,
+  onRefreshSession,
+  onResetSession,
   onOpenConfig,
   onNewSession,
 }: SessionSidebarProps) {
   const isDark = appearance === 'dark'
+  const [menu, setMenu] = useState<{ x: number; y: number; key: string } | null>(null)
+
+  useEffect(() => {
+    const close = () => setMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [])
 
   return (
     <aside
@@ -91,6 +106,10 @@ export function SessionSidebar({
                 key={key}
                 type="button"
                 onClick={() => onSessionSelect(key)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setMenu({ x: e.clientX, y: e.clientY, key })
+                }}
                 className={
                   sessionKey === key
                     ? isDark
@@ -113,6 +132,47 @@ export function SessionSidebar({
           Runtime Config
         </Button>
       </div>
+
+      {menu ? (
+        <div
+          className={
+            isDark
+              ? 'fixed z-50 min-w-[170px] rounded-lg border border-emerald-900/80 bg-[#092018] p-1.5 shadow-xl'
+              : 'fixed z-50 min-w-[170px] rounded-lg border border-slate-300 bg-white p-1.5 shadow-xl'
+          }
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className={
+              isDark
+                ? 'flex w-full rounded-md px-3 py-2 text-left text-sm text-slate-100 hover:bg-emerald-900/50'
+                : 'flex w-full rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100'
+            }
+            onClick={() => {
+              onRefreshSession(menu.key)
+              setMenu(null)
+            }}
+          >
+            Refresh Session
+          </button>
+          <button
+            type="button"
+            className={
+              isDark
+                ? 'mt-1 flex w-full rounded-md px-3 py-2 text-left text-sm text-amber-300 hover:bg-amber-900/20'
+                : 'mt-1 flex w-full rounded-md px-3 py-2 text-left text-sm text-amber-700 hover:bg-amber-50'
+            }
+            onClick={() => {
+              onResetSession(menu.key)
+              setMenu(null)
+            }}
+          >
+            Reset Session
+          </button>
+        </div>
+      ) : null}
     </aside>
   )
 }

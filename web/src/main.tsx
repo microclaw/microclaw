@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import type { ReadonlyJSONObject, ReadonlyJSONValue } from 'assistant-stream/utils'
 import {
   AssistantRuntimeProvider,
+  MessagePrimitive,
+  useMessage,
   useLocalRuntime,
   type ChatModelAdapter,
   type ChatModelRunOptions,
@@ -10,9 +12,16 @@ import {
   type ThreadMessageLike,
   type ToolCallMessagePartProps,
 } from '@assistant-ui/react'
-import { Thread } from '@assistant-ui/react-ui'
 import {
-  Badge,
+  AssistantActionBar,
+  AssistantMessage,
+  BranchPicker,
+  Thread,
+  UserActionBar,
+  UserMessage,
+  makeMarkdownText,
+} from '@assistant-ui/react-ui'
+import {
   Button,
   Callout,
   Dialog,
@@ -269,6 +278,44 @@ function ToolCallCard(props: ToolCallMessagePartProps) {
   )
 }
 
+function MessageTimestamp({ align }: { align: 'left' | 'right' }) {
+  const createdAt = useMessage((m) => m.createdAt)
+  const formatted = createdAt ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+  return (
+    <div className={align === 'right' ? 'mc-msg-time mc-msg-time-right' : 'mc-msg-time'}>
+      {formatted}
+    </div>
+  )
+}
+
+function CustomAssistantMessage() {
+  return (
+    <AssistantMessage.Root>
+      <AssistantMessage.Avatar />
+      <AssistantMessage.Content />
+      <BranchPicker />
+      <AssistantActionBar />
+      <MessageTimestamp align="left" />
+    </AssistantMessage.Root>
+  )
+}
+
+function CustomUserMessage() {
+  return (
+    <UserMessage.Root>
+      <UserMessage.Attachments />
+      <MessagePrimitive.If hasContent>
+        <UserActionBar />
+        <div className="mc-user-content-wrap">
+          <UserMessage.Content />
+          <MessageTimestamp align="right" />
+        </div>
+      </MessagePrimitive.If>
+      <BranchPicker />
+    </UserMessage.Root>
+  )
+}
+
 type ThreadPaneProps = {
   adapter: ChatModelAdapter
   initialMessages: ThreadMessageLike[]
@@ -276,6 +323,7 @@ type ThreadPaneProps = {
 }
 
 function ThreadPane({ adapter, initialMessages, runtimeKey }: ThreadPaneProps) {
+  const MarkdownText = makeMarkdownText()
   const runtime = useLocalRuntime(adapter, {
     initialMessages,
     maxSteps: 100,
@@ -292,16 +340,22 @@ function ThreadPane({ adapter, initialMessages, runtimeKey }: ThreadPaneProps) {
             allowFeedbackNegative: false,
             allowFeedbackPositive: false,
             components: {
+              Text: MarkdownText,
               ToolFallback: ToolCallCard,
             },
           }}
           userMessage={{ allowEdit: false }}
           composer={{ allowAttachments: false }}
+          components={{
+            AssistantMessage: CustomAssistantMessage,
+            UserMessage: CustomUserMessage,
+          }}
           strings={{
             composer: {
               input: { placeholder: 'Message MicroClaw...' },
             },
           }}
+          assistantAvatar={{ fallback: 'M' }}
         />
       </div>
     </AssistantRuntimeProvider>
@@ -526,14 +580,29 @@ function App() {
     setAppearance((prev) => (prev === 'dark' ? 'light' : 'dark'))
   }
 
-  async function onResetSession(): Promise<void> {
+  async function onResetSessionByKey(targetSession: string): Promise<void> {
     try {
       await api('/api/reset', {
         method: 'POST',
-        body: JSON.stringify({ session_key: sessionKey }),
+        body: JSON.stringify({ session_key: targetSession }),
       })
-      await loadHistory(sessionKey)
+      if (targetSession === sessionKey) {
+        await loadHistory(targetSession)
+      }
+      await loadSessions()
       setStatusText('Session reset')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function onRefreshSessionByKey(targetSession: string): Promise<void> {
+    try {
+      if (targetSession === sessionKey) {
+        await loadHistory(targetSession)
+      }
+      await loadSessions()
+      setStatusText('Session refreshed')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -619,6 +688,8 @@ function App() {
             sessionKeys={sessionKeys}
             sessionKey={sessionKey}
             onSessionSelect={setSessionKey}
+            onRefreshSession={(key) => void onRefreshSessionByKey(key)}
+            onResetSession={(key) => void onResetSessionByKey(key)}
             onOpenConfig={openConfig}
             onNewSession={createSession}
           />
@@ -637,36 +708,9 @@ function App() {
                   : 'sticky top-0 z-10 border-b border-slate-200 bg-white/92 px-4 py-3 backdrop-blur-sm'
               }
             >
-              <Flex justify="between" align="center" gap="2" wrap="wrap">
-                <Flex align="center" gap="2">
-                  <Heading size="4" className="capitalize">
-                    {sessionKey}
-                  </Heading>
-                  <Badge color="teal" variant="soft">
-                    assistant-ui
-                  </Badge>
-                  <Badge color={sending ? 'green' : 'gray'} variant="surface">
-                    {sending ? 'Streaming' : 'Idle'}
-                  </Badge>
-                </Flex>
-                <Flex gap="2" align="center">
-                  <Button
-                    size="1"
-                    variant="soft"
-                    onClick={() =>
-                      loadHistory(sessionKey).catch((e) => setError(e instanceof Error ? e.message : String(e)))
-                    }
-                  >
-                    Refresh
-                  </Button>
-                  <Button size="1" variant="soft" color="orange" onClick={onResetSession}>
-                    Reset Session
-                  </Button>
-                </Flex>
-              </Flex>
-              <Text size="1" color="gray" className="mt-1">
-                Status: {statusText}
-              </Text>
+              <Heading size="6" className="capitalize">
+                {sessionKey}
+              </Heading>
             </header>
 
             <div
