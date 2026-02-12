@@ -137,10 +137,11 @@ fn test_data_dir_paths() {
     let mut config = minimal_config();
     config.data_dir = "/opt/microclaw.data".into();
 
-    assert!(config
-        .runtime_data_dir()
-        .ends_with("microclaw.data/runtime"));
-    assert!(config.skills_data_dir().ends_with("microclaw.data/skills"));
+    let runtime = std::path::PathBuf::from(config.runtime_data_dir());
+    let skills = std::path::PathBuf::from(config.skills_data_dir());
+
+    assert!(runtime.ends_with(std::path::Path::new("microclaw.data").join("runtime")));
+    assert!(skills.ends_with(std::path::Path::new("microclaw.data").join("skills")));
 }
 
 #[test]
