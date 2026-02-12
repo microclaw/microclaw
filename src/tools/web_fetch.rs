@@ -4,6 +4,7 @@ use serde_json::json;
 use super::web_html::{extract_primary_html, html_to_text};
 use super::{schema_object, Tool, ToolResult};
 use crate::claude::ToolDefinition;
+use crate::text::floor_char_boundary;
 
 pub struct WebFetchTool;
 
@@ -68,7 +69,7 @@ async fn fetch_url(url: &str) -> Result<String, String> {
 
     const MAX_BYTES: usize = 20_000;
     if text.len() > MAX_BYTES {
-        let truncated = &text[..text.floor_char_boundary(MAX_BYTES)];
+        let truncated = &text[..floor_char_boundary(&text, MAX_BYTES)];
         Ok(format!("{truncated}\n\n[Truncated at 20KB]"))
     } else {
         Ok(text)

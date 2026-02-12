@@ -17,6 +17,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::DefaultTerminal;
 
 use crate::error::MicroClawError;
+use crate::text::floor_char_boundary;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProviderProtocol {
@@ -1038,8 +1039,8 @@ fn mask_secret(s: &str) -> String {
     if s.len() <= 6 {
         return "***".into();
     }
-    let left = s.floor_char_boundary(3.min(s.len()));
-    let right_start = s.floor_char_boundary(s.len().saturating_sub(2));
+    let left = floor_char_boundary(s, 3.min(s.len()));
+    let right_start = floor_char_boundary(s, s.len().saturating_sub(2));
     format!("{}***{}", &s[..left], &s[right_start..])
 }
 

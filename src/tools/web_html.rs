@@ -1,3 +1,4 @@
+use crate::text::floor_char_boundary;
 use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
@@ -31,7 +32,7 @@ fn find_case_insensitive(haystack: &str, needle: &str, from: usize) -> Option<us
 
     // Callers may pass byte offsets derived from external data; coerce to a valid
     // UTF-8 boundary to avoid panics when slicing.
-    let from = haystack.floor_char_boundary(from);
+    let from = crate::text::floor_char_boundary(haystack, from);
     let h = haystack[from..].to_ascii_lowercase();
     let n = needle.to_ascii_lowercase();
     h.find(&n).map(|idx| from + idx)
@@ -131,8 +132,8 @@ fn extract_attr(tag: &str, attr: &str) -> Option<String> {
 }
 
 fn extract_snippet_near(html: &str, from: usize) -> String {
-    let from = html.floor_char_boundary(from.min(html.len()));
-    let window_end = html.floor_char_boundary(from.saturating_add(4000).min(html.len()));
+    let from = floor_char_boundary(html, from.min(html.len()));
+    let window_end = floor_char_boundary(html, from.saturating_add(4000).min(html.len()));
     let segment = &html[from..window_end];
     let Some(class_idx) = find_case_insensitive(segment, "result__snippet", 0) else {
         return String::new();

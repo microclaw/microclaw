@@ -14,6 +14,7 @@ use crate::claude::Message as ClaudeMessage;
 use crate::db::call_blocking;
 use crate::db::StoredMessage;
 use crate::runtime::AppState;
+use crate::text::floor_char_boundary;
 
 struct Handler {
     app_state: Arc<AppState>,
@@ -212,7 +213,7 @@ async fn send_discord_response(ctx: &Context, channel_id: ChannelId, text: &str)
         let chunk_len = if remaining.len() <= MAX_LEN {
             remaining.len()
         } else {
-            let boundary = remaining.floor_char_boundary(MAX_LEN.min(remaining.len()));
+            let boundary = floor_char_boundary(remaining, MAX_LEN.min(remaining.len()));
             remaining[..boundary].rfind('\n').unwrap_or(boundary)
         };
 

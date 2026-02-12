@@ -5,6 +5,7 @@ use tracing::info;
 
 use crate::claude::ToolDefinition;
 use crate::config::WorkingDirIsolation;
+use crate::text::floor_char_boundary;
 use crate::tools::command_runner::{build_command, shell_command};
 
 use super::{schema_object, Tool, ToolResult};
@@ -107,7 +108,7 @@ impl Tool for BashTool {
 
                 // Truncate very long output
                 if result_text.len() > 30000 {
-                    let cutoff = result_text.floor_char_boundary(30000);
+                    let cutoff = floor_char_boundary(&result_text, 30000);
                     result_text.truncate(cutoff);
                     result_text.push_str("\n... (output truncated)");
                 }

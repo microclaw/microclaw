@@ -11,6 +11,7 @@ use crate::claude::Message;
 use crate::claude::{ContentBlock, ImageSource, MessageContent};
 use crate::db::{call_blocking, StoredMessage};
 use crate::runtime::AppState;
+use crate::text::floor_char_boundary;
 
 /// Escape XML special characters in user-supplied content to prevent prompt injection.
 /// User messages are wrapped in XML tags; escaping ensures the content cannot break out.
@@ -474,7 +475,7 @@ fn split_response_text(text: &str) -> Vec<String> {
         let chunk_len = if remaining.len() <= MAX_LEN {
             remaining.len()
         } else {
-            let boundary = remaining.floor_char_boundary(MAX_LEN.min(remaining.len()));
+            let boundary = floor_char_boundary(&remaining, MAX_LEN.min(remaining.len()));
             remaining[..boundary]
                 .rfind(char::from(10))
                 .unwrap_or(boundary)

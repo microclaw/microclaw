@@ -11,6 +11,7 @@ use crate::channel::{
 };
 use crate::db::call_blocking;
 use crate::runtime::AppState;
+use crate::text::floor_char_boundary;
 
 pub fn spawn_scheduler(state: Arc<AppState>) {
     tokio::spawn(async move {
@@ -75,7 +76,7 @@ async fn run_due_tasks(state: &Arc<AppState>) {
                     .await;
                 }
                 let summary = if response.len() > 200 {
-                    format!("{}...", &response[..response.floor_char_boundary(200)])
+                    format!("{}...", &response[..floor_char_boundary(&response, 200)])
                 } else {
                     response
                 };
