@@ -5,7 +5,7 @@ use serenity::model::channel::Message as DiscordMessage;
 use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
 use serenity::prelude::*;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::agent_engine::archive_conversation;
 use crate::agent_engine::process_with_agent;
@@ -89,6 +89,12 @@ impl EventHandler for Handler {
         }
 
         if text.is_empty() {
+            if msg.guild_id.is_some() {
+                info!(
+                    "Discord message content is empty in guild channel {}. If this persists, enable Message Content Intent in Discord Developer Portal (Bot -> Privileged Gateway Intents).",
+                    channel_id
+                );
+            }
             return;
         }
 
@@ -215,24 +221,43 @@ async fn send_discord_response(ctx: &Context, channel_id: ChannelId, text: &str)
     }
 }
 
+async fn run_discord_client(
+    app_state: Arc<AppState>,
+    token: &str,
+    intents: GatewayIntents,
+) -> Result<(), serenity::Error> {
+    let handler = Handler { app_state };
+    let mut client = Client::builder(token, intents)
+        .event_handler(handler)
+        .await?;
+    client.start().await
+}
+
+fn is_disallowed_gateway_intents(err: &serenity::Error) -> bool {
+    let text = err.to_string().to_ascii_lowercase();
+    text.contains("disallowed gateway intents")
+        || text.contains("disallowed intent")
+        || text.contains("4014")
+}
+
 /// Start the Discord bot. Called from run_bot() if discord_bot_token is configured.
 pub async fn start_discord_bot(app_state: Arc<AppState>, token: &str) {
-    let intents = GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::DIRECT_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
+    let base_intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::DIRECT_MESSAGES;
+    let full_intents = base_intents | GatewayIntents::MESSAGE_CONTENT;
 
-    let handler = Handler { app_state };
-
-    let mut client = match Client::builder(token, intents).event_handler(handler).await {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to create Discord client: {e}");
-            return;
+    info!("Starting Discord bot (requesting MESSAGE_CONTENT intent)...");
+    match run_discord_client(app_state.clone(), token, full_intents).await {
+        Ok(()) => {}
+        Err(e) if is_disallowed_gateway_intents(&e) => {
+            warn!(
+                "Discord rejected MESSAGE_CONTENT intent (4014). Falling back to non-privileged intents. Enable Message Content Intent in Discord Developer Portal for full behavior."
+            );
+            if let Err(e2) = run_discord_client(app_state, token, base_intents).await {
+                error!("Discord bot error (fallback intents): {e2}");
+            }
         }
-    };
-
-    info!("Starting Discord bot...");
-    if let Err(e) = client.start().await {
-        error!("Discord bot error: {e}");
+        Err(e) => {
+            error!("Discord bot error: {e}");
+        }
     }
 }

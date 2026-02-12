@@ -239,19 +239,25 @@ struct SetupApp {
     completion_summary: Vec<String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PickerKind {
     Provider,
     Model,
+    Channels,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PickerState {
     kind: PickerKind,
     selected: usize,
+    selected_multi: Vec<bool>,
 }
 
 impl SetupApp {
+    fn channel_options() -> &'static [&'static str] {
+        &["telegram", "discord", "whatsapp"]
+    }
+
     fn new() -> Self {
         // Try loading from existing config file first, then fall back to env vars
         let existing = Self::load_existing_config();
@@ -275,7 +281,7 @@ impl SetupApp {
                     key: "ENABLED_CHANNELS",
                     label: "Enabled channels (csv, empty = setup later)",
                     value: enabled_channels,
-                    required: true,
+                    required: false,
                     secret: false,
                 },
                 Field {
@@ -757,6 +763,7 @@ impl SetupApp {
                 self.picker = Some(PickerState {
                     kind: PickerKind::Provider,
                     selected: idx,
+                    selected_multi: Vec::new(),
                 });
                 true
             }
@@ -777,6 +784,20 @@ impl SetupApp {
                 self.picker = Some(PickerState {
                     kind: PickerKind::Model,
                     selected: idx,
+                    selected_multi: Vec::new(),
+                });
+                true
+            }
+            "ENABLED_CHANNELS" => {
+                let selected_channels = self.enabled_channels();
+                let mut selected_multi = Vec::new();
+                for channel in Self::channel_options() {
+                    selected_multi.push(selected_channels.iter().any(|c| c == channel));
+                }
+                self.picker = Some(PickerState {
+                    kind: PickerKind::Channels,
+                    selected: 0,
+                    selected_multi,
                 });
                 true
             }
@@ -793,6 +814,7 @@ impl SetupApp {
         let options_len = match kind {
             PickerKind::Provider => PROVIDER_PRESETS.len(),
             PickerKind::Model => self.model_options().len(),
+            PickerKind::Channels => Self::channel_options().len(),
         };
         if options_len == 0 {
             return;
@@ -808,6 +830,18 @@ impl SetupApp {
         };
         if let Some(picker_mut) = self.picker.as_mut() {
             picker_mut.selected = next;
+        }
+    }
+
+    fn toggle_picker_multi(&mut self) {
+        let Some(picker) = self.picker.as_mut() else {
+            return;
+        };
+        if picker.kind != PickerKind::Channels {
+            return;
+        }
+        if let Some(slot) = picker.selected_multi.get_mut(picker.selected) {
+            *slot = !*slot;
         }
     }
 
@@ -829,6 +863,22 @@ impl SetupApp {
                         model.value = chosen.clone();
                         self.status = format!("Model set to {chosen}");
                     }
+                }
+            }
+            PickerKind::Channels => {
+                let mut enabled = Vec::new();
+                for (idx, channel) in Self::channel_options().iter().enumerate() {
+                    if picker.selected_multi.get(idx).copied().unwrap_or(false) {
+                        enabled.push((*channel).to_string());
+                    }
+                }
+                if let Some(field) = self.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
+                    field.value = enabled.join(",");
+                }
+                if enabled.is_empty() {
+                    self.status = "Channels set to setup later (web-only by default)".to_string();
+                } else {
+                    self.status = format!("Channels set to {}", enabled.join(","));
                 }
             }
         }
@@ -1103,15 +1153,33 @@ fn save_config_yaml(
             channels.push(p);
         }
     }
-    let telegram_enabled = channels.iter().any(|c| c == "telegram");
-    let discord_enabled = channels.iter().any(|c| c == "discord");
-    let whatsapp_enabled = channels.iter().any(|c| c == "whatsapp");
+
+    let has_tg =
+        !get("TELEGRAM_BOT_TOKEN").trim().is_empty() || !get("BOT_USERNAME").trim().is_empty();
+    let has_discord = !get("DISCORD_BOT_TOKEN").trim().is_empty();
+    let has_whatsapp = !get("WHATSAPP_ACCESS_TOKEN").trim().is_empty()
+        || !get("WHATSAPP_PHONE_NUMBER_ID").trim().is_empty()
+        || !get("WHATSAPP_VERIFY_TOKEN").trim().is_empty();
 
     let mut yaml = String::new();
     yaml.push_str("# MicroClaw configuration\n\n");
     yaml.push_str("# Enabled channels (telegram,discord,whatsapp,web)\n");
     let channels_note = if channels.is_empty() {
-        "setup later".to_string()
+        let mut inferred = Vec::new();
+        if has_tg {
+            inferred.push("telegram");
+        }
+        if has_discord {
+            inferred.push("discord");
+        }
+        if has_whatsapp {
+            inferred.push("whatsapp");
+        }
+        if inferred.is_empty() {
+            "setup later".to_string()
+        } else {
+            format!("inferred: {}", inferred.join(","))
+        }
     } else {
         channels.join(",")
     };
@@ -1120,50 +1188,37 @@ fn save_config_yaml(
     yaml.push_str("# Telegram bot token from @BotFather\n");
     yaml.push_str(&format!(
         "telegram_bot_token: \"{}\"\n",
-        if telegram_enabled {
-            get("TELEGRAM_BOT_TOKEN")
-        } else {
-            String::new()
-        }
+        get("TELEGRAM_BOT_TOKEN")
     ));
     yaml.push_str("# Bot username without @\n");
-    yaml.push_str(&format!(
-        "bot_username: \"{}\"\n\n",
-        if telegram_enabled {
-            get("BOT_USERNAME")
-        } else {
-            String::new()
-        }
-    ));
+    yaml.push_str(&format!("bot_username: \"{}\"\n\n", get("BOT_USERNAME")));
 
     yaml.push_str("# Discord bot token\n");
-    if discord_enabled {
-        yaml.push_str(&format!(
-            "discord_bot_token: \"{}\"\n\n",
-            get("DISCORD_BOT_TOKEN")
-        ));
-    } else {
+    let discord_token = get("DISCORD_BOT_TOKEN");
+    if discord_token.trim().is_empty() {
         yaml.push_str("discord_bot_token: null\n\n");
+    } else {
+        yaml.push_str(&format!("discord_bot_token: \"{}\"\n\n", discord_token));
     }
 
     yaml.push_str("# WhatsApp Cloud API settings\n");
-    if whatsapp_enabled {
-        yaml.push_str(&format!(
-            "whatsapp_access_token: \"{}\"\n",
-            get("WHATSAPP_ACCESS_TOKEN")
-        ));
-        yaml.push_str(&format!(
-            "whatsapp_phone_number_id: \"{}\"\n",
-            get("WHATSAPP_PHONE_NUMBER_ID")
-        ));
-        yaml.push_str(&format!(
-            "whatsapp_verify_token: \"{}\"\n",
-            get("WHATSAPP_VERIFY_TOKEN")
-        ));
-    } else {
+    let wa_access = get("WHATSAPP_ACCESS_TOKEN");
+    let wa_phone = get("WHATSAPP_PHONE_NUMBER_ID");
+    let wa_verify = get("WHATSAPP_VERIFY_TOKEN");
+    if wa_access.trim().is_empty() {
         yaml.push_str("whatsapp_access_token: null\n");
+    } else {
+        yaml.push_str(&format!("whatsapp_access_token: \"{}\"\n", wa_access));
+    }
+    if wa_phone.trim().is_empty() {
         yaml.push_str("whatsapp_phone_number_id: null\n");
+    } else {
+        yaml.push_str(&format!("whatsapp_phone_number_id: \"{}\"\n", wa_phone));
+    }
+    if wa_verify.trim().is_empty() {
         yaml.push_str("whatsapp_verify_token: null\n");
+    } else {
+        yaml.push_str(&format!("whatsapp_verify_token: \"{}\"\n", wa_verify));
     }
     yaml.push_str("whatsapp_webhook_port: 8080\n\n");
 
@@ -1353,6 +1408,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("• Enter: edit field / open selection list"),
+        Line::from("• Channels picker: Space toggle, Enter apply"),
         Line::from("• Tab / Shift+Tab: next/prev field"),
         Line::from("• ↑/↓ in list: move, Enter: confirm, Esc: close"),
         Line::from("• ←/→ on provider/model: rotate presets"),
@@ -1385,7 +1441,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
     .block(Block::default().borders(Borders::ALL).title("Status"));
     frame.render_widget(status, chunks[2]);
 
-    if let Some(picker) = app.picker {
+    if let Some(picker) = &app.picker {
         let overlay_area = frame.area().inner(Margin::new(8, 4));
         let (title, options): (&str, Vec<String>) = match picker.kind {
             PickerKind::Provider => (
@@ -1396,11 +1452,27 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                     .collect(),
             ),
             PickerKind::Model => ("Select LLM Model", app.model_options()),
+            PickerKind::Channels => (
+                "Select Channels (Space=toggle, Enter=apply)",
+                SetupApp::channel_options()
+                    .iter()
+                    .map(|c| (*c).to_string())
+                    .collect(),
+            ),
         };
         let mut list_lines = Vec::with_capacity(options.len());
         for (i, item) in options.iter().enumerate() {
             let selected = i == picker.selected;
-            let prefix = if selected { "▶ " } else { "  " };
+            let pointer = if selected { "▶ " } else { "  " };
+            let checkbox = if picker.kind == PickerKind::Channels {
+                if picker.selected_multi.get(i).copied().unwrap_or(false) {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }
+            } else {
+                ""
+            };
             let style = if selected {
                 Style::default()
                     .fg(Color::Yellow)
@@ -1408,7 +1480,10 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             } else {
                 Style::default().fg(Color::White)
             };
-            list_lines.push(Line::from(Span::styled(format!("{prefix}{item}"), style)));
+            list_lines.push(Line::from(Span::styled(
+                format!("{pointer}{checkbox}{item}"),
+                style,
+            )));
         }
         let overlay = Paragraph::new(list_lines)
             .block(
@@ -1471,6 +1546,7 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                     }
                     KeyCode::Up => app.move_picker(-1),
                     KeyCode::Down => app.move_picker(1),
+                    KeyCode::Char(' ') => app.toggle_picker_multi(),
                     KeyCode::Enter => app.apply_picker_selection(),
                     _ => {}
                 }
@@ -1612,6 +1688,25 @@ mod tests {
         // Save again to test backup
         let backup2 = save_config_yaml(&yaml_path, &values).unwrap();
         assert!(backup2.is_some());
+
+        let _ = fs::remove_file(&yaml_path);
+    }
+    #[test]
+    fn test_save_config_yaml_preserves_discord_token_without_enabled_channels() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_discord_test_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "".into());
+        values.insert("DISCORD_BOT_TOKEN".into(), "discord_token_123".into());
+        values.insert("LLM_PROVIDER".into(), "anthropic".into());
+        values.insert("LLM_API_KEY".into(), "key".into());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains("discord_bot_token: \"discord_token_123\""));
 
         let _ = fs::remove_file(&yaml_path);
     }
