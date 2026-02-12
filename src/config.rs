@@ -456,22 +456,32 @@ mod tests {
     fn test_runtime_and_skills_dirs_from_root_data_dir() {
         let mut config = test_config();
         config.data_dir = "./microclaw.data".into();
-        assert!(config
-            .runtime_data_dir()
-            .ends_with("microclaw.data/runtime"));
-        assert!(config.skills_data_dir().ends_with("microclaw.data/skills"));
+
+        let runtime = std::path::PathBuf::from(config.runtime_data_dir());
+        let skills = std::path::PathBuf::from(config.skills_data_dir());
+
+        assert!(runtime.ends_with(std::path::Path::new("microclaw.data").join("runtime")));
+        assert!(skills.ends_with(std::path::Path::new("microclaw.data").join("skills")));
     }
 
     #[test]
     fn test_runtime_and_skills_dirs_from_runtime_data_dir() {
         let mut config = test_config();
         config.data_dir = "./microclaw.data/runtime".into();
-        assert!(config
-            .runtime_data_dir()
-            .ends_with("microclaw.data/runtime/runtime"));
-        assert!(config
-            .skills_data_dir()
-            .ends_with("microclaw.data/runtime/skills"));
+
+        let runtime = std::path::PathBuf::from(config.runtime_data_dir());
+        let skills = std::path::PathBuf::from(config.skills_data_dir());
+
+        assert!(runtime.ends_with(
+            std::path::Path::new("microclaw.data")
+                .join("runtime")
+                .join("runtime")
+        ));
+        assert!(skills.ends_with(
+            std::path::Path::new("microclaw.data")
+                .join("runtime")
+                .join("skills")
+        ));
     }
 
     #[test]

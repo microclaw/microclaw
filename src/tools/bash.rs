@@ -132,6 +132,39 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn pwd_command() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "(Get-Location).Path"
+        } else {
+            "pwd"
+        }
+    }
+
+    fn sleep_command(seconds: u64) -> String {
+        if cfg!(target_os = "windows") {
+            format!("Start-Sleep -Seconds {seconds}")
+        } else {
+            format!("sleep {seconds}")
+        }
+    }
+
+    fn stderr_command() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "[Console]::Error.WriteLine('err')"
+        } else {
+            "echo err >&2"
+        }
+    }
+
+    fn normalize_path_for_assert(s: &str) -> String {
+        let normalized = s.replace('\\', "/");
+        if cfg!(target_os = "windows") {
+            normalized.to_ascii_lowercase()
+        } else {
+            normalized
+        }
+    }
+
     #[tokio::test]
     async fn test_bash_echo() {
         let tool = BashTool::new(".");
@@ -151,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn test_bash_stderr() {
         let tool = BashTool::new(".");
-        let result = tool.execute(json!({"command": "echo err >&2"})).await;
+        let result = tool.execute(json!({"command": stderr_command()})).await;
         assert!(!result.is_error); // exit code is 0
         assert!(result.content.contains("STDERR"));
         assert!(result.content.contains("err"));
@@ -161,7 +194,7 @@ mod tests {
     async fn test_bash_timeout() {
         let tool = BashTool::new(".");
         let result = tool
-            .execute(json!({"command": "sleep 10", "timeout_secs": 1}))
+            .execute(json!({"command": sleep_command(10), "timeout_secs": 1}))
             .await;
         assert!(result.is_error);
         assert!(result.content.contains("timed out"));
@@ -192,9 +225,10 @@ mod tests {
         std::fs::create_dir_all(&work).unwrap();
 
         let tool = BashTool::new(work.to_str().unwrap());
-        let result = tool.execute(json!({"command": "pwd"})).await;
+        let result = tool.execute(json!({"command": pwd_command()})).await;
         assert!(!result.is_error);
-        assert!(result.content.contains(work.to_str().unwrap()));
+        assert!(normalize_path_for_assert(&result.content)
+            .contains(&normalize_path_for_assert(work.to_str().unwrap())));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -208,7 +242,7 @@ mod tests {
         let tool = BashTool::new_with_isolation(work.to_str().unwrap(), WorkingDirIsolation::Chat);
         let result = tool
             .execute(json!({
-                "command": "pwd",
+                "command": pwd_command(),
                 "__microclaw_auth": {
                     "caller_channel": "telegram",
                     "caller_chat_id": -100123,
@@ -217,9 +251,12 @@ mod tests {
             }))
             .await;
         assert!(!result.is_error);
-        assert!(result
-            .content
-            .contains("/workspace/chat/telegram/neg100123"));
+        let expected_chat_dir = work.join("chat").join("telegram").join("neg100123");
+        assert!(
+            normalize_path_for_assert(&result.content).contains(&normalize_path_for_assert(
+                expected_chat_dir.to_str().unwrap()
+            ))
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

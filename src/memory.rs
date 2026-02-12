@@ -101,7 +101,11 @@ mod tests {
     fn test_chat_memory_path() {
         let (mm, dir) = test_memory_manager();
         let path = mm.chat_memory_path(12345);
-        assert!(path.to_str().unwrap().contains("groups/12345/AGENTS.md"));
+        assert!(path.ends_with(
+            std::path::Path::new("groups")
+                .join("12345")
+                .join("AGENTS.md")
+        ));
         cleanup(&dir);
     }
 
