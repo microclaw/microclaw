@@ -327,11 +327,25 @@ impl Config {
             return Err(MicroClawError::Config("api_key is required".into()));
         }
         if is_openai_codex_provider(&self.llm_provider) {
-            let has_oauth_token = codex_auth_file_has_access_token()?;
-            let has_api_key = !self.api_key.trim().is_empty();
-            if !has_oauth_token && !has_api_key {
+            if !self.api_key.trim().is_empty() {
                 return Err(MicroClawError::Config(
-                    "openai-codex requires OAuth or api_key. Run `codex login` first, set OPENAI_CODEX_ACCESS_TOKEN, or configure api_key for your OpenAI-compatible endpoint.".into(),
+                    "openai-codex ignores microclaw.config.yaml api_key. Configure ~/.codex/auth.json or run `codex login` instead.".into(),
+                ));
+            }
+            if self
+                .llm_base_url
+                .as_ref()
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false)
+            {
+                return Err(MicroClawError::Config(
+                    "openai-codex ignores microclaw.config.yaml llm_base_url. Configure ~/.codex/config.toml instead.".into(),
+                ));
+            }
+            let has_codex_auth = codex_auth_file_has_access_token()?;
+            if !has_codex_auth {
+                return Err(MicroClawError::Config(
+                    "openai-codex requires ~/.codex/auth.json (access token or OPENAI_API_KEY), or OPENAI_CODEX_ACCESS_TOKEN. Run `codex login` or update Codex config files.".into(),
                 ));
             }
         }
@@ -716,11 +730,11 @@ mod tests {
         }
         let _ = std::fs::remove_dir(auth_dir);
 
-        assert!(msg.contains("openai-codex requires OAuth"));
+        assert!(msg.contains("openai-codex requires ~/.codex/auth.json"));
     }
 
     #[test]
-    fn test_post_deserialize_openai_codex_allows_plain_api_key_without_oauth() {
+    fn test_post_deserialize_openai_codex_rejects_plain_api_key_without_oauth() {
         let _guard = env_lock();
         let prev_codex_home = std::env::var("CODEX_HOME").ok();
         let prev_access = std::env::var("OPENAI_CODEX_ACCESS_TOKEN").ok();
@@ -738,7 +752,8 @@ mod tests {
 
         let yaml = "telegram_bot_token: tok\nbot_username: bot\nllm_provider: openai-codex\napi_key: sk-user-stale\n";
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
-        config.post_deserialize().unwrap();
+        let err = config.post_deserialize().unwrap_err();
+        let msg = err.to_string();
 
         if let Some(prev) = prev_codex_home {
             std::env::set_var("CODEX_HOME", prev);
@@ -752,8 +767,7 @@ mod tests {
         }
         let _ = std::fs::remove_dir(auth_dir);
 
-        assert_eq!(config.llm_provider, "openai-codex");
-        assert_eq!(config.api_key, "sk-user-stale");
+        assert!(msg.contains("ignores microclaw.config.yaml api_key"));
     }
 
     #[test]

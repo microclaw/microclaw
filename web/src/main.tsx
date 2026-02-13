@@ -1030,6 +1030,16 @@ function App() {
 
   async function saveConfigChanges(): Promise<void> {
     try {
+      const provider = String(configDraft.llm_provider || '').trim().toLowerCase()
+      if (provider === 'openai-codex') {
+        const apiKey = String(configDraft.api_key || '').trim()
+        const baseUrl = String(configDraft.llm_base_url || '').trim()
+        if (apiKey || baseUrl) {
+          setSaveStatus('Save failed: openai-codex ignores api_key/llm_base_url in microclaw config. Configure ~/.codex/auth.json and ~/.codex/config.toml.')
+          return
+        }
+      }
+
       const payload: Record<string, unknown> = {
         llm_provider: String(configDraft.llm_provider || ''),
         model: String(configDraft.model || ''),
@@ -1050,9 +1060,15 @@ function App() {
       }
       if (String(configDraft.llm_provider || '').trim().toLowerCase() === 'custom') {
         payload.llm_base_url = String(configDraft.llm_base_url || '').trim() || null
+      } else if (provider === 'openai-codex') {
+        payload.llm_base_url = null
       }
       const apiKey = String(configDraft.api_key || '').trim()
-      if (apiKey) payload.api_key = apiKey
+      if (provider === 'openai-codex') {
+        payload.api_key = ''
+      } else if (apiKey) {
+        payload.api_key = apiKey
+      }
 
       const tg = String(configDraft.telegram_bot_token || '').trim()
       if (tg) payload.telegram_bot_token = tg
@@ -1301,7 +1317,7 @@ function App() {
                           LLM provider and API settings.
                         </Text>
                         <Text size="1" color="gray" className="mt-2 block">llm_provider selects routing preset; model is the exact model id sent to provider API.</Text>
-                        <Text size="1" color="gray" className="mt-1 block">For custom providers set <code>llm_base_url</code>. <code>openai-codex</code> supports OAuth from <code>codex login</code> or <code>api_key</code> (for OpenAI-compatible proxies). <code>ollama</code> can leave <code>api_key</code> empty.</Text>
+                        <Text size="1" color="gray" className="mt-1 block">For custom providers set <code>llm_base_url</code>. For <code>openai-codex</code>, configure auth/provider in <code>~/.codex/auth.json</code> and <code>~/.codex/config.toml</code> (this form ignores <code>api_key</code>/<code>llm_base_url</code>). <code>ollama</code> can leave <code>api_key</code> empty.</Text>
                         <div className="mt-4 space-y-3">
                           <ConfigFieldCard label="llm_provider" description={<>Select provider preset for request routing and defaults.</>}>
                             <div className="mt-2">
@@ -1348,7 +1364,7 @@ function App() {
                             label="api_key"
                             description={
                               currentProvider === 'openai-codex'
-                                ? <>For <code>openai-codex</code>, either use OAuth (<code>codex login</code>) or provide <code>api_key</code> for your proxy endpoint.</>
+                                ? <>For <code>openai-codex</code>, this field is ignored. Configure <code>~/.codex/auth.json</code> instead.</>
                                 : <>Provider API key. Leave blank to keep current secret unchanged.</>
                             }
                           >
@@ -1356,7 +1372,7 @@ function App() {
                               className="mt-2"
                               value={String(configDraft.api_key || '')}
                               onChange={(e) => setConfigField('api_key', e.target.value)}
-                              placeholder={currentProvider === 'openai-codex' ? 'OAuth token auto-detected or sk-... for proxy' : 'sk-...'}
+                              placeholder={currentProvider === 'openai-codex' ? '(ignored for openai-codex)' : 'sk-...'}
                             />
                           </ConfigFieldCard>
                         </div>

@@ -8,7 +8,8 @@ use tracing::warn;
 use std::collections::HashSet;
 
 use crate::codex_auth::{
-    is_openai_codex_provider, refresh_openai_codex_auth_if_needed, resolve_openai_codex_auth,
+    codex_config_default_openai_base_url, is_openai_codex_provider,
+    refresh_openai_codex_auth_if_needed, resolve_openai_codex_auth,
 };
 use crate::config::Config;
 #[cfg(test)]
@@ -682,13 +683,10 @@ pub struct OpenAiProvider {
 fn resolve_openai_compat_base(provider: &str, configured_base: &str) -> String {
     let trimmed = configured_base.trim().trim_end_matches('/').to_string();
     if is_openai_codex_provider(provider) {
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("https://api.openai.com/v1") {
-            return "https://chatgpt.com/backend-api/codex".to_string();
+        if let Some(codex_base) = codex_config_default_openai_base_url() {
+            return codex_base.trim_end_matches('/').to_string();
         }
-        if trimmed.eq_ignore_ascii_case("https://chatgpt.com/backend-api") {
-            return "https://chatgpt.com/backend-api/codex".to_string();
-        }
-        return trimmed;
+        return "https://chatgpt.com/backend-api/codex".to_string();
     }
 
     if trimmed.is_empty() {
@@ -706,7 +704,7 @@ impl OpenAiProvider {
 
         let (api_key, codex_account_id) = if is_openai_codex {
             let _ = refresh_openai_codex_auth_if_needed();
-            match resolve_openai_codex_auth(&config.api_key) {
+            match resolve_openai_codex_auth("") {
                 Ok(auth) => (auth.bearer_token, auth.account_id),
                 Err(e) => {
                     warn!("{}", e);
@@ -2034,10 +2032,28 @@ mod tests {
     async fn test_openai_codex_stream_uses_responses_endpoint() {
         let _guard = env_lock();
         let prev_access = std::env::var("OPENAI_CODEX_ACCESS_TOKEN").ok();
+        let prev_codex_home = std::env::var("CODEX_HOME").ok();
         std::env::set_var("OPENAI_CODEX_ACCESS_TOKEN", "oauth-token");
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let codex_home = std::env::temp_dir().join(format!(
+            "microclaw-codex-home-oauth-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::write(
+            codex_home.join("config.toml"),
+            format!(
+                "model_provider = \"test\"\n\n[model_providers.test]\nbase_url = \"http://{}\"\n",
+                addr
+            ),
+        )
+        .unwrap();
+        std::env::set_var("CODEX_HOME", &codex_home);
         let (request_tx, request_rx) = mpsc::channel::<(String, Option<String>)>();
 
         let server = std::thread::spawn(move || {
@@ -2085,7 +2101,7 @@ mod tests {
             llm_provider: "openai-codex".into(),
             api_key: "fallback-key".into(),
             model: "gpt-5.3-codex".into(),
-            llm_base_url: Some(format!("http://{}", addr)),
+            llm_base_url: Some("http://should-be-ignored".into()),
             max_tokens: 8192,
             max_tool_iterations: 100,
             max_history_messages: 50,
@@ -2131,6 +2147,13 @@ mod tests {
         } else {
             std::env::remove_var("OPENAI_CODEX_ACCESS_TOKEN");
         }
+        if let Some(prev) = prev_codex_home {
+            std::env::set_var("CODEX_HOME", prev);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_file(codex_home.join("config.toml"));
+        let _ = std::fs::remove_dir(codex_home);
 
         assert_eq!(path, "/responses");
         assert_eq!(auth_header.as_deref(), Some("Bearer oauth-token"));
@@ -2144,7 +2167,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn test_openai_codex_stream_falls_back_to_api_key_when_oauth_missing() {
+    async fn test_openai_codex_stream_uses_auth_json_openai_api_key_when_oauth_missing() {
         let _guard = env_lock();
         let prev_access = std::env::var("OPENAI_CODEX_ACCESS_TOKEN").ok();
         let prev_codex_home = std::env::var("CODEX_HOME").ok();
@@ -2158,10 +2181,23 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&auth_dir).unwrap();
-        std::env::set_var("CODEX_HOME", &auth_dir);
-
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        std::fs::write(
+            auth_dir.join("auth.json"),
+            r#"{"OPENAI_API_KEY":"sk-from-auth-json"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            auth_dir.join("config.toml"),
+            format!(
+                "model_provider = \"test\"\n\n[model_providers.test]\nbase_url = \"http://{}\"\n",
+                addr
+            ),
+        )
+        .unwrap();
+        std::env::set_var("CODEX_HOME", &auth_dir);
+
         let (request_tx, request_rx) = mpsc::channel::<(String, Option<String>)>();
 
         let server = std::thread::spawn(move || {
@@ -2207,9 +2243,9 @@ mod tests {
             telegram_bot_token: "tok".into(),
             bot_username: "bot".into(),
             llm_provider: "openai-codex".into(),
-            api_key: "sk-proxy-key".into(),
+            api_key: "should-be-ignored".into(),
             model: "gpt-5.3-codex".into(),
-            llm_base_url: Some(format!("http://{}", addr)),
+            llm_base_url: Some("http://should-be-ignored".into()),
             max_tokens: 8192,
             max_tool_iterations: 100,
             max_history_messages: 50,
@@ -2260,10 +2296,12 @@ mod tests {
         } else {
             std::env::remove_var("OPENAI_CODEX_ACCESS_TOKEN");
         }
+        let _ = std::fs::remove_file(auth_dir.join("auth.json"));
+        let _ = std::fs::remove_file(auth_dir.join("config.toml"));
         let _ = std::fs::remove_dir(auth_dir);
 
         assert_eq!(path, "/responses");
-        assert_eq!(auth_header.as_deref(), Some("Bearer sk-proxy-key"));
+        assert_eq!(auth_header.as_deref(), Some("Bearer sk-from-auth-json"));
         assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
         match &resp.content[0] {
             ResponseContentBlock::Text { text } => assert_eq!(text, "ok"),
@@ -2395,21 +2433,58 @@ mod tests {
 
     #[test]
     fn test_resolve_openai_compat_base_defaults_openai_codex() {
+        let _guard = env_lock();
+        let prev_codex_home = std::env::var("CODEX_HOME").ok();
+        let temp = std::env::temp_dir().join(format!(
+            "microclaw-llm-codex-base-default-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::env::set_var("CODEX_HOME", &temp);
+
         let base = resolve_openai_compat_base("openai-codex", "");
         assert_eq!(base, "https://chatgpt.com/backend-api/codex");
+
+        if let Some(prev) = prev_codex_home {
+            std::env::set_var("CODEX_HOME", prev);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_dir(temp);
     }
 
     #[test]
-    fn test_resolve_openai_compat_base_upgrades_legacy_codex_base() {
-        let base = resolve_openai_compat_base("openai-codex", "https://chatgpt.com/backend-api");
-        assert_eq!(base, "https://chatgpt.com/backend-api/codex");
-    }
+    fn test_resolve_openai_compat_base_codex_uses_codex_config_toml_base() {
+        let _guard = env_lock();
+        let prev_codex_home = std::env::var("CODEX_HOME").ok();
+        let temp = std::env::temp_dir().join(format!(
+            "microclaw-llm-codex-base-file-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(
+            temp.join("config.toml"),
+            "model_provider = \"tabcode\"\n\n[model_providers.tabcode]\nbase_url = \"https://api.tabcode.cc/openai\"\n",
+        )
+        .unwrap();
+        std::env::set_var("CODEX_HOME", &temp);
 
-    #[test]
-    fn test_resolve_openai_compat_base_keeps_codex_specific_base() {
-        let base =
-            resolve_openai_compat_base("openai-codex", "https://chatgpt.com/backend-api/codex");
-        assert_eq!(base, "https://chatgpt.com/backend-api/codex");
+        let base = resolve_openai_compat_base("openai-codex", "https://ignored.example.com");
+        assert_eq!(base, "https://api.tabcode.cc/openai");
+
+        if let Some(prev) = prev_codex_home {
+            std::env::set_var("CODEX_HOME", prev);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = std::fs::remove_file(temp.join("config.toml"));
+        let _ = std::fs::remove_dir(temp);
     }
 
     #[test]

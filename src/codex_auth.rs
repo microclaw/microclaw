@@ -9,6 +9,8 @@ pub const OPENAI_CODEX_PROVIDER: &str = "openai-codex";
 #[derive(Debug, Deserialize)]
 struct CodexAuthFile {
     tokens: Option<CodexAuthTokens>,
+    #[serde(rename = "OPENAI_API_KEY")]
+    openai_api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +45,16 @@ pub fn default_codex_auth_path() -> PathBuf {
     Path::new(&base).join("auth.json")
 }
 
+pub fn default_codex_config_path() -> PathBuf {
+    let base = std::env::var("CODEX_HOME")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .as_deref()
+        .map(expand_tilde)
+        .unwrap_or_else(|| expand_tilde("~/.codex"));
+    Path::new(&base).join("config.toml")
+}
+
 pub fn codex_auth_file_has_access_token() -> Result<bool, MicroClawError> {
     if let Ok(token) = std::env::var("OPENAI_CODEX_ACCESS_TOKEN") {
         if !token.trim().is_empty() {
@@ -72,11 +84,16 @@ pub fn codex_auth_file_has_access_token() -> Result<bool, MicroClawError> {
         .and_then(|tokens| tokens.access_token.as_ref())
         .map(|token| !token.trim().is_empty())
         .unwrap_or(false);
-    Ok(has_access_token)
+    let has_openai_api_key = parsed
+        .openai_api_key
+        .as_ref()
+        .map(|key| !key.trim().is_empty())
+        .unwrap_or(false);
+    Ok(has_access_token || has_openai_api_key)
 }
 
 pub fn resolve_openai_codex_auth(
-    fallback_api_key: &str,
+    _fallback_api_key: &str,
 ) -> Result<CodexAuthResolved, MicroClawError> {
     if let Ok(token) = std::env::var("OPENAI_CODEX_ACCESS_TOKEN") {
         let trimmed = token.trim();
@@ -119,20 +136,92 @@ pub fn resolve_openai_codex_auth(
                     .filter(|id| !id.is_empty()),
             });
         }
-    }
 
-    let fallback = fallback_api_key.trim();
-    if !fallback.is_empty() {
-        return Ok(CodexAuthResolved {
-            bearer_token: fallback.to_string(),
-            account_id: None,
-        });
+        if let Some(api_key) = parsed
+            .openai_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        {
+            return Ok(CodexAuthResolved {
+                bearer_token: api_key.to_string(),
+                account_id: None,
+            });
+        }
     }
 
     Err(MicroClawError::Config(format!(
-        "OpenAI Codex provider requires OAuth or api_key. Run `codex login` (expected auth file: {}), set OPENAI_CODEX_ACCESS_TOKEN, or configure api_key for your OpenAI-compatible endpoint.",
+        "OpenAI Codex provider requires ~/.codex/auth.json (access token or OPENAI_API_KEY), or OPENAI_CODEX_ACCESS_TOKEN. Run `codex login` or update Codex config files (expected auth file: {}).",
         auth_path.display()
     )))
+}
+
+pub fn codex_config_default_openai_base_url() -> Option<String> {
+    let path = default_codex_config_path();
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_codex_config_default_openai_base_url(&content)
+}
+
+fn parse_codex_config_default_openai_base_url(content: &str) -> Option<String> {
+    let mut model_provider: Option<String> = None;
+
+    for raw in content.lines() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("model_provider") {
+            model_provider = parse_toml_string_assignment(line, "model_provider");
+            if model_provider.is_some() {
+                break;
+            }
+        }
+    }
+
+    let provider = model_provider?;
+    let target = provider.trim();
+    if target.is_empty() {
+        return None;
+    }
+
+    let mut current_provider: Option<String> = None;
+    for raw in content.lines() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            let section = &line[1..line.len() - 1];
+            current_provider = section
+                .strip_prefix("model_providers.")
+                .map(|v| v.trim().trim_matches('"').to_string())
+                .filter(|v| !v.is_empty());
+            continue;
+        }
+
+        if current_provider.as_deref() == Some(target) {
+            if let Some(base_url) = parse_toml_string_assignment(line, "base_url") {
+                let normalized = base_url.trim().trim_end_matches('/').to_string();
+                if !normalized.is_empty() {
+                    return Some(normalized);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_toml_string_assignment(line: &str, key: &str) -> Option<String> {
+    let (lhs, rhs) = line.split_once('=')?;
+    if lhs.trim() != key {
+        return None;
+    }
+    let value = rhs.trim();
+    if !(value.starts_with('"') && value.ends_with('"') && value.len() >= 2) {
+        return None;
+    }
+    Some(value[1..value.len() - 1].to_string())
 }
 
 fn expand_tilde(input: &str) -> String {
@@ -312,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_auth_file_has_access_token_ignores_openai_api_key_only() {
+    fn test_codex_auth_file_has_access_token_accepts_openai_api_key_only() {
         let _guard = env_lock();
         let prev_codex_home = std::env::var("CODEX_HOME").ok();
         let prev_access = std::env::var("OPENAI_CODEX_ACCESS_TOKEN").ok();
@@ -348,14 +437,15 @@ mod tests {
         let _ = std::fs::remove_file(auth_dir.join("auth.json"));
         let _ = std::fs::remove_dir(auth_dir);
 
-        assert!(!has);
+        assert!(has);
     }
 
     #[test]
-    fn test_resolve_openai_codex_auth_rejects_openai_api_key_only() {
+    fn test_resolve_openai_codex_auth_accepts_openai_api_key_only() {
         let _guard = env_lock();
         let prev_codex_home = std::env::var("CODEX_HOME").ok();
         let prev_access = std::env::var("OPENAI_CODEX_ACCESS_TOKEN").ok();
+        std::env::remove_var("OPENAI_CODEX_ACCESS_TOKEN");
         std::env::remove_var("OPENAI_CODEX_ACCESS_TOKEN");
 
         let auth_dir = std::env::temp_dir().join(format!(
@@ -373,7 +463,7 @@ mod tests {
         .unwrap();
         std::env::set_var("CODEX_HOME", &auth_dir);
 
-        let err = resolve_openai_codex_auth("").unwrap_err().to_string();
+        let auth = resolve_openai_codex_auth("").unwrap();
 
         if let Some(prev) = prev_codex_home {
             std::env::set_var("CODEX_HOME", prev);
@@ -388,41 +478,21 @@ mod tests {
         let _ = std::fs::remove_file(auth_dir.join("auth.json"));
         let _ = std::fs::remove_dir(auth_dir);
 
-        assert!(err.contains("requires OAuth"));
+        assert_eq!(auth.bearer_token, "sk-user-stale");
+        assert!(auth.account_id.is_none());
     }
 
     #[test]
-    fn test_resolve_openai_codex_auth_uses_fallback_api_key() {
-        let _guard = env_lock();
-        let prev_codex_home = std::env::var("CODEX_HOME").ok();
-        let prev_access = std::env::var("OPENAI_CODEX_ACCESS_TOKEN").ok();
-        std::env::remove_var("OPENAI_CODEX_ACCESS_TOKEN");
+    fn test_parse_codex_config_default_openai_base_url() {
+        let content = r#"
+model_provider = "tabcode"
 
-        let auth_dir = std::env::temp_dir().join(format!(
-            "microclaw-codex-auth-fallback-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&auth_dir).unwrap();
-        std::env::set_var("CODEX_HOME", &auth_dir);
-
-        let auth = resolve_openai_codex_auth("sk-proxy-key").unwrap();
-
-        if let Some(prev) = prev_codex_home {
-            std::env::set_var("CODEX_HOME", prev);
-        } else {
-            std::env::remove_var("CODEX_HOME");
-        }
-        if let Some(prev) = prev_access {
-            std::env::set_var("OPENAI_CODEX_ACCESS_TOKEN", prev);
-        } else {
-            std::env::remove_var("OPENAI_CODEX_ACCESS_TOKEN");
-        }
-        let _ = std::fs::remove_dir(auth_dir);
-
-        assert_eq!(auth.bearer_token, "sk-proxy-key");
-        assert!(auth.account_id.is_none());
+[model_providers.tabcode]
+name = "openai"
+base_url = "https://api.tabcode.cc/openai"
+wire_api = "responses"
+"#;
+        let base = parse_codex_config_default_openai_base_url(content).unwrap();
+        assert_eq!(base, "https://api.tabcode.cc/openai");
     }
 }

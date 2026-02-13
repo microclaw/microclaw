@@ -17,7 +17,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::DefaultTerminal;
 
 use crate::codex_auth::{
-    is_openai_codex_provider, provider_allows_empty_api_key, resolve_openai_codex_auth,
+    codex_config_default_openai_base_url, is_openai_codex_provider, provider_allows_empty_api_key,
+    resolve_openai_codex_auth,
 };
 use crate::error::MicroClawError;
 use crate::text::floor_char_boundary;
@@ -47,9 +48,9 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
     },
     ProviderPreset {
         id: "openai-codex",
-        label: "OpenAI Codex (ChatGPT subscription OAuth)",
+        label: "OpenAI Codex",
         protocol: ProviderProtocol::OpenAiCompat,
-        default_base_url: "https://chatgpt.com/backend-api",
+        default_base_url: "",
         models: &["gpt-5.3-codex"],
     },
     ProviderPreset {
@@ -211,9 +212,9 @@ fn default_model_for_provider(provider: &str) -> &'static str {
 
 fn provider_display(provider: &str) -> String {
     if let Some(preset) = find_provider_preset(provider) {
-        format!("{} ({})", preset.id, preset.label)
+        format!("{} - {}", preset.id, preset.label)
     } else {
-        format!("{provider} (custom)")
+        format!("{provider} - custom")
     }
 }
 
@@ -546,6 +547,18 @@ impl SetupApp {
         if provider.is_empty() {
             return Err(MicroClawError::Config("LLM_PROVIDER is required".into()));
         }
+        if is_openai_codex_provider(&provider) {
+            if !self.field_value("LLM_API_KEY").trim().is_empty() {
+                return Err(MicroClawError::Config(
+                    "openai-codex ignores LLM_API_KEY here. Configure ~/.codex/auth.json or run `codex login`.".into(),
+                ));
+            }
+            if !self.field_value("LLM_BASE_URL").trim().is_empty() {
+                return Err(MicroClawError::Config(
+                    "openai-codex ignores LLM_BASE_URL here. Configure ~/.codex/config.toml instead.".into(),
+                ));
+            }
+        }
 
         let timezone = self.field_value("TIMEZONE");
         let tz = if timezone.is_empty() {
@@ -586,12 +599,11 @@ impl SetupApp {
             .trim_start_matches('@')
             .to_string();
         let provider = self.field_value("LLM_PROVIDER").to_lowercase();
-        let api_key_input = self.field_value("LLM_API_KEY");
         let (api_key, codex_account_id) = if is_openai_codex_provider(&provider) {
-            let auth = resolve_openai_codex_auth(&api_key_input)?;
+            let auth = resolve_openai_codex_auth("")?;
             (auth.bearer_token, auth.account_id)
         } else {
-            (api_key_input, None)
+            (self.field_value("LLM_API_KEY"), None)
         };
         let base_url = self.field_value("LLM_BASE_URL");
         let model = self.field_value("LLM_MODEL");
@@ -1087,13 +1099,10 @@ fn resolve_openai_compat_validation_base(
     };
 
     if is_openai_codex_provider(provider) {
-        if trimmed.eq_ignore_ascii_case("https://api.openai.com/v1") {
-            return "https://chatgpt.com/backend-api/codex".to_string();
+        if let Some(codex_base) = codex_config_default_openai_base_url() {
+            return codex_base.trim_end_matches('/').to_string();
         }
-        if trimmed.eq_ignore_ascii_case("https://chatgpt.com/backend-api") {
-            return "https://chatgpt.com/backend-api/codex".to_string();
-        }
-        return trimmed;
+        return "https://chatgpt.com/backend-api/codex".to_string();
     }
 
     if trimmed.ends_with("/v1") {
@@ -1615,6 +1624,14 @@ pub fn run_setup_wizard() -> Result<bool, MicroClawError> {
 mod tests {
     use super::*;
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("env lock poisoned")
+    }
+
     #[test]
     fn test_mask_secret() {
         assert_eq!(mask_secret("abcdefghi"), "abc***hi");
@@ -1672,6 +1689,18 @@ mod tests {
 
     #[test]
     fn test_resolve_openai_compat_validation_base_codex() {
+        let _guard = env_lock();
+        let prev_codex_home = std::env::var("CODEX_HOME").ok();
+        let temp = std::env::temp_dir().join(format!(
+            "microclaw-setup-codex-base-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&temp);
+        std::env::set_var("CODEX_HOME", &temp);
+
         let base = resolve_openai_compat_validation_base("openai-codex", "", None);
         assert_eq!(base, "https://chatgpt.com/backend-api/codex");
         let legacy = resolve_openai_compat_validation_base(
@@ -1680,6 +1709,13 @@ mod tests {
             None,
         );
         assert_eq!(legacy, "https://chatgpt.com/backend-api/codex");
+
+        if let Some(prev) = prev_codex_home {
+            std::env::set_var("CODEX_HOME", prev);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        let _ = fs::remove_dir(temp);
     }
 
     #[test]
