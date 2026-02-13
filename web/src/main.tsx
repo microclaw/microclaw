@@ -599,6 +599,11 @@ function App() {
   const [config, setConfig] = useState<ConfigPayload | null>(null)
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>({})
   const [saveStatus, setSaveStatus] = useState<string>('')
+  const [usageOpen, setUsageOpen] = useState<boolean>(false)
+  const [usageLoading, setUsageLoading] = useState<boolean>(false)
+  const [usageReport, setUsageReport] = useState<string>('')
+  const [usageError, setUsageError] = useState<string>('')
+  const [usageSession, setUsageSession] = useState<string>('')
 
   const sessionItems = useMemo(() => {
     const map = new Map<string, SessionItem>()
@@ -941,6 +946,24 @@ function App() {
     setConfigOpen(true)
   }
 
+  async function openUsage(targetSession = sessionKey): Promise<void> {
+    setUsageLoading(true)
+    setUsageError('')
+    setUsageReport('')
+    setUsageSession(targetSession)
+    try {
+      const query = new URLSearchParams({ session_key: targetSession })
+      const data = await api<{ report?: string }>(`/api/usage?${query.toString()}`)
+      setUsageReport(String(data.report || '').trim())
+      setUsageOpen(true)
+    } catch (e) {
+      setUsageError(e instanceof Error ? e.message : String(e))
+      setUsageOpen(true)
+    } finally {
+      setUsageLoading(false)
+    }
+  }
+
   function setConfigField(field: string, value: unknown): void {
     setConfigDraft((prev) => ({ ...prev, [field]: value }))
   }
@@ -1126,6 +1149,7 @@ function App() {
             onResetSession={(key) => void onResetSessionByKey(key)}
             onDeleteSession={(key) => void onDeleteSessionByKey(key)}
             onOpenConfig={openConfig}
+            onOpenUsage={() => openUsage(sessionKey)}
             onNewSession={createSession}
           />
 
@@ -1458,6 +1482,35 @@ function App() {
                 <Button onClick={() => void saveConfigChanges()}>Save</Button>
               </Flex>
             </div>
+          </Dialog.Content>
+        </Dialog.Root>
+        <Dialog.Root open={usageOpen} onOpenChange={setUsageOpen}>
+          <Dialog.Content maxWidth="980px" className="overflow-hidden flex flex-col" style={{ width: '980px', height: '720px', maxWidth: '980px', maxHeight: '720px' }}>
+            <Dialog.Title>Usage Panel</Dialog.Title>
+            <Dialog.Description size="2" mb="3">
+              Token and cost summary for session <code>{usageSession || sessionKey}</code>
+            </Dialog.Description>
+            <div className="mb-3">
+              <Flex gap="2">
+                <Button size="2" variant="soft" onClick={() => void openUsage(sessionKey)} disabled={usageLoading}>
+                  Refresh Current Session
+                </Button>
+                <Button size="2" variant="soft" onClick={() => void openUsage(usageSession || sessionKey)} disabled={usageLoading}>
+                  Refresh This Panel
+                </Button>
+              </Flex>
+            </div>
+            <Card className="min-h-0 flex-1 overflow-auto p-3">
+              {usageLoading ? (
+                <Text size="2">Loading usage report...</Text>
+              ) : usageError ? (
+                <Callout.Root color="red" size="1" variant="soft">
+                  <Callout.Text>{usageError}</Callout.Text>
+                </Callout.Root>
+              ) : (
+                <pre className="whitespace-pre-wrap break-words text-[13px] leading-6">{usageReport || '(no usage data)'}</pre>
+              )}
+            </Card>
           </Dialog.Content>
         </Dialog.Root>
       </div>

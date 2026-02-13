@@ -25,6 +25,7 @@ use crate::channel::{
 use crate::config::{Config, WorkingDirIsolation};
 use crate::db::{call_blocking, ChatSummary, StoredMessage};
 use crate::runtime::AppState;
+use crate::usage::build_usage_report;
 
 static WEB_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 
@@ -384,6 +385,11 @@ struct RunStatusQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct UsageQuery {
+    session_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct UpdateConfigRequest {
     llm_provider: Option<String>,
     api_key: Option<String>,
@@ -686,6 +692,27 @@ async fn api_history(
         "session_key": session_key,
         "chat_id": chat_id,
         "messages": items,
+    })))
+}
+
+async fn api_usage(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Query(query): Query<UsageQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+
+    let session_key = normalize_session_key(query.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key(&state, &session_key).await?;
+    let report = build_usage_report(state.app_state.db.clone(), &state.app_state.config, chat_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "session_key": session_key,
+        "chat_id": chat_id,
+        "report": report,
     })))
 }
 
@@ -1264,6 +1291,7 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/config", get(api_get_config).put(api_update_config))
         .route("/api/sessions", get(api_sessions))
         .route("/api/history", get(api_history))
+        .route("/api/usage", get(api_usage))
         .route("/api/send", post(api_send))
         .route("/api/send_stream", post(api_send_stream))
         .route("/api/stream", get(api_stream))
@@ -1735,6 +1763,44 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(260)).await;
         let resp3 = app.oneshot(mk_req("r3")).await.unwrap();
         assert_eq!(resp3.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_api_usage_returns_report() {
+        let web_state = test_web_state(Box::new(DummyLlm), None, WebLimits::default());
+        let db = web_state.app_state.db.clone();
+        call_blocking(db, |d| {
+            d.upsert_chat(123, Some("main"), "web")?;
+            d.log_llm_usage(
+                123,
+                "web",
+                "anthropic",
+                "claude-test",
+                1200,
+                300,
+                "agent_loop",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let app = build_router(web_state);
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/usage?session_key=main")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let report = v.get("report").and_then(|x| x.as_str()).unwrap_or_default();
+        assert!(report.contains("Token Usage"));
+        assert!(report.contains("This chat"));
     }
 
     #[tokio::test]
