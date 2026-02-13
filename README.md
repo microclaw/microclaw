@@ -323,6 +323,18 @@ Optional semantic-memory build (sqlite-vec disabled by default):
 cargo build --release --features sqlite-vec
 ```
 
+First-time sqlite-vec quickstart (3 commands):
+
+```sh
+cargo run --features sqlite-vec -- setup
+cargo run --features sqlite-vec -- start
+sqlite3 microclaw.data/runtime/microclaw.db "SELECT id, chat_id, chat_channel, external_chat_id, category, embedding_model FROM memories ORDER BY id DESC LIMIT 20;"
+```
+
+In `setup`, set:
+- `embedding_provider` = `openai` or `ollama`
+- provider credentials/base URL/model as needed
+
 ## Local Web UI (cross-channel history)
 
 When `web_enabled: true`, MicroClaw serves a local Web UI (default `http://127.0.0.1:10961`).

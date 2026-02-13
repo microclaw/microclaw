@@ -266,6 +266,18 @@ cp target/release/microclaw /usr/local/bin/
 cargo build --release --features sqlite-vec
 ```
 
+首次启用 sqlite-vec（最短 3 条命令）：
+
+```sh
+cargo run --features sqlite-vec -- setup
+cargo run --features sqlite-vec -- start
+sqlite3 microclaw.data/runtime/microclaw.db "SELECT id, chat_id, chat_channel, external_chat_id, category, embedding_model FROM memories ORDER BY id DESC LIMIT 20;"
+```
+
+在 `setup` 里至少设置：
+- `embedding_provider` = `openai` 或 `ollama`
+- 对应 provider 的 key/base URL/model
+
 ## 本地 Web UI（跨渠道历史）
 
 当 `web_enabled: true` 时，MicroClaw 会启动本地 Web UI（默认 `http://127.0.0.1:10961`）。
