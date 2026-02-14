@@ -841,7 +841,13 @@ pub(crate) async fn build_db_memory_context(
         let mut scored: Vec<(usize, usize, &crate::db::Memory)> = memories
             .iter()
             .enumerate()
-            .map(|(idx, m)| (score_relevance_with_cache(&m.content, &query_tokens), idx, m))
+            .map(|(idx, m)| {
+                (
+                    score_relevance_with_cache(&m.content, &query_tokens),
+                    idx,
+                    m,
+                )
+            })
             .collect();
         if !query.is_empty() {
             scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
@@ -1738,8 +1744,7 @@ mod tests {
     #[test]
     fn test_build_system_prompt_with_soul() {
         let soul = "I am a friendly pirate assistant. I speak in pirate lingo and love adventure.";
-        let prompt =
-            super::build_system_prompt("testbot", "telegram", "", 42, "", Some(soul));
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", Some(soul));
         assert!(prompt.contains("<soul>"));
         assert!(prompt.contains("pirate"));
         assert!(prompt.contains("</soul>"));
@@ -1757,8 +1762,7 @@ mod tests {
 
     #[test]
     fn test_load_soul_content_from_data_dir() {
-        let base_dir =
-            std::env::temp_dir().join(format!("mc_soul_test_{}", uuid::Uuid::new_v4()));
+        let base_dir = std::env::temp_dir().join(format!("mc_soul_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&base_dir).unwrap();
         let soul_path = base_dir.join("SOUL.md");
         std::fs::write(&soul_path, "I am a wise owl assistant.").unwrap();
