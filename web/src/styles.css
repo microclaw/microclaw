@@ -242,6 +242,10 @@ html.dark .aui-assistant-message-content {
   line-height: 1.7;
 }
 
+html.dark .aui-text {
+  color: hsl(146 26% 92%);
+}
+
 html.dark .aui-assistant-message-content p {
   margin: 0 0 10px;
 }
@@ -284,6 +288,12 @@ html.dark .aui-assistant-message-content code {
   color: color-mix(in srgb, var(--mc-accent) 24%, #ecfeff);
   padding: 1px 6px;
   font-size: 0.85em;
+}
+
+html.dark .aui-md-inline-code {
+  border-color: color-mix(in srgb, var(--mc-accent) 40%, #24313a);
+  background: color-mix(in srgb, var(--mc-accent) 16%, #0b1418);
+  color: hsl(190 55% 92%);
 }
 
 html.dark .aui-assistant-message-content pre {
@@ -439,6 +449,10 @@ html:not(.dark) .aui-assistant-message-content {
   line-height: 1.7;
 }
 
+html:not(.dark) .aui-text {
+  color: hsl(218 30% 17%);
+}
+
 html:not(.dark) .aui-assistant-message-content a {
   color: color-mix(in srgb, var(--mc-accent) 68%, #0f172a);
 }
@@ -450,6 +464,12 @@ html:not(.dark) .aui-assistant-message-content code {
   color: color-mix(in srgb, var(--mc-accent) 55%, #0f172a);
   padding: 1px 6px;
   font-size: 0.85em;
+}
+
+html:not(.dark) .aui-md-inline-code {
+  border-color: color-mix(in srgb, var(--mc-accent) 34%, #cbd5e1);
+  background: color-mix(in srgb, var(--mc-accent) 10%, #f8fafc);
+  color: hsl(218 30% 20%);
 }
 
 html:not(.dark) .aui-assistant-message-content pre {
