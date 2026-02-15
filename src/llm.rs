@@ -207,10 +207,7 @@ impl AnthropicProvider {
             api_key: config.api_key.clone(),
             model: config.model.clone(),
             max_tokens: config.max_tokens,
-            base_url: config
-                .llm_base_url
-                .clone()
-                .unwrap_or_else(|| "https://api.anthropic.com/v1/messages".into()),
+            base_url: resolve_anthropic_messages_url(config.llm_base_url.as_deref().unwrap_or("")),
         }
     }
 
@@ -297,6 +294,17 @@ impl AnthropicProvider {
             usage,
         ))
     }
+}
+
+fn resolve_anthropic_messages_url(configured_base: &str) -> String {
+    let trimmed = configured_base.trim().trim_end_matches('/').to_string();
+    if trimmed.is_empty() {
+        return "https://api.anthropic.com/v1/messages".to_string();
+    }
+    if trimmed.ends_with("/v1/messages") {
+        return trimmed;
+    }
+    format!("{trimmed}/v1/messages")
 }
 
 #[derive(Default)]
@@ -2469,6 +2477,24 @@ mod tests {
     fn test_resolve_openai_compat_base_defaults_openai() {
         let base = resolve_openai_compat_base("openai", "");
         assert_eq!(base, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_resolve_anthropic_messages_url_defaults() {
+        let url = resolve_anthropic_messages_url("");
+        assert_eq!(url, "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn test_resolve_anthropic_messages_url_accepts_full_messages_path() {
+        let url = resolve_anthropic_messages_url("http://127.0.0.1:3000/api/v1/messages");
+        assert_eq!(url, "http://127.0.0.1:3000/api/v1/messages");
+    }
+
+    #[test]
+    fn test_resolve_anthropic_messages_url_appends_messages_path_for_prefix_base() {
+        let url = resolve_anthropic_messages_url("http://127.0.0.1:3000/api/");
+        assert_eq!(url, "http://127.0.0.1:3000/api/v1/messages");
     }
 
     #[test]
