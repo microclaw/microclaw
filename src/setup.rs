@@ -373,9 +373,8 @@ impl SetupApp {
                     if let Some(url) = config.llm_base_url {
                         map.insert("LLM_BASE_URL".into(), url);
                     }
-                    map.insert("DATA_DIR".into(), config.data_dir);
+                    map.insert("WORKSPACE_DIR".into(), config.workspace_dir.clone());
                     map.insert("TIMEZONE".into(), config.timezone);
-                    map.insert("WORKING_DIR".into(), config.working_dir);
                     return map;
                 }
             }
@@ -453,24 +452,17 @@ impl SetupApp {
         tz.parse::<chrono_tz::Tz>()
             .map_err(|_| MicroClawError::Config(format!("Invalid TIMEZONE: {tz}")))?;
 
-        let data_dir = self.field_value("DATA_DIR");
-        let dir = if data_dir.is_empty() {
-            "./microclaw.data".to_string()
+        let workspace_dir = self.field_value("WORKSPACE_DIR");
+        let dir = if workspace_dir.trim().is_empty() {
+            "./workspace".to_string()
         } else {
-            data_dir
+            workspace_dir.trim().to_string()
         };
         fs::create_dir_all(&dir)?;
+        let _ = fs::create_dir_all(Path::new(&dir).join("shared"));
         let probe = Path::new(&dir).join(".setup_probe");
         fs::write(&probe, "ok")?;
         let _ = fs::remove_file(probe);
-
-        let working_dir = self.field_value("WORKING_DIR");
-        let workdir = if working_dir.is_empty() {
-            "./tmp".to_string()
-        } else {
-            working_dir
-        };
-        fs::create_dir_all(&workdir)?;
 
         Ok(())
     }
@@ -917,21 +909,16 @@ fn save_config_yaml(
     }
 
     yaml.push('\n');
-    let data_dir = values
-        .get("DATA_DIR")
+    let workspace_dir = values
+        .get("WORKSPACE_DIR")
         .cloned()
-        .unwrap_or_else(|| "./microclaw.data".into());
-    yaml.push_str(&format!("data_dir: \"{}\"\n", data_dir));
+        .unwrap_or_else(|| "./workspace".into());
+    yaml.push_str(&format!("workspace_dir: \"{}\"\n", workspace_dir.trim()));
     let tz = values
         .get("TIMEZONE")
         .cloned()
         .unwrap_or_else(|| "UTC".into());
     yaml.push_str(&format!("timezone: \"{}\"\n", tz));
-    let working_dir = values
-        .get("WORKING_DIR")
-        .cloned()
-        .unwrap_or_else(|| "./tmp".into());
-    yaml.push_str(&format!("working_dir: \"{}\"\n", working_dir));
 
     fs::write(path, yaml)?;
     Ok(backup)

@@ -196,7 +196,7 @@ impl Tool for SyncSkillsTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "sync_skills".into(),
-            description: "Sync a skill from an external repository (default: vercel-labs/skills) into local microclaw.data/skills and normalize frontmatter (source/version/updated_at/platforms/deps).".into(),
+            description: "Sync a skill from an external repository (default: vercel-labs/skills) into the local skills directory and normalize frontmatter (source/version/updated_at/platforms/deps).".into(),
             input_schema: schema_object(
                 json!({
                     "skill_name": {

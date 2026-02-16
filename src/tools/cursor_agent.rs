@@ -75,7 +75,7 @@ impl Tool for CursorAgentTool {
         let auth = auth_context_from_input(&input);
         let started_at = chrono::Utc::now().to_rfc3339();
         let workdir_str_storage;
-        let working_dir = super::resolve_tool_working_dir(PathBuf::from(&self.config.working_dir).as_path());
+        let working_dir = super::resolve_tool_working_dir(PathBuf::from(self.config.working_dir()).as_path());
         if let Err(e) = tokio::fs::create_dir_all(&working_dir).await {
             return ToolResult::error(format!(
                 "Failed to create working directory {}: {e}",

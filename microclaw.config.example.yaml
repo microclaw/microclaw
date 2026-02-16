@@ -23,13 +23,9 @@ max_tool_iterations: 100
 max_history_messages: 50
 # Maximum inbound Telegram document size in MB
 max_document_size_mb: 100
-# Data root directory:
-# - runtime files go to <data_dir>/runtime
-# - built-in/custom skills are loaded from <data_dir>/skills
-data_dir: "./microclaw.data"
-# Default working directory for file/bash/search tools.
-# Tools use working_dir/shared as the workspace (single shared space; no per-chat isolation).
-working_dir: "./tmp"
+# Workspace directory (required). Single root for runtime, skills, and tool workspace.
+# Layout: workspace_dir/runtime, workspace_dir/skills, workspace_dir/shared. Copy this folder to migrate.
+workspace_dir: "./workspace"
 # IANA timezone for scheduling (e.g. "US/Eastern", "Europe/London")
 timezone: "UTC"
 

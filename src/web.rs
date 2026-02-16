@@ -1117,7 +1117,7 @@ async fn send_and_store_response_with_events(
                             "No session to archive.".into()
                         } else {
                             archive_conversation(
-                                &state.app_state.config.data_dir,
+                                &state.app_state.config.runtime_data_dir(),
                                 chat_id,
                                 &messages,
                             );
@@ -1817,8 +1817,7 @@ mod tests {
             max_tool_iterations: 100,
             max_history_messages: 50,
             max_document_size_mb: 100,
-            data_dir: "./microclaw.data".into(),
-            working_dir: "./tmp".into(),
+            workspace_dir: "./workspace".into(),
             openai_api_key: None,
             timezone: "UTC".into(),
             allowed_groups: vec![],
@@ -1854,8 +1853,7 @@ mod tests {
         };
         let dir = std::env::temp_dir().join(format!("microclaw_webtest_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        cfg.data_dir = dir.to_string_lossy().to_string();
-        cfg.working_dir = dir.join("tmp").to_string_lossy().to_string();
+        cfg.workspace_dir = dir.to_string_lossy().to_string();
         let runtime_dir = cfg.runtime_data_dir();
         std::fs::create_dir_all(&runtime_dir).unwrap();
         let db = Arc::new(Database::new(&runtime_dir).unwrap());
@@ -1864,7 +1862,7 @@ mod tests {
             config: cfg.clone(),
             bot: bot.clone(),
             db: db.clone(),
-            memory: MemoryManager::new(&runtime_dir, &cfg.working_dir),
+            memory: MemoryManager::new(&runtime_dir, cfg.working_dir()),
             skills: SkillManager::from_skills_dir(&cfg.skills_data_dir()),
             llm,
             tools: ToolRegistry::new(&cfg, bot, db),

@@ -274,7 +274,7 @@ pub fn resolve_tool_working_dir(base_working_dir: &Path) -> PathBuf {
 
 impl ToolRegistry {
     pub fn new(config: &Config, bot: Bot, db: Arc<Database>) -> Self {
-        let working_dir = PathBuf::from(&config.working_dir);
+        let working_dir = PathBuf::from(config.working_dir());
         if let Err(e) = std::fs::create_dir_all(&working_dir) {
             tracing::warn!(
                 "Failed to create working_dir '{}': {}",
@@ -284,18 +284,18 @@ impl ToolRegistry {
         }
         let skills_data_dir = config.skills_data_dir();
         let tools: Vec<Box<dyn Tool>> = vec![
-            Box::new(bash::BashTool::new(&config.working_dir)),
+            Box::new(bash::BashTool::new(config.working_dir())),
             Box::new(browser::BrowserTool::new(
-                &config.data_dir,
+                &config.runtime_data_dir(),
                 config.agent_browser_path.clone(),
             )),
-            Box::new(read_file::ReadFileTool::new(&config.working_dir)),
-            Box::new(write_file::WriteFileTool::new(&config.working_dir)),
-            Box::new(edit_file::EditFileTool::new(&config.working_dir)),
-            Box::new(glob::GlobTool::new(&config.working_dir)),
-            Box::new(grep::GrepTool::new(&config.working_dir)),
-            Box::new(memory::ReadMemoryTool::new(&config.data_dir, &config.working_dir)),
-            Box::new(memory::WriteMemoryTool::new(&config.data_dir, &config.working_dir)),
+            Box::new(read_file::ReadFileTool::new(config.working_dir())),
+            Box::new(write_file::WriteFileTool::new(config.working_dir())),
+            Box::new(edit_file::EditFileTool::new(config.working_dir())),
+            Box::new(glob::GlobTool::new(config.working_dir())),
+            Box::new(grep::GrepTool::new(config.working_dir())),
+            Box::new(memory::ReadMemoryTool::new(&config.runtime_data_dir(), config.working_dir())),
+            Box::new(memory::WriteMemoryTool::new(&config.runtime_data_dir(), config.working_dir())),
             Box::new(web_fetch::WebFetchTool),
             Box::new(web_search::WebSearchTool),
             Box::new(send_message::SendMessageTool::new_with_config(
@@ -313,14 +313,14 @@ impl ToolRegistry {
             Box::new(schedule::ResumeTaskTool::new(db.clone())),
             Box::new(schedule::CancelTaskTool::new(db.clone())),
             Box::new(schedule::GetTaskHistoryTool::new(db.clone())),
-            Box::new(export_chat::ExportChatTool::new(db.clone(), &config.data_dir)),
+            Box::new(export_chat::ExportChatTool::new(db.clone(), &config.runtime_data_dir())),
             Box::new(sub_agent::SubAgentTool::new(config)),
             Box::new(cursor_agent::CursorAgentTool::new(config, db.clone())),
             Box::new(cursor_agent::ListCursorAgentRunsTool::new(db.clone())),
             Box::new(activate_skill::ActivateSkillTool::new(&skills_data_dir)),
             Box::new(sync_skills::SyncSkillsTool::new(&skills_data_dir)),
-            Box::new(tiered_memory::ReadTieredMemoryTool::new(&config.data_dir)),
-            Box::new(tiered_memory::WriteTieredMemoryTool::new(&config.data_dir)),
+            Box::new(tiered_memory::ReadTieredMemoryTool::new(&config.runtime_data_dir())),
+            Box::new(tiered_memory::WriteTieredMemoryTool::new(&config.runtime_data_dir())),
         ];
 
         let mut tools: Vec<Box<dyn Tool>> = tools;
@@ -347,7 +347,7 @@ impl ToolRegistry {
 
     /// Create a restricted tool registry for sub-agents (no side-effect or recursive tools).
     pub fn new_sub_agent(config: &Config) -> Self {
-        let working_dir = PathBuf::from(&config.working_dir);
+        let working_dir = PathBuf::from(config.working_dir());
         if let Err(e) = std::fs::create_dir_all(&working_dir) {
             tracing::warn!(
                 "Failed to create working_dir '{}': {}",
@@ -357,18 +357,18 @@ impl ToolRegistry {
         }
         let skills_data_dir = config.skills_data_dir();
         let tools: Vec<Box<dyn Tool>> = vec![
-            Box::new(bash::BashTool::new(&config.working_dir)),
+            Box::new(bash::BashTool::new(config.working_dir())),
             Box::new(browser::BrowserTool::new(
-                &config.data_dir,
+                &config.runtime_data_dir(),
                 config.agent_browser_path.clone(),
             )),
-            Box::new(read_file::ReadFileTool::new(&config.working_dir)),
-            Box::new(write_file::WriteFileTool::new(&config.working_dir)),
-            Box::new(edit_file::EditFileTool::new(&config.working_dir)),
-            Box::new(glob::GlobTool::new(&config.working_dir)),
-            Box::new(grep::GrepTool::new(&config.working_dir)),
-            Box::new(memory::ReadMemoryTool::new(&config.data_dir, &config.working_dir)),
-            Box::new(tiered_memory::ReadTieredMemoryTool::new(&config.data_dir)),
+            Box::new(read_file::ReadFileTool::new(config.working_dir())),
+            Box::new(write_file::WriteFileTool::new(config.working_dir())),
+            Box::new(edit_file::EditFileTool::new(config.working_dir())),
+            Box::new(glob::GlobTool::new(config.working_dir())),
+            Box::new(grep::GrepTool::new(config.working_dir())),
+            Box::new(memory::ReadMemoryTool::new(&config.runtime_data_dir(), config.working_dir())),
+            Box::new(tiered_memory::ReadTieredMemoryTool::new(&config.runtime_data_dir())),
             Box::new(web_fetch::WebFetchTool),
             Box::new(web_search::WebSearchTool),
             Box::new(activate_skill::ActivateSkillTool::new(&skills_data_dir)),

@@ -5,7 +5,7 @@ use chrono::Utc;
 pub struct MemoryManager {
     /// Directory containing groups/ (for per-chat memory and daily logs).
     data_dir: PathBuf,
-    /// Global AGENTS.md is read/written from working_dir/shared/AGENTS.md (single source of truth).
+    /// Global AGENTS.md is read/written from workspace root shared/AGENTS.md (single source of truth).
     working_dir: PathBuf,
 }
 
@@ -17,7 +17,7 @@ impl MemoryManager {
         }
     }
 
-    /// Path for global principles/memory: working_dir/shared/AGENTS.md (single source of truth).
+    /// Path for global principles/memory: workspace root shared/AGENTS.md (single source of truth).
     fn global_memory_path(&self) -> PathBuf {
         self.working_dir.join("shared").join("AGENTS.md")
     }
@@ -26,7 +26,7 @@ impl MemoryManager {
         self.data_dir.join(chat_id.to_string()).join("AGENTS.md")
     }
 
-    /// Path for shared principles for all chats/personas: data_dir/AGENTS.md (e.g. microclaw.data/runtime/groups/AGENTS.md).
+    /// Path for shared principles for all chats/personas: runtime/groups/AGENTS.md (under data root).
     fn groups_root_memory_path(&self) -> PathBuf {
         self.data_dir.join("AGENTS.md")
     }
@@ -57,7 +57,7 @@ impl MemoryManager {
         std::fs::read_to_string(path).ok()
     }
 
-    /// Read shared AGENTS.md at groups root (e.g. microclaw.data/runtime/groups/AGENTS.md). Used as principles for all personas.
+    /// Read shared AGENTS.md at groups root (runtime/groups/AGENTS.md). Used as principles for all personas.
     pub fn read_groups_root_memory(&self) -> Option<String> {
         let path = self.groups_root_memory_path();
         std::fs::read_to_string(path).ok()

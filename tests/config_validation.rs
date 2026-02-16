@@ -15,8 +15,7 @@ fn minimal_config() -> Config {
         max_tool_iterations: 25,
         max_history_messages: 50,
         max_document_size_mb: 100,
-        data_dir: "./microclaw.data".into(),
-        working_dir: "./tmp".into(),
+        workspace_dir: "./workspace".into(),
         openai_api_key: None,
         timezone: "UTC".into(),
         allowed_groups: vec![],
@@ -83,8 +82,7 @@ llm_base_url: https://custom.api.com/v1
 max_tokens: 4096
 max_tool_iterations: 10
 max_history_messages: 100
-data_dir: /data/microclaw
-working_dir: /data/microclaw/tmp
+workspace_dir: /data/microclaw
 openai_api_key: sk-whisper
 timezone: Asia/Shanghai
 allowed_groups:
@@ -114,8 +112,7 @@ discord_allowed_channels:
     assert_eq!(config.max_tokens, 4096);
     assert_eq!(config.max_tool_iterations, 10);
     assert_eq!(config.max_history_messages, 100);
-    assert_eq!(config.data_dir, "/data/microclaw");
-    assert_eq!(config.working_dir, "/data/microclaw/tmp");
+    assert_eq!(config.workspace_dir, "/data/microclaw");
     assert_eq!(config.openai_api_key.as_deref(), Some("sk-whisper"));
     assert_eq!(config.timezone, "Asia/Shanghai");
     assert_eq!(config.allowed_groups, vec![111, 222]);
@@ -138,14 +135,12 @@ fn test_yaml_roundtrip() {
 }
 
 #[test]
-fn test_data_dir_paths() {
+fn test_workspace_dir_paths() {
     let mut config = minimal_config();
-    config.data_dir = "/opt/microclaw.data".into();
+    config.workspace_dir = "/opt/workspace".into();
 
-    assert!(config
-        .runtime_data_dir()
-        .ends_with("microclaw.data/runtime"));
-    assert!(config.skills_data_dir().ends_with("microclaw.data/skills"));
+    assert!(config.runtime_data_dir().ends_with("workspace/runtime"));
+    assert!(config.skills_data_dir().ends_with("workspace/skills"));
 }
 
 #[test]

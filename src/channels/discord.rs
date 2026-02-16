@@ -79,7 +79,7 @@ impl EventHandler for Handler {
                             if messages.is_empty() {
                                 let _ = msg.channel_id.say(&ctx.http, "No session to archive.").await;
                             } else {
-                                archive_conversation(&self.app_state.config.data_dir, channel_id, &messages);
+                                archive_conversation(&self.app_state.config.runtime_data_dir(), channel_id, &messages);
                                 let _ = msg
                                     .channel_id
                                     .say(&ctx.http, format!("Archived {} messages.", messages.len()))

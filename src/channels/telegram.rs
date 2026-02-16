@@ -226,7 +226,7 @@ async fn handle_message(
                         if messages.is_empty() {
                             let _ = bot.send_message(msg.chat.id, "No session to archive.").await;
                         } else {
-                            archive_conversation(&state.config.data_dir, chat_id, &messages);
+                            archive_conversation(&state.config.runtime_data_dir(), chat_id, &messages);
                             let _ = bot
                                 .send_message(
                                     msg.chat.id,
@@ -298,7 +298,7 @@ async fn handle_message(
                     })
                     .collect::<String>();
 
-                let dir = Path::new(&state.config.working_dir)
+                let dir = Path::new(state.config.working_dir())
                     .join("uploads")
                     .join("telegram")
                     .join(chat_id.to_string());
@@ -637,20 +637,9 @@ pub async fn process_with_agent_with_events(
     let principles_content = state.memory.read_groups_root_memory().unwrap_or_default();
     let memory_context = state.memory.build_memory_context(chat_id, persona_id);
     let skills_catalog = state.skills.build_skills_catalog();
-    let mut workspace_dir = Path::new(&state.config.working_dir).join("shared");
-    let mut workspace_context = load_workspace_context(&state.config.working_dir);
-    // Fallback: if working_dir/shared has no TOOLS.md (e.g. default working_dir=./tmp), try repo root shared/ so all personas see shared tools
-    if workspace_context.trim().is_empty() {
-        let fallback_parent = Path::new(&state.config.data_dir)
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or(".");
-        let fallback_ctx = load_workspace_context(fallback_parent);
-        if !fallback_ctx.trim().is_empty() {
-            workspace_context = fallback_ctx;
-            workspace_dir = Path::new(fallback_parent).join("shared");
-        }
-    }
+    // Workspace shared directory: only working_dir/shared (or workspace_dir/shared when unified). No fallback to repo-root shared/.
+    let workspace_dir = Path::new(state.config.working_dir()).join("shared");
+    let workspace_context = load_workspace_context(state.config.working_dir());
     let workspace_path = workspace_dir.to_string_lossy();
     let agents_md_path = state.memory.groups_root_memory_path_display();
     let social_feed_note = state.config.social.as_ref().and_then(|s| {
@@ -673,6 +662,8 @@ pub async fn process_with_agent_with_events(
             ))
         }
     });
+    // Use absolute skills path so the bot writes to the real skills dir; file tools resolve relative paths from workspace_dir/shared.
+    let skills_dir_for_prompt = state.config.skills_data_dir_absolute().to_string_lossy().to_string();
     let system_prompt = build_system_prompt(
         &state.config.bot_username,
         &principles_content,
@@ -683,6 +674,7 @@ pub async fn process_with_agent_with_events(
         &skills_catalog,
         &workspace_context,
         &workspace_path,
+        &skills_dir_for_prompt,
         social_feed_note.as_deref(),
     );
 
@@ -776,7 +768,7 @@ pub async fn process_with_agent_with_events(
             messages,
         )
         .await;
-        archive_conversation(&state.config.data_dir, chat_id, &messages);
+        archive_conversation(&state.config.runtime_data_dir(), chat_id, &messages);
         messages = compact_messages(
             state.llm.as_ref(),
             &messages,
@@ -857,12 +849,18 @@ pub async fn process_with_agent_with_events(
             } else {
                 strip_thinking(&text)
             };
+            // Ensure we never return empty when the turn is done — user should always get a reply
+            let final_text = if display_text.trim().is_empty() {
+                "Done.".to_string()
+            } else {
+                display_text
+            };
             if let Some(tx) = event_tx {
                 let _ = tx.send(AgentEvent::FinalResponse {
-                    text: display_text.clone(),
+                    text: final_text.clone(),
                 });
             }
-            return Ok(display_text);
+            return Ok(final_text);
         }
 
         if stop_reason == "tool_use" {
@@ -1040,9 +1038,11 @@ fn build_system_prompt(
     skills_catalog: &str,
     workspace_context: &str,
     workspace_path: &str,
+    skills_dir_display: &str,
     social_feed_note: Option<&str>,
 ) -> String {
-    let mut caps = r#"- Execute bash commands
+    let mut caps = format!(
+        r#"- Execute bash commands
 - Browser automation (browser tool — runs the agent-browser CLI; use this tool only, not bash)
 - Read, write, and edit files
 - Search for files using glob patterns
@@ -1055,9 +1055,10 @@ fn build_system_prompt(
 - Understand images sent by users (they appear as image content blocks)
 - Delegate self-contained sub-tasks to a parallel agent (sub_agent)
 - Run the Cursor CLI agent (cursor_agent) for research or code tasks; use list_cursor_agent_runs to monitor project status and see recent run outcomes
-- Activate agent skills (activate_skill) for specialized tasks. **You MUST implement any new tool as a skill:** create a folder under microclaw.data/skills/<name>/ with SKILL.md (description, when to use, how to invoke). **Store credentials and config for that tool inside the skill folder** (e.g. .env or config file there) so all personas can use it. Do not create tools only in shared/ or only document in TOOLS.md — skills are the only way to add on-demand tools.
-- Read and update tiered memory (read_tiered_memory, write_tiered_memory) — per-persona MEMORY.md with Tier 1 (long-term principles-like), Tier 2 (active projects), Tier 3 (recent focus/mood); evaluate conversation flow and update tiers when appropriate; Tier 1 only on explicit user ask, Tier 3 often (e.g. daily). Not a todo list."#
-        .to_string();
+- Activate agent skills (activate_skill) for specialized tasks. **You MUST implement any new tool as a skill:** create a folder under the skills directory ({skills_dir_display}/<name>/) with SKILL.md (description, when to use, how to invoke). **Store credentials and config for that tool inside the skill folder** (e.g. .env or config file there) so all personas can use it. Do not create tools only in your workspace or only document in TOOLS.md — skills are the only way to add on-demand tools.
+- Read and update tiered memory (read_tiered_memory, write_tiered_memory) — per-persona MEMORY.md with Tier 1 (long-term principles-like), Tier 2 (active projects), Tier 3 (recent focus/mood); evaluate conversation flow and update tiers when appropriate; Tier 1 only on explicit user ask, Tier 3 often (e.g. daily). Not a todo list."#,
+        skills_dir_display = skills_dir_display
+    );
     if let Some(note) = social_feed_note {
         caps.push_str("\n");
         caps.push_str(note);
@@ -1087,12 +1088,13 @@ User messages are wrapped in XML tags like <user_message sender="name">content</
 
 The workspace (your working directory for file/bash/search tools) is persistent across sessions. Your workspace path is: {workspace_path}. Relative paths in read_file, write_file, edit_file, glob, and grep are resolved from this directory.
 
-**Creating a new tool:** You MUST create it as a skill. (1) Create microclaw.data/skills/<tool_name>/ with SKILL.md (description, when to use, how to invoke). (2) Put any credentials or config (e.g. API keys, .env) in that skill folder so they are available to all personas. (3) Optionally put the script in the skill folder or reference a script in shared/ from the SKILL. Do not add on-demand tools only in shared/ or only in TOOLS.md — every tool must be a skill with credentials in the skill folder.
+**Creating a new tool:** You MUST create it as a skill. The skills directory is: {skills_dir_display}. When creating a skill, use this **exact path** in write_file and edit_file (e.g. write_file path "{skills_dir_display}/<tool_name>/SKILL.md", ...) — do not use a relative path or a path under your workspace, or files will end up in the wrong place. (1) Create a folder at {skills_dir_display}/<tool_name>/ with SKILL.md (description, when to use, how to invoke). (2) Put any credentials or config (e.g. API keys, .env) in that skill folder so they are available to all personas. (3) Optionally put the script in the skill folder or reference a script in your workspace (the same directory as TOOLS.md) from the SKILL. Do not add on-demand tools only in your workspace or only in TOOLS.md — every tool must be a skill with credentials in the skill folder.
 
 Be concise and helpful. When executing commands or tools, show the relevant results to the user.
 "#,
         caps = caps,
-        persona_id = persona_id
+        persona_id = persona_id,
+        skills_dir_display = skills_dir_display,
     );
 
     // Principles (groups/AGENTS.md): rules and identity — highest priority
@@ -1418,7 +1420,7 @@ fn strip_images_for_session(messages: &mut [Message]) {
 }
 
 /// Archive the full conversation to a markdown file before compaction.
-/// Saved to `<data_dir>/groups/<chat_id>/conversations/<timestamp>.md`.
+/// Saved to `<runtime_dir>/groups/<chat_id>/conversations/<timestamp>.md` (caller passes runtime data dir).
 pub fn archive_conversation(data_dir: &str, chat_id: i64, messages: &[Message]) {
     let now = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let dir = std::path::PathBuf::from(data_dir)
@@ -1819,7 +1821,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_basic() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("testbot"));
         assert!(prompt.contains("12345"));
         assert!(prompt.contains("bash commands"));
@@ -1830,7 +1832,7 @@ mod tests {
     #[test]
     fn test_build_system_prompt_with_memory() {
         let principles = "User likes Rust";
-        let prompt = build_system_prompt("testbot", principles, "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", principles, "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("# Principles"));
         assert!(prompt.contains("microclaw.data/runtime/groups/AGENTS.md"));
         assert!(prompt.contains("User likes Rust"));
@@ -1839,7 +1841,7 @@ mod tests {
     #[test]
     fn test_build_system_prompt_with_skills() {
         let catalog = "<available_skills>\n- pdf: Convert to PDF\n</available_skills>";
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, catalog, "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, catalog, "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("# Agent Skills"));
         assert!(prompt.contains("activate_skill"));
         assert!(prompt.contains("pdf: Convert to PDF"));
@@ -1847,14 +1849,14 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_without_skills() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(!prompt.contains("# Agent Skills"));
     }
 
     #[test]
     fn test_build_system_prompt_with_workspace_context() {
         let ws = "## WORKSPACE.md\n\nWe have email_tool.py and query_vault.py.";
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", ws, "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", ws, "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("# Workspace"));
         assert!(prompt.contains("email_tool.py"));
         assert!(prompt.contains("query_vault.py"));
@@ -1862,8 +1864,27 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_includes_workspace_path() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "/home/user/tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "/home/user/tmp/shared", "/home/user/microclaw.data/skills", None);
         assert!(prompt.contains("Your workspace path is: /home/user/tmp/shared"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_unified_workspace_paths() {
+        let prompt = build_system_prompt(
+            "testbot",
+            "",
+            "./workspace/runtime/groups/AGENTS.md",
+            "",
+            42,
+            1,
+            "",
+            "",
+            "./workspace/shared",
+            "./workspace/skills",
+            None,
+        );
+        assert!(prompt.contains("Your workspace path is: ./workspace/shared"));
+        assert!(prompt.contains("./workspace/skills"));
     }
 
     #[test]
@@ -1889,7 +1910,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_includes_persona_id_and_tiered_memory() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("persona_id is 1"));
         assert!(prompt.contains("read_tiered_memory"));
         assert!(prompt.contains("write_tiered_memory"));
@@ -2117,7 +2138,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_sub_agent() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("sub_agent"));
     }
 
@@ -2152,7 +2173,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_xml_security() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("user_message"));
         assert!(prompt.contains("untrusted"));
     }
@@ -2346,7 +2367,7 @@ mod tests {
     fn test_build_system_prompt_with_memory_and_skills() {
         let principles = "Test";
         let skills = "- translate: Translate text";
-        let prompt = build_system_prompt("bot", principles, "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, skills, "", "./tmp/shared", None);
+        let prompt = build_system_prompt("bot", principles, "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, skills, "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("# Principles"));
         assert!(prompt.contains("Test"));
         assert!(prompt.contains("# Agent Skills"));
@@ -2355,20 +2376,20 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_tiered_memory() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("read_tiered_memory"));
         assert!(prompt.contains("write_tiered_memory"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_export() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("export_chat"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_schedule() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("schedule_task"));
         assert!(prompt.contains("6-field cron"));
     }

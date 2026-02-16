@@ -216,7 +216,7 @@ async fn process_webhook(state: &WhatsAppState, payload: WebhookPayload) -> anyh
                                         .await;
                                     } else {
                                         crate::telegram::archive_conversation(
-                                            &state.app_state.config.data_dir,
+                                            &state.app_state.config.runtime_data_dir(),
                                             chat_id,
                                             &messages,
                                         );
