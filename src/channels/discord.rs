@@ -64,7 +64,10 @@ fn format_reqwest_error(prefix: &str, err: &reqwest::Error) -> String {
         source = s.source();
     }
 
-    let url = err.url().map(|u| u.as_str().to_string()).unwrap_or_default();
+    let url = err
+        .url()
+        .map(|u| u.as_str().to_string())
+        .unwrap_or_default();
     let class = if details.is_empty() {
         "unknown".to_string()
     } else {

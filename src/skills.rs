@@ -287,8 +287,15 @@ fn normalize_single_line_frontmatter(content: &str) -> Option<String> {
 
     // Insert newlines before known frontmatter keys so serde_yaml can parse them
     let known_keys: &[&str] = &[
-        "name:", "description:", "license:", "platforms:", "deps:",
-        "compatibility:", "source:", "version:", "updated_at:",
+        "name:",
+        "description:",
+        "license:",
+        "platforms:",
+        "deps:",
+        "compatibility:",
+        "source:",
+        "version:",
+        "updated_at:",
     ];
     let mut yaml = yaml_part.to_string();
     for key in known_keys {
