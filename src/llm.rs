@@ -182,6 +182,25 @@ pub fn create_provider(config: &Config) -> Box<dyn LlmProvider> {
     }
 }
 
+/// Test that a model override is reachable with the current provider/config.
+/// Returns Ok(()) on success, or an error string suitable for showing to the user.
+pub async fn test_model(config: &Config, model_override: &str) -> Result<(), String> {
+    let mut test_config = config.clone();
+    test_config.model = model_override.to_string();
+    let provider = create_provider(&test_config);
+    let messages = vec![Message {
+        role: "user".into(),
+        content: MessageContent::Text("Hi".into()),
+    }];
+    match provider
+        .send_message("Test.", messages, None)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Anthropic provider
 // ---------------------------------------------------------------------------

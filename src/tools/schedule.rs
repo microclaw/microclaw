@@ -7,7 +7,23 @@ use serde_json::json;
 use super::{authorize_chat_access, schema_object, Tool, ToolResult};
 use crate::channel::enforce_channel_policy;
 use crate::claude::ToolDefinition;
-use crate::db::{call_blocking, Database};
+use crate::db::{call_blocking, Database, ScheduledTask};
+
+/// Format scheduled tasks for slash-command or UI display.
+pub fn format_tasks_list(tasks: &[ScheduledTask]) -> String {
+    if tasks.is_empty() {
+        return "No scheduled tasks for this chat. Ask me to schedule one (recurring or one-time).".to_string();
+    }
+    let mut output = String::from("Scheduled tasks:\n");
+    for t in tasks {
+        output.push_str(&format!(
+            "#{} [{}] {} | {} '{}' | next: {}\n",
+            t.id, t.status, t.prompt, t.schedule_type, t.schedule_value, t.next_run
+        ));
+    }
+    output.push_str("\nUse `schedule_task` to add; `pause_scheduled_task` / `resume_scheduled_task` / `cancel_scheduled_task` to manage.");
+    output
+}
 
 fn compute_next_run(cron_expr: &str, tz_name: &str) -> Result<String, String> {
     let tz: chrono_tz::Tz = tz_name

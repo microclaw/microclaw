@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use teloxide::prelude::*;
-use teloxide::types::{ChatAction, ParseMode};
+use teloxide::types::{BotCommand, ChatAction, ParseMode};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, info};
 
@@ -85,6 +85,33 @@ pub async fn run_bot(
 ) -> anyhow::Result<()> {
     let bot = Bot::new(&config.telegram_bot_token);
     let db = Arc::new(db);
+
+    // Register slash commands so they appear in the Telegram menu
+    let commands = [
+        BotCommand {
+            command: "reset".into(),
+            description: "Clear conversation (memory unchanged)".into(),
+        },
+        BotCommand {
+            command: "skills".into(),
+            description: "List available skills".into(),
+        },
+        BotCommand {
+            command: "persona".into(),
+            description: "List / switch / new / delete personas".into(),
+        },
+        BotCommand {
+            command: "archive".into(),
+            description: "Archive conversation to markdown".into(),
+        },
+        BotCommand {
+            command: "schedule".into(),
+            description: "List and manage scheduled jobs".into(),
+        },
+    ];
+    if let Err(e) = bot.set_my_commands(commands).await {
+        error!("Failed to set Telegram bot commands: {}", e);
+    }
 
     let llm = crate::llm::create_provider(&config);
     let mut tools = ToolRegistry::new(&config, bot.clone(), db.clone());
@@ -194,7 +221,7 @@ async fn handle_message(
         let chat_id = msg.chat.id.0;
         match cmd {
             SlashCommand::Reset => {
-                let pid = call_blocking(state.db.clone(), move |db| db.get_or_create_default_persona(chat_id)).await.unwrap_or(0);
+                let pid = call_blocking(state.db.clone(), move |db| db.get_current_persona_id(chat_id)).await.unwrap_or(0);
                 if pid > 0 {
                     let _ = call_blocking(state.db.clone(), move |db| db.delete_session(chat_id, pid)).await;
                 }
@@ -210,11 +237,19 @@ async fn handle_message(
                 send_response(&bot, msg.chat.id, &formatted).await;
             }
             SlashCommand::Persona => {
-                let resp = crate::persona::handle_persona_command(state.db.clone(), chat_id, text.trim()).await;
+                let resp = crate::persona::handle_persona_command(state.db.clone(), chat_id, text.trim(), Some(&state.config)).await;
                 send_response(&bot, msg.chat.id, &resp).await;
             }
+            SlashCommand::Schedule => {
+                let tasks = call_blocking(state.db.clone(), move |db| db.get_tasks_for_chat(chat_id)).await;
+                let text = match &tasks {
+                    Ok(t) => crate::tools::schedule::format_tasks_list(t),
+                    Err(e) => format!("Error listing tasks: {e}"),
+                };
+                send_response(&bot, msg.chat.id, &text).await;
+            }
             SlashCommand::Archive => {
-                let pid = call_blocking(state.db.clone(), move |db| db.get_or_create_default_persona(chat_id)).await.unwrap_or(0);
+                let pid = call_blocking(state.db.clone(), move |db| db.get_current_persona_id(chat_id)).await.unwrap_or(0);
                 if pid == 0 {
                     let _ = bot.send_message(msg.chat.id, "No session to archive.").await;
                 } else {
@@ -422,7 +457,7 @@ async fn handle_message(
     let chat_title = msg.chat.title().map(|t| t.to_string());
 
     // Resolve persona for this chat
-    let persona_id = call_blocking(state.db.clone(), move |db| db.get_or_create_default_persona(chat_id)).await.unwrap_or(0);
+    let persona_id = call_blocking(state.db.clone(), move |db| db.get_current_persona_id(chat_id)).await.unwrap_or(0);
     if persona_id == 0 {
         return Ok(());
     }
@@ -643,7 +678,7 @@ pub async fn process_with_agent_with_events(
     let chat_id = context.chat_id;
     let persona_id = context.persona_id;
 
-    // Build system prompt: principles from groups/AGENTS.md only; memory from per-persona MEMORY.md + daily log
+    // Build system prompt: principles from workspace_dir/AGENTS.md only; memory from per-persona MEMORY.md + daily log
     let principles_content = state.memory.read_groups_root_memory().unwrap_or_default();
     let memory_context = state.memory.build_memory_context(chat_id, persona_id);
     let skills_catalog = state.skills.build_skills_catalog();
@@ -1082,7 +1117,7 @@ You have access to the following capabilities:
 The current chat_id is {chat_id} and persona_id is {persona_id}. Use these when calling send_message, schedule, export_chat, tiered memory, or memory(chat_daily) tools.
 Permission model: you may only operate on the current chat unless this chat is configured as a control chat. If you try cross-chat operations without permission, tools will return a permission error.
 
-When using memory: this persona's tiered memory is in groups/{{chat_id}}/{{persona_id}}/MEMORY.md (Tier 1 = long-term principles-like, Tier 2 = active projects, Tier 3 = recent focus/mood). Use read_tiered_memory and write_tiered_memory to read/update by tier. Update based on conversation flow: Tier 1 only on explicit user ask or long-term pattern; Tier 2 when projects/goals change; Tier 3 often as a general reminder of recent focus — not a todo list. Use write_memory with scope 'chat_daily' to append to the daily log (today and yesterday are injected at session start). Principles are in groups/AGENTS.md only; do not overwrite them.
+When using memory: this persona's tiered memory is in groups/{{chat_id}}/{{persona_id}}/MEMORY.md (Tier 1 = long-term principles-like, Tier 2 = active projects, Tier 3 = recent focus/mood). Use read_tiered_memory and write_tiered_memory to read/update by tier. Update based on conversation flow: Tier 1 only on explicit user ask or long-term pattern; Tier 2 when projects/goals change; Tier 3 often as a general reminder of recent focus — not a todo list. Use write_memory with scope 'chat_daily' to append to the daily log (today and yesterday are injected at session start). Principles are in AGENTS.md at workspace root; do not overwrite them.
 
 For scheduling:
 - Use 6-field cron format: sec min hour dom month dow (e.g., "0 */5 * * * *" for every 5 minutes)
@@ -1107,7 +1142,7 @@ Be concise and helpful. When executing commands or tools, show the relevant resu
         skills_dir_display = skills_dir_display,
     );
 
-    // Principles (groups/AGENTS.md): rules and identity — highest priority
+    // Principles (workspace_dir/AGENTS.md): rules and identity — highest priority
     if !principles_content.trim().is_empty() {
         prompt.push_str("\n# Principles (highest priority)\n\nThe following is loaded from the file **");
         prompt.push_str(agents_md_path);
@@ -1831,7 +1866,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_basic() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("testbot"));
         assert!(prompt.contains("12345"));
         assert!(prompt.contains("bash commands"));
@@ -1842,16 +1877,16 @@ mod tests {
     #[test]
     fn test_build_system_prompt_with_memory() {
         let principles = "User likes Rust";
-        let prompt = build_system_prompt("testbot", principles, "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", principles, "microclaw.data/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("# Principles"));
-        assert!(prompt.contains("microclaw.data/runtime/groups/AGENTS.md"));
+        assert!(prompt.contains("microclaw.data/AGENTS.md"));
         assert!(prompt.contains("User likes Rust"));
     }
 
     #[test]
     fn test_build_system_prompt_with_skills() {
         let catalog = "<available_skills>\n- pdf: Convert to PDF\n</available_skills>";
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, catalog, "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 42, 1, catalog, "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("# Agent Skills"));
         assert!(prompt.contains("activate_skill"));
         assert!(prompt.contains("pdf: Convert to PDF"));
@@ -1859,14 +1894,14 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_without_skills() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(!prompt.contains("# Agent Skills"));
     }
 
     #[test]
     fn test_build_system_prompt_with_workspace_context() {
         let ws = "## WORKSPACE.md\n\nWe have email_tool.py and query_vault.py.";
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", ws, "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 42, 1, "", ws, "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("# Workspace"));
         assert!(prompt.contains("email_tool.py"));
         assert!(prompt.contains("query_vault.py"));
@@ -1874,7 +1909,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_includes_workspace_path() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "/home/user/tmp/shared", "/home/user/microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 42, 1, "", "", "/home/user/tmp/shared", "/home/user/microclaw.data/skills", None);
         assert!(prompt.contains("Your workspace path is: /home/user/tmp/shared"));
     }
 
@@ -1883,7 +1918,7 @@ mod tests {
         let prompt = build_system_prompt(
             "testbot",
             "",
-            "./workspace/runtime/groups/AGENTS.md",
+            "./workspace/AGENTS.md",
             "",
             42,
             1,
@@ -1920,7 +1955,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_includes_persona_id_and_tiered_memory() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 42, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("persona_id is 1"));
         assert!(prompt.contains("read_tiered_memory"));
         assert!(prompt.contains("write_tiered_memory"));
@@ -2148,7 +2183,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_sub_agent() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("sub_agent"));
     }
 
@@ -2183,7 +2218,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_xml_security() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("user_message"));
         assert!(prompt.contains("untrusted"));
     }
@@ -2377,7 +2412,7 @@ mod tests {
     fn test_build_system_prompt_with_memory_and_skills() {
         let principles = "Test";
         let skills = "- translate: Translate text";
-        let prompt = build_system_prompt("bot", principles, "microclaw.data/runtime/groups/AGENTS.md", "", 42, 1, skills, "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("bot", principles, "microclaw.data/AGENTS.md", "", 42, 1, skills, "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("# Principles"));
         assert!(prompt.contains("Test"));
         assert!(prompt.contains("# Agent Skills"));
@@ -2386,20 +2421,20 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_tiered_memory() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("read_tiered_memory"));
         assert!(prompt.contains("write_tiered_memory"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_export() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("export_chat"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_schedule() {
-        let prompt = build_system_prompt("testbot", "", "microclaw.data/runtime/groups/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
+        let prompt = build_system_prompt("testbot", "", "microclaw.data/AGENTS.md", "", 12345, 1, "", "", "./tmp/shared", "./microclaw.data/skills", None);
         assert!(prompt.contains("schedule_task"));
         assert!(prompt.contains("6-field cron"));
     }

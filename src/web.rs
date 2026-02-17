@@ -674,7 +674,7 @@ async fn api_history(
     let chat_id = resolve_chat_id(&session_key);
     let cid = chat_id;
 
-    let persona_id = call_blocking(state.app_state.db.clone(), move |db| db.get_or_create_default_persona(cid))
+    let persona_id = call_blocking(state.app_state.db.clone(), move |db| db.get_current_persona_id(cid))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let cid2 = chat_id;
@@ -1084,7 +1084,7 @@ async fn send_and_store_response_with_events(
         }
         let cid = chat_id;
         let persona_id = call_blocking(state.app_state.db.clone(), move |db| {
-            db.get_or_create_default_persona(cid)
+            db.get_current_persona_id(cid)
         })
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1100,7 +1100,14 @@ async fn send_and_store_response_with_events(
             }
             SlashCommand::Skills => state.app_state.skills.list_skills_formatted(),
             SlashCommand::Persona => {
-                crate::persona::handle_persona_command(state.app_state.db.clone(), chat_id, text.trim()).await
+                crate::persona::handle_persona_command(state.app_state.db.clone(), chat_id, text.trim(), Some(&state.app_state.config)).await
+            }
+            SlashCommand::Schedule => {
+                let tasks = call_blocking(state.app_state.db.clone(), move |db| db.get_tasks_for_chat(chat_id)).await;
+                match &tasks {
+                    Ok(t) => crate::tools::schedule::format_tasks_list(t),
+                    Err(e) => format!("Error listing tasks: {e}"),
+                }
             }
             SlashCommand::Archive => {
                 let cid2 = chat_id;
@@ -1183,7 +1190,7 @@ async fn send_and_store_response_with_events(
 
     let cid = chat_id;
     let persona_id = call_blocking(state.app_state.db.clone(), move |db| {
-        db.get_or_create_default_persona(cid)
+        db.get_current_persona_id(cid)
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1287,7 +1294,7 @@ async fn api_reset(
         deleted
     } else {
         let cid = chat_id;
-        let pid = call_blocking(state.app_state.db.clone(), move |db| db.get_or_create_default_persona(cid))
+        let pid = call_blocking(state.app_state.db.clone(), move |db| db.get_current_persona_id(cid))
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         let cid2 = chat_id;
@@ -2157,7 +2164,7 @@ mod tests {
         let state = test_state(Box::new(DummyLlm));
         let chat_id = 12345_i64;
         let cid = chat_id;
-        let pid = call_blocking(state.db.clone(), move |db| db.get_or_create_default_persona(cid)).await.unwrap_or(0);
+        let pid = call_blocking(state.db.clone(), move |db| db.get_current_persona_id(cid)).await.unwrap_or(0);
         let cid2 = chat_id;
         let message_count = call_blocking(state.db.clone(), move |db| db.get_all_messages(cid2, pid))
             .await

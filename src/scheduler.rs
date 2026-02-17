@@ -52,10 +52,15 @@ async fn run_due_tasks(state: &Arc<AppState>) {
 
         // Claim task immediately so the next scheduler tick (60s) won't pick it again
         // while we're still running the agent (which can take minutes).
+        // Use after(started_at) so the next run is strictly in the future; store in UTC
+        // so get_due_tasks' string comparison (next_run <= now) is reliable.
         let tz: chrono_tz::Tz = state.config.timezone.parse().unwrap_or(chrono_tz::Tz::UTC);
         let next_run = if task.schedule_type == "cron" {
             match cron::Schedule::from_str(&task.schedule_value) {
-                Ok(schedule) => schedule.upcoming(tz).next().map(|t| t.to_rfc3339()),
+                Ok(schedule) => schedule
+                    .after(&started_at.with_timezone(&tz))
+                    .next()
+                    .map(|t| t.with_timezone(&Utc).to_rfc3339()),
                 Err(e) => {
                     error!("Scheduler: invalid cron for task #{}: {e}", task_id);
                     None
@@ -83,7 +88,7 @@ async fn run_due_tasks(state: &Arc<AppState>) {
                 _ => "telegram",
             };
 
-        let persona_id = call_blocking(state.db.clone(), move |db| db.get_or_create_default_persona(chat_id)).await.unwrap_or(0);
+        let persona_id = call_blocking(state.db.clone(), move |db| db.get_current_persona_id(chat_id)).await.unwrap_or(0);
         if persona_id == 0 {
             error!("Scheduler: could not resolve persona for chat {}", chat_id);
             continue;

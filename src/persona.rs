@@ -4,12 +4,19 @@
 
 use std::sync::Arc;
 
+use crate::config::Config;
 use crate::db::{call_blocking, Database};
 
 /// Handle a persona command payload (e.g. from API or internal call).
 /// `text` is the full message; the first token is typically "/persona" or "/personas", rest are subcommand and args.
+/// When creating or updating a persona with a model, pass `config` so the model is tested first; if `config` is None, the test is skipped.
 /// Returns a response string to show the user (or API client).
-pub async fn handle_persona_command(db: Arc<Database>, chat_id: i64, text: &str) -> String {
+pub async fn handle_persona_command(
+    db: Arc<Database>,
+    chat_id: i64,
+    text: &str,
+    config: Option<&Config>,
+) -> String {
     let parts: Vec<&str> = text.split_whitespace().collect();
     let sub = parts.get(1).map(|s| *s).unwrap_or("");
 
@@ -60,8 +67,24 @@ pub async fn handle_persona_command(db: Arc<Database>, chat_id: i64, text: &str)
         let model: Option<String> = parts.get(3).map(|s| (*s).to_string());
         let model_note = model.as_ref().map(|m| format!(" using model {}", m)).unwrap_or_default();
         let name_for_fmt = name.clone();
+        // When a model is specified, test it before creating the persona (if config available)
+        let model_ok_note = if let Some(ref model_str) = model {
+            if let Some(cfg) = config {
+                match crate::llm::test_model(cfg, model_str).await {
+                    Ok(()) => "Model OK. ",
+                    Err(e) => return format!("Model test failed: {e}. Persona not created."),
+                }
+            } else {
+                ""
+            }
+        } else {
+            ""
+        };
         match call_blocking(db.clone(), move |d| d.create_persona(chat_id, &name, model.as_deref())).await {
-            Ok(_) => format!("Created persona {}{}.", name_for_fmt, model_note),
+            Ok(new_id) => {
+                let _ = call_blocking(db.clone(), move |d| d.set_active_persona(chat_id, new_id)).await;
+                format!("{}Created persona {}{} and switched to it.", model_ok_note, name_for_fmt, model_note)
+            }
             Err(e) => format!("Error: {e}"),
         }
     } else if sub == "delete" {
@@ -85,13 +108,26 @@ pub async fn handle_persona_command(db: Arc<Database>, chat_id: i64, text: &str)
         if name.is_empty() {
             return "Usage: /persona model <name> <model>".into();
         }
+        let model_str = match &model {
+            Some(m) => m.as_str(),
+            None => return "Usage: /persona model <name> <model>".into(),
+        };
+        // Test the model before updating (if config available)
+        let model_ok_note = if let Some(cfg) = config {
+            match crate::llm::test_model(cfg, model_str).await {
+                Ok(()) => "Model OK. ",
+                Err(e) => return format!("Model test failed: {e}. Persona model not updated."),
+            }
+        } else {
+            ""
+        };
         let name_for_fmt = name.clone();
         match call_blocking(db.clone(), move |d| d.get_persona_by_name(chat_id, &name)).await {
             Ok(Some(persona)) => {
                 let persona_id = persona.id;
                 let model_display = model.clone();
                 if let Ok(true) = call_blocking(db.clone(), move |d| d.update_persona_model(chat_id, persona_id, model.as_deref())).await {
-                    format!("Set model for {} to {:?}.", name_for_fmt, model_display)
+                    format!("{}Set model for {} to {:?}.", model_ok_note, name_for_fmt, model_display)
                 } else {
                     "Failed to update.".into()
                 }

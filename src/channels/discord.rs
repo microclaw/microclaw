@@ -44,7 +44,7 @@ impl EventHandler for Handler {
         if let Some(cmd) = parse_slash_command(&text) {
             match cmd {
                 SlashCommand::Reset => {
-                    let pid = call_blocking(self.app_state.db.clone(), move |db| db.get_or_create_default_persona(channel_id)).await.unwrap_or(0);
+                    let pid = call_blocking(self.app_state.db.clone(), move |db| db.get_current_persona_id(channel_id)).await.unwrap_or(0);
                     if pid > 0 {
                         let _ = call_blocking(self.app_state.db.clone(), move |db| db.delete_session(channel_id, pid)).await;
                     }
@@ -61,11 +61,19 @@ impl EventHandler for Handler {
                     let _ = msg.channel_id.say(&ctx.http, &formatted).await;
                 }
                 SlashCommand::Persona => {
-                    let resp = crate::persona::handle_persona_command(self.app_state.db.clone(), channel_id, text.trim()).await;
+                    let resp = crate::persona::handle_persona_command(self.app_state.db.clone(), channel_id, text.trim(), Some(&self.app_state.config)).await;
                     let _ = msg.channel_id.say(&ctx.http, resp).await;
                 }
+                SlashCommand::Schedule => {
+                    let tasks = call_blocking(self.app_state.db.clone(), move |db| db.get_tasks_for_chat(channel_id)).await;
+                    let text = match &tasks {
+                        Ok(t) => crate::tools::schedule::format_tasks_list(t),
+                        Err(e) => format!("Error listing tasks: {e}"),
+                    };
+                    let _ = msg.channel_id.say(&ctx.http, &text).await;
+                }
                 SlashCommand::Archive => {
-                    let pid = call_blocking(self.app_state.db.clone(), move |db| db.get_or_create_default_persona(channel_id)).await.unwrap_or(0);
+                    let pid = call_blocking(self.app_state.db.clone(), move |db| db.get_current_persona_id(channel_id)).await.unwrap_or(0);
                     if pid == 0 {
                         let _ = msg.channel_id.say(&ctx.http, "No session to archive.").await;
                     } else {
@@ -99,7 +107,7 @@ impl EventHandler for Handler {
         }
 
         // Resolve persona
-        let persona_id = call_blocking(self.app_state.db.clone(), move |db| db.get_or_create_default_persona(channel_id)).await.unwrap_or(0);
+        let persona_id = call_blocking(self.app_state.db.clone(), move |db| db.get_current_persona_id(channel_id)).await.unwrap_or(0);
         if persona_id == 0 {
             return;
         }

@@ -292,6 +292,51 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Ensure AGENTS.md lives at workspace_root/AGENTS.md (canonical). Move from runtime/groups/ or
+/// runtime/ if needed. If both old and new exist, workspace root wins; remove stale copies.
+fn migrate_agents_md_to_workspace_root(workspace_root: &Path, runtime_dir: &Path) {
+    let new_path = workspace_root.join("AGENTS.md");
+    let legacy_locations = [
+        runtime_dir.join("groups").join("AGENTS.md"),
+        runtime_dir.join("AGENTS.md"),
+    ];
+    for old_path in &legacy_locations {
+        if !old_path.exists() {
+            continue;
+        }
+        if new_path.exists() {
+            // Root already has canonical copy; remove stale
+            if let Err(e) = std::fs::remove_file(old_path) {
+                tracing::warn!(
+                    "Failed to remove stale AGENTS.md at '{}': {}",
+                    old_path.display(),
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "Removed stale AGENTS.md at {} (canonical is workspace root)",
+                    old_path.display()
+                );
+            }
+        } else {
+            if let Err(e) = std::fs::rename(old_path, &new_path) {
+                tracing::warn!(
+                    "Failed to migrate AGENTS.md '{}' -> '{}': {}",
+                    old_path.display(),
+                    new_path.display(),
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "Migrated AGENTS.md to workspace root: {}",
+                    new_path.display()
+                );
+            }
+            break; // moved, done
+        }
+    }
+}
+
 fn migrate_legacy_runtime_layout(data_root: &Path, runtime_dir: &Path) {
     if std::fs::create_dir_all(runtime_dir).is_err() {
         return;
@@ -408,6 +453,7 @@ async fn main() -> anyhow::Result<()> {
     let skills_data_dir = config.skills_data_dir();
     migrate_legacy_runtime_layout(&data_root_dir, Path::new(&runtime_data_dir));
     migrate_repo_shared_into_workspace(Path::new(config.working_dir()));
+    migrate_agents_md_to_workspace_root(Path::new(config.working_dir()), Path::new(&runtime_data_dir));
     builtin_skills::ensure_builtin_skills(&data_root_dir)?;
 
     if std::env::var("MICROCLAW_GATEWAY").is_ok() {

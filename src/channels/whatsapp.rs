@@ -151,7 +151,7 @@ async fn process_webhook(state: &WhatsAppState, payload: WebhookPayload) -> anyh
                 if let Some(cmd) = parse_slash_command(&text) {
                     match cmd {
                         SlashCommand::Reset => {
-                            let pid = call_blocking(state.app_state.db.clone(), move |db| db.get_or_create_default_persona(chat_id)).await.unwrap_or(0);
+                            let pid = call_blocking(state.app_state.db.clone(), move |db| db.get_current_persona_id(chat_id)).await.unwrap_or(0);
                             if pid > 0 {
                                 let _ = call_blocking(state.app_state.db.clone(), move |db| db.delete_session(chat_id, pid)).await;
                             }
@@ -176,7 +176,7 @@ async fn process_webhook(state: &WhatsAppState, payload: WebhookPayload) -> anyh
                             .await;
                         }
                         SlashCommand::Persona => {
-                            let resp = crate::persona::handle_persona_command(state.app_state.db.clone(), chat_id, text.trim()).await;
+                            let resp = crate::persona::handle_persona_command(state.app_state.db.clone(), chat_id, text.trim(), Some(&state.app_state.config)).await;
                             send_whatsapp_message(
                                 &state.http_client,
                                 &state.access_token,
@@ -186,8 +186,23 @@ async fn process_webhook(state: &WhatsAppState, payload: WebhookPayload) -> anyh
                             )
                             .await;
                         }
+                        SlashCommand::Schedule => {
+                            let tasks = call_blocking(state.app_state.db.clone(), move |db| db.get_tasks_for_chat(chat_id)).await;
+                            let text = match &tasks {
+                                Ok(t) => crate::tools::schedule::format_tasks_list(t),
+                                Err(e) => format!("Error listing tasks: {e}"),
+                            };
+                            send_whatsapp_message(
+                                &state.http_client,
+                                &state.access_token,
+                                &state.phone_number_id,
+                                &message.from,
+                                &text,
+                            )
+                            .await;
+                        }
                         SlashCommand::Archive => {
-                            let pid = call_blocking(state.app_state.db.clone(), move |db| db.get_or_create_default_persona(chat_id)).await.unwrap_or(0);
+                            let pid = call_blocking(state.app_state.db.clone(), move |db| db.get_current_persona_id(chat_id)).await.unwrap_or(0);
                             if pid == 0 {
                                 send_whatsapp_message(
                                     &state.http_client,
@@ -255,7 +270,7 @@ async fn process_webhook(state: &WhatsAppState, payload: WebhookPayload) -> anyh
                     .unwrap_or_else(|| message.from.clone());
 
                 // Resolve persona
-                let persona_id = call_blocking(state.app_state.db.clone(), move |db| db.get_or_create_default_persona(chat_id)).await.unwrap_or(0);
+                let persona_id = call_blocking(state.app_state.db.clone(), move |db| db.get_current_persona_id(chat_id)).await.unwrap_or(0);
                 if persona_id == 0 {
                     continue;
                 }

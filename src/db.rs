@@ -1140,6 +1140,14 @@ impl Database {
         }
     }
 
+    /// Resolve the persona to use for this run: active when set, else create/set default.
+    pub fn get_current_persona_id(&self, chat_id: i64) -> Result<i64, MicroClawError> {
+        if let Ok(Some(pid)) = self.get_active_persona_id(chat_id) {
+            return Ok(pid);
+        }
+        self.get_or_create_default_persona(chat_id)
+    }
+
     pub fn set_active_persona(
         &self,
         chat_id: i64,

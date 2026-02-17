@@ -26,12 +26,12 @@ impl MemoryManager {
         self.data_dir.join(chat_id.to_string()).join("AGENTS.md")
     }
 
-    /// Path for shared principles for all chats/personas: runtime/groups/AGENTS.md (under data root).
+    /// Path for shared principles for all chats/personas: workspace_dir/AGENTS.md (at workspace root).
     fn groups_root_memory_path(&self) -> PathBuf {
-        self.data_dir.join("AGENTS.md")
+        self.working_dir.join("AGENTS.md")
     }
 
-    /// Path string for groups/AGENTS.md (principles, for display in system prompt).
+    /// Path string for AGENTS.md (principles, for display in system prompt).
     pub fn groups_root_memory_path_display(&self) -> String {
         self.groups_root_memory_path().to_string_lossy().to_string()
     }
@@ -44,10 +44,11 @@ impl MemoryManager {
             .join("MEMORY.md")
     }
 
-    /// Path for daily log: `groups/{chat_id}/memory/YYYY-MM-DD.md`
-    fn daily_log_path(&self, chat_id: i64, date: &str) -> PathBuf {
+    /// Path for per-persona daily log: `groups/{chat_id}/{persona_id}/memory/YYYY-MM-DD.md`
+    fn daily_log_path(&self, chat_id: i64, persona_id: i64, date: &str) -> PathBuf {
         self.data_dir
             .join(chat_id.to_string())
+            .join(persona_id.to_string())
             .join("memory")
             .join(format!("{date}.md"))
     }
@@ -57,7 +58,7 @@ impl MemoryManager {
         std::fs::read_to_string(path).ok()
     }
 
-    /// Read shared AGENTS.md at groups root (runtime/groups/AGENTS.md). Used as principles for all personas.
+    /// Read shared AGENTS.md at workspace root. Used as principles for all personas.
     pub fn read_groups_root_memory(&self) -> Option<String> {
         let path = self.groups_root_memory_path();
         std::fs::read_to_string(path).ok()
@@ -75,23 +76,23 @@ impl MemoryManager {
     }
 
     /// Read a single daily log file if it exists. `date` must be "YYYY-MM-DD".
-    pub fn read_daily_log(&self, chat_id: i64, date: &str) -> Option<String> {
-        let path = self.daily_log_path(chat_id, date);
+    pub fn read_daily_log(&self, chat_id: i64, persona_id: i64, date: &str) -> Option<String> {
+        let path = self.daily_log_path(chat_id, persona_id, date);
         std::fs::read_to_string(path).ok()
     }
 
     /// Read today's and yesterday's daily logs and return combined content for injection.
     /// Returns empty string if neither file exists.
-    pub fn read_daily_logs_today_yesterday(&self, chat_id: i64) -> String {
+    pub fn read_daily_logs_today_yesterday(&self, chat_id: i64, persona_id: i64) -> String {
         let today = Utc::now().format("%Y-%m-%d").to_string();
         let yesterday = (Utc::now() - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
         let mut out = String::new();
-        if let Some(content) = self.read_daily_log(chat_id, &yesterday) {
+        if let Some(content) = self.read_daily_log(chat_id, persona_id, &yesterday) {
             if !content.trim().is_empty() {
                 out.push_str(&format!("## {yesterday}\n{content}\n\n"));
             }
         }
-        if let Some(content) = self.read_daily_log(chat_id, &today) {
+        if let Some(content) = self.read_daily_log(chat_id, persona_id, &today) {
             if !content.trim().is_empty() {
                 out.push_str(&format!("## {today}\n{content}\n\n"));
             }
@@ -101,8 +102,8 @@ impl MemoryManager {
 
     /// Append content to the daily log for the given date. Creates file and parent dir if needed.
     /// `date` must be "YYYY-MM-DD".
-    pub fn append_daily_log(&self, chat_id: i64, date: &str, content: &str) -> std::io::Result<()> {
-        let path = self.daily_log_path(chat_id, date);
+    pub fn append_daily_log(&self, chat_id: i64, persona_id: i64, date: &str, content: &str) -> std::io::Result<()> {
+        let path = self.daily_log_path(chat_id, persona_id, date);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -137,7 +138,7 @@ impl MemoryManager {
     }
 
     /// Build memory context for the system prompt: per-persona MEMORY.md and daily logs.
-    /// Principles (groups/AGENTS.md) are loaded separately and injected as the "Principles" section.
+    /// Principles (workspace_dir/AGENTS.md) are loaded separately and injected as the "Principles" section.
     pub fn build_memory_context(&self, chat_id: i64, persona_id: i64) -> String {
         let mut context = String::new();
 
@@ -149,7 +150,7 @@ impl MemoryManager {
             }
         }
 
-        let daily = self.read_daily_logs_today_yesterday(chat_id);
+        let daily = self.read_daily_logs_today_yesterday(chat_id, persona_id);
         if !daily.is_empty() {
             context.push_str("<recent_daily_log>\n");
             context.push_str(&daily);
@@ -208,7 +209,7 @@ mod tests {
     fn test_groups_root_memory_path_display() {
         let (mm, dir) = test_memory_manager();
         let s = mm.groups_root_memory_path_display();
-        assert!(s.contains("groups/AGENTS.md"));
+        assert!(s.contains("AGENTS.md"));
         cleanup(&dir);
     }
 
@@ -216,7 +217,7 @@ mod tests {
     fn test_groups_root_memory_path() {
         let (mm, dir) = test_memory_manager();
         let path = mm.groups_root_memory_path();
-        assert!(path.to_str().unwrap().contains("groups/AGENTS.md"));
+        assert!(path.ends_with("AGENTS.md"));
         cleanup(&dir);
     }
 
@@ -322,12 +323,12 @@ mod tests {
     #[test]
     fn test_daily_log_append_and_read() {
         let (mm, dir) = test_memory_manager();
-        mm.append_daily_log(100, "2025-01-15", "Note from day one.\n").unwrap();
-        mm.append_daily_log(100, "2025-01-15", "Second line.").unwrap();
-        let content = mm.read_daily_log(100, "2025-01-15").unwrap();
+        mm.append_daily_log(100, 1, "2025-01-15", "Note from day one.\n").unwrap();
+        mm.append_daily_log(100, 1, "2025-01-15", "Second line.").unwrap();
+        let content = mm.read_daily_log(100, 1, "2025-01-15").unwrap();
         assert!(content.contains("Note from day one."));
         assert!(content.contains("Second line."));
-        assert!(mm.read_daily_log(100, "2025-01-14").is_none());
+        assert!(mm.read_daily_log(100, 1, "2025-01-14").is_none());
         cleanup(&dir);
     }
 

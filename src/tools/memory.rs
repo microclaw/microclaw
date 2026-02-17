@@ -7,19 +7,19 @@ use tracing::info;
 
 use crate::claude::ToolDefinition;
 
-use super::{auth_context_from_input, authorize_chat_access, authorize_chat_persona_access, schema_object, Tool, ToolResult};
+use super::{auth_context_from_input, authorize_chat_persona_access, schema_object, Tool, ToolResult};
 
 pub struct ReadMemoryTool {
     groups_dir: PathBuf,
-    /// Principles file: groups/AGENTS.md (read-only for "global" scope).
-    groups_agents_path: PathBuf,
+    /// Principles file: workspace_dir/AGENTS.md (read-only for "global" scope).
+    workspace_agents_path: PathBuf,
 }
 
 impl ReadMemoryTool {
-    pub fn new(data_dir: &str, _working_dir: &str) -> Self {
+    pub fn new(data_dir: &str, working_dir: &str) -> Self {
         let groups_dir = PathBuf::from(data_dir).join("groups");
         ReadMemoryTool {
-            groups_agents_path: groups_dir.join("AGENTS.md"),
+            workspace_agents_path: PathBuf::from(working_dir).join("AGENTS.md"),
             groups_dir,
         }
     }
@@ -34,7 +34,7 @@ impl Tool for ReadMemoryTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read_memory".into(),
-            description: "Read memory. Use scope 'global' to read principles (groups/AGENTS.md, read-only), or 'chat' to read this persona's full MEMORY.md. For tiered read/write use read_tiered_memory and write_tiered_memory.".into(),
+            description: "Read memory. Use scope 'global' to read principles (AGENTS.md at workspace root, read-only), or 'chat' to read this persona's full MEMORY.md. For tiered read/write use read_tiered_memory and write_tiered_memory.".into(),
             input_schema: schema_object(
                 json!({
                     "scope": {
@@ -63,7 +63,7 @@ impl Tool for ReadMemoryTool {
         };
 
         let path = match scope {
-            "global" => self.groups_agents_path.clone(),
+            "global" => self.workspace_agents_path.clone(),
             "chat" => {
                 let auth = match auth_context_from_input(&input) {
                     Some(a) => a,
@@ -124,7 +124,7 @@ impl Tool for WriteMemoryTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "write_memory".into(),
-            description: "Write memory. Use scope 'chat' to replace this persona's full MEMORY.md, or 'chat_daily' to append to the daily log (today/yesterday are injected at session start). Principles (groups/AGENTS.md) are read-only. For tiered updates use write_tiered_memory.".into(),
+            description: "Write memory. Use scope 'chat' to replace this persona's full MEMORY.md, or 'chat_daily' to append to the daily log (today/yesterday are injected at session start). Principles (AGENTS.md at workspace root) are read-only. For tiered updates use write_tiered_memory.".into(),
             input_schema: schema_object(
                 json!({
                     "scope": {
@@ -138,7 +138,7 @@ impl Tool for WriteMemoryTool {
                     },
                     "persona_id": {
                         "type": "integer",
-                        "description": "Persona ID (required for scope 'chat'; can default from context)"
+                        "description": "Persona ID (required for scope 'chat'; for 'chat_daily' defaults from context)"
                     },
                     "date": {
                         "type": "string",
@@ -165,11 +165,19 @@ impl Tool for WriteMemoryTool {
         };
 
         if scope == "chat_daily" {
-            let chat_id = match input.get("chat_id").and_then(|v| v.as_i64()) {
-                Some(id) => id,
-                None => return ToolResult::error("Missing 'chat_id' for chat_daily scope".into()),
+            let auth = match auth_context_from_input(&input) {
+                Some(a) => a,
+                None => return ToolResult::error("Missing auth context for chat_daily scope".into()),
             };
-            if let Err(e) = authorize_chat_access(&input, chat_id) {
+            let chat_id = input
+                .get("chat_id")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(auth.caller_chat_id);
+            let persona_id = input
+                .get("persona_id")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(auth.caller_persona_id);
+            if let Err(e) = authorize_chat_persona_access(&input, chat_id, persona_id) {
                 return ToolResult::error(e);
             }
             let date = input
@@ -180,6 +188,7 @@ impl Tool for WriteMemoryTool {
             let path = self
                 .groups_dir
                 .join(chat_id.to_string())
+                .join(persona_id.to_string())
                 .join("memory")
                 .join(format!("{date}.md"));
             info!("Appending to daily log: {}", path.display());
@@ -210,7 +219,7 @@ impl Tool for WriteMemoryTool {
 
         if scope == "global" {
             return ToolResult::error(
-                "Writing to global scope is not allowed. Principles are in groups/AGENTS.md (read-only). Use write_tiered_memory for per-persona memory.".into(),
+                "Writing to global scope is not allowed. Principles are in AGENTS.md at workspace root (read-only). Use write_tiered_memory for per-persona memory.".into(),
             );
         }
 
@@ -282,11 +291,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_memory_global_from_groups_agents_md() {
+    async fn test_read_memory_global_from_workspace_agents_md() {
         let dir = test_dir();
-        let groups = dir.join("groups");
-        let _ = std::fs::create_dir_all(&groups);
-        std::fs::write(groups.join("AGENTS.md"), "user prefers Rust").unwrap();
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("AGENTS.md"), "user prefers Rust").unwrap();
         let (tool, _) = test_tools(&dir);
         let result = tool.execute(json!({"scope": "global"})).await;
         assert!(!result.is_error);
@@ -377,9 +385,8 @@ mod tests {
     #[tokio::test]
     async fn test_read_memory_empty_file() {
         let dir = test_dir();
-        let groups = dir.join("groups");
-        let _ = std::fs::create_dir_all(&groups);
-        std::fs::write(groups.join("AGENTS.md"), "   ").unwrap();
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("AGENTS.md"), "   ").unwrap();
         let (read_tool, _) = test_tools(&dir);
         let result = read_tool.execute(json!({"scope": "global"})).await;
         assert!(!result.is_error);

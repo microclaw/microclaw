@@ -8,6 +8,7 @@ pub enum SlashCommand {
     Skills,
     Persona,
     Archive,
+    Schedule,
 }
 
 /// Normalize message text for command detection: trim, slash-like and invisible chars so commands are recognized.
@@ -64,6 +65,14 @@ pub fn parse(text: &str) -> Option<SlashCommand> {
     if lower == "/archive" || lower.starts_with("/archive ") {
         return Some(SlashCommand::Archive);
     }
+    if lower == "/schedule" || lower.starts_with("/schedule ")
+        || lower == "/jobs" || lower.starts_with("/jobs ")
+        || lower == "/scheduled" || lower.starts_with("/scheduled ")
+        || lower == "/scheduledjob" || lower.starts_with("/scheduledjob ")
+        || lower == "/scheduled_job" || lower.starts_with("/scheduled_job ")
+    {
+        return Some(SlashCommand::Schedule);
+    }
     None
 }
 
@@ -92,6 +101,16 @@ mod tests {
     fn parse_skills_archive() {
         assert_eq!(parse("/skills"), Some(SlashCommand::Skills));
         assert_eq!(parse("/archive"), Some(SlashCommand::Archive));
+    }
+
+    #[test]
+    fn parse_schedule() {
+        assert_eq!(parse("/schedule"), Some(SlashCommand::Schedule));
+        assert_eq!(parse("/jobs"), Some(SlashCommand::Schedule));
+        assert_eq!(parse("/schedule "), Some(SlashCommand::Schedule));
+        assert_eq!(parse("/scheduled"), Some(SlashCommand::Schedule));
+        assert_eq!(parse("/scheduledjob"), Some(SlashCommand::Schedule));
+        assert_eq!(parse("/scheduled_job"), Some(SlashCommand::Schedule));
     }
 
     #[test]
