@@ -79,7 +79,7 @@ Machine-readable output for support tickets:
 microclaw doctor --json
 ```
 
-Checks include PATH, shell runtime, Node/npm, `agent-browser`, PowerShell policy (Windows), and MCP command dependencies from `microclaw.data/mcp.json`.
+Checks include PATH, shell runtime, `agent-browser`, PowerShell policy (Windows), and MCP command dependencies from `microclaw.data/mcp.json`.
 
 ### Uninstall (script)
 

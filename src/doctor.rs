@@ -9,6 +9,7 @@ use crate::mcp::McpConfig;
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
     Pass,
+    Miss,
     Warn,
     Fail,
 }
@@ -17,6 +18,7 @@ impl CheckStatus {
     fn as_label(self) -> &'static str {
         match self {
             CheckStatus::Pass => "PASS",
+            CheckStatus::Miss => "MISS",
             CheckStatus::Warn => "WARN",
             CheckStatus::Fail => "FAIL",
         }
@@ -25,6 +27,7 @@ impl CheckStatus {
     fn as_emoji(self) -> &'static str {
         match self {
             CheckStatus::Pass => "✅",
+            CheckStatus::Miss => "🌿",
             CheckStatus::Warn => "⚠️",
             CheckStatus::Fail => "❌",
         }
@@ -76,18 +79,20 @@ impl DoctorReport {
         });
     }
 
-    fn summary(&self) -> (usize, usize, usize) {
+    fn summary(&self) -> (usize, usize, usize, usize) {
         let mut pass = 0usize;
+        let mut miss = 0usize;
         let mut warn = 0usize;
         let mut fail = 0usize;
         for check in &self.checks {
             match check.status {
                 CheckStatus::Pass => pass += 1,
+                CheckStatus::Miss => miss += 1,
                 CheckStatus::Warn => warn += 1,
                 CheckStatus::Fail => fail += 1,
             }
         }
-        (pass, warn, fail)
+        (pass, miss, warn, fail)
     }
 }
 
@@ -108,7 +113,7 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
         print_report(&report);
     }
 
-    let (_, _, fail) = report.summary();
+    let (_, _, _, fail) = report.summary();
     if fail > 0 {
         std::process::exit(2);
     }
@@ -133,7 +138,7 @@ fn build_report() -> DoctorReport {
     check_config(&mut report);
     check_path(&mut report);
     check_shell(&mut report);
-    check_node_and_browser(&mut report);
+    check_browser_dependency(&mut report);
     check_mcp_dependencies(&mut report);
 
     report
@@ -282,49 +287,7 @@ fn check_shell(report: &mut DoctorReport) {
     }
 }
 
-fn check_node_and_browser(report: &mut DoctorReport) {
-    let node_ok = command_exists("node");
-    report.push(
-        "deps.node",
-        "Node.js",
-        if node_ok {
-            CheckStatus::Pass
-        } else {
-            CheckStatus::Warn
-        },
-        if node_ok {
-            "node found".to_string()
-        } else {
-            "node not found".to_string()
-        },
-        if node_ok {
-            None
-        } else {
-            Some("Install Node.js LTS from https://nodejs.org/".to_string())
-        },
-    );
-
-    let npm_ok = command_exists("npm");
-    report.push(
-        "deps.npm",
-        "npm",
-        if npm_ok {
-            CheckStatus::Pass
-        } else {
-            CheckStatus::Warn
-        },
-        if npm_ok {
-            "npm found".to_string()
-        } else {
-            "npm not found".to_string()
-        },
-        if npm_ok {
-            None
-        } else {
-            Some("Install npm (bundled with Node.js).".to_string())
-        },
-    );
-
+fn check_browser_dependency(report: &mut DoctorReport) {
     let browser_cmd = if cfg!(target_os = "windows") {
         command_exists("agent-browser.cmd") || command_exists("agent-browser")
     } else {
@@ -337,7 +300,7 @@ fn check_node_and_browser(report: &mut DoctorReport) {
         if browser_cmd {
             CheckStatus::Pass
         } else {
-            CheckStatus::Warn
+            CheckStatus::Miss
         },
         if browser_cmd {
             "agent-browser command found".to_string()
@@ -363,7 +326,7 @@ fn check_mcp_dependencies(report: &mut DoctorReport) {
         report.push(
             "mcp.config",
             "MCP config",
-            CheckStatus::Warn,
+            CheckStatus::Miss,
             format!("{} not found", mcp_path.display()),
             Some("Create mcp.json if you need MCP servers.".to_string()),
         );
@@ -473,13 +436,28 @@ fn print_report(report: &DoctorReport) {
     );
     println!();
 
+    let mut prev_optional: Option<bool> = None;
     for check in &report.checks {
+        let is_optional = check.status == CheckStatus::Miss;
+        if let Some(prev) = prev_optional {
+            if prev != is_optional {
+                println!();
+            }
+        }
+        prev_optional = Some(is_optional);
+
+        let id_label = if check.status == CheckStatus::Miss {
+            format!("optional, {}", check.id)
+        } else {
+            check.id.clone()
+        };
+
         println!(
             "[{} {:<4}] {:<28} ({}) {}",
             check.status.as_emoji(),
             check.status.as_label(),
             check.title,
-            check.id,
+            id_label,
             check.detail
         );
         if let Some(fix) = &check.fix {
@@ -487,9 +465,12 @@ fn print_report(report: &DoctorReport) {
         }
     }
 
-    let (pass, warn, fail) = report.summary();
+    let (pass, miss, warn, fail) = report.summary();
     println!();
-    println!("Summary: pass={} warn={} fail={}", pass, warn, fail);
+    println!(
+        "Summary: pass={} miss={} warn={} fail={}",
+        pass, miss, warn, fail
+    );
     if fail > 0 {
         println!("Doctor exit code: 2 (hard failures present)");
     } else {
