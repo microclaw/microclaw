@@ -570,11 +570,13 @@ pub(crate) async fn process_with_agent_impl(
                     ResponseContentBlock::Text { text } => {
                         Some(ContentBlock::Text { text: text.clone() })
                     }
-                    ResponseContentBlock::ToolUse { id, name, input } => Some(ContentBlock::ToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                    }),
+                    ResponseContentBlock::ToolUse { id, name, input } => {
+                        Some(ContentBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        })
+                    }
                     ResponseContentBlock::Other => None,
                 })
                 .collect();
@@ -597,8 +599,7 @@ pub(crate) async fn process_with_agent_impl(
                         .execute_with_auth(name, input.clone(), &tool_auth)
                         .await;
                     // Auto-retry on approval_required — the second call auto-approves
-                    if result.is_error
-                        && result.error_type.as_deref() == Some("approval_required")
+                    if result.is_error && result.error_type.as_deref() == Some("approval_required")
                     {
                         info!("Auto-retrying tool '{}' after approval gate", name);
                         result = state
@@ -606,8 +607,7 @@ pub(crate) async fn process_with_agent_impl(
                             .execute_with_auth(name, input.clone(), &tool_auth)
                             .await;
                     }
-                    if result.is_error
-                        && result.error_type.as_deref() != Some("approval_required")
+                    if result.is_error && result.error_type.as_deref() != Some("approval_required")
                     {
                         failed_tools.insert(name.clone());
                         let preview = if result.content.chars().count() > 300 {

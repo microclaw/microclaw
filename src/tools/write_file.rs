@@ -71,8 +71,7 @@ impl Tool for WriteFileTool {
 
         // Guard: SKILL.md files must go in the correct skills directory, not runtime/skills/ or elsewhere.
         if resolved_path.file_name().and_then(|f| f.to_str()) == Some("SKILL.md") {
-            let skills_marker = std::path::Path::new("microclaw.data")
-                .join("skills");
+            let skills_marker = std::path::Path::new("microclaw.data").join("skills");
             let runtime_skills = std::path::Path::new("microclaw.data")
                 .join("runtime")
                 .join("skills");

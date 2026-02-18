@@ -652,9 +652,7 @@ mod tests {
         assert_eq!(first.error_type.as_deref(), Some("approval_required"));
 
         // Second call: auto-approved on retry (no token needed)
-        let second = registry
-            .execute_with_auth("bash", json!({}), &auth)
-            .await;
+        let second = registry.execute_with_auth("bash", json!({}), &auth).await;
         assert!(!second.is_error);
         assert_eq!(second.content, "ok");
     }

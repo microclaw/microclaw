@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 use teloxide::prelude::*;
-use teloxide::types::{ChatAction, InputFile, MessageId, ParseMode, ThreadId};
+use teloxide::types::{ChatAction, InputFile, ParseMode, ThreadId};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::{
@@ -631,13 +631,7 @@ async fn handle_message(
             }
 
             if !response.is_empty() {
-                send_response(
-                    &bot,
-                    msg.chat.id,
-                    &response,
-                    msg.message_thread_id.map(|t| t.0),
-                )
-                .await;
+                send_response(&bot, msg.chat.id, &response, msg.thread_id).await;
 
                 // Store bot response
                 let bot_msg = StoredMessage {
@@ -658,13 +652,7 @@ async fn handle_message(
                 );
             } else {
                 let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.".to_string();
-                send_response(
-                    &bot,
-                    msg.chat.id,
-                    &fallback,
-                    msg.message_thread_id.map(|t| t.0),
-                )
-                .await;
+                send_response(&bot, msg.chat.id, &fallback, msg.thread_id).await;
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     chat_id,
@@ -680,7 +668,7 @@ async fn handle_message(
             typing_handle.abort();
             error!("Error processing message: {}", e);
             let mut req = bot.send_message(msg.chat.id, format!("Error: {e}"));
-            if let Some(tid) = msg.message_thread_id {
+            if let Some(tid) = msg.thread_id {
                 req = req.message_thread_id(tid);
             }
             let _ = req.await;
@@ -887,7 +875,7 @@ async fn send_telegram_markdown_or_plain(
     bot: &Bot,
     chat_id: ChatId,
     text: &str,
-    message_thread_id: Option<i32>,
+    message_thread_id: Option<ThreadId>,
 ) {
     let markdown_text = render_markdown_v2_safe(text);
     let mut req = bot
@@ -895,20 +883,25 @@ async fn send_telegram_markdown_or_plain(
         .parse_mode(ParseMode::MarkdownV2);
 
     if let Some(tid) = message_thread_id {
-        req = req.message_thread_id(ThreadId(MessageId(tid)));
+        req = req.message_thread_id(tid);
     }
 
     if let Err(err) = req.await {
         warn!("Telegram MarkdownV2 send failed, falling back to plain text: {err}");
         let mut plain_req = bot.send_message(chat_id, text);
         if let Some(tid) = message_thread_id {
-            plain_req = plain_req.message_thread_id(ThreadId(MessageId(tid)));
+            plain_req = plain_req.message_thread_id(tid);
         }
         let _ = plain_req.await;
     }
 }
 
-pub async fn send_response(bot: &Bot, chat_id: ChatId, text: &str, message_thread_id: Option<i32>) {
+pub async fn send_response(
+    bot: &Bot,
+    chat_id: ChatId,
+    text: &str,
+    message_thread_id: Option<ThreadId>,
+) {
     for chunk in split_response_text(text) {
         send_telegram_markdown_or_plain(bot, chat_id, &chunk, message_thread_id).await;
     }

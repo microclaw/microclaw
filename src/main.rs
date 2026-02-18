@@ -107,18 +107,20 @@ fn migrate_legacy_runtime_layout(data_root: &Path, runtime_dir: &Path) {
 
 async fn reembed_memories() -> anyhow::Result<()> {
     let config = Config::load()?;
-    let runtime_data_dir = config.runtime_data_dir();
-    let db = db::Database::new(&runtime_data_dir)?;
 
     #[cfg(not(feature = "sqlite-vec"))]
     {
-        eprintln!("sqlite-vec feature not enabled. Rebuild with: cargo build --release --features sqlite-vec");
-        std::process::exit(1);
+        let _ = config;
+        anyhow::bail!(
+            "sqlite-vec feature not enabled. Rebuild with: cargo build --release --features sqlite-vec"
+        );
     }
 
     #[cfg(feature = "sqlite-vec")]
     {
         use microclaw::embedding;
+        let runtime_data_dir = config.runtime_data_dir();
+        let db = db::Database::new(&runtime_data_dir)?;
 
         let provider = embedding::create_provider(&config);
         let provider = match provider {
@@ -155,14 +157,19 @@ async fn reembed_memories() -> anyhow::Result<()> {
                 }
             }
             if (i + 1) % 20 == 0 {
-                println!("  Progress: {}/{} (ok={}, fail={})", i + 1, memories.len(), success, failed);
+                println!(
+                    "  Progress: {}/{} (ok={}, fail={})",
+                    i + 1,
+                    memories.len(),
+                    success,
+                    failed
+                );
             }
         }
 
         println!("Done! {} embedded, {} failed", success, failed);
+        return Ok(());
     }
-
-    Ok(())
 }
 
 #[tokio::main]

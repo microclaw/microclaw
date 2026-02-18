@@ -778,11 +778,7 @@ mod tests {
                 .join("runtime")
                 .join("runtime")
         ));
-        assert!(skills.ends_with(
-            std::path::Path::new("microclaw.data")
-                .join("runtime")
-                .join("skills")
-        ));
+        assert!(skills.ends_with(std::path::Path::new("microclaw.data").join("skills")));
     }
 
     #[test]

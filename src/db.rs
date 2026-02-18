@@ -1853,9 +1853,8 @@ impl Database {
 
     pub fn get_all_active_memories(&self) -> Result<Vec<(i64, String)>, MicroClawError> {
         let conn = self.lock_conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, content FROM memories WHERE is_archived = 0 ORDER BY id",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, content FROM memories WHERE is_archived = 0 ORDER BY id")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;

@@ -297,30 +297,27 @@ impl Tool for SyncSkillsTool {
             .filter(|v| !v.trim().is_empty());
 
         // Auto-detect repo from skill_name if no explicit source_repo was given
-        let (source_repo, skill_name, git_ref) =
-            if explicit_repo.is_none() {
-                if let Some((repo, skill, ref_override)) =
-                    Self::parse_skill_reference(raw_skill_name)
-                {
-                    let git_ref = explicit_ref
-                        .map(|s| s.to_string())
-                        .or(ref_override)
-                        .unwrap_or_else(|| "main".to_string());
-                    (repo, skill, git_ref)
-                } else {
-                    (
-                        "vercel-labs/skills".to_string(),
-                        raw_skill_name.to_string(),
-                        explicit_ref.unwrap_or("main").to_string(),
-                    )
-                }
-            } else {
-                (
-                    explicit_repo.unwrap().trim().to_string(),
-                    raw_skill_name.to_string(),
-                    explicit_ref.unwrap_or("main").to_string(),
-                )
-            };
+        let (source_repo, skill_name, git_ref) = if let Some(repo) = explicit_repo {
+            (
+                repo.trim().to_string(),
+                raw_skill_name.to_string(),
+                explicit_ref.unwrap_or("main").to_string(),
+            )
+        } else if let Some((repo, skill, ref_override)) =
+            Self::parse_skill_reference(raw_skill_name)
+        {
+            let git_ref = explicit_ref
+                .map(|s| s.to_string())
+                .or(ref_override)
+                .unwrap_or_else(|| "main".to_string());
+            (repo, skill, git_ref)
+        } else {
+            (
+                "vercel-labs/skills".to_string(),
+                raw_skill_name.to_string(),
+                explicit_ref.unwrap_or("main").to_string(),
+            )
+        };
 
         let target_name = input
             .get("target_name")
@@ -402,9 +399,8 @@ mod tests {
 
     #[test]
     fn test_parse_skill_reference_owner_repo_skill() {
-        let result = SyncSkillsTool::parse_skill_reference(
-            "omer-metin/skills-for-antigravity/viral-hooks",
-        );
+        let result =
+            SyncSkillsTool::parse_skill_reference("omer-metin/skills-for-antigravity/viral-hooks");
         let (repo, skill, git_ref) = result.unwrap();
         assert_eq!(repo, "omer-metin/skills-for-antigravity");
         assert_eq!(skill, "viral-hooks");
