@@ -1421,9 +1421,12 @@ version = "0.0.80"
 dependencies = [
  "anyhow",
  "async-trait",
+ "microclaw-core",
+ "reqwest",
  "serde",
  "tokio",
  "tracing",
+ "urlencoding",
 ]
 
 [[package]]
