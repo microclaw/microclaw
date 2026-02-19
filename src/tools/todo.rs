@@ -1,55 +1,12 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::info;
 
 use crate::llm_types::ToolDefinition;
+use microclaw_tools::todo_store::{format_todos, read_todos, write_todos, TodoItem};
 
 use super::{authorize_chat_access, schema_object, Tool, ToolResult};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoItem {
-    pub task: String,
-    pub status: String, // "pending", "in_progress", "completed"
-}
-
-fn todo_path(groups_dir: &Path, chat_id: i64) -> PathBuf {
-    groups_dir.join(chat_id.to_string()).join("TODO.json")
-}
-
-fn read_todos(groups_dir: &Path, chat_id: i64) -> Vec<TodoItem> {
-    let path = todo_path(groups_dir, chat_id);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
-}
-
-fn write_todos(groups_dir: &Path, chat_id: i64, todos: &[TodoItem]) -> std::io::Result<()> {
-    let path = todo_path(groups_dir, chat_id);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(todos).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)
-}
-
-fn format_todos(todos: &[TodoItem]) -> String {
-    if todos.is_empty() {
-        return "No tasks in the todo list.".into();
-    }
-    let mut out = String::new();
-    for (i, item) in todos.iter().enumerate() {
-        let icon = match item.status.as_str() {
-            "completed" => "[x]",
-            "in_progress" => "[~]",
-            _ => "[ ]",
-        };
-        out.push_str(&format!("{}. {} {}\n", i + 1, icon, item.task));
-    }
-    out
-}
 
 // --- TodoReadTool ---
 

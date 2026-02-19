@@ -3,6 +3,7 @@
 pub mod command_runner;
 pub mod path_guard;
 pub mod sandbox;
+pub mod todo_store;
 pub mod types;
 pub mod web_fetch;
 pub mod web_html;
