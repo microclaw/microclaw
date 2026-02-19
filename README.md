@@ -80,7 +80,7 @@ Machine-readable output for support tickets:
 microclaw doctor --json
 ```
 
-Checks include PATH, shell runtime, `agent-browser`, PowerShell policy (Windows), and MCP command dependencies from `microclaw.data/mcp.json`.
+Checks include PATH, shell runtime, `agent-browser`, PowerShell policy (Windows), and MCP command dependencies from `<data_dir>/mcp.json`.
 
 ### Uninstall (script)
 
@@ -123,7 +123,7 @@ First-time sqlite-vec quickstart (3 commands):
 ```sh
 cargo run --features sqlite-vec -- setup
 cargo run --features sqlite-vec -- start
-sqlite3 microclaw.data/runtime/microclaw.db "SELECT id, chat_id, chat_channel, external_chat_id, category, embedding_model FROM memories ORDER BY id DESC LIMIT 20;"
+sqlite3 <data_dir>/runtime/microclaw.db "SELECT id, chat_id, chat_channel, external_chat_id, category, embedding_model FROM memories ORDER BY id DESC LIMIT 20;"
 ```
 
 In `setup`, set:
@@ -148,7 +148,7 @@ For a deeper dive into the architecture and design decisions, read: **[Building 
 - **Session resume** -- full conversation state (including tool interactions) persisted between messages; the agent keeps tool-call state across invocations
 - **Context compaction** -- when sessions grow too large, older messages are automatically summarized to stay within context limits
 - **Sub-agent** -- delegate self-contained sub-tasks to a parallel agent with restricted tools
-- **Agent skills** -- extensible skill system ([Anthropic Skills](https://github.com/anthropics/skills) compatible); skills are auto-discovered from `microclaw.data/skills/` and activated on demand
+- **Agent skills** -- extensible skill system ([Anthropic Skills](https://github.com/anthropics/skills) compatible); skills are auto-discovered from `<data_dir>/skills/` and activated on demand
 - **Plan & execute** -- todo list tools for breaking down complex tasks, tracking progress step by step
 - **Platform-extensible architecture** -- shared agent loop + tool system + storage, with platform adapters for channel-specific ingress/egress
 - **Web search** -- search the web via DuckDuckGo and fetch/parse web pages
@@ -206,7 +206,7 @@ node scripts/generate_docs_artifacts.mjs
 MicroClaw maintains persistent memory via `AGENTS.md` files:
 
 ```
-microclaw.data/runtime/groups/
+<data_dir>/runtime/groups/
     AGENTS.md                 # Global memory (shared across all chats)
     {chat_id}/
         AGENTS.md             # Per-chat memory
@@ -260,7 +260,7 @@ LIMIT 50;
 MicroClaw supports the [Anthropic Agent Skills](https://github.com/anthropics/skills) standard. Skills are modular packages that give the bot specialized capabilities for specific tasks.
 
 ```
-microclaw.data/skills/
+<data_dir>/skills/
     pdf/
         SKILL.md              # Required: name, description + instructions
     docx/
@@ -280,7 +280,7 @@ microclaw.data/skills/
 - `apple-calendar` -- query/create Calendar events via `icalBuddy` + `osascript`
 - `weather` -- quick weather lookup via `wttr.in`
 
-**Adding a skill:** Create a subdirectory under `microclaw.data/skills/` with a `SKILL.md` file containing YAML frontmatter and markdown instructions.
+**Adding a skill:** Create a subdirectory under `<data_dir>/skills/` with a `SKILL.md` file containing YAML frontmatter and markdown instructions.
 
 Supported frontmatter fields:
 - `name`, `description`
@@ -296,7 +296,7 @@ Unavailable skills are filtered automatically by platform/dependencies, so unsup
 
 ## MCP
 
-MicroClaw supports MCP servers configured in `microclaw.data/mcp.json` with protocol negotiation and configurable transport.
+MicroClaw supports MCP servers configured in `<data_dir>/mcp.json` with protocol negotiation and configurable transport.
 
 - Default protocol version: `2025-11-05` (overridable globally or per server)
 - Supported transports: `stdio`, `streamable_http`
@@ -304,13 +304,13 @@ MicroClaw supports MCP servers configured in `microclaw.data/mcp.json` with prot
 Recommended production start (minimal local MCP only):
 
 ```sh
-cp mcp.minimal.example.json microclaw.data/mcp.json
+cp mcp.minimal.example.json <data_dir>/mcp.json
 ```
 
 Full example (includes optional remote streamable HTTP server):
 
 ```sh
-cp mcp.example.json microclaw.data/mcp.json
+cp mcp.example.json <data_dir>/mcp.json
 ```
 
 Example:
@@ -387,7 +387,7 @@ Bot: [creates a todo plan, then executes each step, updating progress]
 4. [ ] Add documentation
 ```
 
-Todo lists are stored at `microclaw.data/runtime/groups/{chat_id}/TODO.json` and persist across sessions.
+Todo lists are stored at `<data_dir>/runtime/groups/{chat_id}/TODO.json` and persist across sessions.
 
 ## Scheduling
 
@@ -540,8 +540,8 @@ api_key: "sk-ant-..."
 model: "claude-sonnet-4-20250514"
 # optional
 # llm_base_url: "https://..."
-data_dir: "./microclaw.data"
-working_dir: "./tmp"
+data_dir: "~/.microclaw"
+working_dir: "~/.microclaw/working_dir"
 working_dir_isolation: "chat" # optional; defaults to "chat" if omitted
 sandbox:
   mode: "off" # optional; default off. set "all" to run bash in docker sandbox
@@ -581,7 +581,7 @@ microclaw gateway uninstall
 Notes:
 - macOS uses `launchd` user agents.
 - Linux uses `systemd --user`.
-- Runtime logs are written to `microclaw.data/runtime/logs/`.
+- Runtime logs are written to `<data_dir>/runtime/logs/`.
 - Log file format is hourly: `microclaw-YYYY-MM-DD-HH.log`.
 - Logs older than 30 days are deleted automatically.
 
@@ -600,8 +600,8 @@ All configuration is via `microclaw.config.yaml`:
 | `model` | No | provider-specific | Model name |
 | `model_prices` | No | `[]` | Optional per-model pricing table (USD per 1M tokens) used by `/usage` cost estimates |
 | `llm_base_url` | No | provider preset default | Custom provider base URL |
-| `data_dir` | No | `./microclaw.data` | Data root (`runtime` data in `data_dir/runtime`, skills in `data_dir/skills`) |
-| `working_dir` | No | `./tmp` | Default working directory for tool operations; relative paths in `bash/read_file/write_file/edit_file/glob/grep` resolve from here |
+| `data_dir` | No | `~/.microclaw` | Data root (`runtime` data in `data_dir/runtime`, skills in `data_dir/skills`) |
+| `working_dir` | No | `~/.microclaw/working_dir` | Default working directory for tool operations; relative paths in `bash/read_file/write_file/edit_file/glob/grep` resolve from here |
 | `working_dir_isolation` | No | `chat` | Working directory isolation mode for `bash/read_file/write_file/edit_file/glob/grep`: `shared` uses `working_dir/shared`, `chat` isolates each chat under `working_dir/chat/<channel>/<chat_id>` |
 | `sandbox.mode` | No | `off` | Container sandbox mode for bash tool execution: `off` runs on host; `all` routes bash commands into docker containers |
 | `max_tokens` | No | `8192` | Max tokens per model response |
@@ -617,6 +617,10 @@ All configuration is via `microclaw.config.yaml`:
 | `embedding_base_url` | No | provider default | Optional base URL override for embedding provider |
 | `embedding_model` | No | provider default | Embedding model ID |
 | `embedding_dim` | No | provider default | Embedding vector dimension for sqlite-vec index initialization |
+
+Path compatibility policy:
+- If `data_dir` / `skills_dir` / `working_dir` are already configured, MicroClaw keeps using those configured paths.
+- If these fields are not configured, defaults are `data_dir=~/.microclaw`, `skills_dir=<data_dir>/skills`, `working_dir=~/.microclaw/working_dir`.
 
 `*` At least one channel must be enabled: `telegram_bot_token`, `discord_bot_token`, `channels.slack`, `channels.feishu`, or `web_enabled: true`.
 

@@ -760,7 +760,8 @@ mod tests {
         config.control_chat_ids = vec![999];
         assert_eq!(config.model, "claude-sonnet-4-5-20250929");
         assert!(config.data_dir.ends_with(".microclaw"));
-        assert!(config.working_dir.ends_with(".microclaw/working_dir"));
+        assert!(std::path::PathBuf::from(&config.working_dir)
+            .ends_with(std::path::Path::new(".microclaw").join("working_dir")));
         assert_eq!(config.openai_api_key.as_deref(), Some("sk-test"));
         assert_eq!(config.timezone, "US/Eastern");
         assert_eq!(config.allowed_groups, vec![123, 456]);
@@ -785,7 +786,8 @@ mod tests {
         assert_eq!(config.max_tokens, 8192);
         assert_eq!(config.max_tool_iterations, 100);
         assert!(config.data_dir.ends_with(".microclaw"));
-        assert!(config.working_dir.ends_with(".microclaw/working_dir"));
+        assert!(std::path::PathBuf::from(&config.working_dir)
+            .ends_with(std::path::Path::new(".microclaw").join("working_dir")));
         assert_eq!(config.memory_token_budget, 1500);
         assert!(matches!(
             config.working_dir_isolation,
@@ -817,7 +819,8 @@ mod tests {
         let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nworking_dir: '  '\n";
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
-        assert!(config.working_dir.ends_with(".microclaw/working_dir"));
+        assert!(std::path::PathBuf::from(&config.working_dir)
+            .ends_with(std::path::Path::new(".microclaw").join("working_dir")));
     }
 
     #[test]

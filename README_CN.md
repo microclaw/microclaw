@@ -77,7 +77,7 @@ microclaw doctor
 microclaw doctor --json
 ```
 
-会检查：PATH、shell 运行时、`agent-browser`、Windows PowerShell 执行策略、以及 `microclaw.data/mcp.json` 里的 MCP 命令依赖。
+会检查：PATH、shell 运行时、`agent-browser`、Windows PowerShell 执行策略、以及 `<data_dir>/mcp.json` 里的 MCP 命令依赖。
 
 ### 卸载（脚本）
 
@@ -120,7 +120,7 @@ cargo build --release --features sqlite-vec
 ```sh
 cargo run --features sqlite-vec -- setup
 cargo run --features sqlite-vec -- start
-sqlite3 microclaw.data/runtime/microclaw.db "SELECT id, chat_id, chat_channel, external_chat_id, category, embedding_model FROM memories ORDER BY id DESC LIMIT 20;"
+sqlite3 <data_dir>/runtime/microclaw.db "SELECT id, chat_id, chat_channel, external_chat_id, category, embedding_model FROM memories ORDER BY id DESC LIMIT 20;"
 ```
 
 在 `setup` 里至少设置：
@@ -145,7 +145,7 @@ sqlite3 microclaw.data/runtime/microclaw.db "SELECT id, chat_id, chat_channel, e
 - **会话恢复** -- 完整对话状态（包括工具交互）持久化保存；模型可跨调用延续工具调用状态
 - **上下文压缩** -- 会话过长时自动总结旧消息，保持在上下文限制内
 - **子代理** -- 将独立子任务委派给有限制工具集的并行代理
-- **技能系统** -- 可扩展的技能系统（兼容 [Anthropic Skills](https://github.com/anthropics/skills) 标准）；技能从 `microclaw.data/skills/` 自动发现，按需激活
+- **技能系统** -- 可扩展的技能系统（兼容 [Anthropic Skills](https://github.com/anthropics/skills) 标准）；技能从 `<data_dir>/skills/` 自动发现，按需激活
 - **计划与执行** -- todo 工具，将复杂任务拆解为步骤，逐步跟踪进度
 - **可扩展的平台架构** -- 共享智能体循环/工具系统/存储层，通过平台适配器处理各渠道差异
 - **网页搜索** -- 通过 DuckDuckGo 搜索和抓取网页
@@ -193,7 +193,7 @@ sqlite3 microclaw.data/runtime/microclaw.db "SELECT id, chat_id, chat_channel, e
 MicroClaw 通过 `AGENTS.md` 文件维护持久化记忆：
 
 ```
-microclaw.data/runtime/groups/
+<data_dir>/runtime/groups/
     AGENTS.md                 # 全局记忆（所有聊天共享）
     {chat_id}/
         AGENTS.md             # 每聊天记忆
@@ -247,7 +247,7 @@ LIMIT 50;
 MicroClaw 支持 [Anthropic Agent Skills](https://github.com/anthropics/skills) 标准。技能是为特定任务提供专业能力的模块化包。
 
 ```
-microclaw.data/skills/
+<data_dir>/skills/
     pdf/
         SKILL.md              # 必需：name、description + 指令
     docx/
@@ -267,7 +267,7 @@ microclaw.data/skills/
 - `apple-calendar` -- 通过 `icalBuddy` + `osascript` 查询/创建日历事件
 - `weather` -- 通过 `wttr.in` 快速查询天气
 
-**添加技能：** 在 `microclaw.data/skills/` 下创建子目录，放入包含 YAML frontmatter（`name` 和 `description`）和 markdown 指令的 `SKILL.md` 文件。
+**添加技能：** 在 `<data_dir>/skills/` 下创建子目录，放入包含 YAML frontmatter（`name` 和 `description`）和 markdown 指令的 `SKILL.md` 文件。
 
 **命令：**
 - `/skills` -- 列出所有可用技能
@@ -291,7 +291,7 @@ Bot: [创建 todo 计划，然后逐步执行，更新进度]
 4. [ ] 添加文档
 ```
 
-Todo 列表存储在 `microclaw.data/runtime/groups/{chat_id}/TODO.json`，跨会话持久化。
+Todo 列表存储在 `<data_dir>/runtime/groups/{chat_id}/TODO.json`，跨会话持久化。
 
 ## 定时任务
 
@@ -443,8 +443,8 @@ api_key: "sk-ant-..."
 model: "claude-sonnet-4-20250514"
 # 可选
 # llm_base_url: "https://..."
-data_dir: "./microclaw.data"
-working_dir: "./tmp"
+data_dir: "~/.microclaw"
+working_dir: "~/.microclaw/working_dir"
 working_dir_isolation: "chat" # 可选；默认 chat
 sandbox:
   mode: "off" # 可选；默认关闭。设为 "all" 可让 bash 在 docker 沙箱执行
@@ -484,7 +484,7 @@ microclaw gateway uninstall
 说明：
 - macOS 使用 `launchd` 用户级服务
 - Linux 使用 `systemd --user`
-- 运行日志写入 `microclaw.data/runtime/logs/`
+- 运行日志写入 `<data_dir>/runtime/logs/`
 - 日志按小时分片：`microclaw-YYYY-MM-DD-HH.log`
 - 超过 30 天的日志会自动删除
 
@@ -503,8 +503,8 @@ microclaw gateway uninstall
 | `model` | 否 | 随 provider 默认 | 模型名 |
 | `model_prices` | 否 | `[]` | 可选模型价格表（每百万 token 的美元单价），用于 `/usage` 成本估算 |
 | `llm_base_url` | 否 | provider 预设默认值 | 自定义 API 基础地址 |
-| `data_dir` | 否 | `./microclaw.data` | 数据根目录（运行时数据在 `data_dir/runtime`，技能在 `data_dir/skills`） |
-| `working_dir` | 否 | `./tmp` | 工具默认工作目录；`bash/read_file/write_file/edit_file/glob/grep` 的相对路径都以此为基准 |
+| `data_dir` | 否 | `~/.microclaw` | 数据根目录（运行时数据在 `data_dir/runtime`，技能在 `data_dir/skills`） |
+| `working_dir` | 否 | `~/.microclaw/working_dir` | 工具默认工作目录；`bash/read_file/write_file/edit_file/glob/grep` 的相对路径都以此为基准 |
 | `working_dir_isolation` | 否 | `chat` | 工具工作目录隔离模式：`shared` 使用 `working_dir/shared`，`chat` 使用 `working_dir/chat/<channel>/<chat_id>` |
 | `sandbox.mode` | 否 | `off` | `bash` 工具的容器沙箱模式：`off` 在宿主执行；`all` 通过 docker 容器执行 |
 | `max_tokens` | 否 | `8192` | 每次模型回复的最大 token |
@@ -520,6 +520,10 @@ microclaw gateway uninstall
 | `embedding_base_url` | 否 | provider 默认 | embedding provider base URL 覆盖 |
 | `embedding_model` | 否 | provider 默认 | embedding 模型 ID |
 | `embedding_dim` | 否 | provider 默认 | sqlite-vec 索引使用的向量维度 |
+
+路径兼容策略：
+- 如果用户已经在配置里设置了 `data_dir` / `skills_dir` / `working_dir`，会继续沿用原有路径。
+- 如果未配置，则默认使用 `data_dir=~/.microclaw`、`skills_dir=<data_dir>/skills`、`working_dir=~/.microclaw/working_dir`。
 
 `*` 需要至少启用一个渠道：`telegram_bot_token`、`discord_bot_token`、`channels.slack`、`channels.feishu`，或 `web_enabled: true`。
 

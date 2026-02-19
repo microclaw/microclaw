@@ -75,7 +75,7 @@ node scripts/generate_docs_artifacts.mjs
 
 - Default skills dir: `<data_dir>/skills` (default `data_dir` is `~/.microclaw`)
 - Config override: `skills_dir` in `microclaw.config.yaml` (e.g. `~/.microclaw/skills`)
-- Compatibility fallback: legacy `<data_root>/skills` if it already exists
+- Compatibility policy: existing configured `data_dir` / `skills_dir` / `working_dir` keep working; new defaults apply only when unset
 - ClawHub lockfile: `~/.microclaw/clawhub.lock.json`
 
 ## Agent loop (high level)

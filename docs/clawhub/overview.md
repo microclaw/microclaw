@@ -4,7 +4,7 @@
 
 MicroClaw integrates with ClawHub to search and install skill packs.
 
-- CLI: `microclaw skill search|install|list|inspect`
+- CLI: `microclaw skill search|install|list|inspect|available`
 - Agent tools: `clawhub_search`, `clawhub_install`
 - Lockfile: `clawhub.lock.json` (managed install state)
 
@@ -15,7 +15,8 @@ MicroClaw integrates with ClawHub to search and install skill packs.
 - Optional config override: `skills_dir` in `microclaw.config.yaml`
 
 Compatibility behavior:
-- If legacy `<data_dir>/skills` already exists, runtime keeps using it until migrated.
+- Existing configured paths (`data_dir` / `skills_dir` / `working_dir`) are always respected.
+- New defaults (`~/.microclaw`, `<data_dir>/skills`, `~/.microclaw/working_dir`) are used only when fields are not configured.
 
 ## Config
 
