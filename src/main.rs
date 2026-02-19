@@ -278,11 +278,11 @@ async fn main() -> anyhow::Result<()> {
     let data_root_dir = config.data_root_dir();
     let runtime_data_dir = config.runtime_data_dir();
     let skills_data_dir = config.skills_data_dir();
-    let legacy_skills_dir = config.legacy_skills_dir();
+    let legacy_skills_dir = data_root_dir.join("skills");
     let skills_root_dir = std::path::PathBuf::from(&skills_data_dir)
         .parent()
         .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| config.skills_root_dir());
+        .unwrap_or_else(|| data_root_dir.clone());
     migrate_legacy_runtime_layout(&data_root_dir, Path::new(&runtime_data_dir));
     migrate_legacy_skills_dir(&legacy_skills_dir, Path::new(&skills_data_dir));
     builtin_skills::ensure_builtin_skills(&skills_root_dir)?;

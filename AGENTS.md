@@ -73,7 +73,7 @@ node scripts/generate_docs_artifacts.mjs
 
 ## Skills Storage
 
-- Preferred skills dir: `~/.microclaw/skills` (or `$MICROCLAW_HOME/skills`)
+- Default skills dir: `<data_dir>/skills` (default `data_dir` is `~/.microclaw`)
 - Config override: `skills_dir` in `microclaw.config.yaml` (e.g. `./microclaw.data/skills`)
 - Compatibility fallback: legacy `<data_root>/skills` if it already exists
 - ClawHub lockfile: `~/.microclaw/clawhub.lock.json`

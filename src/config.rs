@@ -45,23 +45,16 @@ fn default_memory_token_budget() -> usize {
     1500
 }
 fn default_data_dir() -> String {
-    default_microclaw_home_dir().to_string_lossy().to_string()
+    home_dir()
+        .map(|h| h.join(".microclaw"))
+        .unwrap_or_else(|| PathBuf::from(".microclaw"))
+        .to_string_lossy()
+        .to_string()
 }
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
-}
-fn default_microclaw_home_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("MICROCLAW_HOME") {
-        let trimmed = dir.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-    home_dir()
-        .map(|h| h.join(".microclaw"))
-        .unwrap_or_else(|| PathBuf::from(".microclaw"))
 }
 fn default_working_dir() -> String {
     "./tmp".into()
@@ -358,44 +351,23 @@ impl Config {
             .to_string()
     }
 
-    /// Skills directory under data root.
-    /// Default location is `~/.microclaw/skills` (or `$MICROCLAW_HOME/skills`).
-    /// Legacy `<data_root>/skills` is migrated by startup path.
+    /// Skills directory. Uses `skills_dir` when configured,
+    /// otherwise defaults to `<data_dir>/skills`.
     pub fn skills_data_dir(&self) -> String {
-        if let Ok(explicit_dir) = std::env::var("MICROCLAW_SKILLS_DIR") {
-            let trimmed = explicit_dir.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
         if let Some(configured) = &self.skills_dir {
             let trimmed = configured.trim();
             if !trimmed.is_empty() {
                 return trimmed.to_string();
             }
         }
-        self.skills_root_dir()
+        self.data_root_dir()
             .join("skills")
             .to_string_lossy()
             .to_string()
     }
 
-    pub fn skills_root_dir(&self) -> PathBuf {
-        default_microclaw_home_dir()
-    }
-
     pub fn clawhub_lockfile_path(&self) -> PathBuf {
-        self.skills_root_dir().join("clawhub.lock.json")
-    }
-
-    pub fn legacy_skills_dir(&self) -> PathBuf {
-        let root = self.data_root_dir();
-        let base = if root.ends_with("runtime") {
-            root.parent().unwrap_or(&root).to_path_buf()
-        } else {
-            root
-        };
-        base.join("skills")
+        self.data_root_dir().join("clawhub.lock.json")
     }
 
     pub fn resolve_config_path() -> Result<Option<PathBuf>, MicroClawError> {
@@ -892,7 +864,7 @@ mod tests {
         let skills = std::path::PathBuf::from(config.skills_data_dir());
 
         assert!(runtime.ends_with(std::path::Path::new("microclaw.data").join("runtime")));
-        assert!(skills.ends_with(std::path::Path::new(".microclaw").join("skills")));
+        assert!(skills.ends_with(std::path::Path::new("microclaw.data").join("skills")));
     }
 
     #[test]
@@ -908,33 +880,11 @@ mod tests {
                 .join("runtime")
                 .join("runtime")
         ));
-        assert!(skills.ends_with(std::path::Path::new(".microclaw").join("skills")));
-    }
-
-    #[test]
-    fn test_skills_dir_prefers_microclaw_home_even_if_legacy_exists() {
-        let mut config = test_config();
-        let legacy_root =
-            std::env::temp_dir().join(format!("microclaw_legacy_skills_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(legacy_root.join("skills")).unwrap();
-        config.data_dir = legacy_root.to_string_lossy().to_string();
-
-        let previous_home = std::env::var("MICROCLAW_HOME").ok();
-        let custom_home =
-            std::env::temp_dir().join(format!("microclaw_home_{}", uuid::Uuid::new_v4()));
-        std::env::set_var("MICROCLAW_HOME", custom_home.to_string_lossy().to_string());
-
-        let skills = std::path::PathBuf::from(config.skills_data_dir());
-        assert!(skills.starts_with(&custom_home));
-        assert!(skills.ends_with(std::path::Path::new("skills")));
-
-        if let Some(v) = previous_home {
-            std::env::set_var("MICROCLAW_HOME", v);
-        } else {
-            std::env::remove_var("MICROCLAW_HOME");
-        }
-        let _ = std::fs::remove_dir_all(legacy_root);
-        let _ = std::fs::remove_dir_all(custom_home);
+        assert!(skills.ends_with(
+            std::path::Path::new("microclaw.data")
+                .join("runtime")
+                .join("skills")
+        ));
     }
 
     #[test]
