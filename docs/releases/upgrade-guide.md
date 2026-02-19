@@ -49,3 +49,38 @@ For cookie-authenticated write/admin APIs, include CSRF header:
 2. `GET /api/auth/status`
 3. `GET /api/sessions/tree`
 4. `GET /api/metrics`
+5. `GET /api/config/self_check` (no unaccepted `high` warnings)
+
+## Merge Notes (PR #40)
+
+Scope in this release:
+
+- web runtime modularization (`web/auth.rs`, `web/sessions.rs`, `web/metrics.rs`, `web/config.rs`, `web/stream.rs`)
+- config self-check API + Web UI warning surfacing
+- OTLP exporter queue/bounded retry behavior hardening
+- release/process docs updates
+
+Operational risk notes:
+
+- startup self-check warnings should be reviewed before production rollout
+- cookie-authenticated write/admin calls require CSRF token header
+- OTLP is optional; when enabled, validate endpoint reachability and retry settings
+
+## Rollback Procedure
+
+If release validation fails after deploy:
+
+1. Stop the new process.
+2. Restore previous binary/image version.
+3. Restore pre-upgrade `microclaw.db` backup.
+4. Restore previous `microclaw.config.yaml`.
+5. Start old version and run:
+   - `GET /api/health`
+   - `GET /api/auth/status`
+   - `GET /api/sessions`
+6. Record incident notes, failure symptom, and migration/schema version.
+
+Notes:
+
+- migrations are forward-applied on startup; DB restore is the safe rollback path
+- do not partially replay migration SQL by hand during incident rollback
