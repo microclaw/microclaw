@@ -9,6 +9,7 @@ use crate::channels::telegram::TelegramChannelConfig;
 use crate::channels::{DiscordAdapter, FeishuAdapter, SlackAdapter, TelegramAdapter};
 use crate::config::Config;
 use crate::embedding::EmbeddingProvider;
+use crate::hooks::HookManager;
 use crate::llm::LlmProvider;
 use crate::memory::MemoryManager;
 use crate::skills::SkillManager;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub memory: MemoryManager,
     pub skills: SkillManager,
+    pub hooks: Arc<HookManager>,
     pub llm: Box<dyn LlmProvider>,
     pub embedding: Option<Arc<dyn EmbeddingProvider>>,
     pub tools: ToolRegistry,
@@ -118,12 +120,15 @@ pub async fn run(
         tools.add_tool(Box::new(crate::tools::mcp::McpTool::new(server, tool_info)));
     }
 
+    let hooks = Arc::new(HookManager::from_config(&config).with_db(db.clone()));
+
     let state = Arc::new(AppState {
         config,
         channel_registry,
         db,
         memory,
         skills,
+        hooks,
         llm,
         embedding,
         tools,

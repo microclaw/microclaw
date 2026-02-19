@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};
 
+use crate::hooks::HookOutcome;
 use crate::embedding::EmbeddingProvider;
 use crate::runtime::AppState;
 use crate::tools::ToolAuthContext;
@@ -362,7 +363,7 @@ pub(crate) async fn process_with_agent_impl(
     let memory_context = format!("{}{}", file_memory, db_memory);
     let skills_catalog = state.skills.build_skills_catalog();
     let soul_content = load_soul_content(&state.config, chat_id);
-    let system_prompt = build_system_prompt(
+    let mut system_prompt = build_system_prompt(
         &state.config.bot_username,
         context.caller_channel,
         &memory_context,
@@ -432,6 +433,39 @@ pub(crate) async fn process_with_agent_impl(
             let _ = tx.send(AgentEvent::Iteration {
                 iteration: iteration + 1,
             });
+        }
+        if let Ok(hook_outcome) = state
+            .hooks
+            .run_before_llm(
+                chat_id,
+                context.caller_channel,
+                iteration + 1,
+                &system_prompt,
+                messages.len(),
+                tool_defs.len(),
+            )
+            .await
+        {
+            match hook_outcome {
+                HookOutcome::Block { reason } => {
+                    let text = if reason.trim().is_empty() {
+                        "Request blocked by policy hook.".to_string()
+                    } else {
+                        reason
+                    };
+                    if let Some(tx) = event_tx {
+                        let _ = tx.send(AgentEvent::FinalResponse { text: text.clone() });
+                    }
+                    return Ok(text);
+                }
+                HookOutcome::Allow { patches } => {
+                    for patch in patches {
+                        if let Some(v) = patch.get("system_prompt").and_then(|v| v.as_str()) {
+                            system_prompt = v.to_string();
+                        }
+                    }
+                }
+            }
         }
         let response = if let Some(tx) = event_tx {
             let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -591,6 +625,40 @@ pub(crate) async fn process_with_agent_impl(
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ResponseContentBlock::ToolUse { id, name, input } = block {
+                    let mut effective_input = input.clone();
+                    if let Ok(hook_outcome) = state
+                        .hooks
+                        .run_before_tool(
+                            chat_id,
+                            context.caller_channel,
+                            iteration + 1,
+                            name,
+                            &effective_input,
+                        )
+                        .await
+                    {
+                        match hook_outcome {
+                            HookOutcome::Block { reason } => {
+                                tool_results.push(ContentBlock::ToolResult {
+                                    tool_use_id: id.clone(),
+                                    content: if reason.trim().is_empty() {
+                                        format!("tool '{}' blocked by policy hook", name)
+                                    } else {
+                                        reason
+                                    },
+                                    is_error: Some(true),
+                                });
+                                continue;
+                            }
+                            HookOutcome::Allow { patches } => {
+                                for patch in patches {
+                                    if let Some(v) = patch.get("tool_input") {
+                                        effective_input = v.clone();
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if let Some(tx) = event_tx {
                         let _ = tx.send(AgentEvent::ToolStart { name: name.clone() });
                     }
@@ -598,7 +666,7 @@ pub(crate) async fn process_with_agent_impl(
                     let started = std::time::Instant::now();
                     let mut result = state
                         .tools
-                        .execute_with_auth(name, input.clone(), &tool_auth)
+                        .execute_with_auth(name, effective_input.clone(), &tool_auth)
                         .await;
                     // Auto-retry on approval_required — the second call auto-approves
                     if result.is_error && result.error_type.as_deref() == Some("approval_required")
@@ -606,8 +674,56 @@ pub(crate) async fn process_with_agent_impl(
                         info!("Auto-retrying tool '{}' after approval gate", name);
                         result = state
                             .tools
-                            .execute_with_auth(name, input.clone(), &tool_auth)
+                            .execute_with_auth(name, effective_input.clone(), &tool_auth)
                             .await;
+                    }
+                    if let Ok(hook_outcome) = state
+                        .hooks
+                        .run_after_tool(
+                            chat_id,
+                            context.caller_channel,
+                            iteration + 1,
+                            name,
+                            &effective_input,
+                            &result,
+                        )
+                        .await
+                    {
+                        match hook_outcome {
+                            HookOutcome::Block { reason } => {
+                                result.is_error = true;
+                                if !reason.trim().is_empty() {
+                                    result.content = reason;
+                                }
+                                if result.error_type.is_none() {
+                                    result.error_type = Some("hook_blocked".to_string());
+                                }
+                            }
+                            HookOutcome::Allow { patches } => {
+                                for patch in patches {
+                                    if let Some(v) = patch.get("content").and_then(|v| v.as_str()) {
+                                        result.content = v.to_string();
+                                    }
+                                    if let Some(v) = patch.get("is_error").and_then(|v| v.as_bool()) {
+                                        result.is_error = v;
+                                    }
+                                    if let Some(v) = patch
+                                        .get("error_type")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::to_string)
+                                    {
+                                        result.error_type = Some(v);
+                                    }
+                                    if let Some(v) = patch
+                                        .get("status_code")
+                                        .and_then(|v| v.as_i64())
+                                        .map(|x| x as i32)
+                                    {
+                                        result.status_code = Some(v);
+                                    }
+                                }
+                            }
+                        }
                     }
                     if result.is_error && result.error_type.as_deref() != Some("approval_required")
                     {
@@ -1514,6 +1630,7 @@ mod tests {
             db: db.clone(),
             memory: MemoryManager::new(runtime_dir.to_str().unwrap()),
             skills: SkillManager::from_skills_dir(&cfg.skills_data_dir()),
+            hooks: Arc::new(crate::hooks::HookManager::from_config(&cfg)),
             llm,
             embedding: None,
             tools: ToolRegistry::new(&cfg, channel_registry, db),
@@ -1907,6 +2024,45 @@ mod tests {
         let soul = super::load_soul_content(&config, 999);
         assert!(soul.is_some());
         assert!(soul.unwrap().contains("custom personality"));
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_hook_before_llm_block_returns_reason() {
+        let base_dir = std::env::temp_dir().join(format!("mc_hook_block_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(base_dir.join("hooks/block-all")).unwrap();
+        std::fs::write(
+            base_dir.join("hooks/block-all/HOOK.md"),
+            r#"---
+name: block-all
+description: block all llm calls
+events: [BeforeLLMCall]
+command: "echo '{\"action\":\"block\",\"reason\":\"blocked by test hook\"}'"
+enabled: true
+timeout_ms: 1000
+---
+"#,
+        )
+        .unwrap();
+
+        let state = test_state_with_base_dir(&base_dir);
+        let chat_id = 90001_i64;
+        store_user_message(&state.db, chat_id, "hello");
+
+        let reply = process_with_agent(
+            &state,
+            AgentRequestContext {
+                caller_channel: "web",
+                chat_id,
+                chat_type: "web",
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(reply.contains("blocked by test hook"));
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }

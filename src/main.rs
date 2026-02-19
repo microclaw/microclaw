@@ -1,7 +1,7 @@
 use microclaw::config::Config;
 use microclaw::error::MicroClawError;
 use microclaw::{
-    builtin_skills, db, doctor, gateway, logging, mcp, memory, runtime, setup, skills,
+    builtin_skills, db, doctor, gateway, hooks, logging, mcp, memory, runtime, setup, skills,
 };
 use std::path::Path;
 use tracing::info;
@@ -19,6 +19,7 @@ Commands:
   start      Start runtime (enabled channels)
   setup      Full-screen setup wizard
   doctor     Preflight diagnostics
+  hooks      Manage runtime hooks (list/info/enable/disable)
   gateway    Manage service (install/start/stop/status/logs)
   version    Show version
   help       Show this help
@@ -194,6 +195,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Some("doctor") => {
             doctor::run_cli(&args[2..])?;
+            return Ok(());
+        }
+        Some("hooks") => {
+            hooks::handle_hooks_cli(&args[2..]).await?;
             return Ok(());
         }
         Some("reembed") => {

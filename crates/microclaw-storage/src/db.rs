@@ -140,7 +140,44 @@ pub struct MemoryInjectionLog {
     pub tokens_est: i64,
 }
 
-const SCHEMA_VERSION_CURRENT: i64 = 4;
+#[derive(Debug, Clone)]
+pub struct AuthApiKeyRecord {
+    pub id: i64,
+    pub label: String,
+    pub prefix: String,
+    pub created_at: String,
+    pub revoked_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub rotated_from_key_id: Option<i64>,
+    pub scopes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MetricsHistoryPoint {
+    pub timestamp_ms: i64,
+    pub llm_completions: i64,
+    pub llm_input_tokens: i64,
+    pub llm_output_tokens: i64,
+    pub http_requests: i64,
+    pub tool_executions: i64,
+    pub mcp_calls: i64,
+    pub active_sessions: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuditLogRecord {
+    pub id: i64,
+    pub kind: String,
+    pub actor: String,
+    pub action: String,
+    pub target: Option<String>,
+    pub status: String,
+    pub detail: Option<String>,
+    pub created_at: String,
+}
+
+const SCHEMA_VERSION_CURRENT: i64 = 8;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -383,6 +420,100 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         set_schema_version(conn, 4)?;
         version = 4;
     }
+    if version < 5 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS auth_passwords (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                session_id TEXT PRIMARY KEY,
+                label TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                revoked_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                key_hash TEXT NOT NULL UNIQUE,
+                prefix TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                revoked_at TEXT,
+                last_used_at TEXT,
+                expires_at TEXT,
+                rotated_from_key_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS api_key_scopes (
+                api_key_id INTEGER NOT NULL,
+                scope TEXT NOT NULL,
+                PRIMARY KEY (api_key_id, scope)
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_key_scopes_scope ON api_key_scopes(scope);",
+        )?;
+        set_schema_version(conn, 5)?;
+        version = 5;
+    }
+    if version < 6 {
+        if !table_has_column(conn, "sessions", "parent_session_key")? {
+            conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_key TEXT", [])?;
+        }
+        if !table_has_column(conn, "sessions", "fork_point")? {
+            conn.execute("ALTER TABLE sessions ADD COLUMN fork_point INTEGER", [])?;
+        }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_key
+             ON sessions(parent_session_key)",
+            [],
+        )?;
+        set_schema_version(conn, 6)?;
+        version = 6;
+    }
+    if version < 7 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS metrics_history (
+                timestamp_ms INTEGER PRIMARY KEY,
+                llm_completions INTEGER NOT NULL DEFAULT 0,
+                llm_input_tokens INTEGER NOT NULL DEFAULT 0,
+                llm_output_tokens INTEGER NOT NULL DEFAULT 0,
+                http_requests INTEGER NOT NULL DEFAULT 0,
+                tool_executions INTEGER NOT NULL DEFAULT 0,
+                mcp_calls INTEGER NOT NULL DEFAULT 0,
+                active_sessions INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_metrics_history_ts ON metrics_history(timestamp_ms);",
+        )?;
+        set_schema_version(conn, 7)?;
+        version = 7;
+    }
+    if version < 8 {
+        if !table_has_column(conn, "api_keys", "expires_at")? {
+            conn.execute("ALTER TABLE api_keys ADD COLUMN expires_at TEXT", [])?;
+        }
+        if !table_has_column(conn, "api_keys", "rotated_from_key_id")? {
+            conn.execute("ALTER TABLE api_keys ADD COLUMN rotated_from_key_id INTEGER", [])?;
+        }
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT,
+                status TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_kind_created
+                ON audit_logs(kind, created_at DESC);",
+        )?;
+        set_schema_version(conn, 8)?;
+        version = 8;
+    }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
     }
@@ -466,8 +597,12 @@ impl Database {
             CREATE TABLE IF NOT EXISTS sessions (
                 chat_id INTEGER PRIMARY KEY,
                 messages_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                parent_session_key TEXT,
+                fork_point INTEGER
             );
+            CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_key
+                ON sessions(parent_session_key);
 
             CREATE TABLE IF NOT EXISTS llm_usage_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -540,6 +675,66 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_memory_injection_logs_chat_created
                 ON memory_injection_logs(chat_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS auth_passwords (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                session_id TEXT PRIMARY KEY,
+                label TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                revoked_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
+
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                key_hash TEXT NOT NULL UNIQUE,
+                prefix TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                revoked_at TEXT,
+                last_used_at TEXT,
+                expires_at TEXT,
+                rotated_from_key_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS api_key_scopes (
+                api_key_id INTEGER NOT NULL,
+                scope TEXT NOT NULL,
+                PRIMARY KEY (api_key_id, scope)
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_key_scopes_scope ON api_key_scopes(scope);
+
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT,
+                status TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_kind_created
+                ON audit_logs(kind, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS metrics_history (
+                timestamp_ms INTEGER PRIMARY KEY,
+                llm_completions INTEGER NOT NULL DEFAULT 0,
+                llm_input_tokens INTEGER NOT NULL DEFAULT 0,
+                llm_output_tokens INTEGER NOT NULL DEFAULT 0,
+                http_requests INTEGER NOT NULL DEFAULT 0,
+                tool_executions INTEGER NOT NULL DEFAULT 0,
+                mcp_calls INTEGER NOT NULL DEFAULT 0,
+                active_sessions INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_metrics_history_ts ON metrics_history(timestamp_ms);
             ",
         )?;
 
@@ -580,7 +775,7 @@ impl Database {
                 chat_type = ?3,
                 last_message_time = ?4,
                 channel = COALESCE(?5, channel),
-                external_chat_id = COALESCE(?6, external_chat_id)",
+                external_chat_id = COALESCE(external_chat_id, ?6)",
             params![
                 chat_id,
                 chat_title,
@@ -1097,15 +1292,27 @@ impl Database {
     // --- Sessions ---
 
     pub fn save_session(&self, chat_id: i64, messages_json: &str) -> Result<(), MicroClawError> {
+        self.save_session_with_meta(chat_id, messages_json, None, None)
+    }
+
+    pub fn save_session_with_meta(
+        &self,
+        chat_id: i64,
+        messages_json: &str,
+        parent_session_key: Option<&str>,
+        fork_point: Option<i64>,
+    ) -> Result<(), MicroClawError> {
         let conn = self.lock_conn();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (chat_id, messages_json, updated_at)
-             VALUES (?1, ?2, ?3)
+            "INSERT INTO sessions (chat_id, messages_json, updated_at, parent_session_key, fork_point)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(chat_id) DO UPDATE SET
                 messages_json = ?2,
-                updated_at = ?3",
-            params![chat_id, messages_json, now],
+                updated_at = ?3,
+                parent_session_key = COALESCE(?4, parent_session_key),
+                fork_point = COALESCE(?5, fork_point)",
+            params![chat_id, messages_json, now, parent_session_key, fork_point],
         )?;
         Ok(())
     }
@@ -1122,6 +1329,55 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub fn load_session_meta(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<(String, String, Option<String>, Option<i64>)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let result = conn.query_row(
+            "SELECT messages_json, updated_at, parent_session_key, fork_point
+             FROM sessions WHERE chat_id = ?1",
+            params![chat_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        );
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn list_session_meta(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(i64, Option<String>, Option<i64>, String)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT chat_id, parent_session_key, fork_point, updated_at
+             FROM sessions
+             ORDER BY updated_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn delete_session(&self, chat_id: i64) -> Result<bool, MicroClawError> {
@@ -1180,6 +1436,343 @@ impl Database {
 
         tx.commit()?;
         Ok(affected > 0)
+    }
+
+    // --- Auth: password/session/api-key ---
+
+    pub fn upsert_auth_password_hash(&self, password_hash: &str) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO auth_passwords(id, password_hash, created_at, updated_at)
+             VALUES(1, ?1, ?2, ?2)
+             ON CONFLICT(id) DO UPDATE SET
+                password_hash = excluded.password_hash,
+                updated_at = excluded.updated_at",
+            params![password_hash, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_auth_password_hash(&self) -> Result<Option<String>, MicroClawError> {
+        let conn = self.lock_conn();
+        let value = conn
+            .query_row(
+                "SELECT password_hash FROM auth_passwords WHERE id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(value)
+    }
+
+    pub fn create_auth_session(
+        &self,
+        session_id: &str,
+        label: Option<&str>,
+        expires_at: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO auth_sessions(session_id, label, created_at, expires_at, last_seen_at, revoked_at)
+             VALUES(?1, ?2, ?3, ?4, ?3, NULL)",
+            params![session_id, label, now, expires_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn validate_auth_session(&self, session_id: &str) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let valid = conn
+            .query_row(
+                "SELECT 1
+                 FROM auth_sessions
+                 WHERE session_id = ?1
+                   AND revoked_at IS NULL
+                   AND expires_at > ?2
+                 LIMIT 1",
+                params![session_id, now],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if valid {
+            let _ = conn.execute(
+                "UPDATE auth_sessions SET last_seen_at = ?2 WHERE session_id = ?1",
+                params![session_id, now],
+            );
+        }
+        Ok(valid)
+    }
+
+    pub fn revoke_auth_session(&self, session_id: &str) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let rows = conn.execute(
+            "UPDATE auth_sessions
+             SET revoked_at = COALESCE(revoked_at, ?2)
+             WHERE session_id = ?1",
+            params![session_id, now],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn create_api_key(
+        &self,
+        label: &str,
+        key_hash: &str,
+        prefix: &str,
+        scopes: &[String],
+        expires_at: Option<&str>,
+        rotated_from_key_id: Option<i64>,
+    ) -> Result<i64, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO api_keys(label, key_hash, prefix, created_at, expires_at, rotated_from_key_id)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![label, key_hash, prefix, now, expires_at, rotated_from_key_id],
+        )?;
+        let key_id = tx.last_insert_rowid();
+        for scope in scopes {
+            tx.execute(
+                "INSERT OR IGNORE INTO api_key_scopes(api_key_id, scope) VALUES(?1, ?2)",
+                params![key_id, scope],
+            )?;
+        }
+        tx.commit()?;
+        Ok(key_id)
+    }
+
+    pub fn list_api_keys(&self) -> Result<Vec<AuthApiKeyRecord>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, label, prefix, created_at, revoked_at, expires_at, last_used_at, rotated_from_key_id
+             FROM api_keys
+             ORDER BY id DESC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let mut scopes_stmt = conn.prepare(
+                "SELECT scope FROM api_key_scopes WHERE api_key_id = ?1 ORDER BY scope ASC",
+            )?;
+            let scopes = scopes_stmt
+                .query_map(params![id], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            out.push(AuthApiKeyRecord {
+                id,
+                label: row.get(1)?,
+                prefix: row.get(2)?,
+                created_at: row.get(3)?,
+                revoked_at: row.get(4)?,
+                expires_at: row.get(5)?,
+                last_used_at: row.get(6)?,
+                rotated_from_key_id: row.get(7)?,
+                scopes,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn rotate_api_key_revoke_old(&self, old_key_id: i64) -> Result<bool, MicroClawError> {
+        self.revoke_api_key(old_key_id)
+    }
+
+    pub fn revoke_api_key(&self, key_id: i64) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let rows = conn.execute(
+            "UPDATE api_keys
+             SET revoked_at = COALESCE(revoked_at, ?2)
+             WHERE id = ?1",
+            params![key_id, now],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn validate_api_key_hash(
+        &self,
+        key_hash: &str,
+    ) -> Result<Option<(i64, Vec<String>)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let row = conn
+            .query_row(
+                "SELECT id FROM api_keys
+                 WHERE key_hash = ?1
+                   AND revoked_at IS NULL
+                   AND (expires_at IS NULL OR expires_at > ?2)
+                 LIMIT 1",
+                params![key_hash, chrono::Utc::now().to_rfc3339()],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?;
+        let Some(key_id) = row else {
+            return Ok(None);
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = conn.execute(
+            "UPDATE api_keys SET last_used_at = ?2 WHERE id = ?1",
+            params![key_id, now],
+        );
+        let mut stmt = conn.prepare(
+            "SELECT scope FROM api_key_scopes WHERE api_key_id = ?1 ORDER BY scope ASC",
+        )?;
+        let scopes = stmt
+            .query_map(params![key_id], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some((key_id, scopes)))
+    }
+
+    pub fn log_audit_event(
+        &self,
+        kind: &str,
+        actor: &str,
+        action: &str,
+        target: Option<&str>,
+        status: &str,
+        detail: Option<&str>,
+    ) -> Result<i64, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO audit_logs(kind, actor, action, target, status, detail, created_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![kind, actor, action, target, status, detail, now],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_audit_logs(
+        &self,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AuditLogRecord>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut rows = Vec::new();
+        if let Some(k) = kind {
+            let mut stmt = conn.prepare(
+                "SELECT id, kind, actor, action, target, status, detail, created_at
+                 FROM audit_logs
+                 WHERE kind = ?1
+                 ORDER BY id DESC
+                 LIMIT ?2",
+            )?;
+            let iter = stmt.query_map(params![k, limit as i64], |row| {
+                Ok(AuditLogRecord {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    actor: row.get(2)?,
+                    action: row.get(3)?,
+                    target: row.get(4)?,
+                    status: row.get(5)?,
+                    detail: row.get(6)?,
+                    created_at: row.get(7)?,
+                })
+            })?;
+            for item in iter {
+                rows.push(item?);
+            }
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, kind, actor, action, target, status, detail, created_at
+                 FROM audit_logs
+                 ORDER BY id DESC
+                 LIMIT ?1",
+            )?;
+            let iter = stmt.query_map(params![limit as i64], |row| {
+                Ok(AuditLogRecord {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    actor: row.get(2)?,
+                    action: row.get(3)?,
+                    target: row.get(4)?,
+                    status: row.get(5)?,
+                    detail: row.get(6)?,
+                    created_at: row.get(7)?,
+                })
+            })?;
+            for item in iter {
+                rows.push(item?);
+            }
+        }
+        Ok(rows)
+    }
+
+    // --- Metrics history ---
+
+    pub fn upsert_metrics_history(&self, point: &MetricsHistoryPoint) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "INSERT INTO metrics_history(
+                timestamp_ms, llm_completions, llm_input_tokens, llm_output_tokens,
+                http_requests, tool_executions, mcp_calls, active_sessions
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(timestamp_ms) DO UPDATE SET
+                llm_completions = excluded.llm_completions,
+                llm_input_tokens = excluded.llm_input_tokens,
+                llm_output_tokens = excluded.llm_output_tokens,
+                http_requests = excluded.http_requests,
+                tool_executions = excluded.tool_executions,
+                mcp_calls = excluded.mcp_calls,
+                active_sessions = excluded.active_sessions",
+            params![
+                point.timestamp_ms,
+                point.llm_completions,
+                point.llm_input_tokens,
+                point.llm_output_tokens,
+                point.http_requests,
+                point.tool_executions,
+                point.mcp_calls,
+                point.active_sessions
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_metrics_history(
+        &self,
+        since_ts_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<MetricsHistoryPoint>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT
+                timestamp_ms, llm_completions, llm_input_tokens, llm_output_tokens,
+                http_requests, tool_executions, mcp_calls, active_sessions
+             FROM metrics_history
+             WHERE timestamp_ms >= ?1
+             ORDER BY timestamp_ms ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![since_ts_ms, limit as i64], |row| {
+                Ok(MetricsHistoryPoint {
+                    timestamp_ms: row.get(0)?,
+                    llm_completions: row.get(1)?,
+                    llm_input_tokens: row.get(2)?,
+                    llm_output_tokens: row.get(3)?,
+                    http_requests: row.get(4)?,
+                    tool_executions: row.get(5)?,
+                    mcp_calls: row.get(6)?,
+                    active_sessions: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn cleanup_metrics_history_before(&self, before_ts_ms: i64) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let n = conn.execute(
+            "DELETE FROM metrics_history WHERE timestamp_ms < ?1",
+            params![before_ts_ms],
+        )?;
+        Ok(n)
     }
 
     pub fn get_new_user_messages_since(
@@ -3636,6 +4229,62 @@ mod tests {
         let missing_after = db.get_memories_without_embedding(Some(100), 10).unwrap();
         assert_eq!(missing_after.len(), 1);
         assert_eq!(missing_after[0].id, id2);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_api_key_expiry_and_rotation_and_audit_logs() {
+        let (db, dir) = test_db();
+        let scopes = vec!["operator.read".to_string(), "operator.approvals".to_string()];
+        let key_id = db
+            .create_api_key(
+                "k1",
+                "hash-k1",
+                "prefix-k1",
+                &scopes,
+                Some(
+                    &(chrono::Utc::now() + chrono::Duration::days(1))
+                        .to_rfc3339(),
+                ),
+                None,
+            )
+            .unwrap();
+        let valid = db.validate_api_key_hash("hash-k1").unwrap();
+        assert!(valid.is_some());
+
+        let expired_id = db
+            .create_api_key(
+                "k2",
+                "hash-k2",
+                "prefix-k2",
+                &scopes,
+                Some(
+                    &(chrono::Utc::now() - chrono::Duration::days(1))
+                        .to_rfc3339(),
+                ),
+                Some(key_id),
+            )
+            .unwrap();
+        let expired = db.validate_api_key_hash("hash-k2").unwrap();
+        assert!(expired.is_none());
+        assert!(db.rotate_api_key_revoke_old(key_id).unwrap());
+
+        let keys = db.list_api_keys().unwrap();
+        let rotated = keys.iter().find(|k| k.id == expired_id).unwrap();
+        assert_eq!(rotated.rotated_from_key_id, Some(key_id));
+
+        db.log_audit_event(
+            "operator",
+            "tester",
+            "auth.api_key.rotate",
+            Some("k1"),
+            "ok",
+            None,
+        )
+        .unwrap();
+        let logs = db.list_audit_logs(Some("operator"), 20).unwrap();
+        assert!(!logs.is_empty());
 
         cleanup(&dir);
     }

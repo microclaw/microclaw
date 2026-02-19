@@ -29,7 +29,9 @@ Main orchestration files in `src/`:
 - `main.rs`: CLI entry (`start`, `setup`, etc.)
 - `runtime.rs`: app wiring (`AppState`), provider/tool initialization, channel boot
 - `agent_engine.rs`: shared agent loop (`process_with_agent`), explicit-memory fast path, compaction, tool loop
+- `hooks.rs`: hooks discovery/runtime/CLI (`hooks list/info/enable/disable`)
 - `llm.rs`: provider implementations + stream handling + format translation
+- `otlp.rs`: OTLP metrics exporter (HTTP/protobuf)
 - `web.rs`: Web API routes, stream APIs, config endpoints
 - `scheduler.rs`: scheduled-task runner + memory reflector loop
 - `skills.rs`: skill discovery/activation
@@ -103,16 +105,40 @@ Surfaces:
 - schema creation + schema-version migrations (`db_meta`, `schema_migrations`)
 - chat/message/session/task persistence
 - structured memory CRUD + archive/supersede
+- auth/session/api-key persistence (scopes, expiry, rotation)
+- audit log persistence (`audit_logs`)
 - usage and memory observability queries
+- metrics history persistence (`metrics_history`)
 
 ## Web/API
 
 `web.rs` routes include:
 - chat send/send_stream + SSE stream replay
-- sessions/history/reset/delete
+- auth APIs (`/api/auth/*`) with session cookie + API key scopes
+- sessions/history/reset/delete/fork/tree
 - config read/update
+- audit query (`/api/audit`)
+- metrics APIs (`/api/metrics`, `/api/metrics/summary`, `/api/metrics/history`)
 - usage text report (`/api/usage`)
 - memory observability series (`/api/memory_observability`)
+
+## Hooks
+
+Hook assets and spec:
+- runtime hook dirs: `hooks/<name>/HOOK.md`
+- hook spec doc: `docs/hooks/HOOK.md`
+- sample hooks: `hooks/block-bash/`, `hooks/redact-tool-output/`
+
+Hook runtime supports:
+- events: `BeforeLLMCall`, `BeforeToolCall`, `AfterToolCall`
+- outcomes: `allow`, `block`, `modify` (structured fields only)
+
+## Observability Docs
+
+- metrics docs: `docs/observability/metrics.md`
+- operations runbook: `docs/operations/runbook.md`
+- upgrade guide: `docs/releases/upgrade-guide.md`
+- regression/stability reports: `docs/reports/*.md`
 
 ## Build and test
 
