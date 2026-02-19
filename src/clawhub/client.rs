@@ -1,5 +1,5 @@
-use crate::error::MicroClawError;
 use crate::clawhub::types::*;
+use crate::error::MicroClawError;
 
 pub struct ClawHubClient {
     base_url: String,
@@ -17,7 +17,12 @@ impl ClawHubClient {
     }
 
     /// Search skills by query
-    pub async fn search(&self, query: &str, limit: usize, sort: &str) -> Result<Vec<SearchResult>, MicroClawError> {
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        sort: &str,
+    ) -> Result<Vec<SearchResult>, MicroClawError> {
         let url = format!(
             "{}/api/v1/skills?q={}&limit={}&sort={}",
             self.base_url, query, limit, sort
@@ -26,10 +31,13 @@ impl ClawHubClient {
         if let Some(ref token) = self.token {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| MicroClawError::Config(format!("ClawHub request failed: {}", e)))?;
-        let results: Vec<SearchResult> = resp.json().await
-            .map_err(|e| MicroClawError::Config(format!("Failed to parse search results: {}", e)))?;
+        let results: Vec<SearchResult> = resp.json().await.map_err(|e| {
+            MicroClawError::Config(format!("Failed to parse search results: {}", e))
+        })?;
         Ok(results)
     }
 
@@ -40,23 +48,37 @@ impl ClawHubClient {
         if let Some(ref token) = self.token {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| MicroClawError::Config(format!("ClawHub request failed: {}", e)))?;
-        let meta: SkillMeta = resp.json().await
-            .map_err(|e| MicroClawError::Config(format!("Failed to parse skill metadata: {}", e)))?;
+        let meta: SkillMeta = resp.json().await.map_err(|e| {
+            MicroClawError::Config(format!("Failed to parse skill metadata: {}", e))
+        })?;
         Ok(meta)
     }
 
     /// Download skill as ZIP bytes
-    pub async fn download_skill(&self, slug: &str, version: &str) -> Result<Vec<u8>, MicroClawError> {
-        let url = format!("{}/api/v1/skills/{}/download?version={}", self.base_url, slug, version);
+    pub async fn download_skill(
+        &self,
+        slug: &str,
+        version: &str,
+    ) -> Result<Vec<u8>, MicroClawError> {
+        let url = format!(
+            "{}/api/v1/skills/{}/download?version={}",
+            self.base_url, slug, version
+        );
         let mut req = self.client.get(&url);
         if let Some(ref token) = self.token {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| MicroClawError::Config(format!("ClawHub download failed: {}", e)))?;
-        let bytes = resp.bytes().await
+        let bytes = resp
+            .bytes()
+            .await
             .map_err(|e| MicroClawError::Config(format!("Failed to read download: {}", e)))?;
         Ok(bytes.to_vec())
     }
@@ -68,9 +90,13 @@ impl ClawHubClient {
         if let Some(ref token) = self.token {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| MicroClawError::Config(format!("ClawHub request failed: {}", e)))?;
-        let versions: Vec<SkillVersion> = resp.json().await
+        let versions: Vec<SkillVersion> = resp
+            .json()
+            .await
             .map_err(|e| MicroClawError::Config(format!("Failed to parse versions: {}", e)))?;
         Ok(versions)
     }

@@ -1,9 +1,9 @@
-pub mod types;
+pub mod cli;
 pub mod client;
 pub mod gate;
-pub mod lockfile;
 pub mod install;
-pub mod cli;
+pub mod lockfile;
 pub mod tools;
+pub mod types;
 
 pub use types::*;

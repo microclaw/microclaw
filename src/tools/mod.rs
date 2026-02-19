@@ -136,8 +136,12 @@ impl ToolRegistry {
 
         // Add ClawHub tools if enabled
         if config.clawhub_agent_tools_enabled {
-            tools.push(Box::new(crate::clawhub::tools::ClawHubSearchTool::new(config)));
-            tools.push(Box::new(crate::clawhub::tools::ClawHubInstallTool::new(config)));
+            tools.push(Box::new(crate::clawhub::tools::ClawHubSearchTool::new(
+                config,
+            )));
+            tools.push(Box::new(crate::clawhub::tools::ClawHubInstallTool::new(
+                config,
+            )));
         }
 
         ToolRegistry {
@@ -156,9 +160,8 @@ impl ToolRegistry {
                 e
             );
         }
-        let sandbox_router = Arc::new(SandboxRouter::new(config.sandbox.clone(), &working_dir));
         let skills_data_dir = config.skills_data_dir();
-        let mut tools: Vec<Box<dyn Tool>> = vec![
+        let tools: Vec<Box<dyn Tool>> = vec![
             Box::new(bash::BashTool::new_with_isolation(
                 &config.working_dir,
                 config.working_dir_isolation,

@@ -1,4 +1,4 @@
-use crate::clawhub::types::{LockEntry, LockFile};
+use crate::clawhub::types::LockFile;
 use crate::error::MicroClawError;
 use std::collections::HashMap;
 use std::path::Path;
@@ -39,6 +39,7 @@ pub fn is_clawhub_managed(lock: &LockFile, slug: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clawhub::types::LockEntry;
 
     #[test]
     fn test_lockfile_missing_returns_empty() {
@@ -72,10 +73,7 @@ mod tests {
         write_lockfile(&lock_path, &lock).unwrap();
         let read = read_lockfile(&lock_path).unwrap();
         assert_eq!(
-            read.skills
-                .get("test-skill")
-                .unwrap()
-                .installed_version,
+            read.skills.get("test-skill").unwrap().installed_version,
             "1.0.0"
         );
 

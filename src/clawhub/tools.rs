@@ -62,7 +62,10 @@ impl Tool for ClawHubSearchTool {
             None => return ToolResult::error("Missing required parameter: query".into()),
         };
         let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-        let sort = params.get("sort").and_then(|v| v.as_str()).unwrap_or("trending");
+        let sort = params
+            .get("sort")
+            .and_then(|v| v.as_str())
+            .unwrap_or("trending");
 
         let rt = match Runtime::new() {
             Ok(rt) => rt,
@@ -78,7 +81,9 @@ impl Tool for ClawHubSearchTool {
                         let vt_info = r
                             .virustotal
                             .as_ref()
-                            .map(|v| format!(" | VirusTotal: {} ({} reports)", v.status, v.report_count))
+                            .map(|v| {
+                                format!(" | VirusTotal: {} ({} reports)", v.status, v.report_count)
+                            })
                             .unwrap_or_default();
                         format!(
                             "• {} — {} ({} installs){}",
@@ -117,7 +122,8 @@ impl Tool for ClawHubInstallTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "clawhub_install".to_string(),
-            description: "Download and install a skill from ClawHub into microclaw.data/skills/.".to_string(),
+            description: "Download and install a skill from ClawHub into microclaw.data/skills/."
+                .to_string(),
             input_schema: schema_object(
                 serde_json::json!({
                     "slug": {
@@ -144,7 +150,10 @@ impl Tool for ClawHubInstallTool {
             None => return ToolResult::error("Missing required parameter: slug".into()),
         };
         let version = params.get("version").and_then(|v| v.as_str());
-        let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+        let force = params
+            .get("force")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let rt = match Runtime::new() {
             Ok(rt) => rt,

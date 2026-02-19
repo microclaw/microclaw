@@ -1,9 +1,9 @@
 use crate::clawhub::client::ClawHubClient;
 use crate::clawhub::gate::check_requirements;
-use crate::clawhub::lockfile::{read_lockfile, write_lockfile, is_clawhub_managed};
+use crate::clawhub::lockfile::{is_clawhub_managed, read_lockfile, write_lockfile};
 use crate::clawhub::types::{LockEntry, LockFile};
 use crate::error::MicroClawError;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use zip::ZipArchive;
 
@@ -65,7 +65,12 @@ pub async fn install_skill(
             .openclaw
             .as_ref()
             .and_then(|o| o.requires.clone())
-            .or_else(|| meta.metadata.clawdbot.as_ref().and_then(|c| c.requires.clone()));
+            .or_else(|| {
+                meta.metadata
+                    .clawdbot
+                    .as_ref()
+                    .and_then(|c| c.requires.clone())
+            });
         let os_list = meta
             .metadata
             .openclaw
@@ -91,17 +96,17 @@ pub async fn install_skill(
     let lock = read_lockfile(lockfile_path)?;
     let is_managed = is_clawhub_managed(&lock, slug);
 
+    if skill_path.exists() && !options.force && is_managed {
+        return Ok(InstallResult {
+            success: false,
+            message: format!(
+                "Skill '{}' is already installed. Use --force to update.",
+                slug
+            ),
+            requires_restart: false,
+        });
+    }
     if skill_path.exists() && !options.force {
-        if is_managed {
-            return Ok(InstallResult {
-                success: false,
-                message: format!(
-                    "Skill '{}' is already installed. Use --force to update.",
-                    slug
-                ),
-                requires_restart: false,
-            });
-        }
         // Manual skill exists - hybrid: warn but allow
     }
 
@@ -147,18 +152,37 @@ pub async fn install_skill(
 }
 
 /// Check if update is needed
-pub fn check_update_available(_lock: &LockFile, current_version: &str, latest_version: &str) -> bool {
+pub fn check_update_available(
+    _lock: &LockFile,
+    current_version: &str,
+    latest_version: &str,
+) -> bool {
     // Simple version comparison - could use semver for more accuracy
     current_version != latest_version
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::clawhub::types::LockFile;
+    use std::collections::HashMap;
+
+    use super::check_update_available;
 
     #[test]
-    fn test_install_module_compiles() {
-        // Basic compilation test
-        assert!(true);
+    fn test_check_update_available_true_when_version_changes() {
+        let lock = LockFile {
+            version: 1,
+            skills: HashMap::new(),
+        };
+        assert!(check_update_available(&lock, "1.0.0", "1.1.0"));
+    }
+
+    #[test]
+    fn test_check_update_available_false_when_version_unchanged() {
+        let lock = LockFile {
+            version: 1,
+            skills: HashMap::new(),
+        };
+        assert!(!check_update_available(&lock, "1.0.0", "1.0.0"));
     }
 }

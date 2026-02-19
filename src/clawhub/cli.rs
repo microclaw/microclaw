@@ -7,13 +7,12 @@ use std::path::PathBuf;
 use tokio::runtime::Runtime;
 
 pub fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), MicroClawError> {
-    let subcommand = args.get(0).map(|s| s.as_str()).unwrap_or("help");
+    let subcommand = args.first().map(|s| s.as_str()).unwrap_or("help");
 
     let registry = &config.clawhub_registry;
     let token = config.clawhub_token.clone();
 
-    let rt = Runtime::new()
-        .map_err(|e| MicroClawError::Config(e.to_string()))?;
+    let rt = Runtime::new().map_err(|e| MicroClawError::Config(e.to_string()))?;
 
     match subcommand {
         "search" => {
@@ -33,10 +32,7 @@ pub fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), MicroCla
                             println!("    {}", r.description);
                             println!("    {} installs", r.install_count);
                             if let Some(vt) = r.virustotal {
-                                println!(
-                                    "    VirusTotal: {} ({})",
-                                    vt.status, vt.report_count
-                                );
+                                println!("    VirusTotal: {} ({})", vt.status, vt.report_count);
                             }
                             println!();
                         }
@@ -63,15 +59,8 @@ pub fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), MicroCla
                     skip_gates: false,
                     skip_security: config.clawhub_skip_security_warnings,
                 };
-                match install_skill(
-                    &client,
-                    slug,
-                    None,
-                    &skills_dir,
-                    &lockfile_path,
-                    &options,
-                )
-                .await
+                match install_skill(&client, slug, None, &skills_dir, &lockfile_path, &options)
+                    .await
                 {
                     Ok(result) => {
                         println!("{}", result.message);
@@ -119,10 +108,7 @@ pub fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), MicroCla
                             println!("  v{}{}", v.version, marker);
                         }
                         if let Some(vt) = meta.virustotal {
-                            println!(
-                                "\nVirusTotal: {} ({} reports)",
-                                vt.status, vt.report_count
-                            );
+                            println!("\nVirusTotal: {} ({} reports)", vt.status, vt.report_count);
                         }
                     }
                     Err(e) => eprintln!("Inspect failed: {}", e),

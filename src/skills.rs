@@ -14,6 +14,7 @@ pub struct SkillMetadata {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
 struct SkillFrontmatter {
     name: Option<String>,
     #[serde(default)]
@@ -36,6 +37,7 @@ struct SkillFrontmatter {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
 struct SkillFrontmatterMetadata {
     #[serde(default)]
     pub openclaw: Option<OpenClaw>,
@@ -53,6 +55,7 @@ struct OpenClaw {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
 struct Requires {
     #[serde(default)]
     pub bins: Vec<String>,

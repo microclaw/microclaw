@@ -1545,7 +1545,6 @@ dependencies = [
  "serde_yaml",
  "serenity",
  "sha2",
- "sqlite-vec",
  "teloxide",
  "thiserror 2.0.18",
  "tokio",
