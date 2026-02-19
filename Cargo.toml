@@ -45,6 +45,8 @@ cron = "0.13"
 urlencoding = "2"
 base64 = "0.22"
 chrono-tz = "0.10"
+zip = "2"
+sha2 = "0.10"
 axum = "0.7"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"

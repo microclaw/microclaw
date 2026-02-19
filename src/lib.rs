@@ -1,5 +1,6 @@
 pub mod agent_engine;
 pub mod channels;
+pub mod clawhub;
 pub mod codex_auth;
 pub mod config;
 pub mod doctor;

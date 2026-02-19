@@ -30,6 +30,36 @@ struct SkillFrontmatter {
     version: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
+    /// ClawHub metadata
+    #[serde(default)]
+    metadata: SkillFrontmatterMetadata,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SkillFrontmatterMetadata {
+    #[serde(default)]
+    pub openclaw: Option<OpenClaw>,
+    #[serde(default)]
+    pub clawdbot: Option<OpenClaw>, // alias
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
+struct OpenClaw {
+    #[serde(default)]
+    pub requires: Option<Requires>,
+    #[serde(default)]
+    pub os: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct Requires {
+    #[serde(default)]
+    pub bins: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default, rename = "anyBins")]
+    pub any_bins: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -60,6 +90,11 @@ impl SkillManager {
     /// Discover all skills that are available on the current platform and satisfy dependency checks.
     pub fn discover_skills(&self) -> Vec<SkillMetadata> {
         self.discover_skills_internal(false)
+    }
+
+    /// Reload skills from disk (live reload)
+    pub fn reload(&self) -> Vec<SkillMetadata> {
+        self.discover_skills()
     }
 
     fn discover_skills_internal(&self, include_unavailable: bool) -> Vec<SkillMetadata> {
