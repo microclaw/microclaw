@@ -1,3 +1,14 @@
+[workspace]
+members = [
+    ".",
+    "crates/microclaw-core",
+    "crates/microclaw-storage",
+    "crates/microclaw-tools",
+    "crates/microclaw-channels",
+    "crates/microclaw-app",
+]
+resolver = "2"
+
 [package]
 name = "microclaw"
 version = "0.0.80"
@@ -6,9 +17,14 @@ license = "MIT"
 
 [features]
 default = []
-sqlite-vec = ["dep:sqlite-vec"]
+sqlite-vec = ["microclaw-storage/sqlite-vec"]
 
 [dependencies]
+microclaw-core = { path = "crates/microclaw-core" }
+microclaw-storage = { path = "crates/microclaw-storage" }
+microclaw-tools = { path = "crates/microclaw-tools" }
+microclaw-channels = { path = "crates/microclaw-channels" }
+microclaw-app = { path = "crates/microclaw-app" }
 teloxide = { version = "0.17", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "blocking"] }
@@ -37,7 +53,6 @@ include_dir = "0.7"
 async-stream = "0.3"
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
-sqlite-vec = { version = "0.1.7-alpha.10", optional = true }
 
 [dev-dependencies]
 tower = "0.5"

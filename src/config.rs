@@ -8,6 +8,8 @@ use crate::codex_auth::{
     codex_auth_file_has_access_token, is_openai_codex_provider, provider_allows_empty_api_key,
 };
 use crate::error::MicroClawError;
+pub use microclaw_tools::sandbox::{SandboxBackend, SandboxConfig, SandboxMode};
+pub use microclaw_tools::types::WorkingDirIsolation;
 
 fn default_telegram_bot_token() -> String {
     String::new()
@@ -51,23 +53,11 @@ fn default_working_dir() -> String {
 fn default_working_dir_isolation() -> WorkingDirIsolation {
     WorkingDirIsolation::Chat
 }
-fn default_sandbox_mode() -> SandboxMode {
-    SandboxMode::Off
-}
-fn default_sandbox_backend() -> SandboxBackend {
-    SandboxBackend::Auto
-}
 fn default_sandbox_image() -> String {
     "ubuntu:25.10".into()
 }
 fn default_sandbox_container_prefix() -> String {
     "microclaw-sandbox".into()
-}
-fn default_sandbox_no_network() -> bool {
-    true
-}
-fn default_sandbox_require_runtime() -> bool {
-    false
 }
 fn default_timezone() -> String {
     "UTC".into()
@@ -121,65 +111,6 @@ fn default_soul_path() -> Option<String> {
 fn is_local_web_host(host: &str) -> bool {
     let h = host.trim().to_ascii_lowercase();
     h == "127.0.0.1" || h == "localhost" || h == "::1"
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkingDirIsolation {
-    Shared,
-    Chat,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SandboxMode {
-    Off,
-    All,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SandboxBackend {
-    Auto,
-    Docker,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SandboxConfig {
-    #[serde(default = "default_sandbox_mode")]
-    pub mode: SandboxMode,
-    #[serde(default = "default_sandbox_backend")]
-    pub backend: SandboxBackend,
-    #[serde(default = "default_sandbox_image")]
-    pub image: String,
-    #[serde(default = "default_sandbox_container_prefix")]
-    pub container_prefix: String,
-    #[serde(default = "default_sandbox_no_network")]
-    pub no_network: bool,
-    #[serde(default = "default_sandbox_require_runtime")]
-    pub require_runtime: bool,
-    #[serde(default)]
-    pub memory_limit: Option<String>,
-    #[serde(default)]
-    pub cpu_quota: Option<f64>,
-    #[serde(default)]
-    pub pids_limit: Option<u32>,
-}
-
-impl Default for SandboxConfig {
-    fn default() -> Self {
-        Self {
-            mode: default_sandbox_mode(),
-            backend: default_sandbox_backend(),
-            image: default_sandbox_image(),
-            container_prefix: default_sandbox_container_prefix(),
-            no_network: default_sandbox_no_network(),
-            require_runtime: default_sandbox_require_runtime(),
-            memory_limit: None,
-            cpu_quota: None,
-            pids_limit: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

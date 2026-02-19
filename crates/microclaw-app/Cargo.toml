@@ -1,0 +1,16 @@
+[package]
+name = "microclaw-app"
+version = "0.0.80"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "multipart"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }

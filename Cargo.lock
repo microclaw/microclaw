@@ -1343,6 +1343,11 @@ dependencies = [
  "futures-util",
  "glob",
  "include_dir",
+ "microclaw-app",
+ "microclaw-channels",
+ "microclaw-core",
+ "microclaw-storage",
+ "microclaw-tools",
  "ratatui",
  "regex",
  "reqwest",
@@ -1351,7 +1356,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serenity",
- "sqlite-vec",
  "teloxide",
  "thiserror 2.0.18",
  "tokio",
@@ -1361,6 +1365,65 @@ dependencies = [
  "tracing-subscriber",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "microclaw-app"
+version = "0.0.80"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "microclaw-channels"
+version = "0.0.80"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "microclaw-storage",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "microclaw-core"
+version = "0.0.80"
+dependencies = [
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "microclaw-storage"
+version = "0.0.80"
+dependencies = [
+ "chrono",
+ "microclaw-core",
+ "rusqlite",
+ "serde_json",
+ "sqlite-vec",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "microclaw-tools"
+version = "0.0.80"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
