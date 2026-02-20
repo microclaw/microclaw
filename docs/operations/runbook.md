@@ -101,17 +101,27 @@ default_mcp_request_timeout_secs: 120
   - `circuit_breaker_cooldown_secs` (default `30`)
 - `request_timeout_secs` remains per-server timeout budget.
 
+## MCP Server Guardrails
+
+- `mcp.json` supports server-level isolation controls:
+  - `max_concurrent_requests` (default `4`)
+  - `queue_wait_ms` (default `200`)
+  - `rate_limit_per_minute` (default `120`)
+
 Example:
 
 ```json
 {
   "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    "remote": {
+      "transport": "streamable_http",
+      "endpoint": "http://127.0.0.1:8080/mcp",
       "request_timeout_secs": 120,
       "circuit_breaker_failure_threshold": 5,
-      "circuit_breaker_cooldown_secs": 30
+      "circuit_breaker_cooldown_secs": 30,
+      "max_concurrent_requests": 4,
+      "queue_wait_ms": 200,
+      "rate_limit_per_minute": 120
     }
   }
 }
@@ -120,3 +130,5 @@ Example:
 Behavior:
 - consecutive MCP request failures trip the breaker and short-circuit calls during cooldown.
 - after cooldown, requests are attempted again automatically.
+- requests are fail-fast when queue wait budget is exceeded.
+- per-server rate limit enforces a fixed 60s window budget.
