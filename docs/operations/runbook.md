@@ -160,3 +160,28 @@ Operational checks:
 - confirm startup logs include `Memory MCP backend enabled via server '<name>'`
 - verify server tool list includes exact names `memory_query` and `memory_upsert`
 - if semantic retrieval quality drops while MCP is enabled, note that local `sqlite-vec` KNN ranking is skipped for MCP-backed rows
+
+Minimal `mcp.json` example (memory MCP server + local filesystem):
+
+```json
+{
+  "defaultProtocolVersion": "2025-11-05",
+  "mcpServers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "memory": {
+      "transport": "streamable_http",
+      "endpoint": "http://127.0.0.1:8090/mcp",
+      "headers": {
+        "Authorization": "Bearer REPLACE_ME"
+      },
+      "request_timeout_secs": 60
+    }
+  }
+}
+```
+
+The `memory` server must expose MCP tools named exactly `memory_query` and `memory_upsert`.
