@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,7 +48,7 @@ fn default_webhook_path() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct FeishuChannelConfig {
+pub struct FeishuAccountConfig {
     pub app_id: String,
     pub app_secret: String,
     #[serde(default = "default_connection_mode")]
@@ -62,6 +63,125 @@ pub struct FeishuChannelConfig {
     pub verification_token: Option<String>,
     #[serde(default)]
     pub encrypt_key: Option<String>,
+    #[serde(default)]
+    pub bot_username: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FeishuChannelConfig {
+    #[serde(default)]
+    pub app_id: String,
+    #[serde(default)]
+    pub app_secret: String,
+    #[serde(default = "default_connection_mode")]
+    pub connection_mode: String,
+    #[serde(default = "default_domain")]
+    pub domain: String,
+    #[serde(default)]
+    pub allowed_chats: Vec<String>,
+    #[serde(default = "default_webhook_path")]
+    pub webhook_path: String,
+    #[serde(default)]
+    pub verification_token: Option<String>,
+    #[serde(default)]
+    pub encrypt_key: Option<String>,
+    #[serde(default)]
+    pub accounts: HashMap<String, FeishuAccountConfig>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+}
+
+fn pick_default_account_id(
+    configured: Option<&str>,
+    accounts: &HashMap<String, FeishuAccountConfig>,
+) -> Option<String> {
+    let explicit = configured
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned);
+    if explicit.is_some() {
+        return explicit;
+    }
+    if accounts.contains_key("default") {
+        return Some("default".to_string());
+    }
+    let mut keys: Vec<String> = accounts.keys().cloned().collect();
+    keys.sort();
+    keys.first().cloned()
+}
+
+pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<FeishuRuntimeContext> {
+    let Some(feishu_cfg) = config.channel_config::<FeishuChannelConfig>("feishu") else {
+        return Vec::new();
+    };
+
+    let default_account =
+        pick_default_account_id(feishu_cfg.default_account.as_deref(), &feishu_cfg.accounts);
+    let mut runtimes = Vec::new();
+
+    let mut account_ids: Vec<String> = feishu_cfg.accounts.keys().cloned().collect();
+    account_ids.sort();
+    for account_id in account_ids {
+        let Some(account_cfg) = feishu_cfg.accounts.get(&account_id) else {
+            continue;
+        };
+        if !account_cfg.enabled
+            || account_cfg.app_id.trim().is_empty()
+            || account_cfg.app_secret.trim().is_empty()
+        {
+            continue;
+        }
+        let is_default = default_account
+            .as_deref()
+            .map(|v| v == account_id.as_str())
+            .unwrap_or(false);
+        let channel_name = if is_default {
+            "feishu".to_string()
+        } else {
+            format!("feishu.{account_id}")
+        };
+        let account_feishu_cfg = FeishuChannelConfig {
+            app_id: account_cfg.app_id.clone(),
+            app_secret: account_cfg.app_secret.clone(),
+            connection_mode: account_cfg.connection_mode.clone(),
+            domain: account_cfg.domain.clone(),
+            allowed_chats: account_cfg.allowed_chats.clone(),
+            webhook_path: account_cfg.webhook_path.clone(),
+            verification_token: account_cfg.verification_token.clone(),
+            encrypt_key: account_cfg.encrypt_key.clone(),
+            accounts: HashMap::new(),
+            default_account: None,
+        };
+        let bot_username = if account_cfg.bot_username.trim().is_empty() {
+            config.bot_username_for_channel(&channel_name)
+        } else {
+            account_cfg.bot_username.trim().to_string()
+        };
+        runtimes.push(FeishuRuntimeContext {
+            channel_name,
+            bot_username,
+            config: account_feishu_cfg,
+        });
+    }
+
+    if runtimes.is_empty()
+        && !feishu_cfg.app_id.trim().is_empty()
+        && !feishu_cfg.app_secret.trim().is_empty()
+    {
+        runtimes.push(FeishuRuntimeContext {
+            channel_name: "feishu".to_string(),
+            bot_username: config.bot_username_for_channel("feishu"),
+            config: feishu_cfg,
+        });
+    }
+
+    runtimes
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +206,7 @@ struct TokenState {
 }
 
 pub struct FeishuAdapter {
+    name: String,
     app_id: String,
     app_secret: String,
     base_url: String,
@@ -94,9 +215,10 @@ pub struct FeishuAdapter {
 }
 
 impl FeishuAdapter {
-    pub fn new(app_id: String, app_secret: String, domain: String) -> Self {
+    pub fn new(name: String, app_id: String, app_secret: String, domain: String) -> Self {
         let base_url = resolve_domain(&domain);
         FeishuAdapter {
+            name,
             app_id,
             app_secret,
             base_url,
@@ -167,7 +289,7 @@ impl FeishuAdapter {
 #[async_trait::async_trait]
 impl ChannelAdapter for FeishuAdapter {
     fn name(&self) -> &str {
-        "feishu"
+        &self.name
     }
 
     fn chat_type_routes(&self) -> Vec<(&str, ConversationKind)> {
@@ -887,14 +1009,15 @@ async fn get_token(
 // WebSocket mode
 // ---------------------------------------------------------------------------
 
-pub async fn start_feishu_bot(app_state: Arc<AppState>) {
-    let feishu_cfg: FeishuChannelConfig = match app_state.config.channel_config("feishu") {
-        Some(c) => c,
-        None => {
-            error!("Feishu channel not configured");
-            return;
-        }
-    };
+#[derive(Clone)]
+pub struct FeishuRuntimeContext {
+    pub channel_name: String,
+    pub bot_username: String,
+    pub config: FeishuChannelConfig,
+}
+
+pub async fn start_feishu_bot(app_state: Arc<AppState>, runtime: FeishuRuntimeContext) {
+    let feishu_cfg = runtime.config.clone();
 
     let base_url = resolve_domain(&feishu_cfg.domain);
     let http_client = reqwest::Client::new();
@@ -943,6 +1066,7 @@ pub async fn start_feishu_bot(app_state: Arc<AppState>) {
     loop {
         if let Err(e) = run_ws_connection(
             app_state.clone(),
+            runtime.clone(),
             &feishu_cfg,
             &base_url,
             &http_client,
@@ -959,6 +1083,7 @@ pub async fn start_feishu_bot(app_state: Arc<AppState>) {
 
 async fn run_ws_connection(
     app_state: Arc<AppState>,
+    runtime: FeishuRuntimeContext,
     feishu_cfg: &FeishuChannelConfig,
     base_url: &str,
     http_client: &reqwest::Client,
@@ -1056,8 +1181,9 @@ async fn run_ws_connection(
                     let bot_id = bot_open_id.to_string();
                     let cfg = feishu_cfg.clone();
                     let base = base_url.to_string();
+                    let runtime_ctx = runtime.clone();
                     tokio::spawn(async move {
-                        handle_feishu_event(state, &cfg, &base, &bot_id, &event).await;
+                        handle_feishu_event(state, runtime_ctx, &cfg, &base, &bot_id, &event).await;
                     });
                 } else if frame.method == FRAME_METHOD_CONTROL {
                     // pong or other control frames — no action needed
@@ -1115,6 +1241,7 @@ async fn send_ack(write: &WsSink, request_frame: &pb::Frame) {
 /// Handle a Feishu event envelope. Dispatches im.message.receive_v1 events.
 async fn handle_feishu_event(
     app_state: Arc<AppState>,
+    runtime: FeishuRuntimeContext,
     feishu_cfg: &FeishuChannelConfig,
     base_url: &str,
     bot_open_id: &str,
@@ -1219,6 +1346,7 @@ async fn handle_feishu_event(
 
     handle_feishu_message(
         app_state,
+        runtime,
         feishu_cfg,
         base_url,
         bot_open_id,
@@ -1235,6 +1363,7 @@ async fn handle_feishu_event(
 #[allow(clippy::too_many_arguments)]
 async fn handle_feishu_message(
     app_state: Arc<AppState>,
+    runtime: FeishuRuntimeContext,
     feishu_cfg: &FeishuChannelConfig,
     base_url: &str,
     _bot_open_id: &str,
@@ -1252,7 +1381,8 @@ async fn handle_feishu_message(
         let external = external_chat_id.to_string();
         let title = title.clone();
         let chat_type = chat_type.to_string();
-        move |db| db.resolve_or_create_chat_id("feishu", &external, Some(&title), &chat_type)
+        let channel_name = runtime.channel_name.clone();
+        move |db| db.resolve_or_create_chat_id(&channel_name, &external, Some(&title), &chat_type)
     })
     .await
     .unwrap_or(0);
@@ -1344,7 +1474,12 @@ async fn handle_feishu_message(
                 )
                 .await;
             } else {
-                archive_conversation(&app_state.config.data_dir, "feishu", chat_id, &messages);
+                archive_conversation(
+                    &app_state.config.data_dir,
+                    &runtime.channel_name,
+                    chat_id,
+                    &messages,
+                );
                 let _ = send_feishu_response(
                     &http_client,
                     base_url,
@@ -1405,7 +1540,7 @@ async fn handle_feishu_message(
     match process_with_agent_with_events(
         &app_state,
         AgentRequestContext {
-            caller_channel: "feishu",
+            caller_channel: &runtime.channel_name,
             chat_id,
             chat_type: if is_dm { "private" } else { "group" },
         },
@@ -1442,7 +1577,7 @@ async fn handle_feishu_message(
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     chat_id,
-                    sender_name: app_state.config.bot_username_for_channel("feishu"),
+                    sender_name: runtime.bot_username.clone(),
                     content: response,
                     is_from_bot: true,
                     timestamp: chrono::Utc::now().to_rfc3339(),
@@ -1464,7 +1599,7 @@ async fn handle_feishu_message(
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     chat_id,
-                    sender_name: app_state.config.bot_username_for_channel("feishu"),
+                    sender_name: runtime.bot_username.clone(),
                     content: fallback.to_string(),
                     is_from_bot: true,
                     timestamp: chrono::Utc::now().to_rfc3339(),
@@ -1494,51 +1629,52 @@ async fn handle_feishu_message(
 /// Register Feishu webhook routes on the given axum Router.
 /// Called when connection_mode is "webhook".
 pub fn register_feishu_webhook(router: axum::Router, app_state: Arc<AppState>) -> axum::Router {
-    let feishu_cfg: FeishuChannelConfig = match app_state.config.channel_config("feishu") {
-        Some(c) => c,
-        None => return router,
-    };
+    let runtimes = build_feishu_runtime_contexts(&app_state.config);
+    if runtimes.is_empty() {
+        return router;
+    }
 
-    let path = feishu_cfg.webhook_path.clone();
-    let verification_token = feishu_cfg.verification_token.clone();
+    let mut router = router;
+    for runtime in runtimes {
+        let cfg = runtime.config.clone();
+        if cfg.connection_mode != "webhook" {
+            continue;
+        }
+        let path = cfg.webhook_path.clone();
+        let verification_token = cfg.verification_token.clone();
+        let state_for_handler = app_state.clone();
+        let runtime_for_handler = runtime.clone();
+        let cfg_for_handler = cfg.clone();
+        let base_url = resolve_domain(&cfg.domain);
 
-    let state_for_handler = app_state.clone();
-    let cfg_for_handler = feishu_cfg.clone();
-    let base_url = resolve_domain(&feishu_cfg.domain);
-
-    router.route(
-        &path,
-        axum::routing::post(move |body: axum::extract::Json<serde_json::Value>| {
-            let state = state_for_handler.clone();
-            let cfg = cfg_for_handler.clone();
-            let base = base_url.clone();
-            let vtoken = verification_token.clone();
-            async move {
-                // Handle URL verification challenge
-                if let Some(challenge) = body.get("challenge").and_then(|v| v.as_str()) {
-                    // Optionally verify token
-                    if let Some(ref expected) = vtoken {
-                        if !expected.is_empty() {
-                            let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
-                            if token != expected {
-                                return axum::Json(serde_json::json!({"error": "invalid token"}));
+        router = router.route(
+            &path,
+            axum::routing::post(move |body: axum::extract::Json<serde_json::Value>| {
+                let state = state_for_handler.clone();
+                let runtime_ctx = runtime_for_handler.clone();
+                let cfg = cfg_for_handler.clone();
+                let base = base_url.clone();
+                let vtoken = verification_token.clone();
+                async move {
+                    // Handle URL verification challenge
+                    if let Some(challenge) = body.get("challenge").and_then(|v| v.as_str()) {
+                        // Optionally verify token
+                        if let Some(ref expected) = vtoken {
+                            if !expected.is_empty() {
+                                let token =
+                                    body.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                                if token != expected {
+                                    return axum::Json(
+                                        serde_json::json!({"error": "invalid token"}),
+                                    );
+                                }
                             }
                         }
+                        return axum::Json(serde_json::json!({ "challenge": challenge }));
                     }
-                    return axum::Json(serde_json::json!({ "challenge": challenge }));
-                }
 
-                // Resolve bot_open_id (we need it for mention detection)
-                let http_client = reqwest::Client::new();
-                let bot_open_id =
-                    match get_token(&http_client, &base, &cfg.app_id, &cfg.app_secret).await {
-                        Ok(_token) => String::new(), // Will be resolved below
-                        Err(_) => String::new(),
-                    };
-
-                // Try to resolve bot open_id for proper mention detection
-                let bot_id = if bot_open_id.is_empty() {
-                    if let Ok(token) =
+                    let http_client = reqwest::Client::new();
+                    let bot_id = if let Ok(token) =
                         get_token(&http_client, &base, &cfg.app_id, &cfg.app_secret).await
                     {
                         resolve_bot_open_id(&http_client, &base, &token)
@@ -1546,19 +1682,18 @@ pub fn register_feishu_webhook(router: axum::Router, app_state: Arc<AppState>) -
                             .unwrap_or_default()
                     } else {
                         String::new()
-                    }
-                } else {
-                    bot_open_id
-                };
+                    };
 
-                // Process the event
-                let event = body.0;
-                tokio::spawn(async move {
-                    handle_feishu_event(state, &cfg, &base, &bot_id, &event).await;
-                });
+                    // Process the event
+                    let event = body.0;
+                    tokio::spawn(async move {
+                        handle_feishu_event(state, runtime_ctx, &cfg, &base, &bot_id, &event).await;
+                    });
 
-                axum::Json(serde_json::json!({"code": 0}))
-            }
-        }),
-    )
+                    axum::Json(serde_json::json!({"code": 0}))
+                }
+            }),
+        );
+    }
+    router
 }

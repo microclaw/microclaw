@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -20,21 +21,123 @@ use microclaw_storage::db::StoredMessage;
 use microclaw_storage::usage::build_usage_report;
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SlackChannelConfig {
+pub struct SlackAccountConfig {
     pub bot_token: String,
     pub app_token: String,
     #[serde(default)]
     pub allowed_channels: Vec<String>,
+    #[serde(default)]
+    pub bot_username: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SlackChannelConfig {
+    #[serde(default)]
+    pub bot_token: String,
+    #[serde(default)]
+    pub app_token: String,
+    #[serde(default)]
+    pub allowed_channels: Vec<String>,
+    #[serde(default)]
+    pub accounts: HashMap<String, SlackAccountConfig>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+}
+
+fn pick_default_account_id(
+    configured: Option<&str>,
+    accounts: &HashMap<String, SlackAccountConfig>,
+) -> Option<String> {
+    let explicit = configured
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned);
+    if explicit.is_some() {
+        return explicit;
+    }
+    if accounts.contains_key("default") {
+        return Some("default".to_string());
+    }
+    let mut keys: Vec<String> = accounts.keys().cloned().collect();
+    keys.sort();
+    keys.first().cloned()
+}
+
+pub fn build_slack_runtime_contexts(config: &crate::config::Config) -> Vec<SlackRuntimeContext> {
+    let Some(slack_cfg) = config.channel_config::<SlackChannelConfig>("slack") else {
+        return Vec::new();
+    };
+
+    let default_account =
+        pick_default_account_id(slack_cfg.default_account.as_deref(), &slack_cfg.accounts);
+    let mut runtimes = Vec::new();
+    let mut account_ids: Vec<String> = slack_cfg.accounts.keys().cloned().collect();
+    account_ids.sort();
+    for account_id in account_ids {
+        let Some(account_cfg) = slack_cfg.accounts.get(&account_id) else {
+            continue;
+        };
+        if !account_cfg.enabled
+            || account_cfg.bot_token.trim().is_empty()
+            || account_cfg.app_token.trim().is_empty()
+        {
+            continue;
+        }
+        let is_default = default_account
+            .as_deref()
+            .map(|v| v == account_id.as_str())
+            .unwrap_or(false);
+        let channel_name = if is_default {
+            "slack".to_string()
+        } else {
+            format!("slack.{account_id}")
+        };
+        let bot_username = if account_cfg.bot_username.trim().is_empty() {
+            config.bot_username_for_channel(&channel_name)
+        } else {
+            account_cfg.bot_username.trim().to_string()
+        };
+        runtimes.push(SlackRuntimeContext {
+            channel_name,
+            app_token: account_cfg.app_token.clone(),
+            bot_token: account_cfg.bot_token.clone(),
+            allowed_channels: account_cfg.allowed_channels.clone(),
+            bot_username,
+        });
+    }
+
+    if runtimes.is_empty()
+        && !slack_cfg.bot_token.trim().is_empty()
+        && !slack_cfg.app_token.trim().is_empty()
+    {
+        runtimes.push(SlackRuntimeContext {
+            channel_name: "slack".to_string(),
+            app_token: slack_cfg.app_token,
+            bot_token: slack_cfg.bot_token,
+            allowed_channels: slack_cfg.allowed_channels,
+            bot_username: config.bot_username_for_channel("slack"),
+        });
+    }
+
+    runtimes
 }
 
 pub struct SlackAdapter {
+    name: String,
     bot_token: String,
     http_client: reqwest::Client,
 }
 
 impl SlackAdapter {
-    pub fn new(bot_token: String) -> Self {
+    pub fn new(name: String, bot_token: String) -> Self {
         SlackAdapter {
+            name,
             bot_token,
             http_client: reqwest::Client::new(),
         }
@@ -44,7 +147,7 @@ impl SlackAdapter {
 #[async_trait::async_trait]
 impl ChannelAdapter for SlackAdapter {
     fn name(&self) -> &str {
-        "slack"
+        &self.name
     }
 
     fn chat_type_routes(&self) -> Vec<(&str, ConversationKind)> {
@@ -264,16 +367,18 @@ async fn send_slack_response(bot_token: &str, channel: &str, text: &str) -> Resu
 }
 
 /// Start the Slack bot using Socket Mode.
-pub async fn start_slack_bot(app_state: Arc<AppState>) {
-    let slack_cfg: SlackChannelConfig = match app_state.config.channel_config("slack") {
-        Some(c) => c,
-        None => {
-            error!("Slack channel not configured");
-            return;
-        }
-    };
-    let app_token = slack_cfg.app_token;
-    let bot_token = slack_cfg.bot_token;
+#[derive(Clone)]
+pub struct SlackRuntimeContext {
+    pub channel_name: String,
+    pub app_token: String,
+    pub bot_token: String,
+    pub allowed_channels: Vec<String>,
+    pub bot_username: String,
+}
+
+pub async fn start_slack_bot(app_state: Arc<AppState>, runtime: SlackRuntimeContext) {
+    let app_token = runtime.app_token.clone();
+    let bot_token = runtime.bot_token.clone();
 
     let bot_user_id = match resolve_bot_user_id(&bot_token).await {
         Ok(id) => {
@@ -287,8 +392,14 @@ pub async fn start_slack_bot(app_state: Arc<AppState>) {
     };
 
     loop {
-        if let Err(e) =
-            run_socket_mode(app_state.clone(), &app_token, &bot_token, &bot_user_id).await
+        if let Err(e) = run_socket_mode(
+            app_state.clone(),
+            runtime.clone(),
+            &app_token,
+            &bot_token,
+            &bot_user_id,
+        )
+        .await
         {
             warn!("Slack Socket Mode disconnected: {e}");
         }
@@ -299,6 +410,7 @@ pub async fn start_slack_bot(app_state: Arc<AppState>) {
 
 async fn run_socket_mode(
     app_state: Arc<AppState>,
+    runtime: SlackRuntimeContext,
     app_token: &str,
     bot_token: &str,
     bot_user_id: &str,
@@ -396,9 +508,11 @@ async fn run_socket_mode(
                         let state = app_state.clone();
                         let bot_token = bot_token.to_string();
                         let bot_user_id = bot_user_id.to_string();
+                        let runtime_ctx = runtime.clone();
                         tokio::spawn(async move {
                             handle_slack_message(
                                 state,
+                                runtime_ctx,
                                 &bot_token,
                                 &bot_user_id,
                                 &channel,
@@ -431,6 +545,7 @@ async fn run_socket_mode(
 #[allow(clippy::too_many_arguments)]
 async fn handle_slack_message(
     app_state: Arc<AppState>,
+    runtime: SlackRuntimeContext,
     bot_token: &str,
     bot_user_id: &str,
     channel: &str,
@@ -447,7 +562,8 @@ async fn handle_slack_message(
         let channel = channel.to_string();
         let title = title.clone();
         let chat_type = chat_type.to_string();
-        move |db| db.resolve_or_create_chat_id("slack", &channel, Some(&title), &chat_type)
+        let channel_name = runtime.channel_name.clone();
+        move |db| db.resolve_or_create_chat_id(&channel_name, &channel, Some(&title), &chat_type)
     })
     .await
     .unwrap_or(0);
@@ -458,15 +574,10 @@ async fn handle_slack_message(
     }
 
     // Check allowed channels filter
-    if let Some(slack_cfg) = app_state
-        .config
-        .channel_config::<SlackChannelConfig>("slack")
+    if !runtime.allowed_channels.is_empty()
+        && !runtime.allowed_channels.iter().any(|c| c == channel)
     {
-        if !slack_cfg.allowed_channels.is_empty()
-            && !slack_cfg.allowed_channels.iter().any(|c| c == channel)
-        {
-            return;
-        }
+        return;
     }
 
     // Store incoming message
@@ -523,7 +634,12 @@ async fn handle_slack_message(
             if messages.is_empty() {
                 let _ = send_slack_response(bot_token, channel, "No session to archive.").await;
             } else {
-                archive_conversation(&app_state.config.data_dir, "slack", chat_id, &messages);
+                archive_conversation(
+                    &app_state.config.data_dir,
+                    &runtime.channel_name,
+                    chat_id,
+                    &messages,
+                );
                 let _ = send_slack_response(
                     bot_token,
                     channel,
@@ -573,7 +689,7 @@ async fn handle_slack_message(
     match process_with_agent_with_events(
         &app_state,
         AgentRequestContext {
-            caller_channel: "slack",
+            caller_channel: &runtime.channel_name,
             chat_id,
             chat_type: if is_dm { "private" } else { "group" },
         },
@@ -602,7 +718,7 @@ async fn handle_slack_message(
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     chat_id,
-                    sender_name: app_state.config.bot_username_for_channel("slack"),
+                    sender_name: runtime.bot_username.clone(),
                     content: response,
                     is_from_bot: true,
                     timestamp: chrono::Utc::now().to_rfc3339(),
@@ -616,7 +732,7 @@ async fn handle_slack_message(
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     chat_id,
-                    sender_name: app_state.config.bot_username_for_channel("slack"),
+                    sender_name: runtime.bot_username.clone(),
                     content: fallback.to_string(),
                     is_from_bot: true,
                     timestamp: chrono::Utc::now().to_rfc3339(),

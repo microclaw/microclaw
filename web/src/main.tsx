@@ -281,6 +281,35 @@ function defaultModelForProvider(providerRaw: string): string {
   return 'gpt-5.2'
 }
 
+function normalizeAccountId(raw: unknown): string {
+  const text = String(raw || '').trim()
+  return text || 'main'
+}
+
+function defaultAccountIdFromChannelConfig(channelCfg: unknown): string {
+  if (!channelCfg || typeof channelCfg !== 'object') return 'main'
+  const cfg = channelCfg as Record<string, unknown>
+  const explicit = String(cfg.default_account || '').trim()
+  if (explicit) return explicit
+  const accounts = cfg.accounts
+  if (accounts && typeof accounts === 'object') {
+    const keys = Object.keys(accounts as Record<string, unknown>).sort()
+    if (keys.includes('default')) return 'default'
+    if (keys.length > 0) return keys[0] || 'main'
+  }
+  return 'main'
+}
+
+function defaultAccountConfig(channelCfg: unknown): Record<string, unknown> {
+  if (!channelCfg || typeof channelCfg !== 'object') return {}
+  const cfg = channelCfg as Record<string, unknown>
+  const accountId = defaultAccountIdFromChannelConfig(cfg)
+  const accounts = cfg.accounts
+  if (!accounts || typeof accounts !== 'object') return {}
+  const account = (accounts as Record<string, unknown>)[accountId]
+  return account && typeof account === 'object' ? (account as Record<string, unknown>) : {}
+}
+
 function readAppearance(): Appearance {
   const saved = localStorage.getItem('microclaw_appearance')
   return saved === 'light' ? 'light' : 'dark'
@@ -1056,6 +1085,13 @@ function App() {
     setConfig(data.config || null)
     setConfigSelfCheck(selfCheck)
     setConfigSelfCheckLoading(false)
+    const channelsCfg = (data.config?.channels as Record<string, Record<string, unknown>> | undefined) || {}
+    const telegramCfg = channelsCfg.telegram || {}
+    const telegramDefaultAccount = defaultAccountIdFromChannelConfig(telegramCfg)
+    const telegramAccountCfg = defaultAccountConfig(telegramCfg)
+    const discordCfg = channelsCfg.discord || {}
+    const discordDefaultAccount = defaultAccountIdFromChannelConfig(discordCfg)
+    const discordAccountCfg = defaultAccountConfig(discordCfg)
     setConfigDraft({
       llm_provider: data.config?.llm_provider || '',
       model: data.config?.model || defaultModelForProvider(String(data.config?.llm_provider || 'anthropic')),
@@ -1063,13 +1099,17 @@ function App() {
       api_key: '',
       telegram_bot_token: '',
       bot_username: String(data.config?.bot_username || ''),
-      telegram_bot_username: String(((data.config?.channels as Record<string, Record<string, unknown>> | undefined)?.telegram?.bot_username) || ''),
+      telegram_account_id: telegramDefaultAccount,
+      telegram_bot_username: String(telegramAccountCfg.bot_username || telegramCfg.bot_username || ''),
       discord_bot_token: '',
-      discord_bot_username: String(((data.config?.channels as Record<string, Record<string, unknown>> | undefined)?.discord?.bot_username) || ''),
+      discord_account_id: discordDefaultAccount,
+      discord_bot_username: String(discordAccountCfg.bot_username || discordCfg.bot_username || ''),
       discord_allowed_channels_csv: Array.isArray(data.config?.discord_allowed_channels)
         ? (data.config?.discord_allowed_channels as number[]).join(',')
+        : Array.isArray(discordAccountCfg.allowed_channels)
+          ? (discordAccountCfg.allowed_channels as number[]).join(',')
         : '',
-      web_bot_username: String(((data.config?.channels as Record<string, Record<string, unknown>> | undefined)?.web?.bot_username) || ''),
+      web_bot_username: String((channelsCfg.web?.bot_username) || ''),
       working_dir_isolation: normalizeWorkingDirIsolation(
         data.config?.working_dir_isolation || DEFAULT_CONFIG_VALUES.working_dir_isolation,
       ),
@@ -1091,11 +1131,18 @@ function App() {
       // Dynamic channel fields — initialize from server config
       ...Object.fromEntries(
         DYNAMIC_CHANNELS.flatMap((ch) => {
-          const chCfg = (data.config?.channels as Record<string, Record<string, unknown>> | undefined)?.[ch.name] || {}
-          return ch.fields.map((f) => [
+          const chCfg = channelsCfg[ch.name] || {}
+          const chAccountCfg = defaultAccountConfig(chCfg)
+          const pairs: Array<[string, unknown]> = [
+            [`${ch.name}__account_id`, defaultAccountIdFromChannelConfig(chCfg)],
+          ]
+          for (const f of ch.fields) {
+            pairs.push([
             `${ch.name}__${f.yamlKey}`,
-            f.secret ? '' : String(chCfg[f.yamlKey] || ''),
+            f.secret ? '' : String(chAccountCfg[f.yamlKey] || chCfg[f.yamlKey] || ''),
           ])
+          }
+          return pairs
         }),
       ),
     })
@@ -1161,6 +1208,9 @@ function App() {
         case 'telegram_bot_token':
           next.telegram_bot_token = ''
           break
+        case 'telegram_account_id':
+          next.telegram_account_id = 'main'
+          break
         case 'bot_username':
           next.bot_username = ''
           break
@@ -1169,6 +1219,9 @@ function App() {
           break
         case 'discord_bot_token':
           next.discord_bot_token = ''
+          break
+        case 'discord_account_id':
+          next.discord_account_id = 'main'
           break
         case 'discord_bot_username':
           next.discord_bot_username = ''
@@ -1227,6 +1280,10 @@ function App() {
         default:
           // Handle dynamic channel fields
           for (const ch of DYNAMIC_CHANNELS) {
+            const accountKey = `${ch.name}__account_id`
+            if (field === accountKey) {
+              next[accountKey] = 'main'
+            }
             for (const f of ch.fields) {
               const key = `${ch.name}__${f.yamlKey}`
               if (field === key) {
@@ -1256,9 +1313,6 @@ function App() {
         llm_provider: String(configDraft.llm_provider || ''),
         model: String(configDraft.model || ''),
         bot_username: String(configDraft.bot_username || '').trim(),
-        telegram_bot_username: String(configDraft.telegram_bot_username || '').trim() || null,
-        discord_allowed_channels: parseDiscordChannelCsv(String(configDraft.discord_allowed_channels_csv || '')),
-        discord_bot_username: String(configDraft.discord_bot_username || '').trim() || null,
         web_bot_username: String(configDraft.web_bot_username || '').trim() || null,
         working_dir_isolation: normalizeWorkingDirIsolation(
           configDraft.working_dir_isolation || DEFAULT_CONFIG_VALUES.working_dir_isolation,
@@ -1297,17 +1351,50 @@ function App() {
       }
 
       const tg = String(configDraft.telegram_bot_token || '').trim()
-      if (tg) payload.telegram_bot_token = tg
+      const telegramAccountId = normalizeAccountId(configDraft.telegram_account_id)
+      const telegramBotUsername = String(configDraft.telegram_bot_username || '').trim()
 
       const discordToken = String(configDraft.discord_bot_token || '').trim()
-      if (discordToken) payload.discord_bot_token = discordToken
+      const discordAccountId = normalizeAccountId(configDraft.discord_account_id)
+      const discordAllowedChannels = parseDiscordChannelCsv(
+        String(configDraft.discord_allowed_channels_csv || ''),
+      )
+      const discordBotUsername = String(configDraft.discord_bot_username || '').trim()
 
       const embeddingApiKey = String(configDraft.embedding_api_key || '').trim()
       if (embeddingApiKey) payload.embedding_api_key = embeddingApiKey
 
       // Build generic channel_configs from dynamic channel definitions
       const channelConfigs: Record<string, Record<string, unknown>> = {}
+      if (tg || telegramBotUsername) {
+        channelConfigs.telegram = {
+          default_account: telegramAccountId,
+          accounts: {
+            [telegramAccountId]: {
+              enabled: true,
+              ...(tg ? { bot_token: tg } : {}),
+              ...(telegramBotUsername ? { bot_username: telegramBotUsername } : {}),
+            },
+          },
+        }
+      }
+      if (discordToken || discordAllowedChannels.length > 0 || discordBotUsername) {
+        channelConfigs.discord = {
+          default_account: discordAccountId,
+          accounts: {
+            [discordAccountId]: {
+              enabled: true,
+              ...(discordToken ? { bot_token: discordToken } : {}),
+              ...(discordAllowedChannels.length > 0
+                ? { allowed_channels: discordAllowedChannels }
+                : {}),
+              ...(discordBotUsername ? { bot_username: discordBotUsername } : {}),
+            },
+          },
+        }
+      }
       for (const ch of DYNAMIC_CHANNELS) {
+        const accountId = normalizeAccountId(configDraft[`${ch.name}__account_id`])
         const fields: Record<string, unknown> = {}
         let hasAny = false
         for (const f of ch.fields) {
@@ -1317,7 +1404,17 @@ function App() {
             hasAny = true
           }
         }
-        if (hasAny) channelConfigs[ch.name] = fields
+        if (hasAny) {
+          channelConfigs[ch.name] = {
+            default_account: accountId,
+            accounts: {
+              [accountId]: {
+                enabled: true,
+                ...fields,
+              },
+            },
+          }
+        }
       }
       if (Object.keys(channelConfigs).length > 0) {
         payload.channel_configs = channelConfigs
@@ -1782,6 +1879,14 @@ function App() {
                           Required: bot token and username. Leave token unchanged if already configured.
                         </Text>
                         <div className="mt-4 space-y-3">
+                          <ConfigFieldCard label="telegram_default_account" description={<>Default account id under <code>channels.telegram.accounts</code>.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.telegram_account_id || 'main')}
+                              onChange={(e) => setConfigField('telegram_account_id', e.target.value)}
+                              placeholder="main"
+                            />
+                          </ConfigFieldCard>
                           <ConfigFieldCard label="telegram_bot_token" description={<>BotFather token for sending and receiving Telegram messages. Leave blank to keep current secret unchanged.</>}>
                             <TextField.Root
                               className="mt-2"
@@ -1818,6 +1923,14 @@ function App() {
                           Required: bot token. Optional: restrict handling to listed channel IDs.
                         </Text>
                         <div className="mt-4 space-y-3">
+                          <ConfigFieldCard label="discord_default_account" description={<>Default account id under <code>channels.discord.accounts</code>.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.discord_account_id || 'main')}
+                              onChange={(e) => setConfigField('discord_account_id', e.target.value)}
+                              placeholder="main"
+                            />
+                          </ConfigFieldCard>
                           <ConfigFieldCard label="discord_bot_token" description={<>Discord bot token from Developer Portal. Leave blank to keep current secret unchanged.</>}>
                             <TextField.Root
                               className="mt-2"
@@ -1853,6 +1966,18 @@ function App() {
                           <ConfigStepsCard steps={ch.steps.map((s, i) => <span key={i}>{s}</span>)} />
                           <Text size="1" color="gray" className="mt-3 block">{ch.hint}</Text>
                           <div className="mt-4 space-y-3">
+                            <ConfigFieldCard
+                              key={`${ch.name}__account_id`}
+                              label={`${ch.name}_default_account`}
+                              description={<>Default account id under <code>channels.{ch.name}.accounts</code>.</>}
+                            >
+                              <TextField.Root
+                                className="mt-2"
+                                value={String(configDraft[`${ch.name}__account_id`] || 'main')}
+                                onChange={(e) => setConfigField(`${ch.name}__account_id`, e.target.value)}
+                                placeholder="main"
+                              />
+                            </ConfigFieldCard>
                             {ch.fields.map((f) => {
                               const stateKey = `${ch.name}__${f.yamlKey}`
                               return (

@@ -260,8 +260,11 @@ impl Tool for SendMessageTool {
 mod tests {
     use super::*;
     use crate::web::WebAdapter;
+    use microclaw_channels::channel::ConversationKind;
+    use microclaw_channels::channel_adapter::ChannelAdapter;
     use microclaw_channels::channel_adapter::ChannelRegistry;
     use serde_json::json;
+    use std::path::Path;
 
     fn test_db() -> (Arc<Database>, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("microclaw_sendmsg_{}", uuid::Uuid::new_v4()));
@@ -277,6 +280,38 @@ mod tests {
         let mut registry = ChannelRegistry::new();
         registry.register(Arc::new(WebAdapter));
         Arc::new(registry)
+    }
+
+    struct LocalOnlyAdapter {
+        name: String,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelAdapter for LocalOnlyAdapter {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn chat_type_routes(&self) -> Vec<(&str, ConversationKind)> {
+            vec![("private", ConversationKind::Private)]
+        }
+
+        fn is_local_only(&self) -> bool {
+            true
+        }
+
+        async fn send_text(&self, _external_chat_id: &str, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn send_attachment(
+            &self,
+            _external_chat_id: &str,
+            _file_path: &Path,
+            _caption: Option<&str>,
+        ) -> Result<String, String> {
+            Ok("attachment".to_string())
+        }
     }
 
     #[tokio::test]
@@ -334,6 +369,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_send_message_uses_channel_account_sender_name() {
+        let (db, dir) = test_db();
+        let chat_id = db
+            .resolve_or_create_chat_id("telegram.sales", "9001", Some("sales"), "private")
+            .unwrap();
+
+        let mut registry = ChannelRegistry::new();
+        registry.register(Arc::new(LocalOnlyAdapter {
+            name: "telegram.sales".to_string(),
+        }));
+        let registry = Arc::new(registry);
+
+        let mut channel_usernames = std::collections::HashMap::new();
+        channel_usernames.insert("telegram.sales".to_string(), "sales_bot".to_string());
+        let tool = SendMessageTool::new(
+            registry,
+            db.clone(),
+            "default_bot".into(),
+            channel_usernames,
+        );
+        let result = tool
+            .execute(json!({
+                "chat_id": chat_id,
+                "text": "hello",
+                "__microclaw_auth": {
+                    "caller_chat_id": chat_id,
+                    "control_chat_ids": []
+                }
+            }))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        let all = db.get_all_messages(chat_id).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].sender_name, "sales_bot");
+        assert_eq!(all[0].content, "hello");
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
     async fn test_send_message_web_caller_cross_chat_denied() {
         let (db, dir) = test_db();
         db.upsert_chat(100, Some("web-main"), "web").unwrap();
@@ -346,11 +420,14 @@ mod tests {
         use crate::channels::telegram::TelegramChannelConfig;
         use crate::channels::TelegramAdapter;
         let tg_adapter = TelegramAdapter::new(
+            "telegram".into(),
             teloxide::Bot::new("123456:TEST_TOKEN"),
             TelegramChannelConfig {
                 bot_token: "123456:TEST_TOKEN".into(),
                 bot_username: "bot".into(),
                 allowed_groups: vec![],
+                accounts: std::collections::HashMap::new(),
+                default_account: None,
             },
         );
         registry.register(Arc::new(tg_adapter));

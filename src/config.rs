@@ -315,6 +315,49 @@ pub struct Config {
 }
 
 impl Config {
+    fn channel_default_account_id(&self, channel: &str) -> Option<String> {
+        let channel_cfg = self.channels.get(channel)?;
+        let mut account_ids: Vec<String> = channel_cfg
+            .get("accounts")
+            .and_then(|v| v.as_mapping())
+            .map(|m| {
+                m.keys()
+                    .filter_map(|k| k.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        account_ids.sort();
+        channel_cfg
+            .get("default_account")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                if channel_cfg
+                    .get("accounts")
+                    .and_then(|v| v.get("default"))
+                    .is_some()
+                {
+                    Some("default".to_string())
+                } else {
+                    account_ids.first().cloned()
+                }
+            })
+    }
+
+    fn channel_account_bot_username(&self, channel: &str, account_id: &str) -> Option<String> {
+        self.channels
+            .get(channel)
+            .and_then(|v| v.get("accounts"))
+            .and_then(|v| v.get(account_id))
+            .and_then(|v| v.get("bot_username"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
     pub fn bot_username_for_channel(&self, channel: &str) -> String {
         let channel_override = self
             .channels
@@ -327,6 +370,16 @@ impl Config {
             return v.to_string();
         }
 
+        if let Some((base_channel, account_id)) = channel.split_once('.') {
+            if let Some(v) = self.channel_account_bot_username(base_channel, account_id) {
+                return v;
+            }
+        } else if let Some(default_account) = self.channel_default_account_id(channel) {
+            if let Some(v) = self.channel_account_bot_username(channel, &default_account) {
+                return v;
+            }
+        }
+
         let global = self.bot_username.trim();
         if !global.is_empty() {
             global.to_string()
@@ -336,7 +389,8 @@ impl Config {
     }
 
     pub fn bot_username_overrides(&self) -> HashMap<String, String> {
-        self.channels
+        let mut overrides: HashMap<String, String> = self
+            .channels
             .iter()
             .filter_map(|(channel, cfg)| {
                 cfg.get("bot_username")
@@ -345,7 +399,39 @@ impl Config {
                     .filter(|v| !v.is_empty())
                     .map(|v| (channel.clone(), v.to_string()))
             })
-            .collect()
+            .collect();
+
+        for (channel, channel_cfg) in &self.channels {
+            let accounts = channel_cfg.get("accounts").and_then(|v| v.as_mapping());
+            let Some(accounts) = accounts else {
+                continue;
+            };
+            let default_account = self.channel_default_account_id(channel);
+            for (key, value) in accounts {
+                let Some(account_id) = key.as_str() else {
+                    continue;
+                };
+                let username = value
+                    .get("bot_username")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty());
+                let Some(username) = username else {
+                    continue;
+                };
+                if default_account
+                    .as_deref()
+                    .map(|v| v == account_id)
+                    .unwrap_or(false)
+                {
+                    overrides.insert(channel.clone(), username.to_string());
+                } else {
+                    overrides.insert(format!("{channel}.{account_id}"), username.to_string());
+                }
+            }
+        }
+
+        overrides
     }
 
     #[cfg(test)]
@@ -687,6 +773,7 @@ impl Config {
                             "enabled": true,
                             "bot_token": token,
                             "allowed_channels": self.discord_allowed_channels,
+                            "no_mention": self.discord_no_mention,
                         }))
                         .unwrap(),
                     );
