@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -21,22 +22,43 @@ use microclaw_storage::db::{call_blocking, StoredMessage};
 use microclaw_storage::usage::build_usage_report;
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TelegramChannelConfig {
+pub struct TelegramAccountConfig {
     pub bot_token: String,
     #[serde(default)]
     pub bot_username: String,
     #[serde(default)]
     pub allowed_groups: Vec<i64>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TelegramChannelConfig {
+    #[serde(default)]
+    pub bot_token: String,
+    #[serde(default)]
+    pub bot_username: String,
+    #[serde(default)]
+    pub allowed_groups: Vec<i64>,
+    #[serde(default)]
+    pub accounts: HashMap<String, TelegramAccountConfig>,
+    #[serde(default)]
+    pub default_account: Option<String>,
 }
 
 pub struct TelegramAdapter {
+    name: String,
     bot: Bot,
     config: TelegramChannelConfig,
 }
 
 impl TelegramAdapter {
-    pub fn new(bot: Bot, config: TelegramChannelConfig) -> Self {
-        TelegramAdapter { bot, config }
+    pub fn new(name: String, bot: Bot, config: TelegramChannelConfig) -> Self {
+        TelegramAdapter { name, bot, config }
     }
 
     pub fn bot(&self) -> &Bot {
@@ -79,7 +101,7 @@ impl TelegramAdapter {
 #[async_trait]
 impl ChannelAdapter for TelegramAdapter {
     fn name(&self) -> &str {
-        "telegram"
+        &self.name
     }
 
     fn chat_type_routes(&self) -> Vec<(&str, ConversationKind)> {
@@ -165,12 +187,23 @@ fn format_user_message(sender_name: &str, content: &str) -> String {
     )
 }
 
-pub async fn start_telegram_bot(state: Arc<AppState>, bot: Bot) -> anyhow::Result<()> {
+#[derive(Clone)]
+pub struct TelegramRuntimeContext {
+    pub channel_name: String,
+    pub bot_username: String,
+    pub allowed_groups: Vec<i64>,
+}
+
+pub async fn start_telegram_bot(
+    state: Arc<AppState>,
+    bot: Bot,
+    ctx: TelegramRuntimeContext,
+) -> anyhow::Result<()> {
     let handler = Update::filter_message().endpoint(handle_message);
 
     Dispatcher::builder(bot, handler)
         .default_handler(|_| async {})
-        .dependencies(dptree::deps![state])
+        .dependencies(dptree::deps![state, ctx])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
@@ -182,6 +215,7 @@ async fn handle_message(
     bot: Bot,
     msg: teloxide::types::Message,
     state: Arc<AppState>,
+    tg_ctx: TelegramRuntimeContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let raw_chat_id = msg.chat.id.0;
     let (runtime_chat_type, db_chat_type) = match msg.chat.kind {
@@ -200,6 +234,9 @@ async fn handle_message(
         }) => ("group", "telegram_channel"),
     };
     let chat_title = msg.chat.title().map(|t| t.to_string());
+    let tg_channel_name = tg_ctx.channel_name.clone();
+    let tg_bot_username = tg_ctx.bot_username.clone();
+    let tg_allowed_groups = tg_ctx.allowed_groups.clone();
 
     // Extract content: text, photo, or voice
     let mut text = msg.text().unwrap_or("").to_string();
@@ -211,9 +248,10 @@ async fn handle_message(
         let external_chat_id = raw_chat_id.to_string();
         let chat_title_for_lookup = chat_title.clone();
         let chat_type_for_lookup = db_chat_type.to_string();
+        let channel_name = tg_channel_name.clone();
         let chat_id = call_blocking(state.db.clone(), move |db| {
             db.resolve_or_create_chat_id(
-                "telegram",
+                &channel_name,
                 &external_chat_id,
                 chat_title_for_lookup.as_deref(),
                 &chat_type_for_lookup,
@@ -250,9 +288,10 @@ async fn handle_message(
         let external_chat_id = raw_chat_id.to_string();
         let chat_title_for_lookup = chat_title.clone();
         let chat_type_for_lookup = db_chat_type.to_string();
+        let channel_name = tg_channel_name.clone();
         let chat_id = call_blocking(state.db.clone(), move |db| {
             db.resolve_or_create_chat_id(
-                "telegram",
+                &channel_name,
                 &external_chat_id,
                 chat_title_for_lookup.as_deref(),
                 &chat_type_for_lookup,
@@ -269,7 +308,7 @@ async fn handle_message(
                     .send_message(msg.chat.id, "No session to archive.")
                     .await;
             } else {
-                archive_conversation(&state.config.data_dir, "telegram", chat_id, &messages);
+                archive_conversation(&state.config.data_dir, &tg_channel_name, chat_id, &messages);
                 let _ = bot
                     .send_message(
                         msg.chat.id,
@@ -290,9 +329,10 @@ async fn handle_message(
         let external_chat_id = raw_chat_id.to_string();
         let chat_title_for_lookup = chat_title.clone();
         let chat_type_for_lookup = db_chat_type.to_string();
+        let channel_name = tg_channel_name.clone();
         let chat_id = call_blocking(state.db.clone(), move |db| {
             db.resolve_or_create_chat_id(
-                "telegram",
+                &channel_name,
                 &external_chat_id,
                 chat_title_for_lookup.as_deref(),
                 &chat_type_for_lookup,
@@ -373,7 +413,7 @@ async fn handle_message(
 
                 let dir = Path::new(&state.config.working_dir)
                     .join("uploads")
-                    .join("telegram")
+                    .join(tg_channel_name.replace('/', "_"))
                     .join(raw_chat_id.to_string());
                 if let Err(e) = std::fs::create_dir_all(&dir) {
                     error!("Failed to create upload dir {}: {e}", dir.display());
@@ -486,15 +526,16 @@ async fn handle_message(
 
     // Check group allowlist
     if (db_chat_type == "telegram_group" || db_chat_type == "telegram_supergroup")
-        && !state.config.allowed_groups.is_empty()
-        && !state.config.allowed_groups.contains(&raw_chat_id)
+        && !tg_allowed_groups.is_empty()
+        && !tg_allowed_groups.contains(&raw_chat_id)
     {
         let external_chat_id = raw_chat_id.to_string();
         let chat_title_for_lookup = chat_title.clone();
         let chat_type_for_lookup = db_chat_type.to_string();
+        let channel_name = tg_channel_name.clone();
         let chat_id = call_blocking(state.db.clone(), move |db| {
             db.resolve_or_create_chat_id(
-                "telegram",
+                &channel_name,
                 &external_chat_id,
                 chat_title_for_lookup.as_deref(),
                 &chat_type_for_lookup,
@@ -542,9 +583,10 @@ async fn handle_message(
     let external_chat_id = raw_chat_id.to_string();
     let chat_title_for_lookup = chat_title.clone();
     let chat_type_for_lookup = db_chat_type.to_string();
+    let channel_name = tg_channel_name.clone();
     let chat_id = call_blocking(state.db.clone(), move |db| {
         db.resolve_or_create_chat_id(
-            "telegram",
+            &channel_name,
             &external_chat_id,
             chat_title_for_lookup.as_deref(),
             &chat_type_for_lookup,
@@ -593,7 +635,7 @@ async fn handle_message(
     let should_respond = match runtime_chat_type {
         "private" => true,
         _ => {
-            let bot_mention = format!("@{}", state.config.bot_username_for_channel("telegram"));
+            let bot_mention = format!("@{}", tg_bot_username);
             text.contains(&bot_mention)
         }
     };
@@ -626,7 +668,7 @@ async fn handle_message(
     match process_with_agent_with_events(
         &state,
         AgentRequestContext {
-            caller_channel: "telegram",
+            caller_channel: &tg_channel_name,
             chat_id,
             chat_type: runtime_chat_type,
         },
@@ -655,7 +697,7 @@ async fn handle_message(
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     chat_id,
-                    sender_name: state.config.bot_username_for_channel("telegram"),
+                    sender_name: tg_bot_username.clone(),
                     content: response,
                     is_from_bot: true,
                     timestamp: chrono::Utc::now().to_rfc3339(),
@@ -674,7 +716,7 @@ async fn handle_message(
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     chat_id,
-                    sender_name: state.config.bot_username_for_channel("telegram"),
+                    sender_name: tg_bot_username.clone(),
                     content: fallback,
                     is_from_bot: true,
                     timestamp: chrono::Utc::now().to_rfc3339(),

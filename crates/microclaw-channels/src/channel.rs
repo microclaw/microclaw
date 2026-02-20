@@ -49,15 +49,41 @@ pub async fn get_chat_type_raw(db: Arc<Database>, chat_id: i64) -> Result<Option
         .map_err(|e| format!("Failed to read chat type for chat {chat_id}: {e}"))
 }
 
+pub async fn get_chat_channel_raw(
+    db: Arc<Database>,
+    chat_id: i64,
+) -> Result<Option<String>, String> {
+    call_blocking(db, move |d| d.get_chat_channel(chat_id))
+        .await
+        .map_err(|e| format!("Failed to read chat channel for chat {chat_id}: {e}"))
+}
+
 pub async fn get_chat_routing(
     registry: &ChannelRegistry,
     db: Arc<Database>,
     chat_id: i64,
 ) -> Result<Option<ChatRouting>, String> {
-    let chat_type = get_chat_type_raw(db, chat_id).await?;
-    Ok(chat_type
-        .as_deref()
-        .and_then(|ct| parse_chat_routing(registry, ct)))
+    let chat_type = get_chat_type_raw(db.clone(), chat_id).await?;
+    let Some(chat_type) = chat_type else {
+        return Ok(None);
+    };
+
+    let kind = registry
+        .resolve_routing(&chat_type)
+        .map(|(_, k)| k)
+        .unwrap_or(ConversationKind::Group);
+
+    if let Some(channel_name) = get_chat_channel_raw(db, chat_id).await? {
+        let normalized = channel_name.trim();
+        if !normalized.is_empty() && registry.get(normalized).is_some() {
+            return Ok(Some(ChatRouting {
+                channel_name: normalized.to_string(),
+                conversation: kind,
+            }));
+        }
+    }
+
+    Ok(parse_chat_routing(registry, &chat_type))
 }
 
 pub async fn get_required_chat_routing(
@@ -65,10 +91,11 @@ pub async fn get_required_chat_routing(
     db: Arc<Database>,
     chat_id: i64,
 ) -> Result<ChatRouting, String> {
-    let chat_type = get_chat_type_raw(db, chat_id)
+    let chat_type = get_chat_type_raw(db.clone(), chat_id)
         .await?
         .ok_or_else(|| format!("target chat {chat_id} not found"))?;
-    parse_chat_routing(registry, &chat_type)
+    get_chat_routing(registry, db, chat_id)
+        .await?
         .ok_or_else(|| format!("unsupported chat type '{chat_type}' for chat {chat_id}"))
 }
 

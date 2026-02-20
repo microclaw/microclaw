@@ -346,11 +346,14 @@ mod tests {
         use crate::channels::telegram::TelegramChannelConfig;
         use crate::channels::TelegramAdapter;
         let tg_adapter = TelegramAdapter::new(
+            "telegram".into(),
             teloxide::Bot::new("123456:TEST_TOKEN"),
             TelegramChannelConfig {
                 bot_token: "123456:TEST_TOKEN".into(),
                 bot_username: "bot".into(),
                 allowed_groups: vec![],
+                accounts: std::collections::HashMap::new(),
+                default_account: None,
             },
         );
         registry.register(Arc::new(tg_adapter));

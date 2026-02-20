@@ -5,7 +5,7 @@ use tracing::info;
 #[cfg(feature = "sqlite-vec")]
 use tracing::warn;
 
-use crate::channels::telegram::TelegramChannelConfig;
+use crate::channels::telegram::{TelegramChannelConfig, TelegramRuntimeContext};
 use crate::channels::{DiscordAdapter, FeishuAdapter, SlackAdapter, TelegramAdapter};
 use crate::config::Config;
 use crate::embedding::EmbeddingProvider;
@@ -54,17 +54,90 @@ pub async fn run(
 
     // Build channel registry from config
     let mut registry = ChannelRegistry::new();
-    let mut telegram_bot: Option<teloxide::Bot> = None;
+    let mut telegram_runtimes: Vec<(teloxide::Bot, TelegramRuntimeContext)> = Vec::new();
     let mut discord_token: Option<String> = None;
     let mut has_slack = false;
     let mut has_web = false;
 
     if config.channel_enabled("telegram") {
         if let Some(tg_cfg) = config.channel_config::<TelegramChannelConfig>("telegram") {
-            if !tg_cfg.bot_token.trim().is_empty() {
+            let mut account_ids: Vec<String> = tg_cfg.accounts.keys().cloned().collect();
+            account_ids.sort();
+            let default_account = tg_cfg
+                .default_account
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    if tg_cfg.accounts.contains_key("default") {
+                        Some("default".to_string())
+                    } else {
+                        account_ids.first().cloned()
+                    }
+                });
+
+            for account_id in account_ids {
+                let Some(account_cfg) = tg_cfg.accounts.get(&account_id) else {
+                    continue;
+                };
+                if !account_cfg.enabled || account_cfg.bot_token.trim().is_empty() {
+                    continue;
+                }
+                let is_default = default_account
+                    .as_deref()
+                    .map(|v| v == account_id.as_str())
+                    .unwrap_or(false);
+                let channel_name = if is_default {
+                    "telegram".to_string()
+                } else {
+                    format!("telegram.{account_id}")
+                };
+                let bot = teloxide::Bot::new(&account_cfg.bot_token);
+                registry.register(Arc::new(TelegramAdapter::new(
+                    channel_name.clone(),
+                    bot.clone(),
+                    tg_cfg.clone(),
+                )));
+                let bot_username = if account_cfg.bot_username.trim().is_empty() {
+                    config.bot_username_for_channel("telegram")
+                } else {
+                    account_cfg.bot_username.trim().to_string()
+                };
+                let allowed_groups = if account_cfg.allowed_groups.is_empty() {
+                    tg_cfg.allowed_groups.clone()
+                } else {
+                    account_cfg.allowed_groups.clone()
+                };
+                telegram_runtimes.push((
+                    bot,
+                    TelegramRuntimeContext {
+                        channel_name,
+                        bot_username,
+                        allowed_groups,
+                    },
+                ));
+            }
+
+            if telegram_runtimes.is_empty() && !tg_cfg.bot_token.trim().is_empty() {
                 let bot = teloxide::Bot::new(&tg_cfg.bot_token);
-                telegram_bot = Some(bot.clone());
-                registry.register(Arc::new(TelegramAdapter::new(bot, tg_cfg)));
+                registry.register(Arc::new(TelegramAdapter::new(
+                    "telegram".to_string(),
+                    bot.clone(),
+                    tg_cfg.clone(),
+                )));
+                telegram_runtimes.push((
+                    bot,
+                    TelegramRuntimeContext {
+                        channel_name: "telegram".to_string(),
+                        bot_username: if tg_cfg.bot_username.trim().is_empty() {
+                            config.bot_username_for_channel("telegram")
+                        } else {
+                            tg_cfg.bot_username.trim().to_string()
+                        },
+                        allowed_groups: tg_cfg.allowed_groups.clone(),
+                    },
+                ));
             }
         }
     }
@@ -173,10 +246,22 @@ pub async fn run(
         });
     }
 
-    if let Some(bot) = telegram_bot {
-        crate::telegram::start_telegram_bot(state, bot).await
-    } else if has_web || discord_token.is_some() || has_slack || has_feishu {
-        info!("Running without Telegram adapter; waiting for other channels");
+    let has_telegram = !telegram_runtimes.is_empty();
+    if has_telegram {
+        for (bot, tg_ctx) in telegram_runtimes {
+            let telegram_state = state.clone();
+            info!(
+                "Starting Telegram bot adapter '{}' as @{}",
+                tg_ctx.channel_name, tg_ctx.bot_username
+            );
+            tokio::spawn(async move {
+                let _ = crate::telegram::start_telegram_bot(telegram_state, bot, tg_ctx).await;
+            });
+        }
+    }
+
+    if has_telegram || has_web || discord_token.is_some() || has_slack || has_feishu {
+        info!("Runtime active; waiting for Ctrl-C");
         tokio::signal::ctrl_c()
             .await
             .map_err(|e| anyhow!("Failed to listen for Ctrl-C: {e}"))?;

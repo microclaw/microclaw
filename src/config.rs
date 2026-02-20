@@ -315,6 +315,49 @@ pub struct Config {
 }
 
 impl Config {
+    fn telegram_default_account_id(&self) -> Option<String> {
+        let telegram = self.channels.get("telegram")?;
+        let mut account_ids: Vec<String> = telegram
+            .get("accounts")
+            .and_then(|v| v.as_mapping())
+            .map(|m| {
+                m.keys()
+                    .filter_map(|k| k.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        account_ids.sort();
+        telegram
+            .get("default_account")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                if telegram
+                    .get("accounts")
+                    .and_then(|v| v.get("default"))
+                    .is_some()
+                {
+                    Some("default".to_string())
+                } else {
+                    account_ids.first().cloned()
+                }
+            })
+    }
+
+    fn telegram_account_bot_username(&self, account_id: &str) -> Option<String> {
+        self.channels
+            .get("telegram")
+            .and_then(|v| v.get("accounts"))
+            .and_then(|v| v.get(account_id))
+            .and_then(|v| v.get("bot_username"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
     pub fn bot_username_for_channel(&self, channel: &str) -> String {
         let channel_override = self
             .channels
@@ -327,6 +370,18 @@ impl Config {
             return v.to_string();
         }
 
+        if let Some(account_id) = channel.strip_prefix("telegram.") {
+            if let Some(v) = self.telegram_account_bot_username(account_id) {
+                return v;
+            }
+        } else if channel == "telegram" {
+            if let Some(default_account) = self.telegram_default_account_id() {
+                if let Some(v) = self.telegram_account_bot_username(&default_account) {
+                    return v;
+                }
+            }
+        }
+
         let global = self.bot_username.trim();
         if !global.is_empty() {
             global.to_string()
@@ -336,7 +391,8 @@ impl Config {
     }
 
     pub fn bot_username_overrides(&self) -> HashMap<String, String> {
-        self.channels
+        let mut overrides: HashMap<String, String> = self
+            .channels
             .iter()
             .filter_map(|(channel, cfg)| {
                 cfg.get("bot_username")
@@ -345,7 +401,40 @@ impl Config {
                     .filter(|v| !v.is_empty())
                     .map(|v| (channel.clone(), v.to_string()))
             })
-            .collect()
+            .collect();
+
+        if let Some(accounts) = self
+            .channels
+            .get("telegram")
+            .and_then(|v| v.get("accounts"))
+            .and_then(|v| v.as_mapping())
+        {
+            let default_account = self.telegram_default_account_id();
+            for (key, value) in accounts {
+                let Some(account_id) = key.as_str() else {
+                    continue;
+                };
+                let username = value
+                    .get("bot_username")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty());
+                let Some(username) = username else {
+                    continue;
+                };
+                if default_account
+                    .as_deref()
+                    .map(|v| v == account_id)
+                    .unwrap_or(false)
+                {
+                    overrides.insert("telegram".to_string(), username.to_string());
+                } else {
+                    overrides.insert(format!("telegram.{account_id}"), username.to_string());
+                }
+            }
+        }
+
+        overrides
     }
 
     #[cfg(test)]
