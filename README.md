@@ -447,7 +447,7 @@ Telegram (optional):
 2. Send `/newbot`
 3. Enter a display name for your bot (e.g. `My MicroClaw`)
 4. Enter a username (must end in `bot`, e.g. `my_microclaw_bot`)
-5. BotFather will reply with a token like `123456789:ABCdefGHIjklMNOpqrsTUVwxyz` -- save this as `telegram_bot_token`
+5. BotFather will reply with a token like `123456789:ABCdefGHIjklMNOpqrsTUVwxyz` -- save this as `telegram_bot_token` (legacy single-account) or `channels.telegram.accounts.<id>.bot_token` (recommended multi-account)
 
 Recommended BotFather settings (optional but useful):
 - `/setdescription` -- set a short description shown in the bot's profile
@@ -541,6 +541,17 @@ You can still configure manually with `microclaw.config.yaml`:
 ```
 telegram_bot_token: "123456:ABC-DEF1234..."
 bot_username: "my_bot"
+# recommended Telegram multi-account mode (multi-token, multi-bot):
+# channels:
+#   telegram:
+#     default_account: "main"
+#     accounts:
+#       main:
+#         bot_token: "123456:ABC-DEF1234..."
+#         bot_username: "my_bot"
+#       support:
+#         bot_token: "987654:XYZ-DEF9999..."
+#         bot_username: "support_bot"
 llm_provider: "anthropic"
 api_key: "sk-ant-..."
 model: "claude-sonnet-4-20250514"
@@ -597,7 +608,11 @@ All configuration is via `microclaw.config.yaml`:
 
 | Key | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `telegram_bot_token` | No* | -- | Telegram bot token from BotFather |
+| `telegram_bot_token` | No* | -- | Telegram bot token from BotFather (legacy single-account mode) |
+| `channels.telegram.default_account` | No | unset | Default Telegram account ID in multi-account mode |
+| `channels.telegram.accounts.<id>.bot_token` | No* | unset | Telegram bot token for a specific account (recommended multi-account mode) |
+| `channels.telegram.accounts.<id>.bot_username` | No | unset | Telegram username for a specific account (without `@`) |
+| `channels.telegram.accounts.<id>.allowed_groups` | No | `[]` | Optional Telegram group allowlist scoped to one account |
 | `discord_bot_token` | No* | -- | Discord bot token from Discord Developer Portal |
 | `discord_allowed_channels` | No | `[]` | Discord channel ID allowlist; empty means no channel restriction |
 | `api_key` | Yes* | -- | LLM API key (`ollama` can leave this empty; `openai-codex` supports OAuth or `api_key`) |
@@ -629,7 +644,7 @@ Path compatibility policy:
 - If `data_dir` / `skills_dir` / `working_dir` are already configured, MicroClaw keeps using those configured paths.
 - If these fields are not configured, defaults are `data_dir=~/.microclaw`, `skills_dir=<data_dir>/skills`, `working_dir=~/.microclaw/working_dir`.
 
-`*` At least one channel must be enabled: `telegram_bot_token`, `discord_bot_token`, `channels.slack`, `channels.feishu`, or `web_enabled: true`.
+`*` At least one channel must be enabled: `telegram_bot_token` (legacy), `channels.telegram.accounts.<id>.bot_token`, `discord_bot_token`, `channels.slack`, `channels.feishu`, or `web_enabled: true`.
 
 ## Docker Sandbox
 
@@ -684,7 +699,7 @@ Notes:
 ## Platform behavior
 
 - Telegram private chats: respond to every message.
-- Telegram groups: respond only when mentioned with `@bot_username`; all group messages are still stored for context.
+- Telegram groups: respond only when mentioned with the active account username (for example `@my_bot` or `@support_bot` in multi-account mode); all group messages are still stored for context.
 - Discord DMs: respond to every message.
 - Discord server channels: respond on @mention; optionally constrained by `discord_allowed_channels`.
 - Slack DMs: respond to every message.
