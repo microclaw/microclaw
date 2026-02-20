@@ -1501,13 +1501,9 @@ impl SetupApp {
             return "Channel";
         }
         match key {
-            "DATA_DIR"
-            | "TIMEZONE"
-            | "WORKING_DIR"
-            | "SANDBOX_ENABLED"
-            | "REFLECTOR_ENABLED"
-            | "REFLECTOR_INTERVAL_MINS"
-            | "MEMORY_TOKEN_BUDGET" => "App",
+            "DATA_DIR" | "TIMEZONE" | "WORKING_DIR" => "App",
+            "SANDBOX_ENABLED" => "Sandbox",
+            "REFLECTOR_ENABLED" | "REFLECTOR_INTERVAL_MINS" | "MEMORY_TOKEN_BUDGET" => "Memory",
             "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL" => "Model",
             "EMBEDDING_PROVIDER" | "EMBEDDING_API_KEY" | "EMBEDDING_BASE_URL"
             | "EMBEDDING_MODEL" | "EMBEDDING_DIM" => "Embedding",
@@ -1528,42 +1524,48 @@ impl SetupApp {
             for ch in DYNAMIC_CHANNELS {
                 let account_expected = dynamic_account_id_field_key(ch.name);
                 if account_expected == key {
-                    return 26 + offset;
+                    return 16 + offset;
                 }
                 offset += 1;
                 for f in ch.fields {
                     let expected = dynamic_field_key(ch.name, f.yaml_key);
                     if expected == key {
-                        return 26 + offset;
+                        return 16 + offset;
                     }
                     offset += 1;
                 }
             }
-            return 26 + offset;
+            return 16 + offset;
         }
         match key {
-            "DATA_DIR" => 0,
-            "TIMEZONE" => 1,
-            "WORKING_DIR" => 2,
-            "SANDBOX_ENABLED" => 3,
-            "REFLECTOR_ENABLED" => 4,
-            "REFLECTOR_INTERVAL_MINS" => 5,
-            "MEMORY_TOKEN_BUDGET" => 6,
-            "LLM_PROVIDER" => 10,
-            "LLM_API_KEY" => 11,
-            "LLM_MODEL" => 12,
-            "LLM_BASE_URL" => 13,
-            "EMBEDDING_PROVIDER" => 14,
-            "EMBEDDING_API_KEY" => 15,
-            "EMBEDDING_BASE_URL" => 16,
-            "EMBEDDING_MODEL" => 17,
-            "EMBEDDING_DIM" => 18,
-            "ENABLED_CHANNELS" => 20,
-            "TELEGRAM_BOT_TOKEN" => 21,
-            "BOT_USERNAME" => 22,
-            "TELEGRAM_ACCOUNT_ID" => 23,
-            "DISCORD_BOT_TOKEN" => 24,
-            "DISCORD_ACCOUNT_ID" => 25,
+            // 1) Model
+            "LLM_PROVIDER" => 0,
+            "LLM_API_KEY" => 1,
+            "LLM_MODEL" => 2,
+            "LLM_BASE_URL" => 3,
+            // 2) Channel (dynamic channel fields start at 16 via branch above)
+            "ENABLED_CHANNELS" => 10,
+            "TELEGRAM_BOT_TOKEN" => 11,
+            "BOT_USERNAME" => 12,
+            "TELEGRAM_ACCOUNT_ID" => 13,
+            "DISCORD_BOT_TOKEN" => 14,
+            "DISCORD_ACCOUNT_ID" => 15,
+            // 3) App
+            "DATA_DIR" => 40,
+            "TIMEZONE" => 41,
+            "WORKING_DIR" => 42,
+            // 4) Memory
+            "REFLECTOR_ENABLED" => 50,
+            "REFLECTOR_INTERVAL_MINS" => 51,
+            "MEMORY_TOKEN_BUDGET" => 52,
+            // 5) Embedding
+            "EMBEDDING_PROVIDER" => 60,
+            "EMBEDDING_API_KEY" => 61,
+            "EMBEDDING_BASE_URL" => 62,
+            "EMBEDDING_MODEL" => 63,
+            "EMBEDDING_DIM" => 64,
+            // 6) Sandbox (last)
+            "SANDBOX_ENABLED" => 100,
             _ => usize::MAX,
         }
     }
