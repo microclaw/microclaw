@@ -52,6 +52,11 @@ channels:
 - `summary.mcp_rejections_total`
 - `summary.mcp_rejection_ratio`
 
+OTLP export includes corresponding counters:
+- `microclaw_mcp_rate_limited_rejections`
+- `microclaw_mcp_bulkhead_rejections`
+- `microclaw_mcp_circuit_open_rejections`
+
 ## OTLP Exporter
 
 Optional OTLP/HTTP protobuf export:

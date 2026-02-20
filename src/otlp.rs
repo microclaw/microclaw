@@ -22,6 +22,9 @@ pub struct OtlpMetricSnapshot {
     pub llm_output_tokens: i64,
     pub tool_executions: i64,
     pub mcp_calls: i64,
+    pub mcp_rate_limited_rejections: i64,
+    pub mcp_bulkhead_rejections: i64,
+    pub mcp_circuit_open_rejections: i64,
     pub active_sessions: i64,
 }
 
@@ -219,6 +222,9 @@ fn build_metrics_payload(
             llm_output_tokens: 0,
             tool_executions: 0,
             mcp_calls: 0,
+            mcp_rate_limited_rejections: 0,
+            mcp_bulkhead_rejections: 0,
+            mcp_circuit_open_rejections: 0,
             active_sessions: 0,
         }]
     } else {
@@ -289,6 +295,33 @@ fn build_metrics_payload(
             points
                 .iter()
                 .map(|p| (p.timestamp_unix_nano, p.mcp_calls))
+                .collect(),
+            start_ts,
+        ),
+        sum_metric(
+            "mcp_rate_limited_rejections",
+            "Total MCP rate-limited rejections",
+            points
+                .iter()
+                .map(|p| (p.timestamp_unix_nano, p.mcp_rate_limited_rejections))
+                .collect(),
+            start_ts,
+        ),
+        sum_metric(
+            "mcp_bulkhead_rejections",
+            "Total MCP bulkhead rejections",
+            points
+                .iter()
+                .map(|p| (p.timestamp_unix_nano, p.mcp_bulkhead_rejections))
+                .collect(),
+            start_ts,
+        ),
+        sum_metric(
+            "mcp_circuit_open_rejections",
+            "Total MCP circuit-open rejections",
+            points
+                .iter()
+                .map(|p| (p.timestamp_unix_nano, p.mcp_circuit_open_rejections))
                 .collect(),
             start_ts,
         ),
@@ -382,6 +415,9 @@ mod tests {
                 llm_output_tokens: 40,
                 tool_executions: 3,
                 mcp_calls: 1,
+                mcp_rate_limited_rejections: 2,
+                mcp_bulkhead_rejections: 1,
+                mcp_circuit_open_rejections: 0,
                 active_sessions: 2,
             }],
         );
@@ -389,5 +425,14 @@ mod tests {
         let metrics = &payload.resource_metrics[0].scope_metrics[0].metrics;
         assert!(!metrics.is_empty());
         assert!(metrics.iter().any(|m| m.name == "microclaw_http_requests"));
+        assert!(metrics
+            .iter()
+            .any(|m| m.name == "microclaw_mcp_rate_limited_rejections"));
+        assert!(metrics
+            .iter()
+            .any(|m| m.name == "microclaw_mcp_bulkhead_rejections"));
+        assert!(metrics
+            .iter()
+            .any(|m| m.name == "microclaw_mcp_circuit_open_rejections"));
     }
 }

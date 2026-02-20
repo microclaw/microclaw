@@ -448,6 +448,9 @@ async fn persist_metrics_snapshot(state: &WebState) -> Result<(), (StatusCode, S
             llm_output_tokens: snapshot.llm_output_tokens,
             tool_executions: snapshot.tool_executions,
             mcp_calls: snapshot.mcp_calls,
+            mcp_rate_limited_rejections: snapshot.mcp_rate_limited_rejections,
+            mcp_bulkhead_rejections: snapshot.mcp_bulkhead_rejections,
+            mcp_circuit_open_rejections: snapshot.mcp_circuit_open_rejections,
             active_sessions,
         };
         tokio::spawn(async move {
