@@ -1,0 +1,27 @@
+name: Nightly Stability
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+concurrency:
+  group: nightly-stability
+  cancel-in-progress: false
+
+jobs:
+  nightly-stability:
+    name: Nightly Stability Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/ci/nightly_stability.sh
