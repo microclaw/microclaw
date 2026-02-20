@@ -36,6 +36,11 @@ If a hook times out or crashes, runtime skips the hook and continues.
 
 If history is empty, generate traffic first and re-check.
 
+MCP reliability counters (snapshot/summary):
+- `mcp_rate_limited_rejections`
+- `mcp_bulkhead_rejections`
+- `mcp_circuit_open_rejections`
+
 ## Stability Gate
 
 - Run stability smoke suite locally: `scripts/ci/stability_smoke.sh`

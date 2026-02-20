@@ -36,6 +36,19 @@ impl McpTool {
             qualified_name,
         }
     }
+
+    fn classify_mcp_error_type(err: &str) -> &'static str {
+        let lower = err.to_ascii_lowercase();
+        if lower.contains("rate-limited") {
+            "mcp_rate_limited"
+        } else if lower.contains("busy; exceeded queue wait") {
+            "mcp_bulkhead_rejected"
+        } else if lower.contains("circuit open") {
+            "mcp_circuit_open"
+        } else {
+            "mcp_error"
+        }
+    }
 }
 
 #[async_trait]
@@ -58,9 +71,33 @@ impl Tool for McpTool {
     async fn execute(&self, input: serde_json::Value) -> ToolResult {
         match self.server.call_tool(&self.tool_info.name, input).await {
             Ok(output) => ToolResult::success(output),
-            Err(e) => {
-                ToolResult::error(format!("MCP tool error: {e}")).with_error_type("mcp_error")
-            }
+            Err(e) => ToolResult::error(format!("MCP tool error: {e}"))
+                .with_error_type(Self::classify_mcp_error_type(&e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::McpTool;
+
+    #[test]
+    fn test_classify_mcp_error_type() {
+        assert_eq!(
+            McpTool::classify_mcp_error_type("rate-limited; retry in 3s"),
+            "mcp_rate_limited"
+        );
+        assert_eq!(
+            McpTool::classify_mcp_error_type("busy; exceeded queue wait of 200ms"),
+            "mcp_bulkhead_rejected"
+        );
+        assert_eq!(
+            McpTool::classify_mcp_error_type("circuit open; retry in 10s"),
+            "mcp_circuit_open"
+        );
+        assert_eq!(
+            McpTool::classify_mcp_error_type("transport disconnected"),
+            "mcp_error"
+        );
     }
 }

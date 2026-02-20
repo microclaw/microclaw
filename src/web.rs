@@ -95,6 +95,9 @@ struct WebMetrics {
     tool_error: i64,
     tool_policy_blocks: i64,
     mcp_calls: i64,
+    mcp_rate_limited_rejections: i64,
+    mcp_bulkhead_rejections: i64,
+    mcp_circuit_open_rejections: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -2096,6 +2099,21 @@ mod tests {
                 .unwrap_or(0)
                 > 0
         );
+        assert!(metrics_json
+            .get("metrics")
+            .and_then(|m| m.get("mcp_rate_limited_rejections"))
+            .and_then(|v| v.as_i64())
+            .is_some());
+        assert!(metrics_json
+            .get("metrics")
+            .and_then(|m| m.get("mcp_bulkhead_rejections"))
+            .and_then(|v| v.as_i64())
+            .is_some());
+        assert!(metrics_json
+            .get("metrics")
+            .and_then(|m| m.get("mcp_circuit_open_rejections"))
+            .and_then(|v| v.as_i64())
+            .is_some());
 
         let history_req = Request::builder()
             .method("GET")
