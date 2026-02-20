@@ -13,6 +13,8 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MAX_RETRIES: u32 = 2;
 const DEFAULT_HEALTH_INTERVAL_SECS: u64 = 60;
 const TOOLS_CACHE_TTL_SECS: u64 = 300;
+const DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD: u32 = 5;
+const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_SECS: u64 = 30;
 
 // --- JSON-RPC 2.0 types ---
 
@@ -60,6 +62,10 @@ pub struct McpServerConfig {
     pub max_retries: Option<u32>,
     #[serde(default)]
     pub health_interval_secs: Option<u64>,
+    #[serde(default, alias = "circuitBreakerFailureThreshold")]
+    pub circuit_breaker_failure_threshold: Option<u32>,
+    #[serde(default, alias = "circuitBreakerCooldownSecs")]
+    pub circuit_breaker_cooldown_secs: Option<u64>,
 
     // stdio transport
     #[serde(default)]
@@ -120,6 +126,57 @@ enum McpTransport {
     StreamableHttp(Box<Mutex<McpHttpInner>>),
 }
 
+#[derive(Debug)]
+struct CircuitBreakerState {
+    threshold: u32,
+    cooldown: Duration,
+    consecutive_failures: u32,
+    open_until: Option<Instant>,
+}
+
+impl CircuitBreakerState {
+    fn new(threshold: u32, cooldown_secs: u64) -> Self {
+        Self {
+            threshold,
+            cooldown: Duration::from_secs(cooldown_secs.max(1)),
+            consecutive_failures: 0,
+            open_until: None,
+        }
+    }
+
+    fn check_ready(&mut self, now: Instant) -> Result<(), u64> {
+        if self.threshold == 0 {
+            return Ok(());
+        }
+        if let Some(open_until) = self.open_until {
+            if now < open_until {
+                return Err((open_until - now).as_secs().max(1));
+            }
+            self.open_until = None;
+            self.consecutive_failures = 0;
+        }
+        Ok(())
+    }
+
+    fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.open_until = None;
+    }
+
+    fn record_failure(&mut self, now: Instant) -> bool {
+        if self.threshold == 0 {
+            return false;
+        }
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures >= self.threshold {
+            self.open_until = Some(now + self.cooldown);
+            self.consecutive_failures = 0;
+            return true;
+        }
+        false
+    }
+}
+
 pub struct McpServer {
     name: String,
     requested_protocol: String,
@@ -130,6 +187,7 @@ pub struct McpServer {
     stdio_spawn: Option<McpStdioSpawnSpec>,
     tools_cache: StdMutex<Vec<McpToolInfo>>,
     tools_cache_updated_at: StdMutex<Option<Instant>>,
+    circuit_breaker: StdMutex<CircuitBreakerState>,
 }
 
 /// Resolve a command name to its full path. On Windows, also checks for
@@ -220,6 +278,12 @@ impl McpServer {
                 .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS),
         );
         let max_retries = config.max_retries.unwrap_or(DEFAULT_MAX_RETRIES);
+        let circuit_breaker_threshold = config
+            .circuit_breaker_failure_threshold
+            .unwrap_or(DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD);
+        let circuit_breaker_cooldown_secs = config
+            .circuit_breaker_cooldown_secs
+            .unwrap_or(DEFAULT_CIRCUIT_BREAKER_COOLDOWN_SECS);
         let transport_name = config.transport.trim().to_ascii_lowercase();
 
         let (transport, stdio_spawn) = match transport_name.as_str() {
@@ -276,6 +340,10 @@ impl McpServer {
             stdio_spawn,
             tools_cache: StdMutex::new(Vec::new()),
             tools_cache_updated_at: StdMutex::new(None),
+            circuit_breaker: StdMutex::new(CircuitBreakerState::new(
+                circuit_breaker_threshold,
+                circuit_breaker_cooldown_secs,
+            )),
         };
 
         server.initialize_connection().await?;
@@ -616,10 +684,42 @@ impl McpServer {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, String> {
-        match &self.transport {
+        let now = Instant::now();
+        {
+            let mut breaker = self
+                .circuit_breaker
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Err(remaining_secs) = breaker.check_ready(now) {
+                return Err(format!(
+                    "MCP server '{}' circuit open; retry in ~{}s",
+                    self.name, remaining_secs
+                ));
+            }
+        }
+
+        let result = match &self.transport {
             McpTransport::Stdio(_) => self.send_request_stdio_with_retries(method, params).await,
             McpTransport::StreamableHttp(_) => self.send_request_http(method, params).await,
+        };
+
+        let mut breaker = self
+            .circuit_breaker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match &result {
+            Ok(_) => breaker.record_success(),
+            Err(_) => {
+                if breaker.record_failure(Instant::now()) {
+                    warn!(
+                        "MCP server '{}' circuit opened after consecutive failures",
+                        self.name
+                    );
+                }
+            }
         }
+
+        result
     }
 
     async fn send_notification(
@@ -933,6 +1033,8 @@ mod tests {
         assert_eq!(server.transport, "stdio");
         assert!(server.protocol_version.is_none());
         assert!(server.max_retries.is_none());
+        assert!(server.circuit_breaker_failure_threshold.is_none());
+        assert!(server.circuit_breaker_cooldown_secs.is_none());
     }
 
     #[test]
@@ -964,5 +1066,30 @@ mod tests {
         assert_eq!(remote.endpoint, "http://127.0.0.1:8080/mcp");
         assert_eq!(remote.max_retries, Some(3));
         assert_eq!(remote.health_interval_secs, Some(15));
+    }
+
+    #[test]
+    fn test_circuit_breaker_trips_and_recovers() {
+        let mut breaker = CircuitBreakerState::new(2, 1);
+        let now = Instant::now();
+
+        assert!(breaker.check_ready(now).is_ok());
+        assert!(!breaker.record_failure(now));
+        assert!(breaker.check_ready(Instant::now()).is_ok());
+        assert!(breaker.record_failure(Instant::now()));
+
+        let blocked = breaker.check_ready(Instant::now());
+        assert!(blocked.is_err());
+
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(breaker.check_ready(Instant::now()).is_ok());
+    }
+
+    #[test]
+    fn test_circuit_breaker_can_be_disabled() {
+        let mut breaker = CircuitBreakerState::new(0, 1);
+        assert!(breaker.check_ready(Instant::now()).is_ok());
+        assert!(!breaker.record_failure(Instant::now()));
+        assert!(breaker.check_ready(Instant::now()).is_ok());
     }
 }
