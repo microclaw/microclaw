@@ -3,17 +3,45 @@
 ## Endpoints
 
 - `GET /api/metrics`: current counters/gauges snapshot.
+- `GET /api/metrics/summary`: SLO-oriented summary contract.
 - `GET /api/metrics/history?minutes=1440&limit=2000`: persisted timeline from SQLite.
 
 ## Fields
 
 - `http_requests`
+- `request_ok`
+- `request_error`
 - `llm_completions`
 - `llm_input_tokens`
 - `llm_output_tokens`
 - `tool_executions`
+- `tool_success`
+- `tool_error`
+- `tool_policy_blocks` (excluded from tool reliability denominator)
 - `mcp_calls`
 - `active_sessions`
+
+## SLO Contract (`/api/metrics/summary`)
+
+`/api/metrics/summary` returns an explicit SLO block:
+
+- `slo.request_success_rate`:
+  - `value` from `request_ok / (request_ok + request_error)` over current process lifetime
+  - `target: 0.995`
+  - `burn_alert: 0.99`
+- `slo.e2e_latency_p95_ms`:
+  - `value` is runtime p95 from sampled successful request latencies
+  - `target: 6000`
+  - `burn_alert: 10000`
+- `slo.tool_reliability`:
+  - `value` from `tool_success / (tool_success + tool_error)`
+  - excludes `tool_policy_blocks` (`approval_required`, `execution_policy_blocked`)
+  - `target: 0.985`
+  - `burn_alert: 0.97`
+- `slo.scheduler_recoverability_7d`:
+  - `value` from successful scheduler runs / total scheduler runs in recent 7 days
+  - `target: 1.0`
+  - `burn_alert: 0.999`
 
 ## Persistence
 

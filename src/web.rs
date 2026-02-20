@@ -15,9 +15,7 @@ use serde_json::json;
 use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info};
 
-use crate::agent_engine::{
-    process_with_agent, process_with_agent_with_events, AgentEvent, AgentRequestContext,
-};
+use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
 use crate::config::{Config, WorkingDirIsolation};
 use crate::otlp::{OtlpExporter, OtlpMetricSnapshot};
 use crate::runtime::AppState;
@@ -86,10 +84,16 @@ struct AuthHub {
 #[derive(Clone, Debug, Default)]
 struct WebMetrics {
     http_requests: i64,
+    request_ok: i64,
+    request_error: i64,
+    request_latency_ms: VecDeque<i64>,
     llm_completions: i64,
     llm_input_tokens: i64,
     llm_output_tokens: i64,
     tool_executions: i64,
+    tool_success: i64,
+    tool_error: i64,
+    tool_policy_blocks: i64,
     mcp_calls: i64,
 }
 
@@ -403,6 +407,62 @@ async fn metrics_http_inc(state: &WebState) {
 async fn metrics_llm_completion_inc(state: &WebState) {
     let mut m = state.metrics.lock().await;
     m.llm_completions += 1;
+}
+
+const METRICS_LATENCY_SAMPLE_CAP: usize = 4096;
+
+async fn metrics_record_request_result(state: &WebState, ok: bool, latency_ms: i64) {
+    let mut m = state.metrics.lock().await;
+    if ok {
+        m.request_ok += 1;
+        m.request_latency_ms.push_back(latency_ms.max(0));
+        if m.request_latency_ms.len() > METRICS_LATENCY_SAMPLE_CAP {
+            let _ = m.request_latency_ms.pop_front();
+        }
+    } else {
+        m.request_error += 1;
+    }
+}
+
+async fn metrics_apply_agent_event(state: &WebState, evt: &AgentEvent) {
+    let mut m = state.metrics.lock().await;
+    match evt {
+        AgentEvent::ToolStart { name } => {
+            m.tool_executions += 1;
+            if name.starts_with("mcp") {
+                m.mcp_calls += 1;
+            }
+        }
+        AgentEvent::ToolResult {
+            is_error,
+            error_type,
+            ..
+        } => {
+            if *is_error {
+                if matches!(
+                    error_type.as_deref(),
+                    Some("approval_required" | "execution_policy_blocked")
+                ) {
+                    m.tool_policy_blocks += 1;
+                } else {
+                    m.tool_error += 1;
+                }
+            } else {
+                m.tool_success += 1;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn percentile_p95(values: &VecDeque<i64>) -> Option<i64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted: Vec<i64> = values.iter().copied().collect();
+    sorted.sort_unstable();
+    let idx = ((sorted.len() - 1) * 95) / 100;
+    sorted.get(idx).copied()
 }
 
 async fn persist_metrics_snapshot(state: &WebState) -> Result<(), (StatusCode, String)> {
@@ -1008,12 +1068,14 @@ async fn api_send(
             reason = %msg,
             "Request rejected by limiter"
         );
+        metrics_record_request_result(&state, false, start.elapsed().as_millis() as i64).await;
         return Err((status, msg));
     }
     let result = send_and_store_response(state.clone(), body).await;
     if result.is_ok() {
         metrics_llm_completion_inc(&state).await;
     }
+    metrics_record_request_result(&state, result.is_ok(), start.elapsed().as_millis() as i64).await;
     state
         .request_hub
         .end_with_limits(&session_key, &state.limits)
@@ -1115,33 +1177,26 @@ async fn send_and_store_response_with_events(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let request_ctx = AgentRequestContext {
+        caller_channel: "web",
+        chat_id,
+        chat_type: "web",
+    };
     let response = if let Some(tx) = event_tx {
-        process_with_agent_with_events(
-            &state.app_state,
-            AgentRequestContext {
-                caller_channel: "web",
-                chat_id,
-                chat_type: "web",
-            },
-            None,
-            None,
-            Some(tx),
-        )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        process_with_agent_with_events(&state.app_state, request_ctx, None, None, Some(tx))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     } else {
-        process_with_agent(
-            &state.app_state,
-            AgentRequestContext {
-                caller_channel: "web",
-                chat_id,
-                chat_type: "web",
-            },
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let result =
+            process_with_agent_with_events(&state.app_state, request_ctx, None, None, Some(&tx))
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+        drop(tx);
+        while let Some(evt) = rx.recv().await {
+            metrics_apply_agent_event(&state, &evt).await;
+        }
+        result?
     };
 
     let after_usage = call_blocking(state.app_state.db.clone(), move |db| {
@@ -2058,6 +2113,36 @@ mod tests {
             .and_then(|v| v.as_array())
             .map(|v| !v.is_empty())
             .unwrap_or(false));
+
+        let summary_req = Request::builder()
+            .method("GET")
+            .uri("/api/metrics/summary")
+            .body(Body::empty())
+            .unwrap();
+        let summary_resp = app.oneshot(summary_req).await.unwrap();
+        assert_eq!(summary_resp.status(), StatusCode::OK);
+        let summary_body = axum::body::to_bytes(summary_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let summary_json: serde_json::Value = serde_json::from_slice(&summary_body).unwrap();
+        assert_eq!(summary_json.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert!(
+            summary_json
+                .get("metrics")
+                .and_then(|m| m.get("request_ok"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                >= 1
+        );
+        assert!(
+            summary_json
+                .get("slo")
+                .and_then(|s| s.get("request_success_rate"))
+                .and_then(|r| r.get("value"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0)
+                >= 0.0
+        );
     }
 
     #[tokio::test]

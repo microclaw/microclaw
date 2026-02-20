@@ -45,3 +45,16 @@ If history is empty, generate traffic first and re-check.
   - scheduler restart persistence
   - sandbox fallback and require-runtime fail-closed behavior
   - web inflight and rate-limit regression
+
+## SLO Alerts
+
+- Query SLO summary: `GET /api/metrics/summary`
+- Request success burn alert: `slo.request_success_rate.value < 0.99`
+- Latency burn alert: `slo.e2e_latency_p95_ms.value > 10000`
+- Tool reliability burn alert: `slo.tool_reliability.value < 0.97`
+- Scheduler recoverability alert: `slo.scheduler_recoverability_7d.value < 0.999`
+
+When any burn alert is active:
+- freeze non-critical feature merges
+- triage and assign incident owner
+- if user-facing impact continues, prepare rollback/hotfix path per stability plan

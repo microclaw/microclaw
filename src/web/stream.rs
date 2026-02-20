@@ -11,6 +11,7 @@ pub(super) async fn api_send_stream(
 
     let text = body.message.trim().to_string();
     if text.is_empty() {
+        metrics_record_request_result(&state, false, start.elapsed().as_millis() as i64).await;
         return Err((StatusCode::BAD_REQUEST, "message is required".into()));
     }
 
@@ -24,6 +25,7 @@ pub(super) async fn api_send_stream(
             reason = %msg,
             "Request rejected by limiter"
         );
+        metrics_record_request_result(&state, false, start.elapsed().as_millis() as i64).await;
         return Err((status, msg));
     }
 
@@ -61,7 +63,7 @@ pub(super) async fn api_send_stream(
 
         let (evt_tx, mut evt_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
         let run_hub = state_for_task.run_hub.clone();
-        let metrics_for_events = state_for_task.metrics.clone();
+        let state_for_events = state_for_task.clone();
         let run_id_for_events = run_id_for_task.clone();
         let run_history_limit = limits.run_history_limit;
         let forward = tokio::spawn(async move {
@@ -78,13 +80,11 @@ pub(super) async fn api_send_stream(
                             .await;
                     }
                     AgentEvent::ToolStart { name } => {
-                        {
-                            let mut m = metrics_for_events.lock().await;
-                            m.tool_executions += 1;
-                            if name.starts_with("mcp") {
-                                m.mcp_calls += 1;
-                            }
-                        }
+                        super::metrics_apply_agent_event(
+                            &state_for_events,
+                            &AgentEvent::ToolStart { name: name.clone() },
+                        )
+                        .await;
                         run_hub
                             .publish(
                                 &run_id_for_events,
@@ -103,6 +103,19 @@ pub(super) async fn api_send_stream(
                         bytes,
                         error_type,
                     } => {
+                        super::metrics_apply_agent_event(
+                            &state_for_events,
+                            &AgentEvent::ToolResult {
+                                name: name.clone(),
+                                is_error,
+                                preview: preview.clone(),
+                                duration_ms,
+                                status_code,
+                                bytes,
+                                error_type: error_type.clone(),
+                            },
+                        )
+                        .await;
                         run_hub
                             .publish(
                                 &run_id_for_events,
@@ -140,6 +153,12 @@ pub(super) async fn api_send_stream(
         {
             Ok(resp) => {
                 metrics_llm_completion_inc(&state_for_task).await;
+                metrics_record_request_result(
+                    &state_for_task,
+                    true,
+                    run_start.elapsed().as_millis() as i64,
+                )
+                .await;
                 let response_text = resp
                     .0
                     .get("response")
@@ -158,6 +177,12 @@ pub(super) async fn api_send_stream(
                     .await;
             }
             Err((_, err_msg)) => {
+                metrics_record_request_result(
+                    &state_for_task,
+                    false,
+                    run_start.elapsed().as_millis() as i64,
+                )
+                .await;
                 state_for_task
                     .run_hub
                     .publish(

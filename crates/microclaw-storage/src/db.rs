@@ -1294,6 +1294,35 @@ impl Database {
         Ok(logs)
     }
 
+    pub fn get_task_run_summary_since(
+        &self,
+        since: Option<&str>,
+    ) -> Result<(i64, i64), MicroClawError> {
+        let conn = self.lock_conn();
+        if let Some(since) = since {
+            let (total, success): (i64, i64) = conn.query_row(
+                "SELECT
+                    COUNT(*) AS total_runs,
+                    COALESCE(SUM(CASE WHEN success != 0 THEN 1 ELSE 0 END), 0) AS success_runs
+                 FROM task_run_logs
+                 WHERE started_at >= ?1",
+                params![since],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((total, success))
+        } else {
+            let (total, success): (i64, i64) = conn.query_row(
+                "SELECT
+                    COUNT(*) AS total_runs,
+                    COALESCE(SUM(CASE WHEN success != 0 THEN 1 ELSE 0 END), 0) AS success_runs
+                 FROM task_run_logs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((total, success))
+        }
+    }
+
     #[allow(dead_code)]
     pub fn delete_task(&self, task_id: i64) -> Result<bool, MicroClawError> {
         let conn = self.lock_conn();
@@ -3619,6 +3648,47 @@ mod tests {
         assert_eq!(logs.len(), 3);
         assert_eq!(logs[0].result_summary.as_deref(), Some("Run 4")); // most recent
         assert_eq!(logs[2].result_summary.as_deref(), Some("Run 2"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_get_task_run_summary_since() {
+        let (db, dir) = test_db();
+        let task_id = db
+            .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
+            .unwrap();
+
+        db.log_task_run(
+            task_id,
+            100,
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:05Z",
+            5000,
+            true,
+            Some("ok"),
+        )
+        .unwrap();
+        db.log_task_run(
+            task_id,
+            100,
+            "2024-01-01T00:10:00Z",
+            "2024-01-01T00:10:05Z",
+            5000,
+            false,
+            Some("fail"),
+        )
+        .unwrap();
+
+        let (total_all, success_all) = db.get_task_run_summary_since(None).unwrap();
+        assert_eq!(total_all, 2);
+        assert_eq!(success_all, 1);
+
+        let (total_since, success_since) = db
+            .get_task_run_summary_since(Some("2024-01-01T00:05:00Z"))
+            .unwrap();
+        assert_eq!(total_since, 1);
+        assert_eq!(success_since, 0);
+
         cleanup(&dir);
     }
 
