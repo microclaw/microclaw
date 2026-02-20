@@ -120,6 +120,14 @@ impl ToolRegistry {
                 channel_registry.clone(),
                 db.clone(),
             )),
+            Box::new(schedule::ListTaskDlqTool::new(
+                channel_registry.clone(),
+                db.clone(),
+            )),
+            Box::new(schedule::ReplayTaskDlqTool::new(
+                channel_registry.clone(),
+                db.clone(),
+            )),
             Box::new(export_chat::ExportChatTool::new(
                 db.clone(),
                 &config.data_dir,

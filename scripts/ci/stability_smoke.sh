@@ -6,6 +6,7 @@ cargo test --quiet --test tool_permissions
 
 echo "[stability-smoke] scheduler recoverability (restart persistence)"
 cargo test --quiet --test db_integration test_scheduled_task_persists_across_db_reopen
+cargo test --quiet test_replay_task_dlq_requeues_task_and_marks_replayed
 
 echo "[stability-smoke] sandbox fallback and fail-closed behavior"
 cargo test --quiet -p microclaw-tools test_router_falls_back_to_host_when_runtime_missing_and_not_required

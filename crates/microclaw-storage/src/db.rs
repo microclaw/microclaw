@@ -180,7 +180,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 8;
+const SCHEMA_VERSION_CURRENT: i64 = 9;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -194,6 +194,20 @@ pub struct ScheduledTask {
     pub last_run: Option<String>,
     pub status: String, // "active", "paused", "completed", "cancelled"
     pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScheduledTaskDlqEntry {
+    pub id: i64,
+    pub task_id: i64,
+    pub chat_id: i64,
+    pub failed_at: String,
+    pub started_at: String,
+    pub finished_at: String,
+    pub duration_ms: i64,
+    pub error_summary: Option<String>,
+    pub replayed_at: Option<String>,
+    pub replay_note: Option<String>,
 }
 
 fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, MicroClawError> {
@@ -530,6 +544,28 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         set_schema_version(conn, 8)?;
         version = 8;
     }
+    if version < 9 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS scheduled_task_dlq (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                failed_at TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                error_summary TEXT,
+                replayed_at TEXT,
+                replay_note TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_scheduled_task_dlq_task_failed
+                ON scheduled_task_dlq(task_id, failed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_task_dlq_chat_failed
+                ON scheduled_task_dlq(chat_id, failed_at DESC);",
+        )?;
+        set_schema_version(conn, 9)?;
+        version = 9;
+    }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
     }
@@ -609,6 +645,23 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_task_run_logs_task_id
                 ON task_run_logs(task_id);
+
+            CREATE TABLE IF NOT EXISTS scheduled_task_dlq (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                failed_at TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                error_summary TEXT,
+                replayed_at TEXT,
+                replay_note TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_scheduled_task_dlq_task_failed
+                ON scheduled_task_dlq(task_id, failed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_task_dlq_chat_failed
+                ON scheduled_task_dlq(chat_id, failed_at DESC);
 
             CREATE TABLE IF NOT EXISTS sessions (
                 chat_id INTEGER PRIMARY KEY,
@@ -1209,6 +1262,21 @@ impl Database {
         Ok(rows > 0)
     }
 
+    pub fn requeue_scheduled_task(
+        &self,
+        task_id: i64,
+        next_run: &str,
+    ) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let rows = conn.execute(
+            "UPDATE scheduled_tasks
+             SET status = 'active', next_run = ?1
+             WHERE id = ?2",
+            params![next_run, task_id],
+        )?;
+        Ok(rows > 0)
+    }
+
     pub fn update_task_after_run(
         &self,
         task_id: i64,
@@ -1322,7 +1390,127 @@ impl Database {
             Ok((total, success))
         }
     }
+    pub fn insert_scheduled_task_dlq(
+        &self,
+        task_id: i64,
+        chat_id: i64,
+        started_at: &str,
+        finished_at: &str,
+        duration_ms: i64,
+        error_summary: Option<&str>,
+    ) -> Result<i64, MicroClawError> {
+        let conn = self.lock_conn();
+        let failed_at = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO scheduled_task_dlq (
+                task_id, chat_id, failed_at, started_at, finished_at, duration_ms, error_summary
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                task_id,
+                chat_id,
+                failed_at,
+                started_at,
+                finished_at,
+                duration_ms,
+                error_summary
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
 
+    pub fn list_scheduled_task_dlq(
+        &self,
+        chat_id: Option<i64>,
+        task_id: Option<i64>,
+        include_replayed: bool,
+        limit: usize,
+    ) -> Result<Vec<ScheduledTaskDlqEntry>, MicroClawError> {
+        let conn = self.lock_conn();
+        let replay_filter = if include_replayed {
+            ""
+        } else {
+            " AND replayed_at IS NULL"
+        };
+        let mapper = |row: &rusqlite::Row<'_>| {
+            Ok(ScheduledTaskDlqEntry {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                chat_id: row.get(2)?,
+                failed_at: row.get(3)?,
+                started_at: row.get(4)?,
+                finished_at: row.get(5)?,
+                duration_ms: row.get(6)?,
+                error_summary: row.get(7)?,
+                replayed_at: row.get(8)?,
+                replay_note: row.get(9)?,
+            })
+        };
+        let query = match (chat_id, task_id) {
+            (Some(_), Some(_)) => format!(
+                "SELECT id, task_id, chat_id, failed_at, started_at, finished_at, duration_ms,
+                        error_summary, replayed_at, replay_note
+                 FROM scheduled_task_dlq
+                 WHERE chat_id = ?1 AND task_id = ?2{replay_filter}
+                 ORDER BY failed_at DESC LIMIT ?3"
+            ),
+            (Some(_), None) => format!(
+                "SELECT id, task_id, chat_id, failed_at, started_at, finished_at, duration_ms,
+                        error_summary, replayed_at, replay_note
+                 FROM scheduled_task_dlq
+                 WHERE chat_id = ?1{replay_filter}
+                 ORDER BY failed_at DESC LIMIT ?2"
+            ),
+            (None, Some(_)) => format!(
+                "SELECT id, task_id, chat_id, failed_at, started_at, finished_at, duration_ms,
+                        error_summary, replayed_at, replay_note
+                 FROM scheduled_task_dlq
+                 WHERE task_id = ?1{replay_filter}
+                 ORDER BY failed_at DESC LIMIT ?2"
+            ),
+            (None, None) => format!(
+                "SELECT id, task_id, chat_id, failed_at, started_at, finished_at, duration_ms,
+                        error_summary, replayed_at, replay_note
+                 FROM scheduled_task_dlq
+                 WHERE 1=1{replay_filter}
+                 ORDER BY failed_at DESC LIMIT ?1"
+            ),
+        };
+        let mut stmt = conn.prepare(&query)?;
+        match (chat_id, task_id) {
+            (Some(c), Some(t)) => stmt
+                .query_map(params![c, t, limit as i64], mapper)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(Into::into),
+            (Some(c), None) => stmt
+                .query_map(params![c, limit as i64], mapper)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(Into::into),
+            (None, Some(t)) => stmt
+                .query_map(params![t, limit as i64], mapper)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(Into::into),
+            (None, None) => stmt
+                .query_map(params![limit as i64], mapper)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(Into::into),
+        }
+    }
+
+    pub fn mark_scheduled_task_dlq_replayed(
+        &self,
+        dlq_id: i64,
+        note: Option<&str>,
+    ) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let replayed_at = chrono::Utc::now().to_rfc3339();
+        let rows = conn.execute(
+            "UPDATE scheduled_task_dlq
+             SET replayed_at = ?1, replay_note = ?2
+             WHERE id = ?3",
+            params![replayed_at, note, dlq_id],
+        )?;
+        Ok(rows > 0)
+    }
     #[allow(dead_code)]
     pub fn delete_task(&self, task_id: i64) -> Result<bool, MicroClawError> {
         let conn = self.lock_conn();
@@ -3116,6 +3304,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(supersede_table_exists, 1);
+        let dlq_table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='scheduled_task_dlq'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(dlq_table_exists, 1);
         drop(conn);
         cleanup(&dir);
     }
@@ -3515,6 +3711,27 @@ mod tests {
     }
 
     #[test]
+    fn test_requeue_scheduled_task() {
+        let (db, dir) = test_db();
+        let id = db
+            .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
+            .unwrap();
+        db.update_task_status(id, "paused").unwrap();
+
+        assert!(db
+            .requeue_scheduled_task(id, "2099-01-01T00:00:00Z")
+            .unwrap());
+        let task = db.get_task_by_id(id).unwrap().unwrap();
+        assert_eq!(task.status, "active");
+        assert_eq!(task.next_run, "2099-01-01T00:00:00Z");
+
+        assert!(!db
+            .requeue_scheduled_task(9999, "2099-01-01T00:00:00Z")
+            .unwrap());
+        cleanup(&dir);
+    }
+
+    #[test]
     fn test_update_task_after_run_cron() {
         let (db, dir) = test_db();
         let id = db
@@ -3657,7 +3874,6 @@ mod tests {
         let task_id = db
             .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
             .unwrap();
-
         db.log_task_run(
             task_id,
             100,
@@ -3688,7 +3904,50 @@ mod tests {
             .unwrap();
         assert_eq!(total_since, 1);
         assert_eq!(success_since, 0);
+        cleanup(&dir);
+    }
 
+    #[test]
+    fn test_scheduled_task_dlq_insert_list_and_mark_replayed() {
+        let (db, dir) = test_db();
+        let task_id = db
+            .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
+            .unwrap();
+
+        let dlq_id = db
+            .insert_scheduled_task_dlq(
+                task_id,
+                100,
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:05Z",
+                5000,
+                Some("Error: timeout"),
+            )
+            .unwrap();
+        assert!(dlq_id > 0);
+
+        let pending = db
+            .list_scheduled_task_dlq(Some(100), Some(task_id), false, 10)
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].task_id, task_id);
+        assert_eq!(pending[0].replayed_at, None);
+
+        assert!(db
+            .mark_scheduled_task_dlq_replayed(dlq_id, Some("queued replay"))
+            .unwrap());
+
+        let pending_after = db
+            .list_scheduled_task_dlq(Some(100), Some(task_id), false, 10)
+            .unwrap();
+        assert!(pending_after.is_empty());
+
+        let all = db
+            .list_scheduled_task_dlq(Some(100), Some(task_id), true, 10)
+            .unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].replayed_at.is_some());
+        assert_eq!(all[0].replay_note.as_deref(), Some("queued replay"));
         cleanup(&dir);
     }
 

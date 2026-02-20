@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use serde_json::json;
 
 use super::{authorize_chat_access, schema_object, Tool, ToolResult};
@@ -430,6 +431,237 @@ pub struct GetTaskHistoryTool {
     db: Arc<Database>,
 }
 
+// --- list_task_dlq ---
+
+pub struct ListTaskDlqTool {
+    registry: Arc<ChannelRegistry>,
+    db: Arc<Database>,
+}
+
+impl ListTaskDlqTool {
+    pub fn new(registry: Arc<ChannelRegistry>, db: Arc<Database>) -> Self {
+        ListTaskDlqTool { registry, db }
+    }
+}
+
+#[async_trait]
+impl Tool for ListTaskDlqTool {
+    fn name(&self) -> &str {
+        "list_scheduled_task_dlq"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "list_scheduled_task_dlq".into(),
+            description: "List failed scheduler runs in DLQ for a chat. Use include_replayed=true to inspect replayed entries.".into(),
+            input_schema: schema_object(
+                json!({
+                    "chat_id": {
+                        "type": "integer",
+                        "description": "The chat ID to inspect DLQ entries for"
+                    },
+                    "task_id": {
+                        "type": "integer",
+                        "description": "Optional task ID filter"
+                    },
+                    "include_replayed": {
+                        "type": "boolean",
+                        "description": "Whether to include already replayed entries"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum entries to return (default: 20, max: 200)"
+                    }
+                }),
+                &["chat_id"],
+            ),
+        }
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> ToolResult {
+        let chat_id = match input.get("chat_id").and_then(|v| v.as_i64()) {
+            Some(id) => id,
+            None => return ToolResult::error("Missing required parameter: chat_id".into()),
+        };
+        if let Err(e) = authorize_chat_access(&input, chat_id) {
+            return ToolResult::error(e);
+        }
+        if let Err(e) =
+            enforce_channel_policy(&self.registry, self.db.clone(), &input, chat_id).await
+        {
+            return ToolResult::error(e);
+        }
+        let task_id = input.get("task_id").and_then(|v| v.as_i64());
+        let include_replayed = input
+            .get("include_replayed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+        let limit = limit.clamp(1, 200);
+
+        match call_blocking(self.db.clone(), move |db| {
+            db.list_scheduled_task_dlq(Some(chat_id), task_id, include_replayed, limit)
+        })
+        .await
+        {
+            Ok(entries) => {
+                if entries.is_empty() {
+                    return ToolResult::success("No DLQ entries found.".into());
+                }
+                let mut out = String::new();
+                out.push_str("Scheduled task DLQ entries (most recent first):\n\n");
+                for e in entries {
+                    let replay_state = if e.replayed_at.is_some() {
+                        "REPLAYED"
+                    } else {
+                        "PENDING"
+                    };
+                    out.push_str(&format!(
+                        "- #{id} task={task} [{state}] failed_at={failed} duration={dur}ms error={err}\n",
+                        id = e.id,
+                        task = e.task_id,
+                        state = replay_state,
+                        failed = e.failed_at,
+                        dur = e.duration_ms,
+                        err = e.error_summary.as_deref().unwrap_or("(no summary)")
+                    ));
+                }
+                ToolResult::success(out)
+            }
+            Err(e) => ToolResult::error(format!("Failed to list DLQ entries: {e}")),
+        }
+    }
+}
+
+// --- replay_task_dlq ---
+
+pub struct ReplayTaskDlqTool {
+    registry: Arc<ChannelRegistry>,
+    db: Arc<Database>,
+}
+
+impl ReplayTaskDlqTool {
+    pub fn new(registry: Arc<ChannelRegistry>, db: Arc<Database>) -> Self {
+        ReplayTaskDlqTool { registry, db }
+    }
+}
+
+#[async_trait]
+impl Tool for ReplayTaskDlqTool {
+    fn name(&self) -> &str {
+        "replay_scheduled_task_dlq"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "replay_scheduled_task_dlq".into(),
+            description: "Replay failed scheduler runs from DLQ by re-queueing their tasks for immediate execution.".into(),
+            input_schema: schema_object(
+                json!({
+                    "chat_id": {
+                        "type": "integer",
+                        "description": "The chat ID to replay DLQ entries for"
+                    },
+                    "task_id": {
+                        "type": "integer",
+                        "description": "Optional task ID filter"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum DLQ entries to replay (default: 5, max: 50)"
+                    }
+                }),
+                &["chat_id"],
+            ),
+        }
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> ToolResult {
+        let chat_id = match input.get("chat_id").and_then(|v| v.as_i64()) {
+            Some(id) => id,
+            None => return ToolResult::error("Missing required parameter: chat_id".into()),
+        };
+        if let Err(e) = authorize_chat_access(&input, chat_id) {
+            return ToolResult::error(e);
+        }
+        if let Err(e) =
+            enforce_channel_policy(&self.registry, self.db.clone(), &input, chat_id).await
+        {
+            return ToolResult::error(e);
+        }
+        let task_id_filter = input.get("task_id").and_then(|v| v.as_i64());
+        let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+        let limit = limit.clamp(1, 50);
+        let now = Utc::now().to_rfc3339();
+
+        let entries = match call_blocking(self.db.clone(), move |db| {
+            db.list_scheduled_task_dlq(Some(chat_id), task_id_filter, false, limit)
+        })
+        .await
+        {
+            Ok(e) => e,
+            Err(e) => return ToolResult::error(format!("Failed to load DLQ entries: {e}")),
+        };
+        if entries.is_empty() {
+            return ToolResult::success("No pending DLQ entries to replay.".into());
+        }
+
+        let mut queued = 0usize;
+        let mut skipped = 0usize;
+        let mut notes = Vec::new();
+        for entry in entries {
+            let db = self.db.clone();
+            let now_for_requeue = now.clone();
+            let res = call_blocking(db, move |db| {
+                let task = db.get_task_by_id(entry.task_id)?;
+                let (queued_this, note) = match task {
+                    Some(t) => {
+                        if t.status == "cancelled" || t.status == "completed" {
+                            (
+                                false,
+                                format!("dlq #{} skipped: task status={}", entry.id, t.status),
+                            )
+                        } else {
+                            db.requeue_scheduled_task(entry.task_id, &now_for_requeue)?;
+                            (
+                                true,
+                                format!("dlq #{} queued task #{}", entry.id, entry.task_id),
+                            )
+                        }
+                    }
+                    None => (
+                        false,
+                        format!("dlq #{} skipped: task #{} missing", entry.id, entry.task_id),
+                    ),
+                };
+                db.mark_scheduled_task_dlq_replayed(entry.id, Some(&note))?;
+                Ok((queued_this, note))
+            })
+            .await;
+
+            match res {
+                Ok((true, note)) => {
+                    queued += 1;
+                    notes.push(note);
+                }
+                Ok((false, note)) => {
+                    skipped += 1;
+                    notes.push(note);
+                }
+                Err(e) => {
+                    skipped += 1;
+                    notes.push(format!("dlq #{} replay failed: {e}", entry.id));
+                }
+            }
+        }
+
+        ToolResult::success(format!(
+            "DLQ replay complete: queued={queued}, skipped={skipped}\n{}",
+            notes.join("\n")
+        ))
+    }
+}
+
 impl GetTaskHistoryTool {
     pub fn new(registry: Arc<ChannelRegistry>, db: Arc<Database>) -> Self {
         GetTaskHistoryTool { registry, db }
@@ -792,6 +1024,82 @@ mod tests {
         assert!(result.content.contains("FAIL"));
         assert!(result.content.contains("All good"));
         assert!(result.content.contains("Error: timeout"));
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_list_task_dlq_with_entries() {
+        let (db, dir) = test_db();
+        let task_id = db
+            .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
+            .unwrap();
+        db.insert_scheduled_task_dlq(
+            task_id,
+            100,
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:05Z",
+            5000,
+            Some("Error: timeout"),
+        )
+        .unwrap();
+
+        let tool = ListTaskDlqTool::new(test_registry(), db);
+        let result = tool.execute(json!({"chat_id": 100})).await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("PENDING"));
+        assert!(result.content.contains("task="));
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_replay_task_dlq_requeues_task_and_marks_replayed() {
+        let (db, dir) = test_db();
+        let task_id = db
+            .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2099-01-01T00:00:00Z")
+            .unwrap();
+        db.update_task_status(task_id, "paused").unwrap();
+        db.insert_scheduled_task_dlq(
+            task_id,
+            100,
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:05Z",
+            5000,
+            Some("Error: timeout"),
+        )
+        .unwrap();
+
+        let tool = ReplayTaskDlqTool::new(test_registry(), db.clone());
+        let result = tool
+            .execute(json!({"chat_id": 100, "task_id": task_id, "limit": 5}))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("queued=1"));
+
+        let task = db.get_task_by_id(task_id).unwrap().unwrap();
+        assert_eq!(task.status, "active");
+        let pending = db
+            .list_scheduled_task_dlq(Some(100), Some(task_id), false, 10)
+            .unwrap();
+        assert!(pending.is_empty());
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_replay_task_dlq_permission_denied_cross_chat() {
+        let (db, dir) = test_db();
+        let tool = ReplayTaskDlqTool::new(test_registry(), db);
+        let result = tool
+            .execute(json!({
+                "chat_id": 200,
+                "limit": 1,
+                "__microclaw_auth": {
+                    "caller_chat_id": 100,
+                    "control_chat_ids": []
+                }
+            }))
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("Permission denied"));
         cleanup(&dir);
     }
 

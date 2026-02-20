@@ -58,3 +58,14 @@ When any burn alert is active:
 - freeze non-critical feature merges
 - triage and assign incident owner
 - if user-facing impact continues, prepare rollback/hotfix path per stability plan
+
+## Scheduler DLQ Replay
+
+- Inspect failed scheduler runs: use tool `list_scheduled_task_dlq` with `chat_id`
+- Replay pending failures: use tool `replay_scheduled_task_dlq` with `chat_id`
+- Optional filters:
+  - `task_id` to target one task
+  - `limit` to bound replay batch size
+- Replay behavior:
+  - re-queues task with immediate `next_run`
+  - marks DLQ entry as replayed with a replay note (`queued` or `skipped` reason)

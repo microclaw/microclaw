@@ -101,6 +101,7 @@ pub fn tool_risk(name: &str) -> ToolRisk {
         | "pause_scheduled_task"
         | "resume_scheduled_task"
         | "cancel_scheduled_task"
+        | "replay_scheduled_task_dlq"
         | "structured_memory_delete"
         | "structured_memory_update" => ToolRisk::Medium,
         _ => ToolRisk::Low,

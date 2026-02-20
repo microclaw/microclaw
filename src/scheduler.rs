@@ -123,6 +123,30 @@ async fn run_due_tasks(state: &Arc<AppState>) {
             error!("Scheduler: failed to log task run for #{}: {e}", task.id);
         }
 
+        if !success {
+            let started_for_dlq = started_at_str.clone();
+            let finished_for_dlq = finished_at_str.clone();
+            let dlq_summary = result_summary.clone();
+            if let Err(e) = call_blocking(state.db.clone(), move |db| {
+                db.insert_scheduled_task_dlq(
+                    task.id,
+                    task.chat_id,
+                    &started_for_dlq,
+                    &finished_for_dlq,
+                    duration_ms,
+                    dlq_summary.as_deref(),
+                )?;
+                Ok(())
+            })
+            .await
+            {
+                error!(
+                    "Scheduler: failed to enqueue DLQ for task #{}: {e}",
+                    task.id
+                );
+            }
+        }
+
         // Compute next run
         let tz: chrono_tz::Tz = state.config.timezone.parse().unwrap_or(chrono_tz::Tz::UTC);
         let next_run = if task.schedule_type == "cron" {
