@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -571,59 +572,82 @@ fn check_mcp_dependencies(report: &mut DoctorReport) {
         Err(_) => PathBuf::from("./microclaw.data"),
     };
 
-    let mcp_path = data_root.join("mcp.json");
-    if !mcp_path.exists() {
+    let mcp_paths = collect_mcp_config_paths(&data_root);
+    let existing_paths = mcp_paths
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect::<Vec<_>>();
+    if existing_paths.is_empty() {
         report.push(
             "mcp.config",
             "MCP config",
             CheckStatus::Miss,
-            format!("{} not found", mcp_path.display()),
-            Some("Create mcp.json if you need MCP servers.".to_string()),
+            format!(
+                "{} and {} not found",
+                data_root.join("mcp.json").display(),
+                data_root.join("mcp.d").display()
+            ),
+            Some("Create mcp.json or mcp.d/*.json if you need MCP servers.".to_string()),
         );
         return;
     }
 
-    let content = match std::fs::read_to_string(&mcp_path) {
-        Ok(s) => s,
-        Err(err) => {
-            report.push(
-                "mcp.config",
-                "MCP config",
-                CheckStatus::Fail,
-                format!("failed reading {}: {err}", mcp_path.display()),
-                None,
-            );
-            return;
+    let mut merged_servers: HashMap<String, crate::mcp::McpServerConfig> = HashMap::new();
+    let mut loaded_sources = 0usize;
+    for path in &existing_paths {
+        let content = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(err) => {
+                report.push(
+                    "mcp.config",
+                    "MCP config",
+                    CheckStatus::Fail,
+                    format!("failed reading {}: {err}", path.display()),
+                    None,
+                );
+                continue;
+            }
+        };
+        let parsed: McpConfig = match serde_json::from_str(&content) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                report.push(
+                    "mcp.config",
+                    "MCP config",
+                    CheckStatus::Fail,
+                    format!("invalid JSON in {}: {err}", path.display()),
+                    Some("Validate MCP JSON format and key names.".to_string()),
+                );
+                continue;
+            }
+        };
+        loaded_sources += 1;
+        for (name, server) in parsed.mcp_servers {
+            merged_servers.insert(name, server);
         }
-    };
-
-    let parsed: McpConfig = match serde_json::from_str(&content) {
-        Ok(cfg) => cfg,
-        Err(err) => {
-            report.push(
-                "mcp.config",
-                "MCP config",
-                CheckStatus::Fail,
-                format!("invalid JSON in {}: {err}", mcp_path.display()),
-                Some("Validate mcp.json format and key names.".to_string()),
-            );
-            return;
-        }
-    };
+    }
+    if loaded_sources == 0 {
+        return;
+    }
 
     report.push(
         "mcp.config",
         "MCP config",
         CheckStatus::Pass,
         format!(
-            "loaded {} with {} server(s)",
-            mcp_path.display(),
-            parsed.mcp_servers.len()
+            "loaded {} source file(s) with {} merged server(s)",
+            loaded_sources,
+            merged_servers.len()
         ),
         None,
     );
 
-    for (name, server) in &parsed.mcp_servers {
+    let mut names = merged_servers.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        let Some(server) = merged_servers.get(&name) else {
+            continue;
+        };
         let transport = server.transport.trim().to_ascii_lowercase();
         if transport == "streamable_http" || transport == "http" {
             if server.endpoint.trim().is_empty() {
@@ -676,6 +700,22 @@ fn check_mcp_dependencies(report: &mut DoctorReport) {
             );
         }
     }
+}
+
+fn collect_mcp_config_paths(data_root: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![data_root.join("mcp.json")];
+    let mcp_dir = data_root.join("mcp.d");
+    let mut fragments = match std::fs::read_dir(&mcp_dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    fragments.sort();
+    paths.extend(fragments);
+    paths
 }
 
 fn check_sandbox_config(report: &mut DoctorReport) {

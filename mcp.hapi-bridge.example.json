@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "hapi_bridge": {
+      "transport": "streamable_http",
+      "endpoint": "http://127.0.0.1:3010/mcp",
+      "request_timeout_secs": 180,
+      "max_retries": 1,
+      "maxConcurrentRequests": 2,
+      "queueWaitMs": 500,
+      "rateLimitPerMinute": 60
+    }
+  }
+}

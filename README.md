@@ -80,7 +80,7 @@ Machine-readable output for support tickets:
 microclaw doctor --json
 ```
 
-Checks include PATH, shell runtime, `agent-browser`, PowerShell policy (Windows), and MCP command dependencies from `<data_dir>/mcp.json`.
+Checks include PATH, shell runtime, `agent-browser`, PowerShell policy (Windows), and MCP command dependencies from `<data_dir>/mcp.json` plus `<data_dir>/mcp.d/*.json`.
 
 Sandbox-only diagnostics:
 
@@ -306,7 +306,7 @@ Unavailable skills are filtered automatically by platform/dependencies, so unsup
 
 ## MCP
 
-MicroClaw supports MCP servers configured in `<data_dir>/mcp.json` with protocol negotiation and configurable transport.
+MicroClaw supports MCP servers configured in `<data_dir>/mcp.json` and optional fragments in `<data_dir>/mcp.d/*.json` with protocol negotiation and configurable transport.
 
 - Default protocol version: `2025-11-05` (overridable globally or per server)
 - Supported transports: `stdio`, `streamable_http`
@@ -321,6 +321,13 @@ Full example (includes optional remote streamable HTTP server):
 
 ```sh
 cp mcp.example.json <data_dir>/mcp.json
+```
+
+For sidecar-style integrations (for example a separate HAPI bridge process), prefer a dedicated fragment:
+
+```sh
+mkdir -p <data_dir>/mcp.d
+cp mcp.hapi-bridge.example.json <data_dir>/mcp.d/hapi-bridge.json
 ```
 
 Example:
@@ -348,7 +355,7 @@ To give your agent access to a real browser with your existing logins (cookies, 
 
 1. Install the **Playwright MCP Bridge** extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/playwright-mcp-bridge)
 2. Click the extension icon and copy the `PLAYWRIGHT_MCP_EXTENSION_TOKEN`
-3. Add to your `mcp.json`:
+3. Add to your `mcp.json` (or `<data_dir>/mcp.d/playwright.json`):
 
 ```json
 {

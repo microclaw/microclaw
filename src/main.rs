@@ -3,7 +3,7 @@ use microclaw::error::MicroClawError;
 use microclaw::{
     builtin_skills, db, doctor, gateway, hooks, logging, mcp, memory, runtime, setup, skills,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -139,6 +139,22 @@ fn migrate_legacy_skills_dir(legacy_dir: &Path, preferred_dir: &Path) {
             );
         }
     }
+}
+
+fn collect_mcp_config_paths(data_root: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![data_root.join("mcp.json")];
+    let mcp_dir = data_root.join("mcp.d");
+    let mut fragments = match std::fs::read_dir(&mcp_dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    fragments.sort();
+    paths.extend(fragments);
+    paths
 }
 
 async fn reembed_memories() -> anyhow::Result<()> {
@@ -316,10 +332,10 @@ async fn main() -> anyhow::Result<()> {
         discovered.len()
     );
 
-    // Initialize MCP servers (optional, configured via <data_root>/mcp.json)
-    let mcp_config_path = data_root_dir.join("mcp.json").to_string_lossy().to_string();
+    // Initialize MCP servers (optional, configured via <data_root>/mcp.json and <data_root>/mcp.d/*.json)
+    let mcp_config_paths = collect_mcp_config_paths(&data_root_dir);
     let mcp_manager =
-        mcp::McpManager::from_config_file(&mcp_config_path, config.mcp_request_timeout_secs())
+        mcp::McpManager::from_config_paths(&mcp_config_paths, config.mcp_request_timeout_secs())
             .await;
     let mcp_tool_count: usize = mcp_manager.all_tools().len();
     if mcp_tool_count > 0 {

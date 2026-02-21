@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
@@ -1031,37 +1032,52 @@ pub struct McpManager {
 
 impl McpManager {
     pub async fn from_config_file(path: &str, default_request_timeout_secs: u64) -> Self {
+        Self::from_config_paths(&[PathBuf::from(path)], default_request_timeout_secs).await
+    }
+
+    pub async fn from_config_paths(paths: &[PathBuf], default_request_timeout_secs: u64) -> Self {
         let default_request_timeout_secs =
             resolve_request_timeout_secs(None, default_request_timeout_secs);
-        let config_str = match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(_) => {
-                // Config file not found is normal — MCP is optional
-                return McpManager {
-                    servers: Vec::new(),
-                };
-            }
-        };
 
-        let config: McpConfig = match serde_json::from_str(&config_str) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to parse MCP config {path}: {e}");
-                return McpManager {
-                    servers: Vec::new(),
-                };
+        let mut merged_default_protocol_version: Option<String> = None;
+        let mut merged_servers: HashMap<String, McpServerConfig> = HashMap::new();
+        let mut loaded_any_config = false;
+        for path in paths {
+            let Some(config) = load_config_from_path(path) else {
+                continue;
+            };
+            loaded_any_config = true;
+            if let Some(protocol_version) = config.default_protocol_version {
+                merged_default_protocol_version = Some(protocol_version);
             }
-        };
+            for (name, server_cfg) in config.mcp_servers {
+                if merged_servers.insert(name.clone(), server_cfg).is_some() {
+                    warn!(
+                        "MCP server '{}' overridden by later config source '{}'",
+                        name,
+                        path.display()
+                    );
+                }
+            }
+        }
+        if !loaded_any_config {
+            // Config file not found is normal — MCP is optional
+            return McpManager {
+                servers: Vec::new(),
+            };
+        }
 
         let mut servers = Vec::new();
-        for (name, server_config) in &config.mcp_servers {
+        let mut entries: Vec<(String, McpServerConfig)> = merged_servers.into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, server_config) in entries {
             info!("Connecting to MCP server '{name}'...");
             match tokio::time::timeout(
                 Duration::from_secs(30),
                 McpServer::connect(
-                    name,
-                    server_config,
-                    config.default_protocol_version.as_deref(),
+                    &name,
+                    &server_config,
+                    merged_default_protocol_version.as_deref(),
                     default_request_timeout_secs,
                 ),
             )
@@ -1106,6 +1122,20 @@ impl McpManager {
             }
         }
         tools
+    }
+}
+
+fn load_config_from_path(path: &Path) -> Option<McpConfig> {
+    let config_str = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    match serde_json::from_str::<McpConfig>(&config_str) {
+        Ok(cfg) => Some(cfg),
+        Err(e) => {
+            error!("Failed to parse MCP config {}: {e}", path.display());
+            None
+        }
     }
 }
 
