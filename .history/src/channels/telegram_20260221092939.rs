@@ -301,31 +301,6 @@ pub async fn start_telegram_bot(
 
     Ok(())
 }
-
-/// Helper function to check if a private chat message is allowed
-/// Returns true if allowed, false if denied (and logs warning)
-fn check_private_chat_access(
-    db_chat_type: &str,
-    allowed_user_ids: &[i64],
-    sender_user_id: Option<i64>,
-    raw_chat_id: i64,
-) -> bool {
-    if db_chat_type == "telegram_private" && !allowed_user_ids.is_empty() {
-        let Some(user_id) = sender_user_id else {
-            warn!("Ignoring private Telegram message without sender user id in chat {raw_chat_id}");
-            return false;
-        };
-        if !allowed_user_ids.contains(&user_id) {
-            warn!(
-                "Ignoring private Telegram message from non-allowlisted user_id={} in chat {}",
-                user_id, raw_chat_id
-            );
-            return false;
-        }
-    }
-    true
-}
-
 async fn handle_message(
     bot: Bot,
     msg: teloxide::types::Message,
@@ -353,16 +328,23 @@ async fn handle_message(
     let tg_bot_username = tg_ctx.bot_username.clone();
     let tg_allowed_groups = tg_ctx.allowed_groups.clone();
     let tg_allowed_user_ids = tg_ctx.allowed_user_ids.clone();
-    let sender_user_id = msg.from.as_ref().and_then(|u| i64::try_from(u.id.0).ok());
+    let sender_user_id = msg
+        .from
+        .as_ref()
+        .and_then(|u| i64::try_from(u.id.0).ok());
 
-    // Security Check: Enforce allowlist for private chats early
-    if !check_private_chat_access(
-        db_chat_type,
-        &tg_allowed_user_ids,
-        sender_user_id,
-        raw_chat_id,
-    ) {
-        return Ok(());
+    if db_chat_type == "telegram_private" && !tg_allowed_user_ids.is_empty() {
+        let Some(user_id) = sender_user_id else {
+            tracing::warn!("Ignoring private Telegram message without sender user id in chat {raw_chat_id}");
+            return Ok(());
+        };
+        if !tg_allowed_user_ids.contains(&user_id) {
+            tracing::warn!(
+                "Ignoring private Telegram message from non-allowlisted user_id={} in chat {}",
+                user_id, raw_chat_id
+            );
+            return Ok(());
+        }
     }
 
     // Extract content: text, photo, or voice
@@ -1877,50 +1859,5 @@ mod tests {
         assert_eq!(runtimes[0].1.bot_username, "legacy_bot");
         assert_eq!(runtimes[0].1.allowed_groups, vec![7, 8]);
         assert_eq!(runtimes[0].1.allowed_user_ids, vec![42, 43]);
-    }
-
-    #[test]
-    fn test_check_private_chat_access() {
-        let allowed_ids = vec![123, 456];
-        
-        // Private chat, allowed user -> Pass
-        assert!(check_private_chat_access(
-            "telegram_private",
-            &allowed_ids,
-            Some(123),
-            999
-        ));
-
-        // Private chat, non-allowed user -> Fail
-        assert!(!check_private_chat_access(
-            "telegram_private",
-            &allowed_ids,
-            Some(789),
-            999
-        ));
-
-        // Private chat, no user ID -> Fail
-        assert!(!check_private_chat_access(
-            "telegram_private",
-            &allowed_ids,
-            None,
-            999
-        ));
-
-        // Private chat, empty allowlist -> Pass (open)
-        assert!(check_private_chat_access(
-            "telegram_private",
-            &[],
-            Some(789),
-            999
-        ));
-
-        // Group chat -> Pass (this check only enforces private chat allowlist)
-        assert!(check_private_chat_access(
-            "telegram_group",
-            &allowed_ids,
-            Some(789),
-            999
-        ));
     }
 }
