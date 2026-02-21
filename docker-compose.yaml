@@ -7,14 +7,15 @@ services:
     command: ["microclaw", "start"]
     stdin_open: true
     tty: true
+    init: true
     restart: unless-stopped
     volumes:
-      - ./microclaw.config.yaml:/app/microclaw.config.yaml
-      - ./AGENTS.md:/app/AGENTS.md
-      - ./CLAUDE.md:/app/CLAUDE.md
-      - ./data:/app/data
+      - ./microclaw.config.yaml:/app/microclaw.config.yaml:ro
+      # Default data_dir resolves to ~/.microclaw; persist it on the host.
+      - ./data:/home/microclaw/.microclaw
       - ./tmp:/app/tmp
     environment:
       - RUST_LOG=info
+      - HOME=/home/microclaw
     ports:
       - "127.0.0.1:10961:10961" # Uncomment and adjust if you plan to use MicroClaw's web UI
