@@ -624,13 +624,16 @@ microclaw start
 ```sh
 microclaw gateway install
 microclaw gateway status
+microclaw gateway status --json
 ```
 
 Manage service lifecycle:
 
 ```sh
+microclaw gateway install --force
 microclaw gateway start
 microclaw gateway stop
+microclaw gateway restart
 microclaw gateway logs 200
 microclaw gateway uninstall
 ```
@@ -639,7 +642,7 @@ Notes:
 - macOS uses `launchd` user agents.
 - Linux uses `systemd --user`.
 - Runtime logs are written to `<data_dir>/runtime/logs/`.
-- Log file format is hourly: `microclaw-YYYY-MM-DD-HH.log`.
+- Gateway service stdout/stderr files are `microclaw-gateway.log` and `microclaw-gateway.error.log`.
 - Logs older than 30 days are deleted automatically.
 
 ## Configuration
