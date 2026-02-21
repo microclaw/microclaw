@@ -1,0 +1,27 @@
+# VCS and editor metadata
+.git
+.github
+.history
+.DS_Store
+
+# Build outputs and caches
+target
+tmp
+working_dir
+coverage
+
+# Local runtime/state data
+data
+microclaw.data
+microclaw.config.yaml
+microclaw.config.yaml.*
+*.db
+*.sqlite
+*.sqlite3
+
+# JS build dependencies
+web/node_modules
+website/node_modules
+
+# Keep Docker context lean by excluding local docs site outputs
+website
