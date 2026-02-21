@@ -93,6 +93,35 @@ type ConfigSelfCheck = {
   security_posture?: SecurityPosture
 }
 
+const DOCS_BASE = 'https://microclaw.ai/docs'
+
+function warningDocUrl(code?: string): string {
+  switch (code) {
+    case 'sandbox_disabled':
+    case 'sandbox_runtime_unavailable':
+    case 'sandbox_mount_allowlist_missing':
+      return `${DOCS_BASE}/configuration#sandbox`
+    case 'auth_password_not_configured':
+    case 'legacy_auth_token_enabled':
+    case 'web_host_not_loopback':
+      return `${DOCS_BASE}/permissions`
+    case 'web_rate_limit_too_high':
+    case 'web_inflight_limit_too_high':
+    case 'web_rate_window_too_small_for_limit':
+    case 'web_session_idle_ttl_too_low':
+      return `${DOCS_BASE}/configuration#web`
+    case 'hooks_max_input_bytes_too_high':
+    case 'hooks_max_output_bytes_too_high':
+      return `${DOCS_BASE}/hooks`
+    case 'otlp_enabled_without_endpoint':
+    case 'otlp_queue_capacity_low':
+    case 'otlp_retry_attempts_too_low':
+      return `${DOCS_BASE}/observability`
+    default:
+      return `${DOCS_BASE}/configuration`
+  }
+}
+
 type ToolStartPayload = {
   tool_use_id: string
   name: string
@@ -1590,26 +1619,40 @@ function App() {
               >
                 <Callout.Text>
                   Config self-check: risk={String(configSelfCheck.risk_level || 'none')}, warnings={Number(configSelfCheck.warning_count || 0)}.
+                  {' '}
+                  <a href={`${DOCS_BASE}/configuration`} target="_blank" rel="noreferrer" className="underline">
+                    Docs
+                  </a>
                 </Callout.Text>
               </Callout.Root>
             ) : null}
             {configSelfCheck?.security_posture ? (
-              <Card className="mb-2 p-3">
-                <Text size="2" weight="bold">Security posture</Text>
-                <Text size="1" color="gray" className="mt-1 block">
-                  sandbox={String(configSelfCheck.security_posture.sandbox_mode || 'off')} | runtime={String(Boolean(configSelfCheck.security_posture.sandbox_runtime_available))} | backend={String(configSelfCheck.security_posture.sandbox_backend || 'auto')}
-                </Text>
-                <Text size="1" color="gray" className="mt-1 block">
-                  mount allowlist: {String(configSelfCheck.security_posture.mount_allowlist?.path || '(default)')} | exists={String(Boolean(configSelfCheck.security_posture.mount_allowlist?.exists))} | has_entries={String(Boolean(configSelfCheck.security_posture.mount_allowlist?.has_entries))}
-                </Text>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {(configSelfCheck.security_posture.execution_policies || []).map((p, idx) => (
-                    <Badge key={`${String(p.tool)}-${idx}`} color={p.risk === 'high' ? 'red' : p.risk === 'medium' ? 'orange' : 'gray'} variant="soft">
-                      {String(p.tool)}: {String(p.policy)}
-                    </Badge>
-                  ))}
-                </div>
-              </Card>
+              <details className="mb-2">
+                <summary className="cursor-pointer text-sm text-[color:var(--gray-11)]">
+                  Security posture details
+                </summary>
+                <Card className="mt-2 p-3">
+                  <Text size="2" weight="bold">
+                    Security posture{' '}
+                    <a href={`${DOCS_BASE}/permissions`} target="_blank" rel="noreferrer" className="underline text-[color:var(--mc-accent)]">
+                      Rules
+                    </a>
+                  </Text>
+                  <Text size="1" color="gray" className="mt-1 block">
+                    sandbox={String(configSelfCheck.security_posture.sandbox_mode || 'off')} | runtime={String(Boolean(configSelfCheck.security_posture.sandbox_runtime_available))} | backend={String(configSelfCheck.security_posture.sandbox_backend || 'auto')}
+                  </Text>
+                  <Text size="1" color="gray" className="mt-1 block">
+                    mount allowlist: {String(configSelfCheck.security_posture.mount_allowlist?.path || '(default)')} | exists={String(Boolean(configSelfCheck.security_posture.mount_allowlist?.exists))} | has_entries={String(Boolean(configSelfCheck.security_posture.mount_allowlist?.has_entries))}
+                  </Text>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(configSelfCheck.security_posture.execution_policies || []).map((p, idx) => (
+                      <Badge key={`${String(p.tool)}-${idx}`} color={p.risk === 'high' ? 'red' : p.risk === 'medium' ? 'orange' : 'gray'} variant="soft">
+                        {String(p.tool)}: {String(p.policy)}
+                      </Badge>
+                    ))}
+                  </div>
+                </Card>
+              </details>
             ) : null}
             {configSelfCheckLoading ? (
               <Text size="1" color="gray" className="mb-2 block">Checking critical config risks...</Text>
@@ -2036,23 +2079,37 @@ function App() {
                           </ConfigFieldCard>
                         </div>
                         {Array.isArray(configSelfCheck?.warnings) && configSelfCheck!.warnings!.length > 0 ? (
-                          <Card className="mt-4 p-3">
-                            <Text size="2" weight="bold">Critical Config Warnings</Text>
-                            <div className="mt-2 space-y-2">
-                              {configSelfCheck!.warnings!.map((w, idx) => (
-                                <Callout.Root
-                                  key={`${w.code || 'warning'}-${idx}`}
-                                  color={w.severity === 'high' ? 'red' : 'orange'}
-                                  size="1"
-                                  variant="soft"
-                                >
-                                  <Callout.Text>
-                                    [{String(w.severity || 'unknown')}] {String(w.code || 'warning')}: {String(w.message || '')}
-                                  </Callout.Text>
-                                </Callout.Root>
-                              ))}
-                            </div>
-                          </Card>
+                          <details className="mt-4">
+                            <summary className="cursor-pointer text-sm text-[color:var(--gray-11)]">
+                              Critical config warnings ({configSelfCheck!.warnings!.length})
+                            </summary>
+                            <Card className="mt-2 p-3">
+                              <Text size="2" weight="bold">Critical Config Warnings</Text>
+                              <div className="mt-2 space-y-2">
+                                {configSelfCheck!.warnings!.map((w, idx) => (
+                                  <Callout.Root
+                                    key={`${w.code || 'warning'}-${idx}`}
+                                    color={w.severity === 'high' ? 'red' : 'orange'}
+                                    size="1"
+                                    variant="soft"
+                                  >
+                                    <Callout.Text>
+                                      [{String(w.severity || 'unknown')}] {String(w.code || 'warning')}: {String(w.message || '')}
+                                      {' '}
+                                      <a
+                                        href={warningDocUrl(w.code)}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="underline"
+                                      >
+                                        Docs
+                                      </a>
+                                    </Callout.Text>
+                                  </Callout.Root>
+                                ))}
+                              </div>
+                            </Card>
+                          </details>
                         ) : null}
                       </div>
                     </Tabs.Content>

@@ -464,7 +464,7 @@ fn default_allowlist_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))?;
-    Some(home.join(".config/microclaw/mount-allowlist.txt"))
+    Some(home.join(".microclaw/sandbox-mount-allowlist.txt"))
 }
 
 fn validate_mount_allowlist(path: &Path, config: &SandboxConfig) -> Result<()> {

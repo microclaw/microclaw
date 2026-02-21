@@ -1102,7 +1102,7 @@ fn check_mount_allowlist(report: &mut DoctorReport) {
 }
 
 fn default_mount_allowlist_path() -> Option<PathBuf> {
-    user_home_dir().map(|h| h.join(".config/microclaw/mount-allowlist.txt"))
+    user_home_dir().map(|h| h.join(".microclaw/sandbox-mount-allowlist.txt"))
 }
 
 fn print_report(report: &DoctorReport) {

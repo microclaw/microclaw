@@ -29,11 +29,11 @@ Policy metadata is enforced before tool execution and surfaced in web config sel
 - Sandbox mount validation:
   - sensitive component blocklist (`.ssh`, `.aws`, `.gnupg`, `.kube`, `.docker`, `.env`, keys, etc.)
   - symlink component rejection
-  - optional external mount allowlist (`~/.config/microclaw/mount-allowlist.txt`)
+  - optional external mount allowlist (`~/.microclaw/sandbox-mount-allowlist.txt`)
 - File path guard:
   - sensitive path deny list
   - symlink validation on existing path prefix
-  - optional external path allowlist (`~/.config/microclaw/path-allowlist.txt`)
+  - optional external path allowlist (`~/.microclaw/sandbox-path-allowlist.txt`)
 
 ## Web Fetch Controls
 

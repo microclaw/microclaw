@@ -321,7 +321,7 @@ fn default_mount_allowlist_path() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from))?;
-    Some(home.join(".config/microclaw/mount-allowlist.txt"))
+    Some(home.join(".microclaw/sandbox-mount-allowlist.txt"))
 }
 
 pub(super) async fn api_update_config(

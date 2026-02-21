@@ -573,7 +573,7 @@ sandbox:
   no_network: true
   require_runtime: false
   # 可选外部白名单文件
-  # mount_allowlist_path: "~/.config/microclaw/mount-allowlist.txt"
+  # mount_allowlist_path: "~/.microclaw/sandbox-mount-allowlist.txt"
 ```
 
 测试步骤：
@@ -594,8 +594,8 @@ microclaw start
   - `require_runtime: false`：降级宿主执行并告警。
   - `require_runtime: true`：直接报错，不降级。
 - 可选加固：
-  - `~/.config/microclaw/mount-allowlist.txt`：沙箱挂载路径白名单。
-  - `~/.config/microclaw/path-allowlist.txt`：文件工具路径白名单。
+  - `~/.microclaw/sandbox-mount-allowlist.txt`：沙箱挂载路径白名单。
+  - `~/.microclaw/sandbox-path-allowlist.txt`：文件工具路径白名单。
 
 ### 支持的 `llm_provider` 值
 

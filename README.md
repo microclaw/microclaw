@@ -750,7 +750,7 @@ sandbox:
   no_network: true
   require_runtime: false
   # optional external allowlist file
-  # mount_allowlist_path: "~/.config/microclaw/mount-allowlist.txt"
+  # mount_allowlist_path: "~/.microclaw/sandbox-mount-allowlist.txt"
 ```
 
 How to test:
@@ -771,8 +771,8 @@ Notes:
   - `require_runtime: false` -> fallback to host with warning.
   - `require_runtime: true` -> command fails fast.
 - Optional hardening:
-  - `~/.config/microclaw/mount-allowlist.txt` for sandbox mount roots.
-  - `~/.config/microclaw/path-allowlist.txt` for file tool path roots.
+  - `~/.microclaw/sandbox-mount-allowlist.txt` for sandbox mount roots.
+  - `~/.microclaw/sandbox-path-allowlist.txt` for file tool path roots.
 
 ### Supported `llm_provider` values
 
