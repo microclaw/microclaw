@@ -28,6 +28,8 @@ pub struct TelegramAccountConfig {
     pub bot_username: String,
     #[serde(default)]
     pub allowed_groups: Vec<i64>,
+    #[serde(default)]
+    pub allowed_user_ids: Vec<i64>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -44,6 +46,8 @@ pub struct TelegramChannelConfig {
     pub bot_username: String,
     #[serde(default)]
     pub allowed_groups: Vec<i64>,
+    #[serde(default)]
+    pub allowed_user_ids: Vec<i64>,
     #[serde(default)]
     pub accounts: HashMap<String, TelegramAccountConfig>,
     #[serde(default)]
@@ -192,6 +196,7 @@ pub struct TelegramRuntimeContext {
     pub channel_name: String,
     pub bot_username: String,
     pub allowed_groups: Vec<i64>,
+    pub allowed_user_ids: Vec<i64>,
 }
 
 pub fn build_telegram_runtime_contexts(
@@ -244,12 +249,18 @@ pub fn build_telegram_runtime_contexts(
         } else {
             account_cfg.allowed_groups.clone()
         };
+        let allowed_user_ids = if account_cfg.allowed_user_ids.is_empty() {
+            tg_cfg.allowed_user_ids.clone()
+        } else {
+            account_cfg.allowed_user_ids.clone()
+        };
         runtimes.push((
             account_cfg.bot_token.clone(),
             TelegramRuntimeContext {
                 channel_name,
                 bot_username,
                 allowed_groups,
+                allowed_user_ids,
             },
         ));
     }
@@ -265,6 +276,7 @@ pub fn build_telegram_runtime_contexts(
                     tg_cfg.bot_username.trim().to_string()
                 },
                 allowed_groups: tg_cfg.allowed_groups.clone(),
+                allowed_user_ids: tg_cfg.allowed_user_ids.clone(),
             },
         ));
     }
@@ -289,6 +301,31 @@ pub async fn start_telegram_bot(
 
     Ok(())
 }
+
+/// Helper function to check if a private chat message is allowed
+/// Returns true if allowed, false if denied (and logs warning)
+fn check_private_chat_access(
+    db_chat_type: &str,
+    allowed_user_ids: &[i64],
+    sender_user_id: Option<i64>,
+    raw_chat_id: i64,
+) -> bool {
+    if db_chat_type == "telegram_private" && !allowed_user_ids.is_empty() {
+        let Some(user_id) = sender_user_id else {
+            warn!("Ignoring private Telegram message without sender user id in chat {raw_chat_id}");
+            return false;
+        };
+        if !allowed_user_ids.contains(&user_id) {
+            warn!(
+                "Ignoring private Telegram message from non-allowlisted user_id={} in chat {}",
+                user_id, raw_chat_id
+            );
+            return false;
+        }
+    }
+    true
+}
+
 async fn handle_message(
     bot: Bot,
     msg: teloxide::types::Message,
@@ -315,6 +352,18 @@ async fn handle_message(
     let tg_channel_name = tg_ctx.channel_name.clone();
     let tg_bot_username = tg_ctx.bot_username.clone();
     let tg_allowed_groups = tg_ctx.allowed_groups.clone();
+    let tg_allowed_user_ids = tg_ctx.allowed_user_ids.clone();
+    let sender_user_id = msg.from.as_ref().and_then(|u| i64::try_from(u.id.0).ok());
+
+    // Security Check: Enforce allowlist for private chats early
+    if !check_private_chat_access(
+        db_chat_type,
+        &tg_allowed_user_ids,
+        sender_user_id,
+        raw_chat_id,
+    ) {
+        return Ok(());
+    }
 
     // Extract content: text, photo, or voice
     let mut text = msg.text().unwrap_or("").to_string();
@@ -596,6 +645,7 @@ async fn handle_message(
     if text.trim().is_empty() && image_data.is_none() && document_saved_path.is_none() {
         return Ok(());
     }
+
     let sender_name = msg
         .from
         .as_ref()
@@ -1792,21 +1842,7 @@ mod tests {
         let mut cfg = crate::config::Config::test_defaults();
         cfg.bot_username = "global_bot".to_string();
         cfg.channels = serde_yaml::from_str(
-            r#"
-telegram:
-  enabled: true
-  default_account: "sales"
-  accounts:
-    sales:
-      enabled: true
-      bot_token: "tg_sales"
-      bot_username: "sales_bot"
-      allowed_groups: [101]
-    ops:
-      enabled: true
-      bot_token: "tg_ops"
-      allowed_groups: [202]
-"#,
+                        r#"telegram: { enabled: true, default_account: "sales", allowed_user_ids: [11], accounts: { sales: { enabled: true, bot_token: "tg_sales", bot_username: "sales_bot", allowed_user_ids: [1001], allowed_groups: [101] }, ops: { enabled: true, bot_token: "tg_ops", allowed_groups: [202] } } }"#,
         )
         .unwrap();
 
@@ -1816,11 +1852,13 @@ telegram:
         assert_eq!(runtimes[0].1.channel_name, "telegram.ops");
         assert_eq!(runtimes[0].1.bot_username, "global_bot");
         assert_eq!(runtimes[0].1.allowed_groups, vec![202]);
+        assert_eq!(runtimes[0].1.allowed_user_ids, vec![11]);
 
         assert_eq!(runtimes[1].0, "tg_sales");
         assert_eq!(runtimes[1].1.channel_name, "telegram");
         assert_eq!(runtimes[1].1.bot_username, "sales_bot");
         assert_eq!(runtimes[1].1.allowed_groups, vec![101]);
+        assert_eq!(runtimes[1].1.allowed_user_ids, vec![1001]);
     }
 
     #[test]
@@ -1828,13 +1866,7 @@ telegram:
         let mut cfg = crate::config::Config::test_defaults();
         cfg.bot_username = "global_bot".to_string();
         cfg.channels = serde_yaml::from_str(
-            r#"
-telegram:
-  enabled: true
-  bot_token: "legacy_tg"
-  bot_username: "legacy_bot"
-  allowed_groups: [7,8]
-"#,
+                        r#"telegram: { enabled: true, bot_token: "legacy_tg", bot_username: "legacy_bot", allowed_groups: [7,8], allowed_user_ids: [42,43] }"#,
         )
         .unwrap();
 
@@ -1844,5 +1876,51 @@ telegram:
         assert_eq!(runtimes[0].1.channel_name, "telegram");
         assert_eq!(runtimes[0].1.bot_username, "legacy_bot");
         assert_eq!(runtimes[0].1.allowed_groups, vec![7, 8]);
+        assert_eq!(runtimes[0].1.allowed_user_ids, vec![42, 43]);
+    }
+
+    #[test]
+    fn test_check_private_chat_access() {
+        let allowed_ids = vec![123, 456];
+
+        // Private chat, allowed user -> Pass
+        assert!(check_private_chat_access(
+            "telegram_private",
+            &allowed_ids,
+            Some(123),
+            999
+        ));
+
+        // Private chat, non-allowed user -> Fail
+        assert!(!check_private_chat_access(
+            "telegram_private",
+            &allowed_ids,
+            Some(789),
+            999
+        ));
+
+        // Private chat, no user ID -> Fail
+        assert!(!check_private_chat_access(
+            "telegram_private",
+            &allowed_ids,
+            None,
+            999
+        ));
+
+        // Private chat, empty allowlist -> Pass (open)
+        assert!(check_private_chat_access(
+            "telegram_private",
+            &[],
+            Some(789),
+            999
+        ));
+
+        // Group chat -> Pass (this check only enforces private chat allowlist)
+        assert!(check_private_chat_access(
+            "telegram_group",
+            &allowed_ids,
+            Some(789),
+            999
+        ));
     }
 }

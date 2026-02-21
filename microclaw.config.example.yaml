@@ -83,6 +83,16 @@ channels:
     bot_username: ""
     # Telegram group allowlist (empty = allow all groups)
     # allowed_groups: []
+    # Telegram DM allowlist by sender user_id (empty = allow all users in private chats)
+    # allowed_user_ids: [123456789]
+    # Multi-account example:
+    # default_account: "main"
+    # accounts:
+    #   main:
+    #     enabled: true
+    #     bot_token: "123456:ABC-DEF..."
+    #     bot_username: "my_bot"
+    #     allowed_user_ids: [123456789]
   discord:
     enabled: false
     bot_token: ""
