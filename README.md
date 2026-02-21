@@ -691,6 +691,7 @@ All configuration is via `microclaw.config.yaml`:
 | `channels.telegram.default_account` | No | unset | Default Telegram account ID in multi-account mode |
 | `channels.telegram.accounts.<id>.bot_token` | No* | unset | Telegram bot token for a specific account (recommended multi-account mode) |
 | `channels.telegram.accounts.<id>.bot_username` | No | unset | Telegram username for a specific account (without `@`) |
+| `channels.telegram.accounts.<id>.model` | No | unset | Optional per-bot model override for that Telegram account |
 | `channels.telegram.allowed_user_ids` | No | `[]` | Optional Telegram private chat sender allowlist at channel scope |
 | `channels.telegram.accounts.<id>.allowed_groups` | No | `[]` | Optional Telegram group allowlist scoped to one account |
 | `channels.telegram.accounts.<id>.allowed_user_ids` | No | `[]` | Optional Telegram private chat sender allowlist scoped to one account (overrides channel scope) |
@@ -699,6 +700,7 @@ All configuration is via `microclaw.config.yaml`:
 | `channels.discord.accounts.<id>.bot_token` | No* | unset | Discord bot token for a specific account |
 | `channels.discord.accounts.<id>.allowed_channels` | No | `[]` | Optional Discord channel allowlist scoped to one account |
 | `channels.discord.accounts.<id>.no_mention` | No | `false` | If true, that Discord account responds in guild channels without @mention |
+| `channels.discord.accounts.<id>.model` | No | unset | Optional per-bot model override for that Discord account |
 | `discord_allowed_channels` | No | `[]` | Discord channel ID allowlist; empty means no channel restriction |
 | `api_key` | Yes* | -- | LLM API key (`ollama` can leave this empty; `openai-codex` supports OAuth or `api_key`) |
 | `bot_username` | No | -- | Telegram bot username (without @; needed for Telegram group mentions) |
@@ -728,11 +730,13 @@ All configuration is via `microclaw.config.yaml`:
 | `channels.slack.accounts.<id>.bot_token` | No* | unset | Slack bot token for a specific account |
 | `channels.slack.accounts.<id>.app_token` | No* | unset | Slack app token (Socket Mode) for a specific account |
 | `channels.slack.accounts.<id>.allowed_channels` | No | `[]` | Optional Slack channel allowlist scoped to one account |
+| `channels.slack.accounts.<id>.model` | No | unset | Optional per-bot model override for that Slack account |
 | `channels.feishu.default_account` | No | unset | Default Feishu/Lark account ID in multi-account mode |
 | `channels.feishu.accounts.<id>.app_id` | No* | unset | Feishu/Lark app ID for a specific account |
 | `channels.feishu.accounts.<id>.app_secret` | No* | unset | Feishu/Lark app secret for a specific account |
 | `channels.feishu.accounts.<id>.domain` | No | `feishu` | Feishu domain for that account (`feishu`, `lark`, or custom URL) |
 | `channels.feishu.accounts.<id>.allowed_chats` | No | `[]` | Optional Feishu chat allowlist scoped to one account |
+| `channels.feishu.accounts.<id>.model` | No | unset | Optional per-bot model override for that Feishu/Lark account |
 | `channels.irc.server` | No* | unset | IRC server host/IP |
 | `channels.irc.port` | No | `"6667"` | IRC server port |
 | `channels.irc.nick` | No* | unset | IRC bot nick |
@@ -740,6 +744,7 @@ All configuration is via `microclaw.config.yaml`:
 | `channels.irc.real_name` | No | `"MicroClaw"` | IRC real name (sent in USER command) |
 | `channels.irc.channels` | No* | unset | Comma-separated channel list (for example `#general,#ops`) |
 | `channels.irc.password` | No | unset | Optional IRC server password |
+| `channels.irc.model` | No | unset | Optional model override for IRC bot |
 | `channels.irc.mention_required` | No | `"true"` | In channel chats, require mention before replying |
 | `channels.irc.tls` | No | `"false"` | Enable IRC TLS connection |
 | `channels.irc.tls_server_name` | No | unset | Optional TLS SNI/server name override |

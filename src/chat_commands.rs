@@ -53,12 +53,24 @@ pub async fn handle_chat_command(
 
     if trimmed == "/status" {
         return Some(
-            build_status_response(state.db.clone(), &state.config, chat_id, caller_channel).await,
+            build_status_response(
+                state.db.clone(),
+                &state.config,
+                &state.llm_model_overrides,
+                chat_id,
+                caller_channel,
+            )
+            .await,
         );
     }
 
     if trimmed == "/model" || trimmed.starts_with("/model ") {
-        return Some(build_model_response(&state.config, trimmed));
+        return Some(build_model_response(
+            &state.config,
+            &state.llm_model_overrides,
+            caller_channel,
+            trimmed,
+        ));
     }
 
     None
@@ -67,11 +79,16 @@ pub async fn handle_chat_command(
 pub async fn build_status_response(
     db: Arc<Database>,
     config: &Config,
+    llm_model_overrides: &std::collections::HashMap<String, String>,
     chat_id: i64,
     caller_channel: &str,
 ) -> String {
     let provider = config.llm_provider.trim();
-    let model = config.model.trim();
+    let model = llm_model_overrides
+        .get(caller_channel)
+        .map(String::as_str)
+        .unwrap_or(config.model.as_str())
+        .trim();
 
     let session_line = match call_blocking(db.clone(), move |db| db.load_session(chat_id)).await {
         Ok(Some((json, updated_at))) => {
@@ -124,9 +141,18 @@ pub async fn build_status_response(
     )
 }
 
-pub fn build_model_response(config: &Config, command_text: &str) -> String {
+pub fn build_model_response(
+    config: &Config,
+    llm_model_overrides: &std::collections::HashMap<String, String>,
+    caller_channel: &str,
+    command_text: &str,
+) -> String {
     let provider = config.llm_provider.trim();
-    let model = config.model.trim();
+    let model = llm_model_overrides
+        .get(caller_channel)
+        .map(String::as_str)
+        .unwrap_or(config.model.as_str())
+        .trim();
     let requested = command_text
         .trim()
         .strip_prefix("/model")

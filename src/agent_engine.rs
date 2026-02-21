@@ -431,6 +431,11 @@ pub(crate) async fn process_with_agent_impl(
     // Agentic tool-use loop
     let mut failed_tools: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut empty_visible_reply_retry_attempted = false;
+    let effective_model = state
+        .llm_model_overrides
+        .get(context.caller_channel)
+        .cloned()
+        .unwrap_or_else(|| state.config.model.clone());
     for iteration in 0..state.config.max_tool_iterations {
         if let Some(tx) = event_tx {
             let _ = tx.send(AgentEvent::Iteration {
@@ -480,11 +485,12 @@ pub(crate) async fn process_with_agent_impl(
             });
             let response = state
                 .llm
-                .send_message_stream(
+                .send_message_stream_with_model(
                     &system_prompt,
                     messages.clone(),
                     Some(tool_defs.clone()),
                     Some(&llm_tx),
+                    Some(&effective_model),
                 )
                 .await?;
             drop(llm_tx);
@@ -493,14 +499,19 @@ pub(crate) async fn process_with_agent_impl(
         } else {
             state
                 .llm
-                .send_message(&system_prompt, messages.clone(), Some(tool_defs.clone()))
+                .send_message_with_model(
+                    &system_prompt,
+                    messages.clone(),
+                    Some(tool_defs.clone()),
+                    Some(&effective_model),
+                )
                 .await?
         };
 
         if let Some(usage) = &response.usage {
             let channel = context.caller_channel.to_string();
             let provider = state.config.llm_provider.clone();
-            let model = state.config.model.clone();
+            let model = effective_model.clone();
             let input_tokens = i64::from(usage.input_tokens);
             let output_tokens = i64::from(usage.output_tokens);
             let _ = call_blocking(state.db.clone(), move |db| {
@@ -1402,13 +1413,21 @@ async fn compact_messages(
         role: "user".into(),
         content: MessageContent::Text(format!("{summarize_prompt}\n\n---\n\n{summary_input}")),
     }];
+    let effective_model = state
+        .llm_model_overrides
+        .get(caller_channel)
+        .cloned()
+        .unwrap_or_else(|| state.config.model.clone());
 
     let timeout_secs = state.config.compaction_timeout_secs;
     let summary = match tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
-        state
-            .llm
-            .send_message("You are a helpful summarizer.", summarize_messages, None),
+        state.llm.send_message_with_model(
+            "You are a helpful summarizer.",
+            summarize_messages,
+            None,
+            Some(&effective_model),
+        ),
     )
     .await
     {
@@ -1416,7 +1435,7 @@ async fn compact_messages(
             if let Some(usage) = &response.usage {
                 let channel = caller_channel.to_string();
                 let provider = state.config.llm_provider.clone();
-                let model = state.config.model.clone();
+                let model = effective_model.clone();
                 let input_tokens = i64::from(usage.input_tokens);
                 let output_tokens = i64::from(usage.output_tokens);
                 let _ = call_blocking(state.db.clone(), move |db| {
@@ -1607,6 +1626,7 @@ mod tests {
             skills: SkillManager::from_skills_dir(&cfg.skills_data_dir()),
             hooks: Arc::new(crate::hooks::HookManager::from_config(&cfg)),
             llm,
+            llm_model_overrides: std::collections::HashMap::new(),
             embedding: None,
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),

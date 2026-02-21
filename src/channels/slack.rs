@@ -26,6 +26,8 @@ pub struct SlackAccountConfig {
     pub allowed_channels: Vec<String>,
     #[serde(default)]
     pub bot_username: String,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -42,6 +44,8 @@ pub struct SlackChannelConfig {
     pub app_token: String,
     #[serde(default)]
     pub allowed_channels: Vec<String>,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub accounts: HashMap<String, SlackAccountConfig>,
     #[serde(default)]
@@ -101,12 +105,19 @@ pub fn build_slack_runtime_contexts(config: &crate::config::Config) -> Vec<Slack
         } else {
             account_cfg.bot_username.trim().to_string()
         };
+        let model = account_cfg
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
         runtimes.push(SlackRuntimeContext {
             channel_name,
             app_token: account_cfg.app_token.clone(),
             bot_token: account_cfg.bot_token.clone(),
             allowed_channels: account_cfg.allowed_channels.clone(),
             bot_username,
+            model,
         });
     }
 
@@ -120,6 +131,12 @@ pub fn build_slack_runtime_contexts(config: &crate::config::Config) -> Vec<Slack
             bot_token: slack_cfg.bot_token,
             allowed_channels: slack_cfg.allowed_channels,
             bot_username: config.bot_username_for_channel("slack"),
+            model: slack_cfg
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned),
         });
     }
 
@@ -372,6 +389,7 @@ pub struct SlackRuntimeContext {
     pub bot_token: String,
     pub allowed_channels: Vec<String>,
     pub bot_username: String,
+    pub model: Option<String>,
 }
 
 pub async fn start_slack_bot(app_state: Arc<AppState>, runtime: SlackRuntimeContext) {

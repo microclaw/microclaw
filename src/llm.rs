@@ -162,6 +162,16 @@ pub trait LlmProvider: Send + Sync {
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<MessagesResponse, MicroClawError>;
 
+    async fn send_message_with_model(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        _model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        self.send_message(system, messages, tools).await
+    }
+
     async fn send_message_stream(
         &self,
         system: &str,
@@ -178,6 +188,18 @@ pub trait LlmProvider: Send + Sync {
             }
         }
         Ok(response)
+    }
+
+    async fn send_message_stream_with_model(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        text_tx: Option<&UnboundedSender<String>>,
+        _model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        self.send_message_stream(system, messages, tools, text_tx)
+            .await
     }
 }
 
@@ -601,10 +623,25 @@ impl LlmProvider for AnthropicProvider {
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<MessagesResponse, MicroClawError> {
+        self.send_message_with_model(system, messages, tools, None)
+            .await
+    }
+
+    async fn send_message_with_model(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
         let messages = sanitize_messages(messages);
+        let model = model_override
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or(&self.model);
 
         let request = MessagesRequest {
-            model: self.model.clone(),
+            model: model.to_string(),
             max_tokens: self.max_tokens,
             system: system.to_string(),
             messages,
@@ -665,9 +702,25 @@ impl LlmProvider for AnthropicProvider {
         tools: Option<Vec<ToolDefinition>>,
         text_tx: Option<&UnboundedSender<String>>,
     ) -> Result<MessagesResponse, MicroClawError> {
+        self.send_message_stream_with_model(system, messages, tools, text_tx, None)
+            .await
+    }
+
+    async fn send_message_stream_with_model(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        text_tx: Option<&UnboundedSender<String>>,
+        model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
         let messages = sanitize_messages(messages);
+        let model = model_override
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or(&self.model);
         let request = MessagesRequest {
-            model: self.model.clone(),
+            model: model.to_string(),
             max_tokens: self.max_tokens,
             system: system.to_string(),
             messages,
@@ -906,8 +959,25 @@ impl LlmProvider for OpenAiProvider {
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<MessagesResponse, MicroClawError> {
+        self.send_message_with_model(system, messages, tools, None)
+            .await
+    }
+
+    async fn send_message_with_model(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        let model = model_override
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or(&self.model);
         if self.is_openai_codex {
-            return self.send_codex_message(system, messages, tools).await;
+            return self
+                .send_codex_message(system, messages, tools, model)
+                .await;
         }
 
         let oai_messages = if self.enable_reasoning_content_bridge {
@@ -917,7 +987,7 @@ impl LlmProvider for OpenAiProvider {
         };
 
         let mut body = json!({
-            "model": self.model,
+            "model": model,
             "messages": oai_messages,
         });
         set_output_token_limit(
@@ -993,8 +1063,26 @@ impl LlmProvider for OpenAiProvider {
         tools: Option<Vec<ToolDefinition>>,
         text_tx: Option<&UnboundedSender<String>>,
     ) -> Result<MessagesResponse, MicroClawError> {
+        self.send_message_stream_with_model(system, messages, tools, text_tx, None)
+            .await
+    }
+
+    async fn send_message_stream_with_model(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        text_tx: Option<&UnboundedSender<String>>,
+        model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        let model = model_override
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or(&self.model);
         if self.is_openai_codex {
-            let response = self.send_codex_message(system, messages, tools).await?;
+            let response = self
+                .send_codex_message(system, messages, tools, model)
+                .await?;
             if let Some(tx) = text_tx {
                 let text = response
                     .content
@@ -1019,7 +1107,7 @@ impl LlmProvider for OpenAiProvider {
         };
 
         let mut body = json!({
-            "model": self.model,
+            "model": model,
             "messages": oai_messages,
             "stream": true,
         });
@@ -1145,6 +1233,7 @@ impl OpenAiProvider {
         system: &str,
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,
+        model: &str,
     ) -> Result<MessagesResponse, MicroClawError> {
         let instructions = if system.trim().is_empty() {
             "You are a helpful assistant."
@@ -1160,7 +1249,7 @@ impl OpenAiProvider {
             }));
         }
         let mut body = json!({
-            "model": self.model,
+            "model": model,
             "input": input,
             "instructions": instructions,
             "store": false,
