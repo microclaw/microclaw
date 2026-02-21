@@ -1178,13 +1178,14 @@ mod tests {
     fn test_render_macos_plist_contains_required_fields() {
         let ctx = test_ctx();
         let plist = render_macos_plist(&ctx);
+        let normalized = plist.replace('\\', "/");
         assert!(plist.contains("<key>Label</key>"));
         assert!(plist.contains(MAC_LABEL));
         assert!(plist.contains("<string>start</string>"));
         assert!(plist.contains("MICROCLAW_GATEWAY"));
         assert!(plist.contains("MICROCLAW_CONFIG"));
-        assert!(plist.contains("/tmp/microclaw/runtime/logs/microclaw-gateway.log"));
-        assert!(plist.contains("/tmp/microclaw/runtime/logs/microclaw-gateway.error.log"));
+        assert!(normalized.contains("/tmp/microclaw/runtime/logs/microclaw-gateway.log"));
+        assert!(normalized.contains("/tmp/microclaw/runtime/logs/microclaw-gateway.error.log"));
     }
 
     #[test]
