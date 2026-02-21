@@ -26,6 +26,23 @@ fn http_client(timeout_secs: u64) -> reqwest::Client {
     client
 }
 
+fn http_client_no_redirect(timeout_secs: u64) -> reqwest::Client {
+    static CLIENTS: OnceLock<Mutex<HashMap<u64, reqwest::Client>>> = OnceLock::new();
+    let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(client) = cache.get(&timeout_secs) {
+        return client.clone();
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("MicroClaw/1.0")
+        .build()
+        .expect("failed to build HTTP client");
+    cache.insert(timeout_secs, client.clone());
+    client
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WebFetchFeedMode {
@@ -236,6 +253,18 @@ fn host_matches_rule(host: &str, rule: &str) -> bool {
     host == rule || host.ends_with(&format!(".{rule}"))
 }
 
+fn resolve_and_validate_redirect_target(
+    current_url: &Url,
+    location: &str,
+    url_validation: &WebFetchUrlValidationConfig,
+) -> Result<Url, String> {
+    let next = current_url
+        .join(location)
+        .map_err(|e| format!("invalid redirect target '{location}': {e}"))?;
+    validate_web_fetch_url(next.as_str(), url_validation.clone())?;
+    Ok(next)
+}
+
 fn feed_cache() -> &'static Mutex<HashMap<String, FeedCacheEntry>> {
     static CACHE: OnceLock<Mutex<HashMap<String, FeedCacheEntry>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -437,10 +466,40 @@ pub async fn fetch_url_with_timeout_and_validation(
     url_validation: WebFetchUrlValidationConfig,
 ) -> Result<String, String> {
     let effective_url_validation = resolve_url_validation_config(url_validation).await?;
-    validate_web_fetch_url(url, effective_url_validation)?;
+    validate_web_fetch_url(url, effective_url_validation.clone())?;
 
-    let client = http_client(timeout_secs.max(1));
-    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    let client = http_client_no_redirect(timeout_secs.max(1));
+    let mut current_url = Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
+    let mut redirects = 0usize;
+
+    let resp = loop {
+        let resp = client
+            .get(current_url.clone())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !resp.status().is_redirection() {
+            break resp;
+        }
+
+        if redirects >= 5 {
+            return Err("too many redirects (max 5)".to_string());
+        }
+        redirects += 1;
+
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .ok_or_else(|| "redirect response missing Location header".to_string())?
+            .to_str()
+            .map_err(|e| format!("invalid redirect Location header: {e}"))?;
+        current_url = resolve_and_validate_redirect_target(
+            &current_url,
+            location,
+            &effective_url_validation,
+        )?;
+    };
 
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
@@ -473,9 +532,12 @@ pub async fn fetch_url(url: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use reqwest::Url;
+
     use super::{
-        resolve_url_validation_config, validate_web_fetch_url, WebFetchFeedFormat,
-        WebFetchFeedMode, WebFetchFeedSource, WebFetchFeedSyncConfig, WebFetchUrlValidationConfig,
+        resolve_and_validate_redirect_target, resolve_url_validation_config,
+        validate_web_fetch_url, WebFetchFeedFormat, WebFetchFeedMode, WebFetchFeedSource,
+        WebFetchFeedSyncConfig, WebFetchUrlValidationConfig,
     };
 
     #[test]
@@ -701,5 +763,26 @@ mod tests {
 
         let resolved = resolve_url_validation_config(cfg).await.unwrap();
         assert!(resolved.denylist_hosts.is_empty());
+    }
+
+    #[test]
+    fn redirect_validation_blocks_denylisted_target() {
+        let current = Url::parse("https://safe.example/start").unwrap();
+        let cfg = WebFetchUrlValidationConfig {
+            denylist_hosts: vec!["blocked.example".to_string()],
+            ..WebFetchUrlValidationConfig::default()
+        };
+        let err =
+            resolve_and_validate_redirect_target(&current, "https://blocked.example/path", &cfg)
+                .unwrap_err();
+        assert!(err.contains("denylisted"));
+    }
+
+    #[test]
+    fn redirect_validation_allows_relative_target() {
+        let current = Url::parse("https://safe.example/start").unwrap();
+        let cfg = WebFetchUrlValidationConfig::default();
+        let next = resolve_and_validate_redirect_target(&current, "/next", &cfg).unwrap();
+        assert_eq!(next.as_str(), "https://safe.example/next");
     }
 }
