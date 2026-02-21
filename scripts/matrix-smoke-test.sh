@@ -7,12 +7,15 @@ PROJECT_NAME="${MATRIX_SMOKE_PROJECT:-microclaw-matrix-smoke}"
 SYNAPSE_PORT="${MATRIX_SMOKE_PORT:-18008}"
 KEEP_ENV="${MATRIX_SMOKE_KEEP:-0}"
 TIMEOUT_SECS="${MATRIX_SMOKE_TIMEOUT_SECS:-45}"
+NO_MENTION_WAIT_SECS="${MATRIX_SMOKE_NO_MENTION_WAIT_SECS:-8}"
 
 COMPOSE_FILE="$WORK_DIR/docker-compose.yaml"
 DATA_DIR="$WORK_DIR/data"
 LOG_FILE="$WORK_DIR/microclaw.log"
 CONFIG_FILE="$WORK_DIR/microclaw.matrix-smoke.yaml"
 STATE_FILE="$WORK_DIR/state.env"
+RUNTIME_ROOT="$WORK_DIR/microclaw.data"
+DB_PATH="$RUNTIME_ROOT/runtime/microclaw.db"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -21,7 +24,7 @@ require_cmd() {
   fi
 }
 
-for cmd in docker curl jq cargo awk sed; do
+for cmd in docker curl jq cargo awk sed sqlite3; do
   require_cmd "$cmd"
 done
 
@@ -40,6 +43,39 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+wait_for_bot_count_gt() {
+  local before="$1"
+  local after="$before"
+  local response=""
+  for _ in $(seq 1 "$TIMEOUT_SECS"); do
+    response="$(curl -sS "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/messages?dir=b&limit=100" -H "Authorization: Bearer $ALICE_TOKEN")"
+    after="$(printf '%s' "$response" | jq '[.chunk[] | select(.type=="m.room.message" and .sender=="@bot:localhost")] | length')"
+    if [[ "$after" -gt "$before" ]]; then
+      LAST_BOT_BODY="$(printf '%s' "$response" | jq -r '.chunk[] | select(.type=="m.room.message" and .sender=="@bot:localhost") | .content.body' | head -n 1)"
+      LAST_BOT_EVENT_ID="$(printf '%s' "$response" | jq -r '.chunk[] | select(.type=="m.room.message" and .sender=="@bot:localhost") | .event_id' | head -n 1)"
+      BOT_COUNT_AFTER_WAIT="$after"
+      return 0
+    fi
+    sleep 1
+  done
+
+  BOT_COUNT_AFTER_WAIT="$after"
+  return 1
+}
+
+wait_for_db_pattern() {
+  local pattern="$1"
+  for _ in $(seq 1 "$TIMEOUT_SECS"); do
+    if [[ -f "$DB_PATH" ]]; then
+      if sqlite3 "$DB_PATH" "SELECT content FROM messages;" 2>/dev/null | grep -Fq "$pattern"; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
 
 cat > "$COMPOSE_FILE" <<YAML
 services:
@@ -125,6 +161,8 @@ curl -sS -X POST "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/join" \
 cat > "$CONFIG_FILE" <<YAML
 llm_provider: "ollama"
 api_key: ""
+data_dir: "${RUNTIME_ROOT}"
+working_dir: "${WORK_DIR}/work"
 web_enabled: false
 channels:
   web:
@@ -134,7 +172,7 @@ channels:
     homeserver_url: "${BASE_URL}"
     access_token: "${BOT_TOKEN}"
     bot_user_id: "@bot:localhost"
-    mention_required: false
+    mention_required: true
     allowed_room_ids:
       - "${ROOM_ID}"
 YAML
@@ -145,6 +183,7 @@ ROOM_ID='${ROOM_ID}'
 ROOM_ID_URI='${ROOM_ID_URI}'
 BOT_TOKEN='${BOT_TOKEN}'
 ALICE_TOKEN='${ALICE_TOKEN}'
+DB_PATH='${DB_PATH}'
 STATE
 
 pushd "$ROOT_DIR" >/dev/null
@@ -154,39 +193,101 @@ popd >/dev/null
 
 sleep 6
 
-BEFORE="$(curl -sS "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/messages?dir=b&limit=50" \
+# 1) mention gating: plain text without mention should not trigger bot reply.
+BASE_BOT_COUNT="$(curl -sS "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/messages?dir=b&limit=100" \
   -H "Authorization: Bearer $ALICE_TOKEN" \
   | jq '[.chunk[] | select(.type=="m.room.message" and .sender=="@bot:localhost")] | length')"
 
 TXN_ID="$(cat /proc/sys/kernel/random/uuid)"
-SEND_RESULT="$(curl -sS -X PUT "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/send/m.room.message/$TXN_ID" \
+curl -sS -X PUT "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/send/m.room.message/$TXN_ID" \
   -H "Authorization: Bearer $ALICE_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"msgtype":"m.text","body":"/skills"}')"
+  -d '{"msgtype":"m.text","body":"hello without mention"}' >/dev/null
 
-AFTER="$BEFORE"
-REPLY=""
-for _ in $(seq 1 "$TIMEOUT_SECS"); do
-  RESP="$(curl -sS "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/messages?dir=b&limit=50" -H "Authorization: Bearer $ALICE_TOKEN")"
-  AFTER="$(printf '%s' "$RESP" | jq '[.chunk[] | select(.type=="m.room.message" and .sender=="@bot:localhost")] | length')"
-  if [[ "$AFTER" -gt "$BEFORE" ]]; then
-    REPLY="$(printf '%s' "$RESP" | jq -r '.chunk[] | select(.type=="m.room.message" and .sender=="@bot:localhost") | .content.body' | head -n 1)"
-    break
-  fi
-  sleep 1
-done
+sleep "$NO_MENTION_WAIT_SECS"
+AFTER_NO_MENTION="$(curl -sS "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/messages?dir=b&limit=100" \
+  -H "Authorization: Bearer $ALICE_TOKEN" \
+  | jq '[.chunk[] | select(.type=="m.room.message" and .sender=="@bot:localhost")] | length')"
 
-if [[ "$AFTER" -le "$BEFORE" ]]; then
-  echo "Matrix smoke test FAILED: bot did not respond within ${TIMEOUT_SECS}s" >&2
-  echo "send_result=$SEND_RESULT" >&2
+if [[ "$AFTER_NO_MENTION" -ne "$BASE_BOT_COUNT" ]]; then
+  echo "Matrix smoke test FAILED: bot replied to non-mentioned message with mention_required=true" >&2
+  echo "before=$BASE_BOT_COUNT after=$AFTER_NO_MENTION" >&2
+  echo "log_file=$LOG_FILE" >&2
+  exit 1
+fi
+
+# 2) mention via Matrix metadata should trigger a bot reply.
+TXN_ID="$(cat /proc/sys/kernel/random/uuid)"
+MENTION_SEND_RESULT="$(curl -sS -X PUT "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/send/m.room.message/$TXN_ID" \
+  -H "Authorization: Bearer $ALICE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"msgtype":"m.text","body":"ping","m.mentions":{"user_ids":["@bot:localhost"]}}')"
+
+LAST_BOT_BODY=""
+LAST_BOT_EVENT_ID=""
+BOT_COUNT_AFTER_WAIT="$AFTER_NO_MENTION"
+wait_for_bot_count_gt "$AFTER_NO_MENTION" || true
+AFTER_MENTION="$BOT_COUNT_AFTER_WAIT"
+if [[ "$AFTER_MENTION" -le "$AFTER_NO_MENTION" ]]; then
+  echo "Matrix smoke test FAILED: bot did not reply to mentioned message within ${TIMEOUT_SECS}s" >&2
+  echo "mention_send_result=$MENTION_SEND_RESULT" >&2
+  echo "log_file=$LOG_FILE" >&2
+  exit 1
+fi
+
+# 3) reaction ingestion: add reaction from alice to the latest bot message and assert DB ingestion.
+if [[ -z "$LAST_BOT_EVENT_ID" || "$LAST_BOT_EVENT_ID" == "null" ]]; then
+  echo "Matrix smoke test FAILED: could not determine last bot event id" >&2
+  exit 1
+fi
+
+REACTION_TXN_ID="$(cat /proc/sys/kernel/random/uuid)"
+REACTION_SEND_RESULT="$(curl -sS -X PUT "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/send/m.reaction/$REACTION_TXN_ID" \
+  -H "Authorization: Bearer $ALICE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"m.relates_to\":{\"rel_type\":\"m.annotation\",\"event_id\":\"$LAST_BOT_EVENT_ID\",\"key\":\"👍\"}}")"
+
+if ! wait_for_db_pattern "[reaction] @alice:localhost reacted 👍"; then
+  echo "Matrix smoke test FAILED: reaction event was not ingested into DB" >&2
+  echo "reaction_send_result=$REACTION_SEND_RESULT" >&2
+  echo "db_path=$DB_PATH" >&2
+  echo "log_file=$LOG_FILE" >&2
+  exit 1
+fi
+
+# 4) attachment ingestion: upload and send file from alice, assert DB contains normalized attachment line.
+UPLOAD_JSON="$(printf 'matrix smoke attachment\n' | curl -sS -X POST "$BASE_URL/_matrix/media/v3/upload?filename=smoke.txt" \
+  -H "Authorization: Bearer $ALICE_TOKEN" \
+  -H 'Content-Type: text/plain' \
+  --data-binary @-)"
+CONTENT_URI="$(printf '%s' "$UPLOAD_JSON" | jq -r '.content_uri')"
+if [[ "$CONTENT_URI" == "null" || -z "$CONTENT_URI" ]]; then
+  echo "Matrix smoke test FAILED: upload did not return content_uri" >&2
+  echo "upload_json=$UPLOAD_JSON" >&2
+  exit 1
+fi
+
+ATTACH_TXN_ID="$(cat /proc/sys/kernel/random/uuid)"
+ATTACH_SEND_RESULT="$(curl -sS -X PUT "$BASE_URL/_matrix/client/v3/rooms/$ROOM_ID_URI/send/m.room.message/$ATTACH_TXN_ID" \
+  -H "Authorization: Bearer $ALICE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"msgtype\":\"m.file\",\"body\":\"smoke.txt\",\"filename\":\"smoke.txt\",\"url\":\"$CONTENT_URI\"}")"
+
+if ! wait_for_db_pattern "[attachment:m.file] smoke.txt ($CONTENT_URI)"; then
+  echo "Matrix smoke test FAILED: attachment event was not ingested into DB" >&2
+  echo "attach_send_result=$ATTACH_SEND_RESULT" >&2
+  echo "db_path=$DB_PATH" >&2
   echo "log_file=$LOG_FILE" >&2
   exit 1
 fi
 
 echo "Matrix smoke test PASSED"
 echo "room_id=$ROOM_ID"
-echo "send_result=$SEND_RESULT"
-echo "bot_reply=$REPLY"
+echo "mention_send_result=$MENTION_SEND_RESULT"
+echo "reaction_send_result=$REACTION_SEND_RESULT"
+echo "attachment_send_result=$ATTACH_SEND_RESULT"
+echo "bot_reply=$LAST_BOT_BODY"
+echo "db_path=$DB_PATH"
 echo "microclaw_log=$LOG_FILE"
 
 if [[ "$KEEP_ENV" == "1" ]]; then

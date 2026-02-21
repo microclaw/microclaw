@@ -913,10 +913,6 @@ async fn handle_matrix_message(
     runtime: MatrixRuntimeContext,
     msg: MatrixIncomingMessage,
 ) {
-    if !runtime.should_respond(&msg.body, msg.mentioned_bot) {
-        return;
-    }
-
     let chat_id = resolve_matrix_chat_id(app_state.clone(), &runtime, &msg.room_id).await;
 
     if chat_id == 0 {
@@ -941,6 +937,7 @@ async fn handle_matrix_message(
     let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&incoming)).await;
 
     let trimmed = msg.body.trim();
+    let should_respond = runtime.should_respond(&msg.body, msg.mentioned_bot);
     if trimmed == "/reset" {
         let _ = call_blocking(app_state.db.clone(), move |db| {
             db.clear_chat_context(chat_id)
@@ -1050,6 +1047,10 @@ async fn handle_matrix_message(
                 .await;
             }
         }
+        return;
+    }
+
+    if !should_respond {
         return;
     }
 
