@@ -11,7 +11,7 @@ use crate::channels::slack::{build_slack_runtime_contexts, SlackRuntimeContext};
 use crate::channels::telegram::{
     build_telegram_runtime_contexts, TelegramChannelConfig, TelegramRuntimeContext,
 };
-use crate::channels::{DiscordAdapter, FeishuAdapter, SlackAdapter, TelegramAdapter};
+use crate::channels::{DiscordAdapter, FeishuAdapter, IrcAdapter, SlackAdapter, TelegramAdapter};
 use crate::config::Config;
 use crate::embedding::EmbeddingProvider;
 use crate::hooks::HookManager;
@@ -65,6 +65,7 @@ pub async fn run(
     let mut discord_runtimes: Vec<(String, DiscordRuntimeContext)> = Vec::new();
     let mut slack_runtimes: Vec<SlackRuntimeContext> = Vec::new();
     let mut feishu_runtimes: Vec<FeishuRuntimeContext> = Vec::new();
+    let mut has_irc = false;
     let mut has_web = false;
 
     if config.channel_enabled("telegram") {
@@ -110,6 +111,20 @@ pub async fn run(
                 runtime_ctx.config.app_secret.clone(),
                 runtime_ctx.config.domain.clone(),
             )));
+        }
+    }
+
+    let mut irc_adapter: Option<Arc<IrcAdapter>> = None;
+    if config.channel_enabled("irc") {
+        if let Some(irc_cfg) =
+            config.channel_config::<crate::channels::irc::IrcChannelConfig>("irc")
+        {
+            if !irc_cfg.server.trim().is_empty() && !irc_cfg.nick.trim().is_empty() {
+                has_irc = true;
+                let adapter = Arc::new(IrcAdapter::new(380));
+                registry.register(adapter.clone());
+                irc_adapter = Some(adapter);
+            }
         }
     }
 
@@ -220,7 +235,18 @@ pub async fn run(
         }
     }
 
-    if has_telegram || has_web || has_discord || has_slack || has_feishu {
+    if has_irc {
+        let irc_state = state.clone();
+        let Some(irc_adapter) = irc_adapter else {
+            return Err(anyhow!("IRC adapter state is missing"));
+        };
+        info!("Starting IRC bot");
+        tokio::spawn(async move {
+            crate::channels::irc::start_irc_bot(irc_state, irc_adapter).await;
+        });
+    }
+
+    if has_telegram || has_web || has_discord || has_slack || has_feishu || has_irc {
         info!("Runtime active; waiting for Ctrl-C");
         tokio::signal::ctrl_c()
             .await
@@ -228,7 +254,7 @@ pub async fn run(
         Ok(())
     } else {
         Err(anyhow!(
-            "No channel is enabled. Configure channels.<name>.enabled (or legacy channel settings) for Telegram, Discord, Slack, Feishu, or web."
+            "No channel is enabled. Configure channels.<name>.enabled (or legacy channel settings) for Telegram, Discord, Slack, Feishu, IRC, or web."
         ))
     }
 }

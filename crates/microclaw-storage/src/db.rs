@@ -214,6 +214,15 @@ pub struct ScheduledTaskDlqEntry {
 }
 
 fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, MicroClawError> {
+    // Validate table name to prevent SQL injection via PRAGMA
+    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(MicroClawError::Config(format!(
+            "invalid table name: {}",
+            table
+        )));
+    }
+    // PRAGMA does not support parameter binding, so format! is required here.
+    // The table name validation above ensures only safe identifiers reach this point.
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
     for col in rows {

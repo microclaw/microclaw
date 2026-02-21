@@ -790,6 +790,7 @@ fn json_to_yaml_value(v: &serde_json::Value) -> serde_yaml::Value {
 const CHANNEL_SECRET_FIELDS: &[(&str, &[&str])] = &[
     ("slack", &["bot_token", "app_token"]),
     ("feishu", &["app_secret"]),
+    ("irc", &["password"]),
 ];
 
 fn config_path_for_save() -> Result<PathBuf, (StatusCode, String)> {

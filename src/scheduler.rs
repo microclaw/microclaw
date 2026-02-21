@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::Utc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent;
 use crate::agent_engine::AgentRequestContext;
@@ -47,9 +47,15 @@ async fn run_due_tasks(state: &Arc<AppState>) {
             .await
             .ok()
             .flatten()
-            .unwrap_or(ChatRouting {
-                channel_name: "telegram".to_string(),
-                conversation: ConversationKind::Private,
+            .unwrap_or_else(|| {
+                warn!(
+                    "Scheduler: no chat routing found for chat {}, defaulting to telegram/private",
+                    task.chat_id
+                );
+                ChatRouting {
+                    channel_name: "telegram".to_string(),
+                    conversation: ConversationKind::Private,
+                }
             });
 
         // Run agent loop with the task prompt

@@ -299,7 +299,7 @@ pub struct Config {
     pub voice_transcription_command: Option<String>,
 
     // --- Channel registry (new dynamic config) ---
-    /// Per-channel configuration. Keys are channel names (e.g. "telegram", "discord", "slack", "web").
+    /// Per-channel configuration. Keys are channel names (e.g. "telegram", "discord", "slack", "irc", "web").
     /// Each value is channel-specific config deserialized by the adapter.
     /// If empty, synthesized from legacy flat fields below in post_deserialize().
     #[serde(default)]
@@ -804,15 +804,17 @@ impl Config {
             || self.channels.contains_key("discord");
         let configured_slack = self.channels.contains_key("slack");
         let configured_feishu = self.channels.contains_key("feishu");
+        let configured_irc = self.channels.contains_key("irc");
         let configured_web = self.web_enabled || self.channels.contains_key("web");
 
         let has_telegram = self.channel_enabled("telegram") && configured_telegram;
         let has_discord = self.channel_enabled("discord") && configured_discord;
         let has_slack = self.channel_enabled("slack") && configured_slack;
         let has_feishu = self.channel_enabled("feishu") && configured_feishu;
+        let has_irc = self.channel_enabled("irc") && configured_irc;
         let has_web = self.channel_enabled("web") && configured_web;
 
-        if !(has_telegram || has_discord || has_slack || has_feishu || has_web) {
+        if !(has_telegram || has_discord || has_slack || has_feishu || has_irc || has_web) {
             return Err(MicroClawError::Config(
                 "At least one channel must be enabled and configured (via channels.<name>.enabled or legacy channel settings)".into(),
             ));
@@ -1234,6 +1236,22 @@ voice_transcription_command: "whisper-mlx --file {file}"
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         // Should succeed: discord_bot_token is set even though telegram_bot_token is empty
         config.post_deserialize().unwrap();
+    }
+
+    #[test]
+    fn test_post_deserialize_irc_only() {
+        let yaml = r##"
+api_key: key
+channels:
+  irc:
+    enabled: true
+    server: "irc.example.com"
+    nick: "microclaw"
+    channels: "#microclaw"
+"##;
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+        assert!(config.channel_enabled("irc"));
     }
 
     #[test]

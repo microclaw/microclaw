@@ -29,6 +29,8 @@ microclaw-channels = { path = "crates/microclaw-channels" }
 microclaw-app = { path = "crates/microclaw-app" }
 teloxide = { version = "0.17", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
+tokio-native-tls = "0.3"
+native-tls = "0.2"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
