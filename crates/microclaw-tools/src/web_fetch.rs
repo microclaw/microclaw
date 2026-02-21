@@ -532,13 +532,20 @@ pub async fn fetch_url(url: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
     use reqwest::Url;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::{timeout, Duration};
 
     use super::{
-        resolve_and_validate_redirect_target, resolve_url_validation_config,
-        validate_web_fetch_url, WebFetchFeedFormat, WebFetchFeedMode, WebFetchFeedSource,
-        WebFetchFeedSyncConfig, WebFetchUrlValidationConfig,
+        fetch_url_with_timeout_and_validation, resolve_and_validate_redirect_target,
+        resolve_url_validation_config, validate_web_fetch_url, WebFetchFeedFormat,
+        WebFetchFeedMode, WebFetchFeedSource, WebFetchFeedSyncConfig, WebFetchUrlValidationConfig,
     };
+    use crate::web_content_validation::WebContentValidationConfig;
 
     #[test]
     fn url_validation_allows_default_http_https() {
@@ -784,5 +791,64 @@ mod tests {
         let cfg = WebFetchUrlValidationConfig::default();
         let next = resolve_and_validate_redirect_target(&current, "/next", &cfg).unwrap();
         assert_eq!(next.as_str(), "https://safe.example/next");
+    }
+
+    #[tokio::test]
+    async fn fetch_blocks_redirect_to_denylisted_host() {
+        let final_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let final_addr = final_listener.local_addr().unwrap();
+        let final_hit = Arc::new(AtomicBool::new(false));
+        let final_hit_clone = final_hit.clone();
+        let final_server = tokio::spawn(async move {
+            if let Ok(Ok((mut stream, _))) =
+                timeout(Duration::from_secs(2), final_listener.accept()).await
+            {
+                final_hit_clone.store(true, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+            }
+        });
+
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_addr = redirect_listener.local_addr().unwrap();
+        let redirect_server = tokio::spawn(async move {
+            let (mut stream, _) = redirect_listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                final_addr.port()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        let start_url = format!("http://localhost:{}/start", redirect_addr.port());
+        let url_cfg = WebFetchUrlValidationConfig {
+            allowlist_hosts: vec!["localhost".to_string()],
+            denylist_hosts: vec!["127.0.0.1".to_string()],
+            ..WebFetchUrlValidationConfig::default()
+        };
+        let err = fetch_url_with_timeout_and_validation(
+            &start_url,
+            5,
+            WebContentValidationConfig::default(),
+            url_cfg,
+        )
+        .await
+        .unwrap_err();
+
+        redirect_server.await.unwrap();
+        final_server.await.unwrap();
+
+        assert!(err.contains("denylisted"));
+        assert!(
+            !final_hit.load(Ordering::SeqCst),
+            "should not request redirect target after URL policy rejection"
+        );
     }
 }
