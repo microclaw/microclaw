@@ -83,7 +83,7 @@ When any burn alert is active:
 - Global tool timeout default: `default_tool_timeout_secs`
 - Per-tool timeout overrides: `tool_timeout_overrides.<tool_name>`
 - Global MCP request timeout default: `default_mcp_request_timeout_secs`
-- MCP per-server override remains supported in `mcp.json`:
+- MCP per-server override remains supported in `mcp.json` and `mcp.d/*.json`:
   - `mcpServers.<name>.request_timeout_secs`
 
 Precedence:
@@ -104,14 +104,14 @@ default_mcp_request_timeout_secs: 120
 
 ## MCP Reliability Tuning
 
-- `mcp.json` supports per-server circuit breaker knobs:
+- `mcp.json` / `mcp.d/*.json` support per-server circuit breaker knobs:
   - `circuit_breaker_failure_threshold` (default `5`)
   - `circuit_breaker_cooldown_secs` (default `30`)
 - `request_timeout_secs` remains per-server timeout budget.
 
 ## MCP Server Guardrails
 
-- `mcp.json` supports server-level isolation controls:
+- `mcp.json` / `mcp.d/*.json` support server-level isolation controls:
   - `max_concurrent_requests` (default `4`)
   - `queue_wait_ms` (default `200`)
   - `rate_limit_per_minute` (default `120`)
@@ -141,6 +141,31 @@ Behavior:
 - requests are fail-fast when queue wait budget is exceeded.
 - per-server rate limit enforces a fixed 60s window budget.
 
+## Sidecar MCP Integration (HAPI Bridge)
+
+Use this pattern when you want remote terminal/session capability via an external bridge, without embedding terminal runtime logic into MicroClaw core.
+
+1. Keep base MCP config in `<data_dir>/mcp.json` (optional).
+2. Add sidecar config as a fragment in `<data_dir>/mcp.d/hapi-bridge.json`.
+3. Start the bridge service separately, then start MicroClaw.
+
+Example fragment:
+
+```json
+{
+  "mcpServers": {
+    "hapi_bridge": {
+      "transport": "streamable_http",
+      "endpoint": "http://127.0.0.1:3010/mcp",
+      "request_timeout_secs": 180
+    }
+  }
+}
+```
+
+Reference template: repository file `mcp.hapi-bridge.example.json`.
+Step-by-step guide: `docs/operations/hapi-bridge.md`.
+
 ## Memory MCP Backend (Optional)
 
 If any configured MCP server exposes both `memory_query` and `memory_upsert`, MicroClaw enables MCP-first structured-memory operations:
@@ -161,7 +186,7 @@ Operational checks:
 - verify server tool list includes exact names `memory_query` and `memory_upsert`
 - if semantic retrieval quality drops while MCP is enabled, note that local `sqlite-vec` KNN ranking is skipped for MCP-backed rows
 
-Minimal `mcp.json` example (memory MCP server + local filesystem):
+Minimal MCP config example (memory MCP server + local filesystem):
 
 ```json
 {

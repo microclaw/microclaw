@@ -32,6 +32,7 @@
 - [工具列表](#工具列表)
 - [记忆系统](#记忆系统)
 - [技能系统](#技能系统)
+- [MCP](#mcp)
 - [计划与执行](#计划与执行)
 - [定时任务](#定时任务)
 - [本地 Web UI（跨渠道历史）](#本地-web-ui跨渠道历史)
@@ -77,7 +78,7 @@ microclaw doctor
 microclaw doctor --json
 ```
 
-会检查：PATH、shell 运行时、`agent-browser`、Windows PowerShell 执行策略、以及 `<data_dir>/mcp.json` 里的 MCP 命令依赖。
+会检查：PATH、shell 运行时、`agent-browser`、Windows PowerShell 执行策略、以及 `<data_dir>/mcp.json` + `<data_dir>/mcp.d/*.json` 里的 MCP 依赖。
 
 仅沙箱诊断：
 
@@ -278,6 +279,30 @@ MicroClaw 支持 [Anthropic Agent Skills](https://github.com/anthropics/skills) 
 **命令：**
 - `/skills` -- 列出所有可用技能
 - `/usage` -- 查看 token 用量统计（当前聊天 + 全局汇总）
+
+## MCP
+
+MicroClaw 支持从以下位置加载 MCP 配置并合并：
+
+- `<data_dir>/mcp.json`
+- `<data_dir>/mcp.d/*.json`（按文件名顺序覆盖前者）
+
+推荐做法：
+
+```sh
+cp mcp.minimal.example.json <data_dir>/mcp.json
+```
+
+旁路/sidecar 集成（例如 HAPI bridge）建议单独放分片配置：
+
+```sh
+mkdir -p <data_dir>/mcp.d
+cp mcp.hapi-bridge.example.json <data_dir>/mcp.d/hapi-bridge.json
+```
+
+这样可以在不改 MicroClaw 核心 agent loop 的情况下，通过外部桥接服务扩展远程终端能力。
+
+详细操作可见：`docs/operations/hapi-bridge.md`。
 
 ## 计划与执行
 
