@@ -431,11 +431,13 @@ impl EventHandler for Handler {
 
         // Handle /status command
         if text.trim() == "/status" {
+            let inflight_runs = self.app_state.inflight_runs.count_chat(channel_id);
             let status = build_status_response(
                 self.app_state.db.clone(),
                 &self.app_state.config,
                 channel_id,
                 &self.runtime.channel_name,
+                inflight_runs,
             )
             .await;
             let _ = msg.channel_id.say(&ctx.http, status).await;

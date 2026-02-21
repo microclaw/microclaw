@@ -500,8 +500,15 @@ async fn handle_message(
         })
         .await
         .unwrap_or(raw_chat_id);
-        let status =
-            build_status_response(state.db.clone(), &state.config, chat_id, &tg_channel_name).await;
+        let inflight_runs = state.inflight_runs.count_chat(chat_id);
+        let status = build_status_response(
+            state.db.clone(),
+            &state.config,
+            chat_id,
+            &tg_channel_name,
+            inflight_runs,
+        )
+        .await;
         let _ = bot.send_message(msg.chat.id, status).await;
         return Ok(());
     }

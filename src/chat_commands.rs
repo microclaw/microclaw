@@ -9,6 +9,7 @@ pub async fn build_status_response(
     config: &Config,
     chat_id: i64,
     caller_channel: &str,
+    inflight_runs: usize,
 ) -> String {
     let provider = config.llm_provider.trim();
     let model = config.model.trim();
@@ -60,7 +61,7 @@ pub async fn build_status_response(
     };
 
     format!(
-        "Status\nChannel: {caller_channel}\nProvider: {provider}\nModel: {model}\n{session_line}\n{task_line}"
+        "Status\nChannel: {caller_channel}\nProvider: {provider}\nModel: {model}\nIn-flight runs: {inflight_runs}\n{session_line}\n{task_line}"
     )
 }
 

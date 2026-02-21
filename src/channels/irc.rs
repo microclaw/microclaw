@@ -460,8 +460,15 @@ async fn handle_irc_message(
         return;
     }
     if trimmed == "/status" {
-        let status =
-            build_status_response(app_state.db.clone(), &app_state.config, chat_id, "irc").await;
+        let inflight_runs = app_state.inflight_runs.count_chat(chat_id);
+        let status = build_status_response(
+            app_state.db.clone(),
+            &app_state.config,
+            chat_id,
+            "irc",
+            inflight_runs,
+        )
+        .await;
         let _ = adapter.send_text(&response_target, &status).await;
         return;
     }

@@ -37,6 +37,11 @@ impl InflightRuns {
         handles.len()
     }
 
+    pub fn count_chat(&self, chat_id: i64) -> usize {
+        let inner = self.inner.lock().expect("inflight runs lock poisoned");
+        inner.get(&chat_id).map(|runs| runs.len()).unwrap_or(0)
+    }
+
     fn unregister(&self, chat_id: i64, run_id: u64) {
         let mut inner = self.inner.lock().expect("inflight runs lock poisoned");
         if let Some(runs) = inner.get_mut(&chat_id) {

@@ -1523,11 +1523,13 @@ async fn handle_feishu_message(
         return;
     }
     if trimmed == "/status" {
+        let inflight_runs = app_state.inflight_runs.count_chat(chat_id);
         let status = build_status_response(
             app_state.db.clone(),
             &app_state.config,
             chat_id,
             &runtime.channel_name,
+            inflight_runs,
         )
         .await;
         let _ =
