@@ -449,6 +449,18 @@ impl EventHandler for Handler {
             return;
         }
 
+        // Handle /stop command
+        if text.trim() == "/stop" {
+            let stopped = self.app_state.inflight_runs.abort_chat(channel_id);
+            let reply = if stopped == 0 {
+                "No running task to stop in this chat.".to_string()
+            } else {
+                format!("Stopped {stopped} running task(s) in this chat.")
+            };
+            let _ = msg.channel_id.say(&ctx.http, reply).await;
+            return;
+        }
+
         if text.is_empty() {
             if msg.guild_id.is_some() {
                 info!(
@@ -511,23 +523,39 @@ impl EventHandler for Handler {
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
         // Process with shared agent engine (reuses the same loop as Telegram)
-        match process_with_agent_with_events(
-            &self.app_state,
-            AgentRequestContext {
-                caller_channel: &self.runtime.channel_name,
-                chat_id: channel_id,
-                chat_type: if msg.guild_id.is_some() {
-                    "group"
-                } else {
-                    "private"
+        let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
+        let _run_guard = self
+            .app_state
+            .inflight_runs
+            .register(channel_id, abort_handle);
+        let agent_result = match futures_util::future::Abortable::new(
+            process_with_agent_with_events(
+                &self.app_state,
+                AgentRequestContext {
+                    caller_channel: &self.runtime.channel_name,
+                    chat_id: channel_id,
+                    chat_type: if msg.guild_id.is_some() {
+                        "group"
+                    } else {
+                        "private"
+                    },
                 },
-            },
-            None,
-            None,
-            Some(&event_tx),
+                None,
+                None,
+                Some(&event_tx),
+            ),
+            abort_registration,
         )
         .await
         {
+            Ok(v) => v,
+            Err(_) => {
+                drop(typing);
+                info!("Discord run aborted for chat_id={channel_id}");
+                return;
+            }
+        };
+        match agent_result {
             Ok(response) => {
                 drop(typing);
                 drop(event_tx);

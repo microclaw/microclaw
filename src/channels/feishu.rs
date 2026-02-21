@@ -1546,6 +1546,17 @@ async fn handle_feishu_message(
         .await;
         return;
     }
+    if trimmed == "/stop" {
+        let stopped = app_state.inflight_runs.abort_chat(chat_id);
+        let reply = if stopped == 0 {
+            "No running task to stop in this chat.".to_string()
+        } else {
+            format!("Stopped {stopped} running task(s) in this chat.")
+        };
+        let _ =
+            send_feishu_response(&http_client, base_url, &token, external_chat_id, &reply).await;
+        return;
+    }
 
     // Determine if we should respond
     let should_respond = is_dm || is_mentioned;
@@ -1562,19 +1573,31 @@ async fn handle_feishu_message(
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
 
-    match process_with_agent_with_events(
-        &app_state,
-        AgentRequestContext {
-            caller_channel: &runtime.channel_name,
-            chat_id,
-            chat_type: if is_dm { "private" } else { "group" },
-        },
-        None,
-        None,
-        Some(&event_tx),
+    let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
+    let _run_guard = app_state.inflight_runs.register(chat_id, abort_handle);
+    let agent_result = match futures_util::future::Abortable::new(
+        process_with_agent_with_events(
+            &app_state,
+            AgentRequestContext {
+                caller_channel: &runtime.channel_name,
+                chat_id,
+                chat_type: if is_dm { "private" } else { "group" },
+            },
+            None,
+            None,
+            Some(&event_tx),
+        ),
+        abort_registration,
     )
     .await
     {
+        Ok(v) => v,
+        Err(_) => {
+            info!("Feishu run aborted for chat_id={chat_id}");
+            return;
+        }
+    };
+    match agent_result {
         Ok(response) => {
             drop(event_tx);
             let mut used_send_message_tool = false;

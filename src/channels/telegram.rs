@@ -513,6 +513,32 @@ async fn handle_message(
         return Ok(());
     }
 
+    // Handle /stop command — cancel in-flight runs for this chat
+    if text.trim() == "/stop" {
+        let external_chat_id = raw_chat_id.to_string();
+        let chat_title_for_lookup = chat_title.clone();
+        let chat_type_for_lookup = db_chat_type.to_string();
+        let channel_name = tg_channel_name.clone();
+        let chat_id = call_blocking(state.db.clone(), move |db| {
+            db.resolve_or_create_chat_id(
+                &channel_name,
+                &external_chat_id,
+                chat_title_for_lookup.as_deref(),
+                &chat_type_for_lookup,
+            )
+        })
+        .await
+        .unwrap_or(raw_chat_id);
+        let stopped = state.inflight_runs.abort_chat(chat_id);
+        let reply = if stopped == 0 {
+            "No running task to stop in this chat.".to_string()
+        } else {
+            format!("Stopped {stopped} running task(s) in this chat.")
+        };
+        let _ = bot.send_message(msg.chat.id, reply).await;
+        return Ok(());
+    }
+
     if let Some(photos) = msg.photo() {
         // Pick the largest photo (last in the array)
         if let Some(photo) = photos.last() {
@@ -823,19 +849,32 @@ async fn handle_message(
 
     // Process through platform-agnostic agent engine.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
-    match process_with_agent_with_events(
-        &state,
-        AgentRequestContext {
-            caller_channel: &tg_channel_name,
-            chat_id,
-            chat_type: runtime_chat_type,
-        },
-        None,
-        image_data,
-        Some(&event_tx),
+    let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
+    let _run_guard = state.inflight_runs.register(chat_id, abort_handle);
+    let agent_result = match futures_util::future::Abortable::new(
+        process_with_agent_with_events(
+            &state,
+            AgentRequestContext {
+                caller_channel: &tg_channel_name,
+                chat_id,
+                chat_type: runtime_chat_type,
+            },
+            None,
+            image_data,
+            Some(&event_tx),
+        ),
+        abort_registration,
     )
     .await
     {
+        Ok(v) => v,
+        Err(_) => {
+            typing_handle.abort();
+            info!("Telegram run aborted for chat_id={chat_id}");
+            return Ok(());
+        }
+    };
+    match agent_result {
         Ok(response) => {
             typing_handle.abort();
             drop(event_tx);

@@ -470,6 +470,16 @@ async fn handle_irc_message(
         let _ = adapter.send_text(&response_target, &model_text).await;
         return;
     }
+    if trimmed == "/stop" {
+        let stopped = app_state.inflight_runs.abort_chat(chat_id);
+        let reply = if stopped == 0 {
+            "No running task to stop in this chat.".to_string()
+        } else {
+            format!("Stopped {stopped} running task(s) in this chat.")
+        };
+        let _ = adapter.send_text(&response_target, &reply).await;
+        return;
+    }
 
     if is_group && cfg.mention_required_bool() && !is_irc_mention(&text, cfg.nick.trim()) {
         return;
@@ -484,19 +494,31 @@ async fn handle_irc_message(
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
 
-    match process_with_agent_with_events(
-        &app_state,
-        AgentRequestContext {
-            caller_channel: "irc",
-            chat_id,
-            chat_type: runtime_chat_type,
-        },
-        None,
-        None,
-        Some(&event_tx),
+    let (abort_handle, abort_registration) = futures_util::future::AbortHandle::new_pair();
+    let _run_guard = app_state.inflight_runs.register(chat_id, abort_handle);
+    let agent_result = match futures_util::future::Abortable::new(
+        process_with_agent_with_events(
+            &app_state,
+            AgentRequestContext {
+                caller_channel: "irc",
+                chat_id,
+                chat_type: runtime_chat_type,
+            },
+            None,
+            None,
+            Some(&event_tx),
+        ),
+        abort_registration,
     )
     .await
     {
+        Ok(v) => v,
+        Err(_) => {
+            info!("IRC run aborted for chat_id={chat_id}");
+            return;
+        }
+    };
+    match agent_result {
         Ok(response) => {
             drop(event_tx);
             let mut used_send_message_tool = false;

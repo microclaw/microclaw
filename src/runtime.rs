@@ -15,6 +15,7 @@ use crate::channels::{DiscordAdapter, FeishuAdapter, IrcAdapter, SlackAdapter, T
 use crate::config::Config;
 use crate::embedding::EmbeddingProvider;
 use crate::hooks::HookManager;
+use crate::inflight::InflightRuns;
 use crate::llm::LlmProvider;
 use crate::memory::MemoryManager;
 use crate::memory_backend::MemoryBackend;
@@ -35,6 +36,7 @@ pub struct AppState {
     pub embedding: Option<Arc<dyn EmbeddingProvider>>,
     pub memory_backend: Arc<MemoryBackend>,
     pub tools: ToolRegistry,
+    pub inflight_runs: Arc<InflightRuns>,
 }
 
 pub async fn run(
@@ -163,6 +165,7 @@ pub async fn run(
         embedding,
         memory_backend,
         tools,
+        inflight_runs: Arc::new(InflightRuns::default()),
     });
 
     crate::scheduler::spawn_scheduler(state.clone());

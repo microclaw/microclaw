@@ -1567,6 +1567,7 @@ mod tests {
             embedding: None,
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
+            inflight_runs: Arc::new(crate::inflight::InflightRuns::default()),
         };
         Arc::new(state)
     }
