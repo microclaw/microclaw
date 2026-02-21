@@ -102,6 +102,70 @@ tool_timeout_overrides:
 default_mcp_request_timeout_secs: 120
 ```
 
+## Web Fetch Validation
+
+`web_fetch` now has two independent validation layers:
+
+- content validation (`web_fetch_validation`) to detect prompt-injection patterns in fetched text
+- URL policy validation (`web_fetch_url_validation`) to enforce scheme/host rules before fetch
+
+Recommended baseline:
+
+```yaml
+web_fetch_validation:
+  enabled: true
+  strict_mode: true
+  max_scan_bytes: 100000
+
+web_fetch_url_validation:
+  enabled: true
+  allowed_schemes: ["https", "http"]
+  allowlist_hosts: []
+  denylist_hosts:
+    - "localhost"
+    - "127.0.0.1"
+    - "169.254.169.254"
+```
+
+### Feed Sync (Optional)
+
+`web_fetch_url_validation.feed_sync` can pull host entries from remote feeds and merge them into
+runtime allowlist/denylist sets.
+
+Example:
+
+```yaml
+web_fetch_url_validation:
+  enabled: true
+  allowed_schemes: ["https", "http"]
+  allowlist_hosts: []
+  denylist_hosts: []
+  feed_sync:
+    enabled: true
+    fail_open: true
+    max_entries_per_source: 10000
+    sources:
+      - enabled: true
+        mode: denylist
+        url: "https://example.com/blocked-hosts.txt"
+        format: lines
+        refresh_interval_secs: 3600
+        timeout_secs: 10
+      - enabled: true
+        mode: allowlist
+        url: "https://example.com/approved-hosts.csv"
+        format: csv_first_column
+        refresh_interval_secs: 3600
+        timeout_secs: 10
+```
+
+Operational notes:
+
+- URL checks run before network fetch; denylist takes precedence over allowlist.
+- If `allowlist_hosts` is non-empty, target host must match allowlist.
+- `fail_open: true` skips an unavailable feed; `fail_open: false` blocks requests when feed fetch fails.
+- Feed data is cached in memory and refreshed per-source `refresh_interval_secs`.
+
 ## MCP Reliability Tuning
 
 - `mcp.json` supports per-server circuit breaker knobs:
