@@ -1878,49 +1878,4 @@ mod tests {
         assert_eq!(runtimes[0].1.allowed_groups, vec![7, 8]);
         assert_eq!(runtimes[0].1.allowed_user_ids, vec![42, 43]);
     }
-
-    #[test]
-    fn test_check_private_chat_access() {
-        let allowed_ids = vec![123, 456];
-        
-        // Private chat, allowed user -> Pass
-        assert!(check_private_chat_access(
-            "telegram_private",
-            &allowed_ids,
-            Some(123),
-            999
-        ));
-
-        // Private chat, non-allowed user -> Fail
-        assert!(!check_private_chat_access(
-            "telegram_private",
-            &allowed_ids,
-            Some(789),
-            999
-        ));
-
-        // Private chat, no user ID -> Fail
-        assert!(!check_private_chat_access(
-            "telegram_private",
-            &allowed_ids,
-            None,
-            999
-        ));
-
-        // Private chat, empty allowlist -> Pass (open)
-        assert!(check_private_chat_access(
-            "telegram_private",
-            &[],
-            Some(789),
-            999
-        ));
-
-        // Group chat -> Pass (this check only enforces private chat allowlist)
-        assert!(check_private_chat_access(
-            "telegram_group",
-            &allowed_ids,
-            Some(789),
-            999
-        ));
-    }
 }

@@ -1,0 +1,15 @@
+/target
+microclaw.config.yaml
+microclaw.config.yaml.*
+microclaw.data/
+website/
+tmp/
+working_dir/
+web/node_modules/
+.hitsory/
+.github/
+.git/
+.gitignore
+.gitmodules
+.gitkeep
+.gitlab-ci.yml  
