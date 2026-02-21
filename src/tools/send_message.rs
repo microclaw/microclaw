@@ -426,6 +426,7 @@ mod tests {
                 bot_token: "123456:TEST_TOKEN".into(),
                 bot_username: "bot".into(),
                 allowed_groups: vec![],
+                allowed_user_ids: vec![],
                 accounts: std::collections::HashMap::new(),
                 default_account: None,
             },

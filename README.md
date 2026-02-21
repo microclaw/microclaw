@@ -556,10 +556,14 @@ bot_username: "my_bot"
 # channels:
 #   telegram:
 #     default_account: "main"
+#     # optional: only allow these Telegram user IDs in private chats (DM)
+#     # allowed_user_ids: [123456789]
 #     accounts:
 #       main:
 #         bot_token: "123456:ABC-DEF1234..."
 #         bot_username: "my_bot"
+#         # optional per-account DM allowlist (overrides channel-level list)
+#         # allowed_user_ids: [123456789]
 #       support:
 #         bot_token: "987654:XYZ-DEF9999..."
 #         bot_username: "support_bot"
