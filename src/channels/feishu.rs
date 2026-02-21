@@ -13,6 +13,7 @@ use crate::agent_engine::archive_conversation;
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::chat_commands::{build_model_response, build_status_response};
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -1519,6 +1520,30 @@ async fn handle_feishu_message(
                 .await;
             }
         }
+        return;
+    }
+    if trimmed == "/status" {
+        let status = build_status_response(
+            app_state.db.clone(),
+            &app_state.config,
+            chat_id,
+            &runtime.channel_name,
+        )
+        .await;
+        let _ =
+            send_feishu_response(&http_client, base_url, &token, external_chat_id, &status).await;
+        return;
+    }
+    if trimmed == "/model" || trimmed.starts_with("/model ") {
+        let model_text = build_model_response(&app_state.config, trimmed);
+        let _ = send_feishu_response(
+            &http_client,
+            base_url,
+            &token,
+            external_chat_id,
+            &model_text,
+        )
+        .await;
         return;
     }
 

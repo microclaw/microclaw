@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 use crate::agent_engine::{
     archive_conversation, process_with_agent_with_events, AgentEvent, AgentRequestContext,
 };
+use crate::chat_commands::{build_model_response, build_status_response};
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -480,6 +481,35 @@ async fn handle_message(
                     .await;
             }
         }
+        return Ok(());
+    }
+
+    // Handle /status command — runtime and session summary
+    if text.trim() == "/status" {
+        let external_chat_id = raw_chat_id.to_string();
+        let chat_title_for_lookup = chat_title.clone();
+        let chat_type_for_lookup = db_chat_type.to_string();
+        let channel_name = tg_channel_name.clone();
+        let chat_id = call_blocking(state.db.clone(), move |db| {
+            db.resolve_or_create_chat_id(
+                &channel_name,
+                &external_chat_id,
+                chat_title_for_lookup.as_deref(),
+                &chat_type_for_lookup,
+            )
+        })
+        .await
+        .unwrap_or(raw_chat_id);
+        let status =
+            build_status_response(state.db.clone(), &state.config, chat_id, &tg_channel_name).await;
+        let _ = bot.send_message(msg.chat.id, status).await;
+        return Ok(());
+    }
+
+    // Handle /model command — show current provider/model
+    if text.trim() == "/model" || text.trim_start().starts_with("/model ") {
+        let model_text = build_model_response(&state.config, &text);
+        let _ = bot.send_message(msg.chat.id, model_text).await;
         return Ok(());
     }
 

@@ -16,6 +16,7 @@ use crate::agent_engine::archive_conversation;
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::chat_commands::{build_model_response, build_status_response};
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -425,6 +426,26 @@ impl EventHandler for Handler {
                         .await;
                 }
             }
+            return;
+        }
+
+        // Handle /status command
+        if text.trim() == "/status" {
+            let status = build_status_response(
+                self.app_state.db.clone(),
+                &self.app_state.config,
+                channel_id,
+                &self.runtime.channel_name,
+            )
+            .await;
+            let _ = msg.channel_id.say(&ctx.http, status).await;
+            return;
+        }
+
+        // Handle /model command
+        if text.trim() == "/model" || text.trim_start().starts_with("/model ") {
+            let model_text = build_model_response(&self.app_state.config, &text);
+            let _ = msg.channel_id.say(&ctx.http, model_text).await;
             return;
         }
 
