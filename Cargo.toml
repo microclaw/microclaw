@@ -12,13 +12,20 @@ resolver = "2"
 
 [package]
 name = "microclaw"
-version = "0.0.97"
+version = "0.0.98"
 edition = "2021"
 license = "MIT"
+default-run = "microclaw"
 
 [features]
 default = []
 sqlite-vec = ["microclaw-storage/sqlite-vec"]
+matrix-e2ee-probe = []
+
+[[bin]]
+name = "test_matrix_e2ee_probe"
+path = "src/bin/matrix_e2ee_probe.rs"
+required-features = ["matrix-e2ee-probe"]
 
 [dependencies]
 microclaw-core = { path = "crates/microclaw-core" }
