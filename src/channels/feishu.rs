@@ -13,6 +13,7 @@ use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
 use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::maybe_handle_plugin_command;
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -1493,6 +1494,20 @@ async fn handle_feishu_message(
                 .await;
             return;
         }
+    }
+    if let Some(plugin_response) =
+        maybe_handle_plugin_command(&app_state.config, trimmed, chat_id, &runtime.channel_name)
+            .await
+    {
+        let _ = send_feishu_response(
+            &http_client,
+            base_url,
+            &token,
+            external_chat_id,
+            &plugin_response,
+        )
+        .await;
+        return;
     }
 
     // Determine if we should respond

@@ -153,3 +153,9 @@ web_session_idle_ttl_seconds: 300
 # Supports markdown format. If not set, checks data_dir/SOUL.md then ./SOUL.md.
 # Per-chat overrides: place SOUL.md in <data_dir>/runtime/groups/<chat_id>/SOUL.md
 # soul_path: "./SOUL.md"
+
+# Plugin runtime
+# Place plugin manifests in <data_dir>/plugins by default (or set a custom dir below).
+# plugins:
+#   enabled: true
+#   dir: "./microclaw.data/plugins"

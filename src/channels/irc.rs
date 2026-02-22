@@ -13,6 +13,7 @@ use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
 use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::maybe_handle_plugin_command;
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -486,6 +487,12 @@ async fn handle_irc_message(
             let _ = adapter.send_text(&response_target, &reply).await;
             return;
         }
+    }
+    if let Some(plugin_response) =
+        maybe_handle_plugin_command(&app_state.config, trimmed, chat_id, "irc").await
+    {
+        let _ = adapter.send_text(&response_target, &plugin_response).await;
+        return;
     }
 
     if is_group && cfg.mention_required_bool() && !is_irc_mention(&text, cfg.nick.trim()) {

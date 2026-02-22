@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
 use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::maybe_handle_plugin_command;
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -412,6 +413,12 @@ async fn handle_message(
             let _ = bot.send_message(msg.chat.id, reply).await;
             return Ok(());
         }
+    }
+    if let Some(plugin_response) =
+        maybe_handle_plugin_command(&state.config, &text, raw_chat_id, &tg_channel_name).await
+    {
+        let _ = bot.send_message(msg.chat.id, plugin_response).await;
+        return Ok(());
     }
 
     if let Some(photos) = msg.photo() {

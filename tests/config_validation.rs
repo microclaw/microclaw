@@ -61,6 +61,7 @@ fn minimal_config() -> Config {
         reflector_interval_mins: 15,
         soul_path: None,
         clawhub: microclaw::config::ClawHubConfig::default(),
+        plugins: microclaw::plugins::PluginsConfig::default(),
         voice_provider: "openai".into(),
         voice_transcription_command: None,
         channels: std::collections::HashMap::new(),

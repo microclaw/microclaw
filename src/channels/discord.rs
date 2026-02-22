@@ -16,6 +16,7 @@ use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
 use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::maybe_handle_plugin_command;
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -375,6 +376,17 @@ impl EventHandler for Handler {
                 let _ = msg.channel_id.say(&ctx.http, reply).await;
                 return;
             }
+        }
+        if let Some(plugin_response) = maybe_handle_plugin_command(
+            &self.app_state.config,
+            &text,
+            channel_id,
+            &self.runtime.channel_name,
+        )
+        .await
+        {
+            let _ = msg.channel_id.say(&ctx.http, plugin_response).await;
+            return;
         }
 
         if text.is_empty() {

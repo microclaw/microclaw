@@ -167,3 +167,13 @@ pub fn build_model_response(
         )
     }
 }
+
+pub async fn maybe_handle_plugin_command(
+    config: &Config,
+    command_text: &str,
+    chat_id: i64,
+    caller_channel: &str,
+) -> Option<String> {
+    crate::plugins::execute_plugin_slash_command(config, caller_channel, chat_id, command_text)
+        .await
+}
