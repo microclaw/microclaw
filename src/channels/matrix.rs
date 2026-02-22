@@ -1,9 +1,24 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
 
+use matrix_sdk::attachment::AttachmentConfig;
+use matrix_sdk::authentication::matrix::MatrixSession;
+use matrix_sdk::config::SyncSettings as MatrixSyncSettings;
+use matrix_sdk::deserialized_responses::EncryptionInfo;
+use matrix_sdk::ruma::events::reaction::{ReactionEventContent, SyncReactionEvent};
+use matrix_sdk::ruma::events::relation::Annotation;
+use matrix_sdk::ruma::events::room::message::{
+    MessageType, RoomMessageEventContent, SyncRoomMessageEvent,
+};
+use matrix_sdk::ruma::events::Mentions;
+use matrix_sdk::ruma::{OwnedDeviceId, OwnedEventId, OwnedRoomId, OwnedUserId};
+use matrix_sdk::{Client as MatrixSdkClient, Room as MatrixSdkRoom, SessionMeta, SessionTokens};
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::archive_conversation;
@@ -21,6 +36,11 @@ use microclaw_storage::usage::build_usage_report;
 
 fn default_enabled() -> bool {
     true
+}
+
+fn matrix_sdk_clients() -> &'static RwLock<HashMap<String, Arc<MatrixSdkClient>>> {
+    static CLIENTS: OnceLock<RwLock<HashMap<String, Arc<MatrixSdkClient>>>> = OnceLock::new();
+    CLIENTS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 fn default_matrix_mention_required() -> bool {
@@ -104,6 +124,7 @@ pub struct MatrixRuntimeContext {
     pub allowed_user_ids: Vec<String>,
     pub mention_required: bool,
     pub sync_timeout_ms: u64,
+    pub sdk_client: Option<Arc<RwLock<Option<Arc<MatrixSdkClient>>>>>,
 }
 
 impl MatrixRuntimeContext {
@@ -217,6 +238,7 @@ pub fn build_matrix_runtime_contexts(config: &crate::config::Config) -> Vec<Matr
             allowed_user_ids: account_cfg.allowed_user_ids.clone(),
             mention_required: account_cfg.mention_required,
             sync_timeout_ms: account_cfg.sync_timeout_ms,
+            sdk_client: None,
         });
     }
 
@@ -239,6 +261,7 @@ pub fn build_matrix_runtime_contexts(config: &crate::config::Config) -> Vec<Matr
             allowed_user_ids: matrix_cfg.allowed_user_ids,
             mention_required: matrix_cfg.mention_required,
             sync_timeout_ms: matrix_cfg.sync_timeout_ms,
+            sdk_client: None,
         });
     }
 
@@ -263,6 +286,10 @@ impl MatrixAdapter {
     }
 }
 
+async fn get_registered_matrix_sdk_client(channel_name: &str) -> Option<Arc<MatrixSdkClient>> {
+    matrix_sdk_clients().read().await.get(channel_name).cloned()
+}
+
 #[async_trait::async_trait]
 impl ChannelAdapter for MatrixAdapter {
     fn name(&self) -> &str {
@@ -277,7 +304,9 @@ impl ChannelAdapter for MatrixAdapter {
     }
 
     async fn send_text(&self, external_chat_id: &str, text: &str) -> Result<(), String> {
-        send_matrix_text(
+        let sdk_client = get_registered_matrix_sdk_client(&self.name).await;
+        send_matrix_text_with_sdk(
+            sdk_client,
             &self.http_client,
             &self.homeserver_url,
             &self.access_token,
@@ -293,7 +322,9 @@ impl ChannelAdapter for MatrixAdapter {
         file_path: &Path,
         caption: Option<&str>,
     ) -> Result<String, String> {
-        send_matrix_attachment(
+        let sdk_client = get_registered_matrix_sdk_client(&self.name).await;
+        send_matrix_attachment_with_sdk(
+            sdk_client,
             &self.http_client,
             &self.homeserver_url,
             &self.access_token,
@@ -325,6 +356,27 @@ enum MatrixIncomingEvent {
 }
 
 pub async fn start_matrix_bot(app_state: Arc<AppState>, runtime: MatrixRuntimeContext) {
+    if let Some(client) = build_matrix_sdk_client(app_state.clone(), &runtime).await {
+        let client = Arc::new(client);
+        matrix_sdk_clients()
+            .write()
+            .await
+            .insert(runtime.channel_name.clone(), client.clone());
+        let client_slot = runtime
+            .sdk_client
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(RwLock::new(None)));
+        *client_slot.write().await = Some(client);
+
+        let mut runtime_with_sdk = runtime.clone();
+        runtime_with_sdk.sdk_client = Some(client_slot.clone());
+        let e2ee_state = app_state.clone();
+        tokio::spawn(async move {
+            start_matrix_e2ee_sync(e2ee_state, runtime_with_sdk).await;
+        });
+    }
+
     let mut since: Option<String> = None;
     let mut bootstrapped = false;
 
@@ -358,6 +410,7 @@ pub async fn start_matrix_bot(app_state: Arc<AppState>, runtime: MatrixRuntimeCo
                                     event_id,
                                     body,
                                     mentioned_bot,
+                                    prefer_sdk_send: false,
                                 };
                                 handle_matrix_message(state, runtime_ctx, msg).await;
                             }
@@ -392,6 +445,214 @@ pub async fn start_matrix_bot(app_state: Arc<AppState>, runtime: MatrixRuntimeCo
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MatrixWhoAmIResponse {
+    user_id: String,
+    #[serde(default)]
+    device_id: Option<String>,
+}
+
+async fn build_matrix_sdk_client(
+    app_state: Arc<AppState>,
+    runtime: &MatrixRuntimeContext,
+) -> Option<MatrixSdkClient> {
+    let _ = app_state;
+
+    let sdk_client = match MatrixSdkClient::builder()
+        .homeserver_url(runtime.homeserver_url.clone())
+        .build()
+        .await
+    {
+        Ok(client) => client,
+        Err(e) => {
+            warn!("Matrix SDK client init failed: {e}");
+            return None;
+        }
+    };
+
+    let whoami_url = format!(
+        "{}/_matrix/client/v3/account/whoami",
+        runtime.homeserver_url.trim_end_matches('/')
+    );
+    let whoami = match reqwest::Client::new()
+        .get(&whoami_url)
+        .bearer_auth(runtime.access_token.trim())
+        .send()
+        .await
+    {
+        Ok(resp) => match resp.json::<MatrixWhoAmIResponse>().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Matrix SDK whoami parse failed: {e}");
+                return None;
+            }
+        },
+        Err(e) => {
+            warn!("Matrix SDK whoami failed: {e}");
+            return None;
+        }
+    };
+
+    let user_id: OwnedUserId = match whoami.user_id.parse() {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Matrix SDK invalid whoami user_id: {e}");
+            return None;
+        }
+    };
+    let Some(device_id_raw) = whoami.device_id else {
+        warn!("Matrix SDK whoami missing device_id; cannot restore E2EE session");
+        return None;
+    };
+    let device_id: OwnedDeviceId = device_id_raw.into();
+
+    let session = MatrixSession {
+        meta: SessionMeta { user_id, device_id },
+        tokens: SessionTokens {
+            access_token: runtime.access_token.clone(),
+            refresh_token: None,
+        },
+    };
+
+    if let Err(e) = sdk_client
+        .matrix_auth()
+        .restore_session(session, matrix_sdk::store::RoomLoadSettings::default())
+        .await
+    {
+        warn!("Matrix SDK restore_session failed: {e}");
+        return None;
+    }
+
+    Some(sdk_client)
+}
+
+async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntimeContext) {
+    let Some(slot) = runtime.sdk_client.as_ref() else {
+        return;
+    };
+    let client = {
+        let guard = slot.read().await;
+        guard.clone()
+    };
+    let Some(client) = client else {
+        return;
+    };
+
+    let bootstrapped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handler_state = app_state.clone();
+    let handler_runtime = runtime.clone();
+    let handler_boot = bootstrapped.clone();
+
+    client.add_event_handler(
+        move |ev: SyncRoomMessageEvent, room: MatrixSdkRoom, encryption_info: Option<EncryptionInfo>| {
+            let app_state = handler_state.clone();
+            let runtime = handler_runtime.clone();
+            let bootstrapped = handler_boot.clone();
+            async move {
+                if encryption_info.is_none() || !bootstrapped.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                let SyncRoomMessageEvent::Original(ev) = ev else {
+                    return;
+                };
+                let body = match &ev.content.msgtype {
+                    MessageType::Text(text) => text.body.clone(),
+                    MessageType::Image(image) => format!("[attachment:m.image] {}", image.body),
+                    MessageType::File(file) => format!("[attachment:m.file] {}", file.body),
+                    MessageType::Audio(audio) => format!("[attachment:m.audio] {}", audio.body),
+                    MessageType::Video(video) => format!("[attachment:m.video] {}", video.body),
+                    _ => return,
+                };
+                if body.trim().is_empty() {
+                    return;
+                }
+                let mentioned_bot = ev
+                    .content
+                    .mentions
+                    .as_ref()
+                    .map(|mentions| {
+                        mentions
+                            .user_ids
+                            .iter()
+                            .any(|uid| uid.as_str().eq_ignore_ascii_case(runtime.bot_user_id.as_str()))
+                    })
+                    .unwrap_or(false);
+                let room_id = room.room_id().to_string();
+                if !runtime.should_process_dm_sender(ev.sender.as_str()) && room.active_members_count() <= 2 {
+                    return;
+                }
+                let msg = MatrixIncomingMessage {
+                    room_id,
+                    is_direct: room.active_members_count() <= 2,
+                    sender: ev.sender.to_string(),
+                    event_id: ev.event_id.to_string(),
+                    body,
+                    mentioned_bot,
+                    prefer_sdk_send: true,
+                };
+                handle_matrix_message(app_state, runtime, msg).await;
+            }
+        },
+    );
+
+    let reaction_state = app_state.clone();
+    let reaction_runtime = runtime.clone();
+    let reaction_boot = bootstrapped.clone();
+    client.add_event_handler(
+        move |ev: SyncReactionEvent, room: MatrixSdkRoom, encryption_info: Option<EncryptionInfo>| {
+            let app_state = reaction_state.clone();
+            let runtime = reaction_runtime.clone();
+            let bootstrapped = reaction_boot.clone();
+            async move {
+                if encryption_info.is_none() || !bootstrapped.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                let SyncReactionEvent::Original(ev) = ev else {
+                    return;
+                };
+                let room_id = room.room_id().to_string();
+                let is_direct = room.active_members_count() <= 2;
+                if is_direct && !runtime.should_process_dm_sender(ev.sender.as_str()) {
+                    return;
+                }
+                handle_matrix_reaction(
+                    app_state,
+                    runtime,
+                    room_id,
+                    is_direct,
+                    ev.sender.to_string(),
+                    ev.event_id.to_string(),
+                    ev.content.relates_to.event_id.to_string(),
+                    ev.content.relates_to.key.clone(),
+                )
+                .await;
+            }
+        },
+    );
+
+    loop {
+        let settings =
+            || MatrixSyncSettings::default().timeout(Duration::from_millis(runtime.sync_timeout_ms_or_default()));
+        if !bootstrapped.load(std::sync::atomic::Ordering::SeqCst) {
+            match client.sync_once(settings()).await {
+                Ok(_) => {
+                    bootstrapped.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                Err(e) => {
+                    warn!("Matrix SDK initial sync failed: {e}");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            }
+        }
+
+        if let Err(e) = client.sync(settings()).await {
+            warn!("Matrix SDK sync loop ended: {e}");
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     }
 }
@@ -752,6 +1013,74 @@ async fn send_matrix_text(
     Ok(())
 }
 
+fn matrix_mentions_for_text(text: &str) -> Option<Mentions> {
+    let user_ids: Vec<OwnedUserId> = extract_matrix_user_ids(text)
+        .into_iter()
+        .filter_map(|raw| raw.parse::<OwnedUserId>().ok())
+        .collect();
+    if user_ids.is_empty() {
+        None
+    } else {
+        Some(Mentions::with_user_ids(user_ids))
+    }
+}
+
+async fn send_matrix_text_with_sdk(
+    sdk_client: Option<Arc<MatrixSdkClient>>,
+    http_client: &reqwest::Client,
+    homeserver_url: &str,
+    access_token: &str,
+    room_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    if let Some(sdk_client) = sdk_client {
+        let parsed_room_id: OwnedRoomId = room_id
+            .parse()
+            .map_err(|e| format!("Invalid Matrix room id '{room_id}': {e}"))?;
+        if let Some(room) = sdk_client.get_room(&parsed_room_id) {
+            for chunk in split_text(text, 3800) {
+                let mut content = RoomMessageEventContent::text_plain(chunk.clone());
+                content.mentions = matrix_mentions_for_text(&chunk);
+                room.send(content)
+                    .await
+                    .map_err(|e| format!("Matrix SDK send failed: {e}"))?;
+            }
+            return Ok(());
+        }
+    }
+
+    send_matrix_text(http_client, homeserver_url, access_token, room_id, text).await
+}
+
+async fn send_matrix_text_runtime(
+    runtime: &MatrixRuntimeContext,
+    room_id: &str,
+    text: &str,
+    prefer_sdk_send: bool,
+) -> Result<(), String> {
+    let sdk_client = if prefer_sdk_send {
+        match runtime.sdk_client.as_ref() {
+            Some(slot) => {
+                let guard = slot.read().await;
+                guard.clone()
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let http_client = reqwest::Client::new();
+    send_matrix_text_with_sdk(
+        sdk_client,
+        &http_client,
+        &runtime.homeserver_url,
+        &runtime.access_token,
+        room_id,
+        text,
+    )
+    .await
+}
+
 fn guess_mime_from_extension(path: &Path) -> &'static str {
     match path
         .extension()
@@ -870,6 +1199,67 @@ async fn send_matrix_attachment(
     })
 }
 
+async fn send_matrix_attachment_with_sdk(
+    sdk_client: Option<Arc<MatrixSdkClient>>,
+    client: &reqwest::Client,
+    homeserver_url: &str,
+    access_token: &str,
+    room_id: &str,
+    file_path: &Path,
+    caption: Option<&str>,
+) -> Result<String, String> {
+    if let Some(sdk_client) = sdk_client {
+        let parsed_room_id: OwnedRoomId = room_id
+            .parse()
+            .map_err(|e| format!("Invalid Matrix room id '{room_id}': {e}"))?;
+        if let Some(room) = sdk_client.get_room(&parsed_room_id) {
+            let data = tokio::fs::read(file_path)
+                .await
+                .map_err(|e| format!("Failed to read attachment file: {e}"))?;
+            let file_name = file_path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("attachment.bin")
+                .to_string();
+            let mime_str = guess_mime_from_extension(file_path);
+            let mime = mime_str
+                .parse()
+                .map_err(|e| format!("Invalid MIME type '{mime_str}': {e}"))?;
+
+            room.send_attachment(file_name, &mime, data, AttachmentConfig::new())
+                .await
+                .map_err(|e| format!("Matrix SDK attachment send failed: {e}"))?;
+
+            if let Some(c) = caption.map(str::trim).filter(|v| !v.is_empty()) {
+                send_matrix_text_with_sdk(
+                    Some(sdk_client.clone()),
+                    client,
+                    homeserver_url,
+                    access_token,
+                    room_id,
+                    c,
+                )
+                .await?;
+            }
+
+            return Ok(match caption {
+                Some(c) => format!("[attachment:{}] {}", file_path.display(), c),
+                None => format!("[attachment:{}]", file_path.display()),
+            });
+        }
+    }
+
+    send_matrix_attachment(
+        client,
+        homeserver_url,
+        access_token,
+        room_id,
+        file_path,
+        caption,
+    )
+    .await
+}
+
 fn looks_like_reaction_token(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
@@ -928,6 +1318,51 @@ async fn send_matrix_reaction(
     Ok(())
 }
 
+async fn send_matrix_reaction_runtime(
+    runtime: &MatrixRuntimeContext,
+    room_id: &str,
+    target_event_id: &str,
+    key: &str,
+    prefer_sdk_send: bool,
+) -> Result<(), String> {
+    if prefer_sdk_send {
+        if let Some(slot) = runtime.sdk_client.as_ref() {
+            let sdk_client = {
+                let guard = slot.read().await;
+                guard.clone()
+            };
+            if let Some(sdk_client) = sdk_client {
+                let parsed_room_id: OwnedRoomId = room_id
+                    .parse()
+                    .map_err(|e| format!("Invalid Matrix room id '{room_id}': {e}"))?;
+                let parsed_event_id: OwnedEventId = target_event_id
+                    .parse()
+                    .map_err(|e| format!("Invalid Matrix event id '{target_event_id}': {e}"))?;
+                if let Some(room) = sdk_client.get_room(&parsed_room_id) {
+                    let content = ReactionEventContent::new(Annotation::new(
+                        parsed_event_id,
+                        key.to_string(),
+                    ));
+                    room.send(content)
+                        .await
+                        .map_err(|e| format!("Matrix SDK reaction send failed: {e}"))?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    send_matrix_reaction(
+        &reqwest::Client::new(),
+        &runtime.homeserver_url,
+        &runtime.access_token,
+        room_id,
+        target_event_id,
+        key,
+    )
+    .await
+}
+
 struct MatrixIncomingMessage {
     room_id: String,
     is_direct: bool,
@@ -935,6 +1370,7 @@ struct MatrixIncomingMessage {
     event_id: String,
     body: String,
     mentioned_bot: bool,
+    prefer_sdk_send: bool,
 }
 
 async fn resolve_matrix_chat_id(
@@ -1006,8 +1442,6 @@ async fn handle_matrix_message(
         return;
     }
 
-    let client = reqwest::Client::new();
-
     let incoming = StoredMessage {
         id: if msg.event_id.trim().is_empty() {
             uuid::Uuid::new_v4().to_string()
@@ -1029,12 +1463,11 @@ async fn handle_matrix_message(
             db.clear_chat_context(chat_id)
         })
         .await;
-        let _ = send_matrix_text(
-            &client,
-            &runtime.homeserver_url,
-            &runtime.access_token,
+        let _ = send_matrix_text_runtime(
+            &runtime,
             &msg.room_id,
             "Context cleared (session + chat history).",
+            msg.prefer_sdk_send,
         )
         .await;
         return;
@@ -1042,28 +1475,15 @@ async fn handle_matrix_message(
 
     if trimmed == "/skills" {
         let formatted = app_state.skills.list_skills_formatted();
-        let _ = send_matrix_text(
-            &client,
-            &runtime.homeserver_url,
-            &runtime.access_token,
-            &msg.room_id,
-            &formatted,
-        )
-        .await;
+        let _ =
+            send_matrix_text_runtime(&runtime, &msg.room_id, &formatted, msg.prefer_sdk_send).await;
         return;
     }
 
     if trimmed == "/reload-skills" {
         let reloaded = app_state.skills.reload();
         let text = format!("Reloaded {} skills from disk.", reloaded.len());
-        let _ = send_matrix_text(
-            &client,
-            &runtime.homeserver_url,
-            &runtime.access_token,
-            &msg.room_id,
-            &text,
-        )
-        .await;
+        let _ = send_matrix_text_runtime(&runtime, &msg.room_id, &text, msg.prefer_sdk_send).await;
         return;
     }
 
@@ -1073,12 +1493,11 @@ async fn handle_matrix_message(
         {
             let messages: Vec<LlmMessage> = serde_json::from_str(&json).unwrap_or_default();
             if messages.is_empty() {
-                let _ = send_matrix_text(
-                    &client,
-                    &runtime.homeserver_url,
-                    &runtime.access_token,
+                let _ = send_matrix_text_runtime(
+                    &runtime,
                     &msg.room_id,
                     "No session to archive.",
+                    msg.prefer_sdk_send,
                 )
                 .await;
             } else {
@@ -1088,22 +1507,20 @@ async fn handle_matrix_message(
                     chat_id,
                     &messages,
                 );
-                let _ = send_matrix_text(
-                    &client,
-                    &runtime.homeserver_url,
-                    &runtime.access_token,
+                let _ = send_matrix_text_runtime(
+                    &runtime,
                     &msg.room_id,
                     &format!("Archived {} messages.", messages.len()),
+                    msg.prefer_sdk_send,
                 )
                 .await;
             }
         } else {
-            let _ = send_matrix_text(
-                &client,
-                &runtime.homeserver_url,
-                &runtime.access_token,
+            let _ = send_matrix_text_runtime(
+                &runtime,
                 &msg.room_id,
                 "No session to archive.",
+                msg.prefer_sdk_send,
             )
             .await;
         }
@@ -1113,22 +1530,16 @@ async fn handle_matrix_message(
     if trimmed == "/usage" {
         match build_usage_report(app_state.db.clone(), chat_id).await {
             Ok(report) => {
-                let _ = send_matrix_text(
-                    &client,
-                    &runtime.homeserver_url,
-                    &runtime.access_token,
-                    &msg.room_id,
-                    &report,
-                )
-                .await;
+                let _ =
+                    send_matrix_text_runtime(&runtime, &msg.room_id, &report, msg.prefer_sdk_send)
+                        .await;
             }
             Err(e) => {
-                let _ = send_matrix_text(
-                    &client,
-                    &runtime.homeserver_url,
-                    &runtime.access_token,
+                let _ = send_matrix_text_runtime(
+                    &runtime,
                     &msg.room_id,
                     &format!("Failed to query usage statistics: {e}"),
+                    msg.prefer_sdk_send,
                 )
                 .await;
             }
@@ -1176,13 +1587,12 @@ async fn handle_matrix_message(
             if !response.is_empty() {
                 if let Some(reaction_key) = looks_like_reaction_token(&response) {
                     if !msg.event_id.trim().is_empty() {
-                        if let Err(e) = send_matrix_reaction(
-                            &client,
-                            &runtime.homeserver_url,
-                            &runtime.access_token,
+                        if let Err(e) = send_matrix_reaction_runtime(
+                            &runtime,
                             &msg.room_id,
                             &msg.event_id,
                             &reaction_key,
+                            msg.prefer_sdk_send,
                         )
                         .await
                         {
@@ -1205,12 +1615,11 @@ async fn handle_matrix_message(
                     }
                 }
 
-                if let Err(e) = send_matrix_text(
-                    &client,
-                    &runtime.homeserver_url,
-                    &runtime.access_token,
+                if let Err(e) = send_matrix_text_runtime(
+                    &runtime,
                     &msg.room_id,
                     &response,
+                    msg.prefer_sdk_send,
                 )
                 .await
                 {
@@ -1230,14 +1639,9 @@ async fn handle_matrix_message(
             } else if !used_send_message_tool {
                 let fallback =
                     "I couldn't produce a visible reply after an automatic retry. Please try again.";
-                let _ = send_matrix_text(
-                    &client,
-                    &runtime.homeserver_url,
-                    &runtime.access_token,
-                    &msg.room_id,
-                    fallback,
-                )
-                .await;
+                let _ =
+                    send_matrix_text_runtime(&runtime, &msg.room_id, fallback, msg.prefer_sdk_send)
+                        .await;
 
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -1253,12 +1657,11 @@ async fn handle_matrix_message(
         }
         Err(e) => {
             error!("Error processing Matrix message: {e}");
-            let _ = send_matrix_text(
-                &client,
-                &runtime.homeserver_url,
-                &runtime.access_token,
+            let _ = send_matrix_text_runtime(
+                &runtime,
                 &msg.room_id,
                 &format!("Error: {e}"),
+                msg.prefer_sdk_send,
             )
             .await;
         }
@@ -1322,6 +1725,7 @@ mod tests {
             allowed_user_ids: Vec::new(),
             mention_required: true,
             sync_timeout_ms: 30_000,
+            sdk_client: None,
         };
 
         assert!(runtime.should_respond("hello there", true, false));
@@ -1341,6 +1745,7 @@ mod tests {
             allowed_user_ids: vec!["@alice:localhost".to_string()],
             mention_required: true,
             sync_timeout_ms: 30_000,
+            sdk_client: None,
         };
 
         assert!(runtime.should_process_dm_sender("@alice:localhost"));
@@ -1359,6 +1764,7 @@ mod tests {
             allowed_user_ids: Vec::new(),
             mention_required: true,
             sync_timeout_ms: 30_000,
+            sdk_client: None,
         };
 
         assert!(runtime.should_process_group_room("!group:localhost"));
