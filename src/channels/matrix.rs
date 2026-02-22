@@ -10,6 +10,7 @@ use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::SyncSettings as MatrixSyncSettings;
 use matrix_sdk::ruma::events::reaction::{ReactionEventContent, SyncReactionEvent};
 use matrix_sdk::ruma::events::relation::Annotation;
+use matrix_sdk::ruma::events::room::member::{MembershipState, StrippedRoomMemberEvent};
 use matrix_sdk::ruma::events::room::message::{
     MessageType, RoomMessageEventContent, SyncRoomMessageEvent,
 };
@@ -642,6 +643,16 @@ fn matrix_sdk_store_dir(app_state: &AppState, runtime: &MatrixRuntimeContext) ->
         .join(matrix_channel_slug(&runtime.channel_name))
 }
 
+async fn auto_join_invited_rooms(client: &MatrixSdkClient) {
+    for room in client.invited_rooms() {
+        let room_id = room.room_id().to_string();
+        match room.join().await {
+            Ok(()) => info!("Matrix auto-joined invited room {}", room_id),
+            Err(e) => warn!("Matrix failed to auto-join invited room {}: {e}", room_id),
+        }
+    }
+}
+
 async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntimeContext) {
     let Some(slot) = runtime.sdk_client.as_ref() else {
         return;
@@ -658,6 +669,25 @@ async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntime
     let handler_state = app_state.clone();
     let handler_runtime = runtime.clone();
     let handler_boot = bootstrapped.clone();
+    let invite_runtime = runtime.clone();
+
+    client.add_event_handler(move |ev: StrippedRoomMemberEvent, room: MatrixSdkRoom| {
+        let runtime = invite_runtime.clone();
+        async move {
+            if ev.content.membership != MembershipState::Invite {
+                return;
+            }
+            if ev.state_key.as_str() != runtime.bot_user_id {
+                return;
+            }
+
+            let room_id = room.room_id().to_string();
+            match room.join().await {
+                Ok(()) => info!("Matrix auto-joined invite room {}", room_id),
+                Err(e) => warn!("Matrix failed to auto-join invite room {}: {e}", room_id),
+            }
+        }
+    });
 
     client.add_event_handler(move |ev: SyncRoomMessageEvent, room: MatrixSdkRoom| {
         let app_state = handler_state.clone();
@@ -755,6 +785,7 @@ async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntime
         if !bootstrapped.load(std::sync::atomic::Ordering::SeqCst) {
             match client.sync_once(settings()).await {
                 Ok(_) => {
+                    auto_join_invited_rooms(&client).await;
                     bootstrapped.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 Err(e) => {
