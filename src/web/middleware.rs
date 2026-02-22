@@ -120,7 +120,21 @@ pub(super) fn verify_password_hash(stored: &str, password: &str) -> bool {
     sha256_hex(&format!("{salt}:{password}")) == hash
 }
 
-pub(super) fn client_key_from_headers(headers: &HeaderMap) -> String {
+pub(super) fn client_key_from_headers_with_config(headers: &HeaderMap, config: &Config) -> String {
+    let trust_xff = config
+        .channels
+        .get("web")
+        .and_then(|v| v.as_mapping())
+        .and_then(|map| {
+            map.get(serde_yaml::Value::String(
+                "trust_x_forwarded_for".to_string(),
+            ))
+        })
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !trust_xff {
+        return "global".to_string();
+    }
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())

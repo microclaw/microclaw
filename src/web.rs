@@ -384,6 +384,38 @@ impl RequestHub {
 }
 
 impl AuthHub {
+    const MAX_BUCKET_KEYS: usize = 4096;
+
+    fn prune_buckets(
+        buckets: &mut HashMap<String, VecDeque<Instant>>,
+        now: Instant,
+        window: Duration,
+        max_keys: usize,
+    ) {
+        buckets.retain(|_, bucket| {
+            while let Some(ts) = bucket.front() {
+                if now.duration_since(*ts) > window {
+                    let _ = bucket.pop_front();
+                } else {
+                    break;
+                }
+            }
+            !bucket.is_empty()
+        });
+        if buckets.len() <= max_keys {
+            return;
+        }
+        let mut by_oldest = buckets
+            .iter()
+            .filter_map(|(k, bucket)| bucket.back().copied().map(|ts| (k.clone(), ts)))
+            .collect::<Vec<_>>();
+        by_oldest.sort_by_key(|(_, ts)| *ts);
+        let remove_n = buckets.len().saturating_sub(max_keys);
+        for (k, _) in by_oldest.into_iter().take(remove_n) {
+            let _ = buckets.remove(&k);
+        }
+    }
+
     async fn allow_login_attempt(
         &self,
         client_key: &str,
@@ -392,6 +424,10 @@ impl AuthHub {
     ) -> bool {
         let now = Instant::now();
         let mut guard = self.login_buckets.lock().await;
+        Self::prune_buckets(&mut guard, now, window, Self::MAX_BUCKET_KEYS);
+        if !guard.contains_key(client_key) && guard.len() >= Self::MAX_BUCKET_KEYS {
+            return false;
+        }
         let bucket = guard.entry(client_key.to_string()).or_default();
         while let Some(ts) = bucket.front() {
             if now.duration_since(*ts) > window {
@@ -415,6 +451,10 @@ impl AuthHub {
     ) -> bool {
         let now = Instant::now();
         let mut guard = self.api_key_buckets.lock().await;
+        Self::prune_buckets(&mut guard, now, window, Self::MAX_BUCKET_KEYS);
+        if !guard.contains_key(api_key_actor) && guard.len() >= Self::MAX_BUCKET_KEYS {
+            return false;
+        }
         let bucket = guard.entry(api_key_actor.to_string()).or_default();
         while let Some(ts) = bucket.front() {
             if now.duration_since(*ts) > window {
@@ -2787,5 +2827,42 @@ mod tests {
             .unwrap();
         let second_resp = app.oneshot(second_try).await.unwrap();
         assert_eq!(second_resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_client_key_ignores_xff_by_default() {
+        let cfg = test_config_template();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.10".parse().unwrap());
+        let key = client_key_from_headers_with_config(&headers, &cfg);
+        assert_eq!(key, "global");
+    }
+
+    #[test]
+    fn test_client_key_uses_xff_when_trusted() {
+        let mut cfg = test_config_template();
+        cfg.channels.insert(
+            "web".to_string(),
+            serde_yaml::to_value(json!({"trust_x_forwarded_for": true})).unwrap(),
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.10, 198.51.100.2".parse().unwrap(),
+        );
+        let key = client_key_from_headers_with_config(&headers, &cfg);
+        assert_eq!(key, "203.0.113.10");
+    }
+
+    #[tokio::test]
+    async fn test_auth_hub_login_bucket_limit_caps_key_spray() {
+        let hub = AuthHub::default();
+        let window = Duration::from_secs(60);
+        for i in 0..AuthHub::MAX_BUCKET_KEYS {
+            let ok = hub.allow_login_attempt(&format!("k{i}"), 1, window).await;
+            assert!(ok);
+        }
+        let blocked = hub.allow_login_attempt("overflow", 1, window).await;
+        assert!(!blocked);
     }
 }

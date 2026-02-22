@@ -84,7 +84,7 @@ pub(super) async fn api_auth_login(
     Json(body): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     metrics_http_inc(&state).await;
-    let client_key = client_key_from_headers(&headers);
+    let client_key = client_key_from_headers_with_config(&headers, &state.app_state.config);
     let allowed = state
         .auth_hub
         .allow_login_attempt(&client_key, 5, Duration::from_secs(60))
