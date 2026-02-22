@@ -532,6 +532,7 @@ pub async fn execute_plugin_slash_command(
                     run.timeout_secs,
                     run.execution_policy
                         .unwrap_or(PluginExecutionPolicy::HostOnly),
+                    &vars,
                 )
                 .await
                 {
@@ -672,11 +673,9 @@ async fn execute_with_template(
     command_template: &str,
     timeout_secs: u64,
     execution_policy: PluginExecutionPolicy,
+    vars: &HashMap<String, String>,
 ) -> anyhow::Result<SandboxExecResult> {
-    let mut vars = HashMap::new();
-    vars.insert("channel".to_string(), caller_channel.to_string());
-    vars.insert("chat_id".to_string(), caller_chat_id.to_string());
-    let command = render_template_checked(command_template, &vars, true)?;
+    let command = render_template_checked(command_template, vars, true)?;
 
     let base_working_dir = PathBuf::from(&config.working_dir);
     let working_dir = make_tool_working_dir(
@@ -1133,6 +1132,31 @@ commands:
             .await
             .unwrap();
         assert_eq!(allowed_control, "secure-ok");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_plugin_slash_command_run_command_can_use_args_variable() {
+        let root = make_temp_plugins_dir("slash_args");
+        std::fs::write(
+            root.join("cmd.yaml"),
+            r#"
+name: argsplug
+enabled: true
+commands:
+  - command: /echo
+    run:
+      command: "printf 'echo=%s\n' {{args}}"
+      timeout_secs: 5
+      execution_policy: host_only
+"#,
+        )
+        .unwrap();
+        let cfg = config_with_plugins_dir(&root);
+        let out = execute_plugin_slash_command(&cfg, "web", 7, "/echo hello world")
+            .await
+            .unwrap();
+        assert!(out.contains("echo=hello world"), "got: {out}");
         let _ = std::fs::remove_dir_all(root);
     }
 

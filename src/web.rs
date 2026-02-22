@@ -16,6 +16,9 @@ use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
+use crate::chat_commands::{
+    build_model_response, build_status_response, maybe_handle_plugin_command,
+};
 use crate::config::{Config, WorkingDirIsolation};
 use crate::otlp::{OtlpExporter, OtlpMetricSnapshot};
 use crate::runtime::AppState;
@@ -24,6 +27,7 @@ use microclaw_channels::channel::{
     deliver_and_store_bot_message, get_chat_routing, session_source_for_chat,
 };
 use microclaw_channels::channel_adapter::{ChannelAdapter, ChannelRegistry};
+use microclaw_core::llm_types::Message;
 use microclaw_storage::db::{call_blocking, ChatSummary, MetricsHistoryPoint, StoredMessage};
 use microclaw_storage::usage::build_usage_report;
 
@@ -1306,6 +1310,25 @@ async fn send_and_store_response_with_events(
         }
     }
 
+    if let Some(command_response) = handle_web_slash_command(&state, &text, chat_id).await {
+        let bot_username = state.app_state.config.bot_username_for_channel("web");
+        deliver_and_store_bot_message(
+            &state.app_state.channel_registry,
+            state.app_state.db.clone(),
+            &bot_username,
+            chat_id,
+            &command_response,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        return Ok(Json(json!({
+            "ok": true,
+            "session_key": session_key,
+            "chat_id": chat_id,
+            "response": command_response,
+        })));
+    }
+
     let user_msg = StoredMessage {
         id: uuid::Uuid::new_v4().to_string(),
         chat_id,
@@ -1370,6 +1393,75 @@ async fn send_and_store_response_with_events(
         "chat_id": chat_id,
         "response": response,
     })))
+}
+
+async fn handle_web_slash_command(state: &WebState, text: &str, chat_id: i64) -> Option<String> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('/') {
+        return None;
+    }
+
+    if trimmed == "/reset" {
+        let _ = call_blocking(state.app_state.db.clone(), move |db| {
+            db.clear_chat_context(chat_id)
+        })
+        .await;
+        return Some("Context cleared (session + chat history).".to_string());
+    }
+
+    if trimmed == "/skills" {
+        return Some(state.app_state.skills.list_skills_formatted());
+    }
+
+    if trimmed == "/reload-skills" {
+        let reloaded = state.app_state.skills.reload();
+        return Some(format!("Reloaded {} skills from disk.", reloaded.len()));
+    }
+
+    if trimmed == "/archive" {
+        if let Ok(Some((json, _))) = call_blocking(state.app_state.db.clone(), move |db| {
+            db.load_session(chat_id)
+        })
+        .await
+        {
+            let messages: Vec<Message> = serde_json::from_str(&json).unwrap_or_default();
+            if messages.is_empty() {
+                return Some("No session to archive.".to_string());
+            }
+            crate::agent_engine::archive_conversation(
+                &state.app_state.config.data_dir,
+                "web",
+                chat_id,
+                &messages,
+            );
+            return Some(format!("Archived {} messages.", messages.len()));
+        }
+        return Some("No session to archive.".to_string());
+    }
+
+    if trimmed == "/usage" {
+        return match build_usage_report(state.app_state.db.clone(), chat_id).await {
+            Ok(report) => Some(report),
+            Err(e) => Some(format!("Failed to query usage statistics: {e}")),
+        };
+    }
+
+    if trimmed == "/status" {
+        let status = build_status_response(
+            state.app_state.db.clone(),
+            &state.app_state.config,
+            chat_id,
+            "web",
+        )
+        .await;
+        return Some(status);
+    }
+
+    if trimmed == "/model" || trimmed.starts_with("/model ") {
+        return Some(build_model_response(&state.app_state.config, trimmed));
+    }
+
+    maybe_handle_plugin_command(&state.app_state.config, trimmed, chat_id, "web").await
 }
 
 async fn api_audit_logs(
@@ -2615,6 +2707,78 @@ mod tests {
                 && n.get("fork_point").and_then(|v| v.as_i64()) == Some(1)
         });
         assert!(found);
+    }
+
+    #[tokio::test]
+    async fn test_web_send_model_slash_command() {
+        let web_state = test_web_state(Box::new(DummyLlm), None, WebLimits::default());
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"slash-main","sender_name":"u","message":"/model"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let response = v
+            .get("response")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default();
+        assert!(response.contains("Current provider/model"));
+    }
+
+    #[tokio::test]
+    async fn test_web_send_plugin_slash_command() {
+        let mut cfg = test_config_template();
+        let plugin_dir =
+            std::env::temp_dir().join(format!("microclaw_web_plugin_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("webplug.yaml"),
+            r#"
+name: webplug
+enabled: true
+commands:
+  - command: /webplug
+    response: "webplug-ok"
+"#,
+        )
+        .unwrap();
+        cfg.plugins.enabled = true;
+        cfg.plugins.dir = Some(plugin_dir.to_string_lossy().to_string());
+
+        let state = test_state_with_config(Box::new(DummyLlm), cfg);
+        let web_state = test_web_state_from_app_state(state, None, WebLimits::default());
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"slash-main","sender_name":"u","message":"/webplug"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            v.get("response").and_then(|x| x.as_str()),
+            Some("webplug-ok")
+        );
+
+        let _ = std::fs::remove_dir_all(plugin_dir);
     }
 
     #[tokio::test]
