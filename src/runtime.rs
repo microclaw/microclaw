@@ -3,7 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::channels::dingtalk::{build_dingtalk_runtime_contexts, DingTalkRuntimeContext};
 use crate::channels::discord::{build_discord_runtime_contexts, DiscordRuntimeContext};
@@ -390,28 +390,6 @@ pub async fn run(
 
     for (server, tool_info) in mcp_manager.all_tools() {
         tools.add_tool(Box::new(crate::tools::mcp::McpTool::new(server, tool_info)));
-    }
-    let mut existing_tool_names: HashSet<String> = tools
-        .definitions()
-        .iter()
-        .map(|d| d.name.to_ascii_lowercase())
-        .collect();
-    for loaded in crate::plugins::load_plugin_tools(&config) {
-        let normalized = loaded.spec.name.to_ascii_lowercase();
-        if existing_tool_names.contains(&normalized) {
-            warn!(
-                plugin = loaded.plugin_name.as_str(),
-                tool = loaded.spec.name.as_str(),
-                "Skipping plugin tool with duplicate name"
-            );
-            continue;
-        }
-        existing_tool_names.insert(normalized);
-        tools.add_tool(Box::new(crate::plugins::PluginTool::new(
-            &config,
-            loaded.plugin_name,
-            loaded.spec,
-        )));
     }
 
     let hooks = Arc::new(HookManager::from_config(&config).with_db(db.clone()));

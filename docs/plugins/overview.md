@@ -53,7 +53,7 @@ tools:
 
 - Custom slash commands are matched by first token (for example `/announce hello`).
 - Plugin tools are registered at startup and available to the agent loop.
-- Existing plugin tool behavior is hot-reloaded at execution time. Adding brand new tool names still requires restart.
+- Plugin tool names and behavior are loaded dynamically on each turn (no restart required).
 - `execution_policy` supports:
   - `host_only`
   - `sandbox_only`

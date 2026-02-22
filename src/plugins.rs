@@ -347,6 +347,52 @@ pub fn load_plugin_tools(config: &Config) -> Vec<LoadedPluginTool> {
     out
 }
 
+pub fn dynamic_plugin_tool_definitions(config: &Config) -> Vec<ToolDefinition> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for manifest in load_plugin_manifests(config) {
+        for spec in manifest.tools {
+            let normalized = spec.name.to_ascii_lowercase();
+            if normalized.is_empty() || !seen.insert(normalized) {
+                continue;
+            }
+            out.push(ToolDefinition {
+                name: spec.name,
+                description: format!("[plugin:{}] {}", manifest.name, spec.description),
+                input_schema: if spec.input_schema.is_object() {
+                    spec.input_schema
+                } else {
+                    default_plugin_tool_schema()
+                },
+            });
+        }
+    }
+    out
+}
+
+pub async fn execute_dynamic_plugin_tool(
+    config: &Config,
+    tool_name: &str,
+    input: serde_json::Value,
+) -> Option<ToolResult> {
+    let mut matched: Option<(String, PluginToolSpec)> = None;
+    for manifest in load_plugin_manifests(config) {
+        if let Some(spec) = manifest
+            .tools
+            .into_iter()
+            .find(|t| t.name.eq_ignore_ascii_case(tool_name))
+        {
+            matched = Some((manifest.name, spec));
+            break;
+        }
+    }
+    let Some((plugin_name, spec)) = matched else {
+        return None;
+    };
+
+    Some(execute_plugin_tool_spec(config, &plugin_name, &spec, input).await)
+}
+
 pub fn handle_plugins_admin_command(
     config: &Config,
     caller_chat_id: i64,
@@ -410,7 +456,7 @@ pub fn handle_plugins_admin_command(
             }
         }
         "reload" => Some(
-            "Plugin manifests are loaded dynamically. Command changes apply immediately; existing tool names refresh behavior on next execution. New tool names still require restart."
+            "Plugin manifests are loaded dynamically; command and tool changes apply immediately."
                 .to_string(),
         ),
         _ => Some("Usage: /plugins [list|validate|reload]".to_string()),
@@ -712,24 +758,119 @@ fn format_exec_result(result: &SandboxExecResult) -> String {
     out
 }
 
+async fn execute_plugin_tool_spec(
+    config: &Config,
+    _plugin_name: &str,
+    spec: &PluginToolSpec,
+    input: serde_json::Value,
+) -> ToolResult {
+    let auth = auth_context_from_input(&input);
+    let caller_channel = auth
+        .as_ref()
+        .map(|a| a.caller_channel.as_str())
+        .unwrap_or("unknown");
+    let caller_chat_id = auth.as_ref().map(|a| a.caller_chat_id).unwrap_or(0);
+
+    if !is_channel_allowed(caller_channel, &spec.permissions.allowed_channels) {
+        return ToolResult::error(format!(
+            "Plugin tool '{}' is not allowed in channel '{}'.",
+            spec.name, caller_channel
+        ))
+        .with_error_type("plugin_permission_denied");
+    }
+    if spec.permissions.require_control_chat && !config.control_chat_ids.contains(&caller_chat_id) {
+        return ToolResult::error(format!(
+            "Plugin tool '{}' requires control chat permission.",
+            spec.name
+        ))
+        .with_error_type("plugin_permission_denied");
+    }
+
+    let mut vars = HashMap::new();
+    vars.insert("channel".to_string(), caller_channel.to_string());
+    vars.insert("chat_id".to_string(), caller_chat_id.to_string());
+    if let Some(map) = input.as_object() {
+        for (k, v) in map {
+            if k == "__microclaw_auth" {
+                continue;
+            }
+            let value = if let Some(s) = v.as_str() {
+                s.to_string()
+            } else if v.is_number() || v.is_boolean() {
+                v.to_string()
+            } else {
+                serde_json::to_string(v).unwrap_or_default()
+            };
+            vars.insert(k.clone(), value);
+        }
+    }
+
+    let rendered = match render_template_checked(&spec.run.command, &vars, true) {
+        Ok(v) => v,
+        Err(e) => {
+            return ToolResult::error(format!("Plugin tool template error: {e}"))
+                .with_error_type("plugin_template_error");
+        }
+    };
+
+    let base_working_dir = PathBuf::from(&config.working_dir);
+    let working_dir = make_tool_working_dir(
+        &base_working_dir,
+        config.working_dir_isolation,
+        caller_channel,
+        caller_chat_id,
+    );
+    if let Err(e) = tokio::fs::create_dir_all(&working_dir).await {
+        return ToolResult::error(format!(
+            "Failed to create plugin working directory {}: {e}",
+            working_dir.display()
+        ))
+        .with_error_type("plugin_spawn_error");
+    }
+
+    let router = Arc::new(SandboxRouter::new(
+        config.sandbox.clone(),
+        &base_working_dir,
+    ));
+    let result = execute_command_with_policy(
+        router,
+        caller_channel,
+        caller_chat_id,
+        &rendered,
+        spec.run.timeout_secs,
+        working_dir,
+        PluginTool::resolve_policy(spec),
+    )
+    .await;
+
+    match result {
+        Ok(exec_result) => {
+            let text = format_exec_result(&exec_result);
+            if exec_result.exit_code == 0 {
+                ToolResult::success(text).with_status_code(exec_result.exit_code)
+            } else {
+                ToolResult::error(format!("Exit code {}\n{}", exec_result.exit_code, text))
+                    .with_status_code(exec_result.exit_code)
+                    .with_error_type("plugin_process_exit")
+            }
+        }
+        Err(e) => ToolResult::error(format!("Plugin tool execution failed: {e}"))
+            .with_error_type("plugin_spawn_error"),
+    }
+}
+
 pub struct PluginTool {
     plugin_name: String,
     config: Config,
     spec: PluginToolSpec,
-    sandbox_router: Arc<SandboxRouter>,
 }
 
 impl PluginTool {
     pub fn new(config: &Config, plugin_name: String, spec: PluginToolSpec) -> Self {
-        let base_working_dir = PathBuf::from(&config.working_dir);
         Self {
             plugin_name,
             config: config.clone(),
             spec,
-            sandbox_router: Arc::new(SandboxRouter::new(
-                config.sandbox.clone(),
-                &base_working_dir,
-            )),
         }
     }
 
@@ -774,97 +915,7 @@ impl Tool for PluginTool {
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult {
         let runtime_spec = self.resolve_runtime_spec();
-        let auth = auth_context_from_input(&input);
-        let caller_channel = auth
-            .as_ref()
-            .map(|a| a.caller_channel.as_str())
-            .unwrap_or("unknown");
-        let caller_chat_id = auth.as_ref().map(|a| a.caller_chat_id).unwrap_or(0);
-
-        if !is_channel_allowed(caller_channel, &runtime_spec.permissions.allowed_channels) {
-            return ToolResult::error(format!(
-                "Plugin tool '{}' is not allowed in channel '{}'.",
-                runtime_spec.name, caller_channel
-            ))
-            .with_error_type("plugin_permission_denied");
-        }
-        if runtime_spec.permissions.require_control_chat
-            && !self.config.control_chat_ids.contains(&caller_chat_id)
-        {
-            return ToolResult::error(format!(
-                "Plugin tool '{}' requires control chat permission.",
-                runtime_spec.name
-            ))
-            .with_error_type("plugin_permission_denied");
-        }
-
-        let mut vars = HashMap::new();
-        vars.insert("channel".to_string(), caller_channel.to_string());
-        vars.insert("chat_id".to_string(), caller_chat_id.to_string());
-        if let Some(map) = input.as_object() {
-            for (k, v) in map {
-                if k == "__microclaw_auth" {
-                    continue;
-                }
-                let value = if let Some(s) = v.as_str() {
-                    s.to_string()
-                } else if v.is_number() || v.is_boolean() {
-                    v.to_string()
-                } else {
-                    serde_json::to_string(v).unwrap_or_default()
-                };
-                vars.insert(k.clone(), value);
-            }
-        }
-
-        let rendered = match render_template_checked(&runtime_spec.run.command, &vars, true) {
-            Ok(v) => v,
-            Err(e) => {
-                return ToolResult::error(format!("Plugin tool template error: {e}"))
-                    .with_error_type("plugin_template_error");
-            }
-        };
-
-        let base_working_dir = PathBuf::from(&self.config.working_dir);
-        let working_dir = make_tool_working_dir(
-            &base_working_dir,
-            self.config.working_dir_isolation,
-            caller_channel,
-            caller_chat_id,
-        );
-        if let Err(e) = tokio::fs::create_dir_all(&working_dir).await {
-            return ToolResult::error(format!(
-                "Failed to create plugin working directory {}: {e}",
-                working_dir.display()
-            ))
-            .with_error_type("plugin_spawn_error");
-        }
-
-        let result = execute_command_with_policy(
-            self.sandbox_router.clone(),
-            caller_channel,
-            caller_chat_id,
-            &rendered,
-            runtime_spec.run.timeout_secs,
-            working_dir,
-            Self::resolve_policy(&runtime_spec),
-        )
-        .await;
-
-        match result {
-            Ok(exec_result) => {
-                let text = format_exec_result(&exec_result);
-                if exec_result.exit_code == 0 {
-                    ToolResult::success(text).with_status_code(exec_result.exit_code)
-                } else {
-                    ToolResult::error(format!("Exit code {}\n{}", exec_result.exit_code, text))
-                        .with_status_code(exec_result.exit_code)
-                        .with_error_type("plugin_process_exit")
-                }
-            }
-            Err(e) => ToolResult::error(format!("Plugin tool execution failed: {e}"))
-                .with_error_type("plugin_spawn_error"),
-        }
+        execute_plugin_tool_spec(&self.config, &self.plugin_name, &runtime_spec, input).await
     }
 }
 

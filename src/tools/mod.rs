@@ -35,10 +35,11 @@ use microclaw_tools::runtime::{inject_auth_context, require_high_risk_approval};
 use microclaw_tools::sandbox::{SandboxMode, SandboxRouter};
 
 pub struct ToolRegistry {
+    config: Config,
     tools: Vec<Box<dyn Tool>>,
     sandbox_mode: SandboxMode,
     sandbox_runtime_available: bool,
-    cached_definitions: OnceLock<Vec<ToolDefinition>>,
+    cached_static_definitions: OnceLock<Vec<ToolDefinition>>,
 }
 
 impl ToolRegistry {
@@ -187,10 +188,11 @@ impl ToolRegistry {
         }
 
         ToolRegistry {
+            config: config.clone(),
             tools,
             sandbox_mode: sandbox_router.mode(),
             sandbox_runtime_available: sandbox_router.runtime_available(),
-            cached_definitions: OnceLock::new(),
+            cached_static_definitions: OnceLock::new(),
         }
     }
 
@@ -256,22 +258,35 @@ impl ToolRegistry {
             )),
         ];
         ToolRegistry {
+            config: config.clone(),
             tools,
             sandbox_mode: sandbox_router.mode(),
             sandbox_runtime_available: sandbox_router.runtime_available(),
-            cached_definitions: OnceLock::new(),
+            cached_static_definitions: OnceLock::new(),
         }
     }
 
     pub fn add_tool(&mut self, tool: Box<dyn Tool>) {
         // Invalidate cache when a new tool is added
-        self.cached_definitions = OnceLock::new();
+        self.cached_static_definitions = OnceLock::new();
         self.tools.push(tool);
     }
 
-    pub fn definitions(&self) -> &[ToolDefinition] {
-        self.cached_definitions
+    pub fn definitions(&self) -> Vec<ToolDefinition> {
+        let static_defs = self
+            .cached_static_definitions
             .get_or_init(|| self.tools.iter().map(|t| t.definition()).collect())
+            .clone();
+        let mut out = static_defs;
+        let mut existing: std::collections::HashSet<String> =
+            out.iter().map(|d| d.name.to_ascii_lowercase()).collect();
+        for plugin_def in crate::plugins::dynamic_plugin_tool_definitions(&self.config) {
+            let normalized = plugin_def.name.to_ascii_lowercase();
+            if existing.insert(normalized) {
+                out.push(plugin_def);
+            }
+        }
+        out
     }
 
     pub async fn execute(&self, name: &str, input: serde_json::Value) -> ToolResult {
@@ -317,7 +332,15 @@ impl ToolRegistry {
             "tool execution policy evaluated"
         );
         let input = inject_auth_context(input, auth);
-        self.execute(name, input).await
+        let result = self.execute(name, input.clone()).await;
+        if result.error_type.as_deref() == Some("unknown_tool") {
+            if let Some(dynamic) =
+                crate::plugins::execute_dynamic_plugin_tool(&self.config, name, input).await
+            {
+                return dynamic;
+            }
+        }
+        result
     }
 }
 
@@ -465,9 +488,10 @@ mod tests {
     #[tokio::test]
     async fn test_high_risk_tool_requires_explicit_approval_on_web() {
         let registry = ToolRegistry {
+            config: crate::config::Config::test_defaults(),
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
-            cached_definitions: OnceLock::new(),
+            cached_static_definitions: OnceLock::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -500,9 +524,10 @@ mod tests {
     #[tokio::test]
     async fn test_high_risk_tool_requires_explicit_approval_on_control_chat() {
         let registry = ToolRegistry {
+            config: crate::config::Config::test_defaults(),
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
-            cached_definitions: OnceLock::new(),
+            cached_static_definitions: OnceLock::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -531,9 +556,10 @@ mod tests {
     #[tokio::test]
     async fn test_medium_risk_tool_no_second_approval() {
         let registry = ToolRegistry {
+            config: crate::config::Config::test_defaults(),
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
-            cached_definitions: OnceLock::new(),
+            cached_static_definitions: OnceLock::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "write_file".into(),
             })],
@@ -549,5 +575,60 @@ mod tests {
             .await;
         assert!(!result.is_error);
         assert_eq!(result.content, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_plugin_tool_executes_without_restart() {
+        let root = std::env::temp_dir().join(format!("microclaw_plugin_{}", uuid::Uuid::new_v4()));
+        let plugins_dir = root.join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+        let manifest = plugins_dir.join("demo.yaml");
+        std::fs::write(
+            &manifest,
+            r#"
+name: demo
+enabled: true
+tools:
+  - name: plugin_runtime_echo
+    description: runtime echo
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+    run:
+      command: "printf plugin-ok"
+      timeout_secs: 5
+"#,
+        )
+        .unwrap();
+
+        let mut config = crate::config::Config::test_defaults();
+        config.working_dir = root.join("work").to_string_lossy().to_string();
+        config.plugins.enabled = true;
+        config.plugins.dir = Some(plugins_dir.to_string_lossy().to_string());
+
+        let registry = ToolRegistry {
+            config,
+            tools: vec![],
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+        };
+        let auth = ToolAuthContext {
+            caller_channel: "web".into(),
+            caller_chat_id: 7,
+            control_chat_ids: vec![],
+        };
+
+        let defs = registry.definitions();
+        assert!(defs.iter().any(|d| d.name == "plugin_runtime_echo"));
+
+        let result = registry
+            .execute_with_auth("plugin_runtime_echo", json!({}), &auth)
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("plugin-ok"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }
