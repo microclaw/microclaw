@@ -148,7 +148,7 @@ sleep 8
 
 pushd "$ROOT_DIR" >/dev/null
 set +e
-PROBE_OUT="$(cargo run --quiet --bin matrix_e2ee_probe -- \
+PROBE_OUT="$(cargo run --quiet --features matrix-e2ee-probe --bin matrix_e2ee_probe -- \
   --homeserver-url "$BASE_URL" \
   --access-token "$ALICE_TOKEN" \
   --room-id "$ROOM_ID" \
