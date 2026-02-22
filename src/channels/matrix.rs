@@ -66,6 +66,8 @@ pub struct MatrixAccountConfig {
     pub mention_required: bool,
     #[serde(default = "default_matrix_sync_timeout_ms")]
     pub sync_timeout_ms: u64,
+    #[serde(default)]
+    pub backup_key: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -88,6 +90,8 @@ pub struct MatrixChannelConfig {
     pub mention_required: bool,
     #[serde(default = "default_matrix_sync_timeout_ms")]
     pub sync_timeout_ms: u64,
+    #[serde(default)]
+    pub backup_key: String,
     #[serde(default)]
     pub accounts: HashMap<String, MatrixAccountConfig>,
     #[serde(default)]
@@ -124,6 +128,7 @@ pub struct MatrixRuntimeContext {
     pub allowed_user_ids: Vec<String>,
     pub mention_required: bool,
     pub sync_timeout_ms: u64,
+    pub backup_key: String,
     pub sdk_client: Option<Arc<RwLock<Option<Arc<MatrixSdkClient>>>>>,
 }
 
@@ -238,6 +243,7 @@ pub fn build_matrix_runtime_contexts(config: &crate::config::Config) -> Vec<Matr
             allowed_user_ids: account_cfg.allowed_user_ids.clone(),
             mention_required: account_cfg.mention_required,
             sync_timeout_ms: account_cfg.sync_timeout_ms,
+            backup_key: account_cfg.backup_key.clone(),
             sdk_client: None,
         });
     }
@@ -261,6 +267,7 @@ pub fn build_matrix_runtime_contexts(config: &crate::config::Config) -> Vec<Matr
             allowed_user_ids: matrix_cfg.allowed_user_ids,
             mention_required: matrix_cfg.mention_required,
             sync_timeout_ms: matrix_cfg.sync_timeout_ms,
+            backup_key: matrix_cfg.backup_key,
             sdk_client: None,
         });
     }
@@ -535,6 +542,19 @@ async fn build_matrix_sdk_client(
         return None;
     }
 
+    if !runtime.backup_key.trim().is_empty() {
+        if let Err(e) = sdk_client
+            .encryption()
+            .recovery()
+            .recover(runtime.backup_key.trim())
+            .await
+        {
+            warn!("Matrix SDK recovery setup failed with configured backup_key: {e}");
+        } else {
+            info!("Matrix SDK recovery initialized from configured backup_key");
+        }
+    }
+
     Some(sdk_client)
 }
 
@@ -578,12 +598,16 @@ async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntime
     let handler_boot = bootstrapped.clone();
 
     client.add_event_handler(
-        move |ev: SyncRoomMessageEvent, room: MatrixSdkRoom, encryption_info: Option<EncryptionInfo>| {
+        move |ev: SyncRoomMessageEvent,
+              room: MatrixSdkRoom,
+              encryption_info: Option<EncryptionInfo>| {
             let app_state = handler_state.clone();
             let runtime = handler_runtime.clone();
             let bootstrapped = handler_boot.clone();
             async move {
-                if encryption_info.is_none() || !bootstrapped.load(std::sync::atomic::Ordering::SeqCst) {
+                if encryption_info.is_none()
+                    || !bootstrapped.load(std::sync::atomic::Ordering::SeqCst)
+                {
                     return;
                 }
                 let SyncRoomMessageEvent::Original(ev) = ev else {
@@ -595,8 +619,10 @@ async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntime
                 if body.trim().is_empty() {
                     return;
                 }
-                let mentioned_bot =
-                    is_bot_mentioned_in_mentions(ev.content.mentions.as_ref(), &runtime.bot_user_id);
+                let mentioned_bot = is_bot_mentioned_in_mentions(
+                    ev.content.mentions.as_ref(),
+                    &runtime.bot_user_id,
+                );
                 let room_id = room.room_id().to_string();
                 let is_direct = room
                     .is_direct()
@@ -626,12 +652,16 @@ async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntime
     let reaction_runtime = runtime.clone();
     let reaction_boot = bootstrapped.clone();
     client.add_event_handler(
-        move |ev: SyncReactionEvent, room: MatrixSdkRoom, encryption_info: Option<EncryptionInfo>| {
+        move |ev: SyncReactionEvent,
+              room: MatrixSdkRoom,
+              encryption_info: Option<EncryptionInfo>| {
             let app_state = reaction_state.clone();
             let runtime = reaction_runtime.clone();
             let bootstrapped = reaction_boot.clone();
             async move {
-                if encryption_info.is_none() || !bootstrapped.load(std::sync::atomic::Ordering::SeqCst) {
+                if encryption_info.is_none()
+                    || !bootstrapped.load(std::sync::atomic::Ordering::SeqCst)
+                {
                     return;
                 }
                 let SyncReactionEvent::Original(ev) = ev else {
@@ -664,8 +694,10 @@ async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntime
     );
 
     loop {
-        let settings =
-            || MatrixSyncSettings::default().timeout(Duration::from_millis(runtime.sync_timeout_ms_or_default()));
+        let settings = || {
+            MatrixSyncSettings::default()
+                .timeout(Duration::from_millis(runtime.sync_timeout_ms_or_default()))
+        };
         if !bootstrapped.load(std::sync::atomic::Ordering::SeqCst) {
             match client.sync_once(settings()).await {
                 Ok(_) => {
@@ -1666,13 +1698,9 @@ async fn handle_matrix_message(
                     }
                 }
 
-                if let Err(e) = send_matrix_text_runtime(
-                    &runtime,
-                    &msg.room_id,
-                    &response,
-                    msg.prefer_sdk_send,
-                )
-                .await
+                if let Err(e) =
+                    send_matrix_text_runtime(&runtime, &msg.room_id, &response, msg.prefer_sdk_send)
+                        .await
                 {
                     error!("Matrix: failed to send response: {e}");
                 }
@@ -1724,18 +1752,17 @@ mod tests {
     use super::{
         extract_matrix_user_ids, is_bot_mentioned_in_mentions, looks_like_reaction_token,
         matrix_channel_slug, matrix_mentions_for_text, matrix_message_payload_for_text,
-        matrix_sdk_clients,
-        normalize_matrix_message_body, normalize_matrix_sdk_message_type, MatrixRuntimeContext,
-        Mentions,
+        matrix_sdk_clients, normalize_matrix_message_body, normalize_matrix_sdk_message_type,
+        MatrixRuntimeContext, Mentions,
     };
-    use matrix_sdk::Client as MatrixSdkClient;
     use matrix_sdk::ruma::events::room::message::{
         AudioMessageEventContent, FileMessageEventContent, ImageMessageEventContent, MessageType,
         TextMessageEventContent, VideoMessageEventContent,
     };
+    use matrix_sdk::Client as MatrixSdkClient;
+    use serde_json::json;
     use std::collections::BTreeSet;
     use std::sync::Arc;
-    use serde_json::json;
 
     #[test]
     fn test_extract_matrix_user_ids() {
@@ -1786,6 +1813,7 @@ mod tests {
             allowed_user_ids: Vec::new(),
             mention_required: true,
             sync_timeout_ms: 30_000,
+            backup_key: String::new(),
             sdk_client: None,
         };
 
@@ -1806,6 +1834,7 @@ mod tests {
             allowed_user_ids: vec!["@alice:localhost".to_string()],
             mention_required: true,
             sync_timeout_ms: 30_000,
+            backup_key: String::new(),
             sdk_client: None,
         };
 
@@ -1825,6 +1854,7 @@ mod tests {
             allowed_user_ids: Vec::new(),
             mention_required: true,
             sync_timeout_ms: 30_000,
+            backup_key: String::new(),
             sdk_client: None,
         };
 
@@ -1868,13 +1898,12 @@ mod tests {
         .expect("image");
         assert!(image.contains("[attachment:m.image]"));
 
-        let file = normalize_matrix_sdk_message_type(&MessageType::File(
-            FileMessageEventContent::plain(
+        let file =
+            normalize_matrix_sdk_message_type(&MessageType::File(FileMessageEventContent::plain(
                 "file.bin".to_string(),
                 matrix_sdk::ruma::mxc_uri!("mxc://example.org/file").into(),
-            ),
-        ))
-        .expect("file");
+            )))
+            .expect("file");
         assert!(file.contains("[attachment:m.file]"));
 
         let audio = normalize_matrix_sdk_message_type(&MessageType::Audio(
