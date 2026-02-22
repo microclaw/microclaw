@@ -62,7 +62,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 argon2 = "0.5"
 opentelemetry-proto = { version = "0.28", features = ["gen-tonic-messages"] }
 prost = "0.13"
-matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "native-tls"] }
+matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "native-tls", "sqlite", "bundled-sqlite"] }
 
 [dev-dependencies]
 tower = "0.5"

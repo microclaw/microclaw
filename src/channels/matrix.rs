@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -460,10 +460,18 @@ async fn build_matrix_sdk_client(
     app_state: Arc<AppState>,
     runtime: &MatrixRuntimeContext,
 ) -> Option<MatrixSdkClient> {
-    let _ = app_state;
+    let store_dir = matrix_sdk_store_dir(&app_state, runtime);
+    if let Err(e) = std::fs::create_dir_all(&store_dir) {
+        warn!(
+            "Matrix SDK could not create store directory '{}': {e}",
+            store_dir.display()
+        );
+        return None;
+    }
 
     let sdk_client = match MatrixSdkClient::builder()
         .homeserver_url(runtime.homeserver_url.clone())
+        .sqlite_store(&store_dir, None)
         .build()
         .await
     {
@@ -528,6 +536,28 @@ async fn build_matrix_sdk_client(
     }
 
     Some(sdk_client)
+}
+
+fn matrix_channel_slug(channel_name: &str) -> String {
+    let mut out = String::with_capacity(channel_name.len());
+    for ch in channel_name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "matrix".to_string()
+    } else {
+        out
+    }
+}
+
+fn matrix_sdk_store_dir(app_state: &AppState, runtime: &MatrixRuntimeContext) -> PathBuf {
+    PathBuf::from(app_state.config.runtime_data_dir())
+        .join("matrix_sdk")
+        .join(matrix_channel_slug(&runtime.channel_name))
 }
 
 async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntimeContext) {
@@ -1680,7 +1710,8 @@ async fn handle_matrix_message(
 mod tests {
     use super::{
         extract_matrix_user_ids, is_bot_mentioned_in_mentions, looks_like_reaction_token,
-        matrix_mentions_for_text, matrix_message_payload_for_text, matrix_sdk_clients,
+        matrix_channel_slug, matrix_mentions_for_text, matrix_message_payload_for_text,
+        matrix_sdk_clients,
         normalize_matrix_message_body, normalize_matrix_sdk_message_type, MatrixRuntimeContext,
         Mentions,
     };
@@ -1884,5 +1915,12 @@ mod tests {
         assert!(got.is_some());
 
         matrix_sdk_clients().write().await.remove(&key);
+    }
+
+    #[test]
+    fn test_matrix_channel_slug_sanitizes_name() {
+        assert_eq!(matrix_channel_slug("matrix"), "matrix");
+        assert_eq!(matrix_channel_slug("matrix.primary"), "matrix_primary");
+        assert_eq!(matrix_channel_slug("matrix/tenant#1"), "matrix_tenant_1");
     }
 }
