@@ -253,6 +253,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'bot_token', label: 'slack_bot_token', placeholder: 'xoxb-...', description: 'Bot User OAuth Token (xoxb-) for sending messages. Leave blank to keep current secret unchanged.', secret: true },
       { yamlKey: 'app_token', label: 'slack_app_token', placeholder: 'xapp-...', description: 'App-level token (xapp-) for Socket Mode connection. Leave blank to keep current secret unchanged.', secret: true },
       { yamlKey: 'bot_username', label: 'slack_bot_username', placeholder: 'slack_bot_name', description: 'Optional Slack-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'slack_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Slack bot model override for this account.', secret: false },
     ],
   },
   {
@@ -272,6 +273,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'app_secret', label: 'feishu_app_secret', placeholder: 'xxx', description: 'App Secret from Feishu Open Platform. Leave blank to keep current secret unchanged.', secret: true },
       { yamlKey: 'domain', label: 'feishu_domain', placeholder: 'feishu', description: 'Use "feishu" for China, "lark" for international, or a custom base URL.', secret: false },
       { yamlKey: 'bot_username', label: 'feishu_bot_username', placeholder: 'feishu_bot_name', description: 'Optional Feishu-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'feishu_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Feishu bot model override for this account.', secret: false },
     ],
   },
 ]
@@ -1130,9 +1132,11 @@ function App() {
       bot_username: String(data.config?.bot_username || ''),
       telegram_account_id: telegramDefaultAccount,
       telegram_bot_username: String(telegramAccountCfg.bot_username || telegramCfg.bot_username || ''),
+      telegram_model: String(telegramAccountCfg.model || telegramCfg.model || ''),
       discord_bot_token: '',
       discord_account_id: discordDefaultAccount,
       discord_bot_username: String(discordAccountCfg.bot_username || discordCfg.bot_username || ''),
+      discord_model: String(discordAccountCfg.model || discordCfg.model || ''),
       discord_allowed_channels_csv: Array.isArray(data.config?.discord_allowed_channels)
         ? (data.config?.discord_allowed_channels as number[]).join(',')
         : Array.isArray(discordAccountCfg.allowed_channels)
@@ -1246,6 +1250,9 @@ function App() {
         case 'telegram_bot_username':
           next.telegram_bot_username = ''
           break
+        case 'telegram_model':
+          next.telegram_model = ''
+          break
         case 'discord_bot_token':
           next.discord_bot_token = ''
           break
@@ -1254,6 +1261,9 @@ function App() {
           break
         case 'discord_bot_username':
           next.discord_bot_username = ''
+          break
+        case 'discord_model':
+          next.discord_model = ''
           break
         case 'discord_allowed_channels_csv':
           next.discord_allowed_channels_csv = ''
@@ -1382,6 +1392,7 @@ function App() {
       const tg = String(configDraft.telegram_bot_token || '').trim()
       const telegramAccountId = normalizeAccountId(configDraft.telegram_account_id)
       const telegramBotUsername = String(configDraft.telegram_bot_username || '').trim()
+      const telegramModel = String(configDraft.telegram_model || '').trim()
 
       const discordToken = String(configDraft.discord_bot_token || '').trim()
       const discordAccountId = normalizeAccountId(configDraft.discord_account_id)
@@ -1389,13 +1400,14 @@ function App() {
         String(configDraft.discord_allowed_channels_csv || ''),
       )
       const discordBotUsername = String(configDraft.discord_bot_username || '').trim()
+      const discordModel = String(configDraft.discord_model || '').trim()
 
       const embeddingApiKey = String(configDraft.embedding_api_key || '').trim()
       if (embeddingApiKey) payload.embedding_api_key = embeddingApiKey
 
       // Build generic channel_configs from dynamic channel definitions
       const channelConfigs: Record<string, Record<string, unknown>> = {}
-      if (tg || telegramBotUsername) {
+      if (tg || telegramBotUsername || telegramModel) {
         channelConfigs.telegram = {
           default_account: telegramAccountId,
           accounts: {
@@ -1403,11 +1415,12 @@ function App() {
               enabled: true,
               ...(tg ? { bot_token: tg } : {}),
               ...(telegramBotUsername ? { bot_username: telegramBotUsername } : {}),
+              ...(telegramModel ? { model: telegramModel } : {}),
             },
           },
         }
       }
-      if (discordToken || discordAllowedChannels.length > 0 || discordBotUsername) {
+      if (discordToken || discordAllowedChannels.length > 0 || discordBotUsername || discordModel) {
         channelConfigs.discord = {
           default_account: discordAccountId,
           accounts: {
@@ -1418,6 +1431,7 @@ function App() {
                 ? { allowed_channels: discordAllowedChannels }
                 : {}),
               ...(discordBotUsername ? { bot_username: discordBotUsername } : {}),
+              ...(discordModel ? { model: discordModel } : {}),
             },
           },
         }
@@ -1946,6 +1960,14 @@ function App() {
                               placeholder="my_microclaw_bot"
                             />
                           </ConfigFieldCard>
+                          <ConfigFieldCard label="telegram_model" description={<>Optional Telegram bot model override for this account.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.telegram_model || '')}
+                              onChange={(e) => setConfigField('telegram_model', e.target.value)}
+                              placeholder="claude-sonnet-4-5-20250929"
+                            />
+                          </ConfigFieldCard>
                         </div>
                       </div>
                     </Tabs.Content>
@@ -1996,6 +2018,14 @@ function App() {
                               value={String(configDraft.discord_bot_username || '')}
                               onChange={(e) => setConfigField('discord_bot_username', e.target.value)}
                               placeholder="discord_bot_name"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="discord_model" description={<>Optional Discord bot model override for this account.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.discord_model || '')}
+                              onChange={(e) => setConfigField('discord_model', e.target.value)}
+                              placeholder="claude-sonnet-4-5-20250929"
                             />
                           </ConfigFieldCard>
                         </div>

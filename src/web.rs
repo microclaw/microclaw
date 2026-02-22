@@ -1564,6 +1564,7 @@ mod tests {
             skills: SkillManager::from_skills_dir(&cfg.skills_data_dir()),
             hooks: Arc::new(crate::hooks::HookManager::for_tests()),
             llm,
+            llm_model_overrides: std::collections::HashMap::new(),
             embedding: None,
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),

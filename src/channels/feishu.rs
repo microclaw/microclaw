@@ -63,6 +63,8 @@ pub struct FeishuAccountConfig {
     pub encrypt_key: Option<String>,
     #[serde(default)]
     pub bot_username: String,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -89,6 +91,8 @@ pub struct FeishuChannelConfig {
     pub verification_token: Option<String>,
     #[serde(default)]
     pub encrypt_key: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub accounts: HashMap<String, FeishuAccountConfig>,
     #[serde(default)]
@@ -153,6 +157,7 @@ pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<Feis
             webhook_path: account_cfg.webhook_path.clone(),
             verification_token: account_cfg.verification_token.clone(),
             encrypt_key: account_cfg.encrypt_key.clone(),
+            model: account_cfg.model.clone(),
             accounts: HashMap::new(),
             default_account: None,
         };
@@ -161,9 +166,16 @@ pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<Feis
         } else {
             account_cfg.bot_username.trim().to_string()
         };
+        let model = account_cfg
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
         runtimes.push(FeishuRuntimeContext {
             channel_name,
             bot_username,
+            model,
             config: account_feishu_cfg,
         });
     }
@@ -175,6 +187,12 @@ pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<Feis
         runtimes.push(FeishuRuntimeContext {
             channel_name: "feishu".to_string(),
             bot_username: config.bot_username_for_channel("feishu"),
+            model: feishu_cfg
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned),
             config: feishu_cfg,
         });
     }
@@ -1011,6 +1029,7 @@ async fn get_token(
 pub struct FeishuRuntimeContext {
     pub channel_name: String,
     pub bot_username: String,
+    pub model: Option<String>,
     pub config: FeishuChannelConfig,
 }
 

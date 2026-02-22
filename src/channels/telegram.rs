@@ -27,6 +27,8 @@ pub struct TelegramAccountConfig {
     pub allowed_groups: Vec<i64>,
     #[serde(default)]
     pub allowed_user_ids: Vec<i64>,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -45,6 +47,8 @@ pub struct TelegramChannelConfig {
     pub allowed_groups: Vec<i64>,
     #[serde(default)]
     pub allowed_user_ids: Vec<i64>,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub accounts: HashMap<String, TelegramAccountConfig>,
     #[serde(default)]
@@ -194,6 +198,7 @@ pub struct TelegramRuntimeContext {
     pub bot_username: String,
     pub allowed_groups: Vec<i64>,
     pub allowed_user_ids: Vec<i64>,
+    pub model: Option<String>,
 }
 
 pub fn build_telegram_runtime_contexts(
@@ -251,6 +256,20 @@ pub fn build_telegram_runtime_contexts(
         } else {
             account_cfg.allowed_user_ids.clone()
         };
+        let model = account_cfg
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                tg_cfg
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(ToOwned::to_owned)
+            });
         runtimes.push((
             account_cfg.bot_token.clone(),
             TelegramRuntimeContext {
@@ -258,6 +277,7 @@ pub fn build_telegram_runtime_contexts(
                 bot_username,
                 allowed_groups,
                 allowed_user_ids,
+                model,
             },
         ));
     }
@@ -274,6 +294,12 @@ pub fn build_telegram_runtime_contexts(
                 },
                 allowed_groups: tg_cfg.allowed_groups.clone(),
                 allowed_user_ids: tg_cfg.allowed_user_ids.clone(),
+                model: tg_cfg
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(ToOwned::to_owned),
             },
         ));
     }

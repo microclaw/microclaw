@@ -546,6 +546,11 @@ microclaw gateway uninstall
 | `bot_username` | 否 | -- | Telegram Bot 用户名（不带 @，仅 Telegram 群聊 @ 提及时需要） |
 | `llm_provider` | 否 | `anthropic` | 提供方预设 ID（或自定义 ID）。`anthropic` 走原生 Anthropic API，其他走 OpenAI 兼容 API |
 | `model` | 否 | 随 provider 默认 | 模型名 |
+| `channels.telegram.accounts.<id>.model` | 否 | 未设置 | Telegram 某个 bot 账号的模型覆盖（按 bot 生效） |
+| `channels.discord.accounts.<id>.model` | 否 | 未设置 | Discord 某个 bot 账号的模型覆盖（按 bot 生效） |
+| `channels.slack.accounts.<id>.model` | 否 | 未设置 | Slack 某个 bot 账号的模型覆盖（按 bot 生效） |
+| `channels.feishu.accounts.<id>.model` | 否 | 未设置 | 飞书/Lark 某个 bot 账号的模型覆盖（按 bot 生效） |
+| `channels.irc.model` | 否 | 未设置 | IRC bot 的模型覆盖 |
 | `model_prices` | 否 | `[]` | 可选模型价格表（每百万 token 的美元单价），用于 `/usage` 成本估算 |
 | `llm_base_url` | 否 | provider 预设默认值 | 自定义 API 基础地址 |
 | `data_dir` | 否 | `~/.microclaw` | 数据根目录（运行时数据在 `data_dir/runtime`，技能在 `data_dir/skills`） |

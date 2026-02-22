@@ -32,6 +32,8 @@ pub struct DiscordAccountConfig {
     pub no_mention: bool,
     #[serde(default)]
     pub bot_username: String,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -48,6 +50,8 @@ pub struct DiscordChannelConfig {
     pub allowed_channels: Vec<u64>,
     #[serde(default)]
     pub no_mention: bool,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default)]
     pub accounts: HashMap<String, DiscordAccountConfig>,
     #[serde(default)]
@@ -108,6 +112,12 @@ pub fn build_discord_runtime_contexts(
         } else {
             account_cfg.bot_username.trim().to_string()
         };
+        let model = account_cfg
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
         runtimes.push((
             account_cfg.bot_token.clone(),
             DiscordRuntimeContext {
@@ -115,6 +125,7 @@ pub fn build_discord_runtime_contexts(
                 allowed_channels: account_cfg.allowed_channels.clone(),
                 no_mention: account_cfg.no_mention,
                 bot_username,
+                model,
             },
         ));
     }
@@ -127,6 +138,12 @@ pub fn build_discord_runtime_contexts(
                 allowed_channels: discord_cfg.allowed_channels,
                 no_mention: discord_cfg.no_mention,
                 bot_username: config.bot_username_for_channel("discord"),
+                model: discord_cfg
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(ToOwned::to_owned),
             },
         ));
     }
@@ -308,6 +325,7 @@ pub struct DiscordRuntimeContext {
     pub allowed_channels: Vec<u64>,
     pub no_mention: bool,
     pub bot_username: String,
+    pub model: Option<String>,
 }
 
 #[async_trait]
