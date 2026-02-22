@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -35,6 +36,7 @@ pub struct AppState {
     pub skills: SkillManager,
     pub hooks: Arc<HookManager>,
     pub llm: Box<dyn LlmProvider>,
+    pub llm_model_overrides: HashMap<String, String>,
     pub embedding: Option<Arc<dyn EmbeddingProvider>>,
     pub memory_backend: Arc<MemoryBackend>,
     pub tools: ToolRegistry,
@@ -71,10 +73,14 @@ pub async fn run(
     let mut matrix_runtimes: Vec<MatrixRuntimeContext> = Vec::new();
     let mut has_irc = false;
     let mut has_web = false;
+    let mut llm_model_overrides: HashMap<String, String> = HashMap::new();
 
     if config.channel_enabled("telegram") {
         if let Some(tg_cfg) = config.channel_config::<TelegramChannelConfig>("telegram") {
             for (token, runtime_ctx) in build_telegram_runtime_contexts(&config) {
+                if let Some(model) = runtime_ctx.model.clone() {
+                    llm_model_overrides.insert(runtime_ctx.channel_name.clone(), model);
+                }
                 let bot = teloxide::Bot::new(&token);
                 registry.register(Arc::new(TelegramAdapter::new(
                     runtime_ctx.channel_name.clone(),
@@ -89,6 +95,9 @@ pub async fn run(
     if config.channel_enabled("discord") {
         discord_runtimes = build_discord_runtime_contexts(&config);
         for (token, runtime_ctx) in &discord_runtimes {
+            if let Some(model) = runtime_ctx.model.clone() {
+                llm_model_overrides.insert(runtime_ctx.channel_name.clone(), model);
+            }
             registry.register(Arc::new(DiscordAdapter::new(
                 runtime_ctx.channel_name.clone(),
                 token.clone(),
@@ -99,6 +108,9 @@ pub async fn run(
     if config.channel_enabled("slack") {
         slack_runtimes = build_slack_runtime_contexts(&config);
         for runtime_ctx in &slack_runtimes {
+            if let Some(model) = runtime_ctx.model.clone() {
+                llm_model_overrides.insert(runtime_ctx.channel_name.clone(), model);
+            }
             registry.register(Arc::new(SlackAdapter::new(
                 runtime_ctx.channel_name.clone(),
                 runtime_ctx.bot_token.clone(),
@@ -109,6 +121,9 @@ pub async fn run(
     if config.channel_enabled("feishu") {
         feishu_runtimes = build_feishu_runtime_contexts(&config);
         for runtime_ctx in &feishu_runtimes {
+            if let Some(model) = runtime_ctx.model.clone() {
+                llm_model_overrides.insert(runtime_ctx.channel_name.clone(), model);
+            }
             registry.register(Arc::new(FeishuAdapter::new(
                 runtime_ctx.channel_name.clone(),
                 runtime_ctx.config.app_id.clone(),
@@ -135,6 +150,15 @@ pub async fn run(
             config.channel_config::<crate::channels::irc::IrcChannelConfig>("irc")
         {
             if !irc_cfg.server.trim().is_empty() && !irc_cfg.nick.trim().is_empty() {
+                if let Some(model) = irc_cfg
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(ToOwned::to_owned)
+                {
+                    llm_model_overrides.insert("irc".to_string(), model);
+                }
                 has_irc = true;
                 let adapter = Arc::new(IrcAdapter::new(380));
                 registry.register(adapter.clone());
@@ -175,6 +199,7 @@ pub async fn run(
         skills,
         hooks,
         llm,
+        llm_model_overrides,
         embedding,
         memory_backend,
         tools,

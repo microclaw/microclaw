@@ -86,6 +86,13 @@ const DYNAMIC_CHANNELS: &[DynamicChannelDef] = &[
                 secret: false,
                 required: false,
             },
+            ChannelFieldDef {
+                yaml_key: "model",
+                label: "Slack bot model override (optional)",
+                default: "",
+                secret: false,
+                required: false,
+            },
         ],
     },
     DynamicChannelDef {
@@ -116,6 +123,13 @@ const DYNAMIC_CHANNELS: &[DynamicChannelDef] = &[
             ChannelFieldDef {
                 yaml_key: "bot_username",
                 label: "Feishu bot username override (optional)",
+                default: "",
+                secret: false,
+                required: false,
+            },
+            ChannelFieldDef {
+                yaml_key: "model",
+                label: "Feishu bot model override (optional)",
                 default: "",
                 secret: false,
                 required: false,
@@ -200,6 +214,13 @@ const DYNAMIC_CHANNELS: &[DynamicChannelDef] = &[
                 yaml_key: "tls_danger_accept_invalid_certs",
                 label: "IRC TLS accept invalid certs (true/false)",
                 default: "false",
+                secret: false,
+                required: false,
+            },
+            ChannelFieldDef {
+                yaml_key: "model",
+                label: "IRC bot model override (optional)",
+                default: "",
                 secret: false,
                 required: false,
             },
@@ -633,6 +654,13 @@ impl SetupApp {
                     secret: false,
                 },
                 Field {
+                    key: "TELEGRAM_MODEL".into(),
+                    label: "Telegram bot model override (optional)".into(),
+                    value: existing.get("TELEGRAM_MODEL").cloned().unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
                     key: "DISCORD_BOT_TOKEN".into(),
                     label: "Discord bot token".into(),
                     value: existing.get("DISCORD_BOT_TOKEN").cloned().unwrap_or_default(),
@@ -646,6 +674,13 @@ impl SetupApp {
                         .get("DISCORD_ACCOUNT_ID")
                         .cloned()
                         .unwrap_or_else(|| default_account_id().to_string()),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: "DISCORD_MODEL".into(),
+                    label: "Discord bot model override (optional)".into(),
+                    value: existing.get("DISCORD_MODEL").cloned().unwrap_or_default(),
                     required: false,
                     secret: false,
                 },
@@ -874,6 +909,20 @@ impl SetupApp {
                         .get("telegram")
                         .and_then(resolve_channel_default_account_id)
                         .unwrap_or_else(|| default_account_id().to_string());
+                    let telegram_model = config
+                        .channels
+                        .get("telegram")
+                        .and_then(|ch_cfg| {
+                            channel_default_account_str_value(ch_cfg, "model").or_else(|| {
+                                ch_cfg
+                                    .get("model")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::trim)
+                                    .filter(|v| !v.is_empty())
+                                    .map(ToOwned::to_owned)
+                            })
+                        })
+                        .unwrap_or_default();
                     let bot_username = if !config.bot_username.trim().is_empty() {
                         config.bot_username
                     } else if let Some(ch_cfg) = config.channels.get("telegram") {
@@ -913,11 +962,27 @@ impl SetupApp {
                         .get("discord")
                         .and_then(resolve_channel_default_account_id)
                         .unwrap_or_else(|| default_account_id().to_string());
+                    let discord_model = config
+                        .channels
+                        .get("discord")
+                        .and_then(|ch_cfg| {
+                            channel_default_account_str_value(ch_cfg, "model").or_else(|| {
+                                ch_cfg
+                                    .get("model")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::trim)
+                                    .filter(|v| !v.is_empty())
+                                    .map(ToOwned::to_owned)
+                            })
+                        })
+                        .unwrap_or_default();
                     map.insert("TELEGRAM_BOT_TOKEN".into(), telegram_bot_token);
                     map.insert("TELEGRAM_ACCOUNT_ID".into(), telegram_account_id);
+                    map.insert("TELEGRAM_MODEL".into(), telegram_model);
                     map.insert("BOT_USERNAME".into(), bot_username);
                     map.insert("DISCORD_BOT_TOKEN".into(), discord_bot_token);
                     map.insert("DISCORD_ACCOUNT_ID".into(), discord_account_id);
+                    map.insert("DISCORD_MODEL".into(), discord_model);
                     // Extract dynamic channel configs
                     for ch in DYNAMIC_CHANNELS {
                         if let Some(ch_map) = config.channels.get(ch.name) {
@@ -1091,10 +1156,12 @@ impl SetupApp {
 
     fn is_field_visible(&self, key: &str) -> bool {
         match key {
-            "TELEGRAM_BOT_TOKEN" | "BOT_USERNAME" | "TELEGRAM_ACCOUNT_ID" => {
+            "TELEGRAM_BOT_TOKEN" | "BOT_USERNAME" | "TELEGRAM_ACCOUNT_ID" | "TELEGRAM_MODEL" => {
                 self.channel_enabled("telegram")
             }
-            "DISCORD_BOT_TOKEN" | "DISCORD_ACCOUNT_ID" => self.channel_enabled("discord"),
+            "DISCORD_BOT_TOKEN" | "DISCORD_ACCOUNT_ID" | "DISCORD_MODEL" => {
+                self.channel_enabled("discord")
+            }
             _ => Self::dynamic_field_channel(key)
                 .map(|ch| self.channel_enabled(ch))
                 .unwrap_or(true),
@@ -1568,9 +1635,8 @@ impl SetupApp {
         match key {
             "ENABLED_CHANNELS" => "web".into(),
             "TELEGRAM_ACCOUNT_ID" | "DISCORD_ACCOUNT_ID" => default_account_id().to_string(),
-            "TELEGRAM_BOT_TOKEN" | "BOT_USERNAME" | "DISCORD_BOT_TOKEN" | "LLM_API_KEY" => {
-                String::new()
-            }
+            "TELEGRAM_BOT_TOKEN" | "BOT_USERNAME" | "TELEGRAM_MODEL" | "DISCORD_BOT_TOKEN"
+            | "DISCORD_MODEL" | "LLM_API_KEY" => String::new(),
             "LLM_PROVIDER" => "anthropic".into(),
             "LLM_MODEL" => default_model_for_provider(&provider).into(),
             "LLM_BASE_URL" => find_provider_preset(&provider)
@@ -1628,8 +1694,10 @@ impl SetupApp {
             | "TELEGRAM_BOT_TOKEN"
             | "BOT_USERNAME"
             | "TELEGRAM_ACCOUNT_ID"
+            | "TELEGRAM_MODEL"
             | "DISCORD_BOT_TOKEN"
-            | "DISCORD_ACCOUNT_ID" => "Channel",
+            | "DISCORD_ACCOUNT_ID"
+            | "DISCORD_MODEL" => "Channel",
             _ => "Setup",
         }
     }
@@ -1641,18 +1709,18 @@ impl SetupApp {
             for ch in DYNAMIC_CHANNELS {
                 let account_expected = dynamic_account_id_field_key(ch.name);
                 if account_expected == key {
-                    return 16 + offset;
+                    return 20 + offset;
                 }
                 offset += 1;
                 for f in ch.fields {
                     let expected = dynamic_field_key(ch.name, f.yaml_key);
                     if expected == key {
-                        return 16 + offset;
+                        return 20 + offset;
                     }
                     offset += 1;
                 }
             }
-            return 16 + offset;
+            return 20 + offset;
         }
         match key {
             // 1) Model
@@ -1660,13 +1728,15 @@ impl SetupApp {
             "LLM_API_KEY" => 1,
             "LLM_MODEL" => 2,
             "LLM_BASE_URL" => 3,
-            // 2) Channel (dynamic channel fields start at 16 via branch above)
+            // 2) Channel (dynamic channel fields start at 20 via branch above)
             "ENABLED_CHANNELS" => 10,
             "TELEGRAM_BOT_TOKEN" => 11,
             "BOT_USERNAME" => 12,
             "TELEGRAM_ACCOUNT_ID" => 13,
-            "DISCORD_BOT_TOKEN" => 14,
-            "DISCORD_ACCOUNT_ID" => 15,
+            "TELEGRAM_MODEL" => 14,
+            "DISCORD_BOT_TOKEN" => 15,
+            "DISCORD_ACCOUNT_ID" => 16,
+            "DISCORD_MODEL" => 17,
             // 3) App
             "DATA_DIR" => 40,
             "TIMEZONE" => 41,
@@ -2013,8 +2083,10 @@ fn save_config_yaml(
     let telegram_token = get("TELEGRAM_BOT_TOKEN");
     let telegram_username = get("BOT_USERNAME");
     let telegram_account_id = account_id_from_value(&get("TELEGRAM_ACCOUNT_ID"));
+    let telegram_model = get("TELEGRAM_MODEL");
     let discord_token = get("DISCORD_BOT_TOKEN");
     let discord_account_id = account_id_from_value(&get("DISCORD_ACCOUNT_ID"));
+    let discord_model = get("DISCORD_MODEL");
 
     let telegram_present =
         !telegram_token.trim().is_empty() || !telegram_username.trim().is_empty();
@@ -2064,6 +2136,9 @@ fn save_config_yaml(
                     telegram_username
                 ));
             }
+            if !telegram_model.trim().is_empty() {
+                yaml.push_str(&format!("        model: \"{}\"\n", telegram_model));
+            }
         }
     }
     if channel_selected("discord") || discord_present {
@@ -2079,6 +2154,9 @@ fn save_config_yaml(
             yaml.push_str("        enabled: true\n");
             if !discord_token.trim().is_empty() {
                 yaml.push_str(&format!("        bot_token: \"{}\"\n", discord_token));
+            }
+            if !discord_model.trim().is_empty() {
+                yaml.push_str(&format!("        model: \"{}\"\n", discord_model));
             }
         }
     }

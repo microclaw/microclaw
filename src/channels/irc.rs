@@ -48,6 +48,8 @@ pub struct IrcChannelConfig {
     pub channels: String,
     #[serde(default)]
     pub password: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
     #[serde(default = "default_irc_mention_required")]
     pub mention_required: String,
     #[serde(default = "default_irc_tls")]
