@@ -13,7 +13,7 @@ use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{broadcast, Mutex};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
 use crate::config::{Config, WorkingDirIsolation};
@@ -66,6 +66,7 @@ impl ChannelAdapter for WebAdapter {
 struct WebState {
     app_state: Arc<AppState>,
     legacy_auth_token: Option<String>,
+    bootstrap_token: Arc<Mutex<Option<String>>>,
     run_hub: RunHub,
     session_hub: SessionHub,
     request_hub: RequestHub,
@@ -1366,8 +1367,24 @@ async fn api_audit_logs(
 pub async fn start_web_server(state: Arc<AppState>) {
     let limits = WebLimits::from_config(&state.config);
     let flush_interval = metrics_flush_interval(&state.config);
+    let has_password = call_blocking(state.db.clone(), |db| db.get_auth_password_hash())
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    let bootstrap_token = if state.config.web_auth_token.is_none() && !has_password {
+        let token = uuid::Uuid::new_v4().to_string();
+        warn!(
+            "web auth bootstrap enabled: set a password via /api/auth/password with header x-bootstrap-token: {}",
+            token
+        );
+        Some(token)
+    } else {
+        None
+    };
     let web_state = WebState {
         legacy_auth_token: state.config.web_auth_token.clone(),
+        bootstrap_token: Arc::new(Mutex::new(bootstrap_token)),
         app_state: state.clone(),
         run_hub: RunHub::default(),
         session_hub: SessionHub::default(),
@@ -1671,6 +1688,7 @@ mod tests {
         WebState {
             app_state: state,
             legacy_auth_token: auth_token,
+            bootstrap_token: Arc::new(Mutex::new(None)),
             run_hub: RunHub::default(),
             session_hub: SessionHub::default(),
             request_hub: RequestHub::default(),
@@ -2723,5 +2741,51 @@ mod tests {
             redacted.get("max_tokens").and_then(|v| v.as_u64()),
             Some(cfg.max_tokens as u64)
         );
+    }
+
+    #[tokio::test]
+    async fn test_password_bootstrap_token_is_required_and_one_time() {
+        let web_state = test_web_state(Box::new(DummyLlm), None, WebLimits::default());
+        {
+            let mut guard = web_state.bootstrap_token.lock().await;
+            *guard = Some("bootstrap-123".to_string());
+        }
+        let app = build_router(web_state.clone());
+
+        let missing = Request::builder()
+            .method("POST")
+            .uri("/api/auth/password")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"password":"passw0rd!"}"#))
+            .unwrap();
+        let missing_resp = app.clone().oneshot(missing).await.unwrap();
+        assert_eq!(missing_resp.status(), StatusCode::UNAUTHORIZED);
+
+        let with_token = Request::builder()
+            .method("POST")
+            .uri("/api/auth/password")
+            .header("content-type", "application/json")
+            .header("x-bootstrap-token", "bootstrap-123")
+            .body(Body::from(r#"{"password":"passw0rd!"}"#))
+            .unwrap();
+        let ok_resp = app.clone().oneshot(with_token).await.unwrap();
+        assert_eq!(ok_resp.status(), StatusCode::OK);
+
+        let db = web_state.app_state.db.clone();
+        let has_password = call_blocking(db, |d| d.get_auth_password_hash())
+            .await
+            .unwrap()
+            .is_some();
+        assert!(has_password);
+
+        let second_try = Request::builder()
+            .method("POST")
+            .uri("/api/auth/password")
+            .header("content-type", "application/json")
+            .header("x-bootstrap-token", "bootstrap-123")
+            .body(Body::from(r#"{"password":"passw0rd!2"}"#))
+            .unwrap();
+        let second_resp = app.oneshot(second_try).await.unwrap();
+        assert_eq!(second_resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

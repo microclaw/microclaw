@@ -25,7 +25,29 @@ pub(super) async fn api_auth_set_password(
     Json(body): Json<SetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     metrics_http_inc(&state).await;
-    let identity = require_scope(&state, &headers, AuthScope::Admin).await?;
+    let has_password = call_blocking(state.app_state.db.clone(), |db| db.get_auth_password_hash())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_some();
+    let bootstrap_mode = state.legacy_auth_token.is_none() && !has_password;
+    let actor = if bootstrap_mode {
+        let provided = bootstrap_token_from_headers(&headers).ok_or((
+            StatusCode::UNAUTHORIZED,
+            "missing bootstrap token".to_string(),
+        ))?;
+        let expected = {
+            let guard = state.bootstrap_token.lock().await;
+            guard.clone()
+        };
+        if expected.as_deref() != Some(provided.as_str()) {
+            return Err((StatusCode::UNAUTHORIZED, "invalid bootstrap token".into()));
+        }
+        "bootstrap-token".to_string()
+    } else {
+        require_scope(&state, &headers, AuthScope::Admin)
+            .await?
+            .actor
+    };
     let password = body.password.trim();
     if password.len() < 8 {
         return Err((
@@ -39,10 +61,14 @@ pub(super) async fn api_auth_set_password(
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if bootstrap_mode {
+        let mut guard = state.bootstrap_token.lock().await;
+        *guard = None;
+    }
     audit_log(
         &state,
         "operator",
-        &identity.actor,
+        &actor,
         "auth.set_password",
         None,
         "ok",

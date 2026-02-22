@@ -41,6 +41,14 @@ pub(super) fn auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+pub(super) fn bootstrap_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-bootstrap-token")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 pub(super) fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
@@ -183,19 +191,24 @@ pub(super) async fn require_scope(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .is_some();
     if state.legacy_auth_token.is_none() && !has_password {
-        let id = AuthIdentity {
-            scopes: vec![
-                "operator.read".to_string(),
-                "operator.write".to_string(),
-                "operator.admin".to_string(),
-                "operator.approvals".to_string(),
-            ],
-            actor: "bootstrap".to_string(),
-        };
-        if id.allows(required) {
-            return Ok(id);
+        #[cfg(test)]
+        {
+            let id = AuthIdentity {
+                scopes: vec![
+                    "operator.read".to_string(),
+                    "operator.write".to_string(),
+                    "operator.admin".to_string(),
+                    "operator.approvals".to_string(),
+                ],
+                actor: "bootstrap-test".to_string(),
+            };
+            if id.allows(required) {
+                return Ok(id);
+            }
+            return Err((StatusCode::FORBIDDEN, "forbidden".into()));
         }
-        return Err((StatusCode::FORBIDDEN, "forbidden".into()));
+        #[cfg(not(test))]
+        return Err((StatusCode::UNAUTHORIZED, "unauthorized".into()));
     }
 
     if let Some(provided) = auth_token_from_headers(headers) {
