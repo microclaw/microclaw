@@ -244,6 +244,15 @@ pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<Feis
     runtimes
 }
 
+async fn maybe_plugin_slash_response(
+    config: &crate::config::Config,
+    text: &str,
+    chat_id: i64,
+    channel_name: &str,
+) -> Option<String> {
+    maybe_handle_plugin_command(config, text, chat_id, channel_name).await
+}
+
 // ---------------------------------------------------------------------------
 // Domain resolution
 // ---------------------------------------------------------------------------
@@ -1496,7 +1505,7 @@ async fn handle_feishu_message(
         }
     }
     if let Some(plugin_response) =
-        maybe_handle_plugin_command(&app_state.config, trimmed, chat_id, &runtime.channel_name)
+        maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, &runtime.channel_name)
             .await
     {
         let _ = send_feishu_response(
@@ -1684,4 +1693,34 @@ pub fn register_feishu_webhook(router: axum::Router, app_state: Arc<AppState>) -
         );
     }
     router
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_feishu_plugin_slash_dispatch_helper() {
+        let root = std::env::temp_dir().join(format!("mc_feishu_plugin_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("plugin.yaml"),
+            r#"
+name: feishuplug
+enabled: true
+commands:
+  - command: /feishuplug
+    response: "feishu-ok"
+"#,
+        )
+        .unwrap();
+
+        let mut cfg = crate::config::Config::test_defaults();
+        cfg.plugins.enabled = true;
+        cfg.plugins.dir = Some(root.to_string_lossy().to_string());
+
+        let out = maybe_plugin_slash_response(&cfg, "/feishuplug", 1, "feishu").await;
+        assert_eq!(out.as_deref(), Some("feishu-ok"));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

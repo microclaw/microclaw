@@ -489,7 +489,7 @@ async fn handle_irc_message(
         }
     }
     if let Some(plugin_response) =
-        maybe_handle_plugin_command(&app_state.config, trimmed, chat_id, "irc").await
+        maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, "irc").await
     {
         let _ = adapter.send_text(&response_target, &plugin_response).await;
         return;
@@ -687,6 +687,15 @@ fn nick_from_prefix(prefix: &str) -> Option<&str> {
     }
 }
 
+async fn maybe_plugin_slash_response(
+    config: &crate::config::Config,
+    text: &str,
+    chat_id: i64,
+    channel_name: &str,
+) -> Option<String> {
+    maybe_handle_plugin_command(config, text, chat_id, channel_name).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,5 +730,30 @@ mod tests {
             chunks,
             vec!["supercal", "ifragili", "sticexpi", "alidocio", "us"]
         );
+    }
+
+    #[tokio::test]
+    async fn test_irc_plugin_slash_dispatch_helper() {
+        let root = std::env::temp_dir().join(format!("mc_irc_plugin_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("plugin.yaml"),
+            r#"
+name: ircplug
+enabled: true
+commands:
+  - command: /ircplug
+    response: "irc-ok"
+"#,
+        )
+        .unwrap();
+
+        let mut cfg = crate::config::Config::test_defaults();
+        cfg.plugins.enabled = true;
+        cfg.plugins.dir = Some(root.to_string_lossy().to_string());
+
+        let out = maybe_plugin_slash_response(&cfg, "/ircplug", 1, "irc").await;
+        assert_eq!(out.as_deref(), Some("irc-ok"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

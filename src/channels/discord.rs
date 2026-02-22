@@ -158,6 +158,15 @@ pub struct DiscordAdapter {
     http_client: reqwest::Client,
 }
 
+async fn maybe_plugin_slash_response(
+    config: &crate::config::Config,
+    text: &str,
+    chat_id: i64,
+    channel_name: &str,
+) -> Option<String> {
+    maybe_handle_plugin_command(config, text, chat_id, channel_name).await
+}
+
 fn format_reqwest_error(prefix: &str, err: &reqwest::Error) -> String {
     let mut details = Vec::new();
     if err.is_timeout() {
@@ -377,7 +386,7 @@ impl EventHandler for Handler {
                 return;
             }
         }
-        if let Some(plugin_response) = maybe_handle_plugin_command(
+        if let Some(plugin_response) = maybe_plugin_slash_response(
             &self.app_state.config,
             &text,
             channel_id,
@@ -598,5 +607,35 @@ pub async fn start_discord_bot(
         Err(e) => {
             error!("Discord bot error: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_discord_plugin_slash_dispatch_helper() {
+        let root = std::env::temp_dir().join(format!("mc_dc_plugin_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("plugin.yaml"),
+            r#"
+name: dcplug
+enabled: true
+commands:
+  - command: /dcplug
+    response: "discord-ok"
+"#,
+        )
+        .unwrap();
+
+        let mut cfg = crate::config::Config::test_defaults();
+        cfg.plugins.enabled = true;
+        cfg.plugins.dir = Some(root.to_string_lossy().to_string());
+
+        let out = maybe_plugin_slash_response(&cfg, "/dcplug", 1, "discord").await;
+        assert_eq!(out.as_deref(), Some("discord-ok"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }
