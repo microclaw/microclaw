@@ -129,6 +129,12 @@ pub struct LoadedPluginTool {
     pub spec: PluginToolSpec,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct PluginLoadReport {
+    pub manifests: Vec<PluginManifest>,
+    pub errors: Vec<String>,
+}
+
 pub fn plugins_dir(config: &Config) -> PathBuf {
     if let Some(dir) = &config.plugins.dir {
         let trimmed = dir.trim();
@@ -139,16 +145,18 @@ pub fn plugins_dir(config: &Config) -> PathBuf {
     config.data_root_dir().join("plugins")
 }
 
-pub fn load_plugin_manifests(config: &Config) -> Vec<PluginManifest> {
+pub fn load_plugin_report(config: &Config) -> PluginLoadReport {
     if !config.plugins.enabled {
-        return Vec::new();
+        return PluginLoadReport::default();
     }
     let dir = plugins_dir(config);
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+        Err(_) => return PluginLoadReport::default(),
     };
 
+    let mut report = PluginLoadReport::default();
+    let mut plugin_names = HashSet::new();
     let mut manifests = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -166,6 +174,22 @@ pub fn load_plugin_manifests(config: &Config) -> Vec<PluginManifest> {
         match load_manifest_file(&path) {
             Ok(mut manifest) => {
                 normalize_manifest(&mut manifest);
+                if manifest.name.is_empty() {
+                    report
+                        .errors
+                        .push(format!("{}: plugin name is empty", path.display()));
+                    continue;
+                }
+                let normalized_name = manifest.name.to_ascii_lowercase();
+                if !plugin_names.insert(normalized_name) {
+                    report.errors.push(format!(
+                        "{}: duplicate plugin name '{}'",
+                        path.display(),
+                        manifest.name
+                    ));
+                    continue;
+                }
+                validate_manifest(&manifest, &path, &mut report.errors);
                 if manifest.enabled {
                     manifests.push(manifest);
                 }
@@ -175,8 +199,16 @@ pub fn load_plugin_manifests(config: &Config) -> Vec<PluginManifest> {
             }
         }
     }
+    report.manifests = manifests;
+    report
+}
 
-    manifests
+pub fn load_plugin_manifests(config: &Config) -> Vec<PluginManifest> {
+    let report = load_plugin_report(config);
+    for err in &report.errors {
+        warn!(error = err.as_str(), "plugin manifest validation issue");
+    }
+    report.manifests
 }
 
 fn load_manifest_file(path: &Path) -> anyhow::Result<PluginManifest> {
@@ -225,10 +257,82 @@ fn normalize_channels(channels: &mut Vec<String>) {
     *channels = deduped;
 }
 
+fn validate_manifest(manifest: &PluginManifest, path: &Path, errors: &mut Vec<String>) {
+    let mut command_names = HashSet::new();
+    for command in &manifest.commands {
+        if command.command.trim() == "/" {
+            errors.push(format!(
+                "{}: plugin '{}' has invalid command '/'",
+                path.display(),
+                manifest.name
+            ));
+        }
+        let normalized = command.command.to_ascii_lowercase();
+        if !command_names.insert(normalized) {
+            errors.push(format!(
+                "{}: plugin '{}' has duplicate command '{}'",
+                path.display(),
+                manifest.name,
+                command.command
+            ));
+        }
+        if let Some(run) = &command.run {
+            if run.command.trim().is_empty() {
+                errors.push(format!(
+                    "{}: plugin '{}' command '{}' has empty run.command",
+                    path.display(),
+                    manifest.name,
+                    command.command
+                ));
+            }
+        }
+    }
+
+    let mut tool_names = HashSet::new();
+    for tool in &manifest.tools {
+        let normalized = tool.name.to_ascii_lowercase();
+        if normalized.is_empty() {
+            errors.push(format!(
+                "{}: plugin '{}' contains tool with empty name",
+                path.display(),
+                manifest.name
+            ));
+            continue;
+        }
+        if !tool_names.insert(normalized) {
+            errors.push(format!(
+                "{}: plugin '{}' has duplicate tool '{}'",
+                path.display(),
+                manifest.name,
+                tool.name
+            ));
+        }
+        if tool.run.command.trim().is_empty() {
+            errors.push(format!(
+                "{}: plugin '{}' tool '{}' has empty run.command",
+                path.display(),
+                manifest.name,
+                tool.name
+            ));
+        }
+        if !tool.input_schema.is_object() {
+            errors.push(format!(
+                "{}: plugin '{}' tool '{}' input_schema must be an object",
+                path.display(),
+                manifest.name,
+                tool.name
+            ));
+        }
+    }
+}
+
 pub fn load_plugin_tools(config: &Config) -> Vec<LoadedPluginTool> {
     let mut out = Vec::new();
-    let manifests = load_plugin_manifests(config);
-    for manifest in manifests {
+    let report = load_plugin_report(config);
+    for err in &report.errors {
+        warn!(error = err.as_str(), "plugin manifest validation issue");
+    }
+    for manifest in report.manifests {
         let plugin_name = manifest.name;
         for spec in manifest.tools {
             if spec.name.is_empty() || spec.run.command.trim().is_empty() {
@@ -241,6 +345,76 @@ pub fn load_plugin_tools(config: &Config) -> Vec<LoadedPluginTool> {
         }
     }
     out
+}
+
+pub fn handle_plugins_admin_command(
+    config: &Config,
+    caller_chat_id: i64,
+    command_text: &str,
+) -> Option<String> {
+    let trimmed = command_text.trim();
+    let is_plugins_cmd =
+        trimmed == "/plugins" || trimmed.starts_with("/plugins ") || trimmed == "/plugins@bot";
+    if !is_plugins_cmd {
+        return None;
+    }
+    if !config.control_chat_ids.contains(&caller_chat_id) {
+        return Some("Plugin admin commands require control chat permission.".to_string());
+    }
+
+    let arg = trimmed
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("list")
+        .to_ascii_lowercase();
+    let report = load_plugin_report(config);
+    match arg.as_str() {
+        "list" => {
+            if report.manifests.is_empty() {
+                return Some("No enabled plugins found.".to_string());
+            }
+            let mut lines = Vec::new();
+            lines.push(format!("Plugins ({}):", report.manifests.len()));
+            for manifest in &report.manifests {
+                lines.push(format!(
+                    "- {} (commands: {}, tools: {})",
+                    manifest.name,
+                    manifest.commands.len(),
+                    manifest.tools.len()
+                ));
+            }
+            if !report.errors.is_empty() {
+                lines.push(format!("Validation issues: {}", report.errors.len()));
+            }
+            Some(lines.join("\n"))
+        }
+        "validate" => {
+            if report.errors.is_empty() {
+                Some("Plugin validation OK.".to_string())
+            } else {
+                let mut lines = Vec::new();
+                lines.push(format!(
+                    "Plugin validation found {} issue(s):",
+                    report.errors.len()
+                ));
+                for err in report.errors.iter().take(20) {
+                    lines.push(format!("- {err}"));
+                }
+                if report.errors.len() > 20 {
+                    lines.push(format!(
+                        "... and {} more issue(s)",
+                        report.errors.len() - 20
+                    ));
+                }
+                Some(lines.join("\n"))
+            }
+        }
+        "reload" => Some(
+            "Plugin manifests are loaded dynamically. Command changes apply immediately; existing tool names refresh behavior on next execution. New tool names still require restart."
+                .to_string(),
+        ),
+        _ => Some("Usage: /plugins [list|validate|reload]".to_string()),
+    }
 }
 
 pub fn command_matches(input: &str, configured: &str) -> bool {
@@ -295,7 +469,12 @@ pub async fn execute_plugin_slash_command(
 
             let mut response_chunks = Vec::new();
             if let Some(response) = &command.response {
-                response_chunks.push(render_template(response, &vars, false));
+                match render_template_checked(response, &vars, false) {
+                    Ok(text) => response_chunks.push(text),
+                    Err(e) => {
+                        return Some(format!("Plugin command response template error: {e}"));
+                    }
+                }
             }
 
             if let Some(run) = &command.run {
@@ -375,6 +554,39 @@ fn render_template(template: &str, vars: &HashMap<String, String>, shell_escape:
     out
 }
 
+fn template_keys(template: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while let Some(start_rel) = template[i..].find("{{") {
+        let start = i + start_rel;
+        let Some(end_rel) = template[start + 2..].find("}}") else {
+            break;
+        };
+        let end = start + 2 + end_rel;
+        let key = template[start + 2..end].trim();
+        if !key.is_empty() {
+            out.push(key.to_string());
+        }
+        i = end + 2;
+    }
+    out
+}
+
+fn render_template_checked(
+    template: &str,
+    vars: &HashMap<String, String>,
+    shell_escape: bool,
+) -> anyhow::Result<String> {
+    let missing: Vec<String> = template_keys(template)
+        .into_iter()
+        .filter(|k| !vars.contains_key(k))
+        .collect();
+    if !missing.is_empty() {
+        anyhow::bail!("missing template variable(s): {}", missing.join(", "));
+    }
+    Ok(render_template(template, vars, shell_escape))
+}
+
 fn shell_escape_single(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
@@ -418,7 +630,7 @@ async fn execute_with_template(
     let mut vars = HashMap::new();
     vars.insert("channel".to_string(), caller_channel.to_string());
     vars.insert("chat_id".to_string(), caller_chat_id.to_string());
-    let command = render_template(command_template, &vars, true);
+    let command = render_template_checked(command_template, &vars, true)?;
 
     let base_working_dir = PathBuf::from(&config.working_dir);
     let working_dir = make_tool_working_dir(
@@ -521,11 +733,23 @@ impl PluginTool {
         }
     }
 
-    fn resolve_policy(&self) -> PluginExecutionPolicy {
-        self.spec
-            .permissions
+    fn resolve_runtime_spec(&self) -> PluginToolSpec {
+        let manifests = load_plugin_manifests(&self.config);
+        manifests
+            .into_iter()
+            .find(|m| m.name == self.plugin_name)
+            .and_then(|m| {
+                m.tools
+                    .into_iter()
+                    .find(|t| t.name.eq_ignore_ascii_case(&self.spec.name))
+            })
+            .unwrap_or_else(|| self.spec.clone())
+    }
+
+    fn resolve_policy(spec: &PluginToolSpec) -> PluginExecutionPolicy {
+        spec.permissions
             .execution_policy
-            .or(self.spec.run.execution_policy)
+            .or(spec.run.execution_policy)
             .unwrap_or(PluginExecutionPolicy::HostOnly)
     }
 }
@@ -549,6 +773,7 @@ impl Tool for PluginTool {
     }
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult {
+        let runtime_spec = self.resolve_runtime_spec();
         let auth = auth_context_from_input(&input);
         let caller_channel = auth
             .as_ref()
@@ -556,19 +781,19 @@ impl Tool for PluginTool {
             .unwrap_or("unknown");
         let caller_chat_id = auth.as_ref().map(|a| a.caller_chat_id).unwrap_or(0);
 
-        if !is_channel_allowed(caller_channel, &self.spec.permissions.allowed_channels) {
+        if !is_channel_allowed(caller_channel, &runtime_spec.permissions.allowed_channels) {
             return ToolResult::error(format!(
                 "Plugin tool '{}' is not allowed in channel '{}'.",
-                self.spec.name, caller_channel
+                runtime_spec.name, caller_channel
             ))
             .with_error_type("plugin_permission_denied");
         }
-        if self.spec.permissions.require_control_chat
+        if runtime_spec.permissions.require_control_chat
             && !self.config.control_chat_ids.contains(&caller_chat_id)
         {
             return ToolResult::error(format!(
                 "Plugin tool '{}' requires control chat permission.",
-                self.spec.name
+                runtime_spec.name
             ))
             .with_error_type("plugin_permission_denied");
         }
@@ -592,7 +817,13 @@ impl Tool for PluginTool {
             }
         }
 
-        let rendered = render_template(&self.spec.run.command, &vars, true);
+        let rendered = match render_template_checked(&runtime_spec.run.command, &vars, true) {
+            Ok(v) => v,
+            Err(e) => {
+                return ToolResult::error(format!("Plugin tool template error: {e}"))
+                    .with_error_type("plugin_template_error");
+            }
+        };
 
         let base_working_dir = PathBuf::from(&self.config.working_dir);
         let working_dir = make_tool_working_dir(
@@ -614,9 +845,9 @@ impl Tool for PluginTool {
             caller_channel,
             caller_chat_id,
             &rendered,
-            self.spec.run.timeout_secs,
+            runtime_spec.run.timeout_secs,
             working_dir,
-            self.resolve_policy(),
+            Self::resolve_policy(&runtime_spec),
         )
         .await;
 
@@ -673,5 +904,71 @@ mod tests {
             manifest.commands[0].permissions.allowed_channels,
             vec!["telegram".to_string()]
         );
+    }
+
+    #[test]
+    fn test_render_template_checked_missing_var() {
+        let vars = HashMap::from([(String::from("a"), String::from("1"))]);
+        let err = render_template_checked("x {{a}} {{b}}", &vars, false).unwrap_err();
+        assert!(err.to_string().contains("missing template variable"));
+        assert!(err.to_string().contains("b"));
+    }
+
+    #[test]
+    fn test_validate_manifest_reports_duplicates() {
+        let manifest = PluginManifest {
+            name: "dup".to_string(),
+            enabled: true,
+            commands: vec![
+                PluginCommandSpec {
+                    command: "/a".to_string(),
+                    description: String::new(),
+                    response: None,
+                    run: Some(PluginExecSpec {
+                        command: "echo 1".to_string(),
+                        timeout_secs: 3,
+                        execution_policy: None,
+                    }),
+                    permissions: PluginCommandPermissions::default(),
+                },
+                PluginCommandSpec {
+                    command: "/a".to_string(),
+                    description: String::new(),
+                    response: None,
+                    run: None,
+                    permissions: PluginCommandPermissions::default(),
+                },
+            ],
+            tools: vec![
+                PluginToolSpec {
+                    name: "t".to_string(),
+                    description: "d".to_string(),
+                    input_schema: schema_object(json!({}), &[]),
+                    run: PluginExecSpec {
+                        command: "echo 1".to_string(),
+                        timeout_secs: 3,
+                        execution_policy: None,
+                    },
+                    permissions: PluginToolPermissions::default(),
+                },
+                PluginToolSpec {
+                    name: "t".to_string(),
+                    description: "d".to_string(),
+                    input_schema: schema_object(json!({}), &[]),
+                    run: PluginExecSpec {
+                        command: "echo 1".to_string(),
+                        timeout_secs: 3,
+                        execution_policy: None,
+                    },
+                    permissions: PluginToolPermissions::default(),
+                },
+            ],
+        };
+
+        let mut errors = Vec::new();
+        validate_manifest(&manifest, Path::new("/tmp/dup.yaml"), &mut errors);
+        assert!(!errors.is_empty());
+        assert!(errors.iter().any(|e| e.contains("duplicate command")));
+        assert!(errors.iter().any(|e| e.contains("duplicate tool")));
     }
 }
