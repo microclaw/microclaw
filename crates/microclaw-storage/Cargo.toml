@@ -11,7 +11,7 @@ sqlite-vec = ["dep:sqlite-vec"]
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 microclaw-core = { path = "../microclaw-core" }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }

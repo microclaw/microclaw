@@ -205,6 +205,40 @@ const DYNAMIC_CHANNELS: &[DynamicChannelDef] = &[
             },
         ],
     },
+    DynamicChannelDef {
+        name: "matrix",
+        presence_keys: &["homeserver_url", "access_token", "bot_user_id"],
+        fields: &[
+            ChannelFieldDef {
+                yaml_key: "homeserver_url",
+                label: "Matrix homeserver URL (e.g. https://matrix.org)",
+                default: "",
+                secret: false,
+                required: true,
+            },
+            ChannelFieldDef {
+                yaml_key: "access_token",
+                label: "Matrix access token",
+                default: "",
+                secret: true,
+                required: true,
+            },
+            ChannelFieldDef {
+                yaml_key: "bot_user_id",
+                label: "Matrix bot user ID (e.g. @bot:example.org)",
+                default: "",
+                secret: false,
+                required: true,
+            },
+            ChannelFieldDef {
+                yaml_key: "bot_username",
+                label: "Matrix bot username override (optional)",
+                default: "",
+                secret: false,
+                required: false,
+            },
+        ],
+    },
 ];
 
 /// Build the setup-wizard field key from channel name + yaml key.

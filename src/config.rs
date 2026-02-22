@@ -814,6 +814,7 @@ impl Config {
             || self.channels.contains_key("discord");
         let configured_slack = self.channels.contains_key("slack");
         let configured_feishu = self.channels.contains_key("feishu");
+        let configured_matrix = self.channels.contains_key("matrix");
         let configured_irc = self.channels.contains_key("irc");
         let configured_web = self.web_enabled || self.channels.contains_key("web");
 
@@ -821,10 +822,18 @@ impl Config {
         let has_discord = self.channel_enabled("discord") && configured_discord;
         let has_slack = self.channel_enabled("slack") && configured_slack;
         let has_feishu = self.channel_enabled("feishu") && configured_feishu;
+        let has_matrix = self.channel_enabled("matrix") && configured_matrix;
         let has_irc = self.channel_enabled("irc") && configured_irc;
         let has_web = self.channel_enabled("web") && configured_web;
 
-        if !(has_telegram || has_discord || has_slack || has_feishu || has_irc || has_web) {
+        if !(has_telegram
+            || has_discord
+            || has_slack
+            || has_feishu
+            || has_matrix
+            || has_irc
+            || has_web)
+        {
             return Err(MicroClawError::Config(
                 "At least one channel must be enabled and configured (via channels.<name>.enabled or legacy channel settings)".into(),
             ));
@@ -1289,6 +1298,22 @@ channels:
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
         assert!(config.channel_enabled("irc"));
+    }
+
+    #[test]
+    fn test_post_deserialize_matrix_only() {
+        let yaml = r##"
+api_key: key
+channels:
+  matrix:
+    enabled: true
+    homeserver_url: "https://matrix.example.com"
+    access_token: "syt_xxx"
+    bot_user_id: "@microclaw:example.com"
+"##;
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+        assert!(config.channel_enabled("matrix"));
     }
 
     #[test]

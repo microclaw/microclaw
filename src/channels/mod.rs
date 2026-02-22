@@ -1,6 +1,7 @@
 pub mod discord;
 pub mod feishu;
 pub mod irc;
+pub mod matrix;
 pub mod slack;
 pub mod telegram;
 
@@ -8,5 +9,6 @@ pub mod telegram;
 pub use discord::DiscordAdapter;
 pub use feishu::FeishuAdapter;
 pub use irc::IrcAdapter;
+pub use matrix::MatrixAdapter;
 pub use slack::SlackAdapter;
 pub use telegram::TelegramAdapter;

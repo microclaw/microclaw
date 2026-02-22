@@ -113,6 +113,14 @@ channels:
   #   # webhook_path: "/feishu/events"
   #   # verification_token: ""
   #   # encrypt_key: ""
+  # matrix:
+  #   enabled: false
+  #   homeserver_url: "https://matrix.org"
+  #   access_token: "syt_xxx"
+  #   bot_user_id: "@microclaw:matrix.org"
+  #   # allowed_room_ids: ["!roomid:matrix.org"]
+  #   # allowed_user_ids: ["@alice:matrix.org"]   # DM sender allowlist (empty = allow all DMs)
+  #   # mention_required: true
 
 # Local web UI (optional)
 # Channel on/off is controlled by `channels.web.enabled`.

@@ -7,11 +7,14 @@ use tracing::warn;
 
 use crate::channels::discord::{build_discord_runtime_contexts, DiscordRuntimeContext};
 use crate::channels::feishu::{build_feishu_runtime_contexts, FeishuRuntimeContext};
+use crate::channels::matrix::{build_matrix_runtime_contexts, MatrixRuntimeContext};
 use crate::channels::slack::{build_slack_runtime_contexts, SlackRuntimeContext};
 use crate::channels::telegram::{
     build_telegram_runtime_contexts, TelegramChannelConfig, TelegramRuntimeContext,
 };
-use crate::channels::{DiscordAdapter, FeishuAdapter, IrcAdapter, SlackAdapter, TelegramAdapter};
+use crate::channels::{
+    DiscordAdapter, FeishuAdapter, IrcAdapter, MatrixAdapter, SlackAdapter, TelegramAdapter,
+};
 use crate::config::Config;
 use crate::embedding::EmbeddingProvider;
 use crate::hooks::HookManager;
@@ -65,6 +68,7 @@ pub async fn run(
     let mut discord_runtimes: Vec<(String, DiscordRuntimeContext)> = Vec::new();
     let mut slack_runtimes: Vec<SlackRuntimeContext> = Vec::new();
     let mut feishu_runtimes: Vec<FeishuRuntimeContext> = Vec::new();
+    let mut matrix_runtimes: Vec<MatrixRuntimeContext> = Vec::new();
     let mut has_irc = false;
     let mut has_web = false;
 
@@ -110,6 +114,17 @@ pub async fn run(
                 runtime_ctx.config.app_id.clone(),
                 runtime_ctx.config.app_secret.clone(),
                 runtime_ctx.config.domain.clone(),
+            )));
+        }
+    }
+
+    if config.channel_enabled("matrix") {
+        matrix_runtimes = build_matrix_runtime_contexts(&config);
+        for runtime_ctx in &matrix_runtimes {
+            registry.register(Arc::new(MatrixAdapter::new(
+                runtime_ctx.channel_name.clone(),
+                runtime_ctx.homeserver_url.clone(),
+                runtime_ctx.access_token.clone(),
             )));
         }
     }
@@ -210,6 +225,20 @@ pub async fn run(
         }
     }
 
+    let has_matrix = !matrix_runtimes.is_empty();
+    if has_matrix {
+        for runtime_ctx in matrix_runtimes {
+            let matrix_state = state.clone();
+            info!(
+                "Starting Matrix bot adapter '{}' as {}",
+                runtime_ctx.channel_name, runtime_ctx.bot_user_id
+            );
+            tokio::spawn(async move {
+                crate::channels::matrix::start_matrix_bot(matrix_state, runtime_ctx).await;
+            });
+        }
+    }
+
     if has_web {
         let web_state = state.clone();
         info!(
@@ -246,7 +275,7 @@ pub async fn run(
         });
     }
 
-    if has_telegram || has_web || has_discord || has_slack || has_feishu || has_irc {
+    if has_telegram || has_web || has_discord || has_slack || has_feishu || has_matrix || has_irc {
         info!("Runtime active; waiting for Ctrl-C");
         tokio::signal::ctrl_c()
             .await
@@ -254,7 +283,7 @@ pub async fn run(
         Ok(())
     } else {
         Err(anyhow!(
-            "No channel is enabled. Configure channels.<name>.enabled (or legacy channel settings) for Telegram, Discord, Slack, Feishu, IRC, or web."
+            "No channel is enabled. Configure channels.<name>.enabled (or legacy channel settings) for Telegram, Discord, Slack, Feishu, Matrix, IRC, or web."
         ))
     }
 }
