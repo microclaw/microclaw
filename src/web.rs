@@ -16,9 +16,7 @@ use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
-use crate::chat_commands::{
-    build_model_response, build_status_response, maybe_handle_plugin_command,
-};
+use crate::chat_commands::handle_chat_command;
 use crate::config::{Config, WorkingDirIsolation};
 use crate::otlp::{OtlpExporter, OtlpMetricSnapshot};
 use crate::runtime::AppState;
@@ -1404,14 +1402,20 @@ async fn send_and_store_response_with_events(
         }
     }
 
-    if let Some(command_response) = handle_web_slash_command(&state, &text, chat_id).await {
+    if let Some(command_reply) = handle_chat_command(&state.app_state, chat_id, "web", &text).await
+    {
+        if let Some(tx) = event_tx {
+            let _ = tx.send(AgentEvent::FinalResponse {
+                text: command_reply.clone(),
+            });
+        }
         let bot_username = state.app_state.config.bot_username_for_channel("web");
         deliver_and_store_bot_message(
             &state.app_state.channel_registry,
             state.app_state.db.clone(),
             &bot_username,
             chat_id,
-            &command_response,
+            &command_reply,
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -1419,7 +1423,7 @@ async fn send_and_store_response_with_events(
             "ok": true,
             "session_key": session_key,
             "chat_id": chat_id,
-            "response": command_response,
+            "response": command_reply,
         })));
     }
 
@@ -1487,110 +1491,6 @@ async fn send_and_store_response_with_events(
         "chat_id": chat_id,
         "response": response,
     })))
-}
-
-async fn handle_web_slash_command(state: &WebState, text: &str, chat_id: i64) -> Option<String> {
-    let trimmed = text.trim();
-    if !trimmed.starts_with('/') {
-        return None;
-    }
-
-    if trimmed == "/reset" {
-        let _ = call_blocking(state.app_state.db.clone(), move |db| {
-            db.clear_chat_context(chat_id)
-        })
-        .await;
-        let groups_dir = PathBuf::from(&state.app_state.config.data_dir).join("groups");
-        if let Err(e) = clear_todos(&groups_dir, "web", chat_id) {
-            warn!("Failed to clear TODO.json for chat {}: {}", chat_id, e);
-        }
-        return Some("Context cleared (session + chat history).".to_string());
-    }
-
-    if trimmed == "/clear" {
-        let _ = call_blocking(state.app_state.db.clone(), move |db| {
-            db.clear_chat_conversation(chat_id)
-        })
-        .await;
-        let groups_dir = PathBuf::from(&state.app_state.config.data_dir).join("groups");
-        if let Err(e) = clear_todos(&groups_dir, "web", chat_id) {
-            warn!("Failed to clear TODO.json for chat {}: {}", chat_id, e);
-        }
-        return Some("Context cleared (session + chat history, scheduled tasks kept).".to_string());
-    }
-
-    if trimmed == "/stop" {
-        let stopped = crate::run_control::abort_runs("web", chat_id).await;
-        if stopped > 0 {
-            return Some(format!("Stopping current run ({stopped} active)."));
-        }
-        return Some("No active run in this chat.".to_string());
-    }
-
-    if trimmed == "/skills" {
-        return Some(state.app_state.skills.list_skills_formatted());
-    }
-
-    if trimmed == "/reload-skills" {
-        let reloaded = state.app_state.skills.reload();
-        return Some(format!("Reloaded {} skills from disk.", reloaded.len()));
-    }
-
-    if trimmed == "/archive" {
-        if let Ok(Some((json, _))) = call_blocking(state.app_state.db.clone(), move |db| {
-            db.load_session(chat_id)
-        })
-        .await
-        {
-            let messages: Vec<Message> = serde_json::from_str(&json).unwrap_or_default();
-            if messages.is_empty() {
-                return Some("No session to archive.".to_string());
-            }
-            crate::agent_engine::archive_conversation(
-                &state.app_state.config.data_dir,
-                "web",
-                chat_id,
-                &messages,
-            );
-            return Some(format!("Archived {} messages.", messages.len()));
-        }
-        return Some("No session to archive.".to_string());
-    }
-
-    if trimmed == "/usage" {
-        return match build_usage_report(state.app_state.db.clone(), chat_id).await {
-            Ok(report) => Some(report),
-            Err(e) => Some(format!("Failed to query usage statistics: {e}")),
-        };
-    }
-
-    if trimmed == "/status" {
-        let status = build_status_response(
-            state.app_state.db.clone(),
-            &state.app_state.config,
-            &state.app_state.llm_model_overrides,
-            chat_id,
-            "web",
-        )
-        .await;
-        return Some(status);
-    }
-
-    if trimmed == "/model" || trimmed.starts_with("/model ") {
-        return Some(build_model_response(
-            &state.app_state.config,
-            &state.app_state.llm_model_overrides,
-            "web",
-            trimmed,
-        ));
-    }
-
-    if let Some(plugin_response) =
-        maybe_handle_plugin_command(&state.app_state.config, trimmed, chat_id, "web").await
-    {
-        return Some(plugin_response);
-    }
-    Some("Unknown command.".to_string())
 }
 
 async fn api_audit_logs(
@@ -1790,7 +1690,7 @@ fn build_router(web_state: WebState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, WorkingDirIsolation};
+    use crate::config::{Config, LlmProviderProfile, WorkingDirIsolation};
     use crate::llm::LlmProvider;
     use crate::{db::Database, memory::MemoryManager, skills::SkillManager, tools::ToolRegistry};
     use crate::{error::MicroClawError, llm_types::ResponseContentBlock};
@@ -1947,7 +1847,12 @@ mod tests {
             skills: SkillManager::from_skills_dir(&cfg.skills_data_dir()),
             hooks: Arc::new(crate::hooks::HookManager::for_tests()),
             llm,
-            llm_model_overrides: std::collections::HashMap::new(),
+            llm_provider_overrides: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            llm_model_overrides: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             embedding: None,
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
@@ -2011,6 +1916,88 @@ mod tests {
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("event: delta"));
         assert!(text.contains("event: done"));
+    }
+
+    #[tokio::test]
+    async fn test_api_send_models_command_uses_live_models_for_non_preset_provider() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (path_tx, path_rx) = mpsc::channel::<String>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut buf = [0u8; 8192];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let path = req
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or("")
+                .to_string();
+            let _ = path_tx.send(path);
+            let body = r#"{"data":[{"id":"live-web-a"},{"id":"live-web-b"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+
+        let mut cfg = test_config_template();
+        cfg.llm_provider = "lab-local".into();
+        cfg.api_key = "k".into();
+        cfg.model = "custom-model".into();
+        cfg.llm_base_url = Some(format!("http://{addr}/v1"));
+        cfg.llm_providers.insert(
+            "lab-local".to_string(),
+            LlmProviderProfile {
+                provider: Some("openai".to_string()),
+                api_key: None,
+                llm_base_url: Some(format!("http://{addr}/v1")),
+                default_model: Some("custom-model".to_string()),
+                models: vec!["custom-model".to_string()],
+            },
+        );
+        let web_state = test_web_state_from_app_state(
+            test_state_with_config(Box::new(DummyLlm), cfg),
+            None,
+            WebLimits::default(),
+        );
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"main","sender_name":"u","message":"/models"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let text = v
+            .get("response")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default();
+        let path = path_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().unwrap();
+        assert_eq!(path, "/v1/models");
+        assert!(text.contains("Live models for provider 'lab-local'"));
+        assert!(text.contains("live-web-a"));
     }
 
     #[tokio::test]

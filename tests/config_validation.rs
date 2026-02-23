@@ -10,6 +10,7 @@ fn minimal_config() -> Config {
         llm_provider: "anthropic".into(),
         api_key: "test-key".into(),
         model: String::new(),
+        llm_providers: std::collections::HashMap::new(),
         llm_base_url: None,
         max_tokens: 8192,
         max_tool_iterations: 25,
