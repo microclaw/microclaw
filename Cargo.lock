@@ -2515,7 +2515,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "microclaw"
-version = "0.0.103"
+version = "0.0.105"
 dependencies = [
  "anyhow",
  "argon2",
