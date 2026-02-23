@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use tokio::sync::RwLock;
 use tracing::info;
 #[cfg(feature = "sqlite-vec")]
 use tracing::warn;
@@ -46,7 +47,8 @@ pub struct AppState {
     pub skills: SkillManager,
     pub hooks: Arc<HookManager>,
     pub llm: Box<dyn LlmProvider>,
-    pub llm_model_overrides: HashMap<String, String>,
+    pub llm_provider_overrides: Arc<RwLock<HashMap<String, String>>>,
+    pub llm_model_overrides: Arc<RwLock<HashMap<String, String>>>,
     pub embedding: Option<Arc<dyn EmbeddingProvider>>,
     pub memory_backend: Arc<MemoryBackend>,
     pub tools: ToolRegistry,
@@ -404,7 +406,8 @@ pub async fn run(
         skills,
         hooks,
         llm,
-        llm_model_overrides,
+        llm_provider_overrides: Arc::new(RwLock::new(HashMap::new())),
+        llm_model_overrides: Arc::new(RwLock::new(llm_model_overrides)),
         embedding,
         memory_backend,
         tools,

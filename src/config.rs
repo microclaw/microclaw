@@ -179,6 +179,30 @@ pub struct ModelPrice {
     pub output_per_million_usd: f64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct LlmProviderProfile {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub llm_base_url: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedLlmProviderProfile {
+    pub alias: String,
+    pub provider: String,
+    pub api_key: String,
+    pub llm_base_url: Option<String>,
+    pub default_model: String,
+    pub models: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     // --- LLM / API ---
@@ -188,6 +212,8 @@ pub struct Config {
     pub api_key: String,
     #[serde(default = "default_model")]
     pub model: String,
+    #[serde(default)]
+    pub llm_providers: HashMap<String, LlmProviderProfile>,
     #[serde(default)]
     pub llm_base_url: Option<String>,
     #[serde(default = "default_max_tokens")]
@@ -460,6 +486,7 @@ impl Config {
             llm_provider: "anthropic".into(),
             api_key: "key".into(),
             model: "claude-sonnet-4-5-20250929".into(),
+            llm_providers: HashMap::new(),
             llm_base_url: None,
             max_tokens: 8192,
             max_tool_iterations: 100,
@@ -640,6 +667,49 @@ impl Config {
                 _ => "gpt-5.2".into(),
             };
         }
+        self.model = self.model.trim().to_string();
+        if self.model.is_empty() {
+            self.model = "gpt-5.2".into();
+        }
+        self.llm_providers = self
+            .llm_providers
+            .drain()
+            .filter_map(|(alias, mut profile)| {
+                let alias = alias.trim().to_ascii_lowercase();
+                if alias.is_empty() {
+                    return None;
+                }
+                profile.provider = profile
+                    .provider
+                    .as_ref()
+                    .map(|v| v.trim().to_ascii_lowercase())
+                    .filter(|v| !v.is_empty());
+                profile.api_key = profile
+                    .api_key
+                    .as_ref()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty());
+                profile.llm_base_url = profile
+                    .llm_base_url
+                    .as_ref()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty());
+                profile.default_model = profile
+                    .default_model
+                    .as_ref()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty());
+                profile.models = profile
+                    .models
+                    .into_iter()
+                    .map(|m| m.trim().to_string())
+                    .filter(|m| !m.is_empty())
+                    .collect::<Vec<_>>();
+                profile.models.sort();
+                profile.models.dedup();
+                Some((alias, profile))
+            })
+            .collect();
 
         // Validate timezone
         self.timezone
@@ -915,6 +985,106 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    fn merged_profile_from_alias(&self, alias: &str) -> Option<ResolvedLlmProviderProfile> {
+        let alias = alias.trim().to_ascii_lowercase();
+        if alias.is_empty() {
+            return None;
+        }
+        if alias == self.llm_provider {
+            let mut provider = self.llm_provider.clone();
+            let mut api_key = self.api_key.clone();
+            let mut llm_base_url = self.llm_base_url.clone();
+            let mut default_model = self.model.clone();
+            let mut models = vec![default_model.clone()];
+            if let Some(profile) = self.llm_providers.get(&alias) {
+                if let Some(v) = &profile.provider {
+                    provider = v.clone();
+                }
+                if let Some(v) = &profile.api_key {
+                    api_key = v.clone();
+                }
+                if let Some(v) = &profile.llm_base_url {
+                    llm_base_url = Some(v.clone());
+                }
+                if let Some(v) = &profile.default_model {
+                    default_model = v.clone();
+                }
+                if !profile.models.is_empty() {
+                    models = profile.models.clone();
+                }
+            }
+            if !models.iter().any(|m| m == &default_model) {
+                models.push(default_model.clone());
+            }
+            models.sort();
+            models.dedup();
+            return Some(ResolvedLlmProviderProfile {
+                alias,
+                provider,
+                api_key,
+                llm_base_url,
+                default_model,
+                models,
+            });
+        }
+
+        let profile = self.llm_providers.get(&alias)?;
+        let provider = profile.provider.clone().unwrap_or_else(|| alias.clone());
+        let api_key = profile
+            .api_key
+            .clone()
+            .unwrap_or_else(|| self.api_key.clone());
+        let llm_base_url = profile
+            .llm_base_url
+            .clone()
+            .or_else(|| self.llm_base_url.clone());
+        let default_model = profile
+            .default_model
+            .clone()
+            .unwrap_or_else(|| self.model.clone());
+        let mut models = if profile.models.is_empty() {
+            vec![default_model.clone()]
+        } else {
+            profile.models.clone()
+        };
+        if !models.iter().any(|m| m == &default_model) {
+            models.push(default_model.clone());
+        }
+        models.sort();
+        models.dedup();
+        Some(ResolvedLlmProviderProfile {
+            alias,
+            provider,
+            api_key,
+            llm_base_url,
+            default_model,
+            models,
+        })
+    }
+
+    pub fn resolve_llm_provider_profile(&self, alias: &str) -> Option<ResolvedLlmProviderProfile> {
+        self.merged_profile_from_alias(alias)
+    }
+
+    pub fn list_llm_provider_profiles(&self) -> Vec<ResolvedLlmProviderProfile> {
+        let mut out = Vec::new();
+        if let Some(default_profile) = self.resolve_llm_provider_profile(&self.llm_provider) {
+            out.push(default_profile);
+        }
+        let mut aliases: Vec<String> = self.llm_providers.keys().cloned().collect();
+        aliases.sort();
+        aliases.dedup();
+        for alias in aliases {
+            if alias == self.llm_provider {
+                continue;
+            }
+            if let Some(profile) = self.resolve_llm_provider_profile(&alias) {
+                out.push(profile);
+            }
+        }
+        out
     }
 
     /// Deserialize a typed channel config from the `channels` map.

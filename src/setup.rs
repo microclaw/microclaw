@@ -357,6 +357,7 @@ struct SetupApp {
     selected: usize,
     editing: bool,
     picker: Option<PickerState>,
+    fetched_model_options: HashMap<String, Vec<String>>,
     status: String,
     completed: bool,
     backup_path: Option<String>,
@@ -607,8 +608,9 @@ impl SetupApp {
             selected: 0,
             editing: false,
             picker: None,
+            fetched_model_options: HashMap::new(),
             status:
-                "Use ↑/↓ select field, Enter to edit or choose list, F2 validate, s/Ctrl+S save, q quit"
+                "Use ↑/↓ select field, Enter to edit or choose list, Ctrl+L fetch models, F2 validate, s/Ctrl+S save, q quit"
                     .into(),
             completed: false,
             backup_path: None,
@@ -1196,6 +1198,7 @@ impl SetupApp {
         let old_provider = self.field_value("LLM_PROVIDER");
         let old_base_url = self.field_value("LLM_BASE_URL");
         let old_model = self.field_value("LLM_MODEL");
+        self.fetched_model_options.clear();
 
         if let Some(field) = self.fields.iter_mut().find(|f| f.key == "LLM_PROVIDER") {
             field.value = provider.to_string();
@@ -1240,31 +1243,23 @@ impl SetupApp {
     }
 
     fn cycle_model(&mut self, direction: i32) {
-        let provider = self.field_value("LLM_PROVIDER");
-        let preset = match find_provider_preset(&provider) {
-            Some(p) => p,
-            None => return,
-        };
-        if preset.models.is_empty() {
+        let options = self.model_options();
+        if options.is_empty() {
             return;
         }
         let current = self.field_value("LLM_MODEL");
-        let current_idx = preset
-            .models
-            .iter()
-            .position(|m| *m == current)
-            .unwrap_or(0);
+        let current_idx = options.iter().position(|m| *m == current).unwrap_or(0);
         let next_idx = if direction < 0 {
             if current_idx == 0 {
-                preset.models.len() - 1
+                options.len() - 1
             } else {
                 current_idx - 1
             }
         } else {
-            (current_idx + 1) % preset.models.len()
+            (current_idx + 1) % options.len()
         };
         if let Some(model) = self.fields.iter_mut().find(|f| f.key == "LLM_MODEL") {
-            model.value = preset.models[next_idx].to_string();
+            model.value = options[next_idx].clone();
         }
     }
 
@@ -1275,13 +1270,79 @@ impl SetupApp {
             .unwrap_or(PROVIDER_PRESETS.len().saturating_sub(1))
     }
 
-    fn model_options(&self) -> Vec<String> {
+    fn current_model_cache_key(&self) -> String {
+        let provider = self.field_value("LLM_PROVIDER").to_ascii_lowercase();
+        let base = self.field_value("LLM_BASE_URL");
+        let base = base.trim().trim_end_matches('/').to_ascii_lowercase();
+        format!("{provider}|{base}")
+    }
+
+    fn current_provider_is_custom(&self) -> bool {
+        self.field_value("LLM_PROVIDER")
+            .eq_ignore_ascii_case("custom")
+    }
+
+    fn current_provider_requires_dynamic_models(&self) -> bool {
+        let provider = self.field_value("LLM_PROVIDER");
+        self.current_provider_is_custom() || find_provider_preset(&provider).is_none()
+    }
+
+    fn has_cached_models_for_current_provider(&self) -> bool {
+        let cache_key = self.current_model_cache_key();
+        self.fetched_model_options
+            .get(&cache_key)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    }
+
+    fn static_model_options(&self) -> Vec<String> {
         let provider = self.field_value("LLM_PROVIDER");
         if let Some(preset) = find_provider_preset(&provider) {
             preset.models.iter().map(|m| (*m).to_string()).collect()
         } else {
             vec![self.field_value("LLM_MODEL")]
         }
+    }
+
+    fn model_options(&self) -> Vec<String> {
+        let cache_key = self.current_model_cache_key();
+        if let Some(cached) = self.fetched_model_options.get(&cache_key) {
+            if !cached.is_empty() {
+                return cached.clone();
+            }
+        }
+        self.static_model_options()
+    }
+
+    fn fetch_live_models_for_current_provider(
+        &self,
+    ) -> Result<(String, String, String, Option<String>), MicroClawError> {
+        let provider = self.field_value("LLM_PROVIDER").to_lowercase();
+        let (api_key, codex_account_id) = if is_openai_codex_provider(&provider) {
+            let auth = resolve_openai_codex_auth("")?;
+            (auth.bearer_token, auth.account_id)
+        } else {
+            (self.field_value("LLM_API_KEY"), None)
+        };
+        let base_url = self.field_value("LLM_BASE_URL");
+        Ok((provider, api_key, base_url, codex_account_id))
+    }
+
+    fn apply_fetched_models(&mut self, models: Vec<String>) -> Result<usize, MicroClawError> {
+        if models.is_empty() {
+            return Err(MicroClawError::Config(
+                "Provider returned no models from API".into(),
+            ));
+        }
+        let cache_key = self.current_model_cache_key();
+        self.fetched_model_options.insert(cache_key, models.clone());
+        if let Some(model_field) = self.fields.iter_mut().find(|f| f.key == "LLM_MODEL") {
+            let current = model_field.value.trim().to_string();
+            if current.is_empty() || !models.iter().any(|m| m == &current) {
+                model_field.value = models[0].clone();
+            }
+        }
+        Ok(models.len())
     }
 
     fn open_picker_for_selected(&mut self) -> bool {
@@ -1296,10 +1357,6 @@ impl SetupApp {
                 true
             }
             "LLM_MODEL" => {
-                let provider = self.field_value("LLM_PROVIDER");
-                if provider.eq_ignore_ascii_case("custom") {
-                    return false;
-                }
                 let options = self.model_options();
                 if options.is_empty() {
                     return false;
@@ -1736,6 +1793,153 @@ fn send_openai_validation_chat_request(
         req = req.bearer_auth(api_key);
     }
     req.send()
+}
+
+fn resolve_openai_compat_models_endpoint(provider: &str, base_url: &str) -> String {
+    let base =
+        resolve_openai_compat_validation_base(provider, base_url, find_provider_preset(provider));
+    let base = base.trim_end_matches('/');
+    if base.ends_with("/chat/completions") {
+        format!(
+            "{}/models",
+            base.trim_end_matches("/chat/completions")
+                .trim_end_matches('/')
+        )
+    } else if base.ends_with("/responses") {
+        format!(
+            "{}/models",
+            base.trim_end_matches("/responses").trim_end_matches('/')
+        )
+    } else if base.ends_with("/models") {
+        base.to_string()
+    } else {
+        format!("{base}/models")
+    }
+}
+
+fn resolve_anthropic_models_endpoint(base_url: &str) -> String {
+    let base = if base_url.trim().is_empty() {
+        "https://api.anthropic.com".to_string()
+    } else {
+        base_url.trim_end_matches('/').to_string()
+    };
+    if base.ends_with("/v1/models") {
+        base
+    } else if base.ends_with("/v1/messages") {
+        format!("{}/v1/models", base.trim_end_matches("/v1/messages"))
+    } else if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    }
+}
+
+fn extract_openai_models_ids(text: &str) -> Vec<String> {
+    let mut out = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
+        .map(|arr| {
+            arr.into_iter()
+                .filter_map(|item| {
+                    item.get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|id| id.trim().to_string())
+                        .filter(|id| !id.is_empty())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn extract_anthropic_models_ids(text: &str) -> Vec<String> {
+    let mut out = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
+        .map(|arr| {
+            arr.into_iter()
+                .filter_map(|item| {
+                    item.get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|id| id.trim().to_string())
+                        .filter(|id| !id.is_empty())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn fetch_provider_models(
+    provider: &str,
+    api_key: &str,
+    base_url: &str,
+    codex_account_id: Option<&str>,
+) -> Result<Vec<String>, MicroClawError> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    if provider_protocol(provider) == ProviderProtocol::Anthropic {
+        if api_key.trim().is_empty() {
+            return Err(MicroClawError::Config(
+                "LLM_API_KEY is required to fetch Anthropic models".into(),
+            ));
+        }
+        let endpoint = resolve_anthropic_models_endpoint(base_url);
+        let resp = client
+            .get(endpoint)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .send()?;
+        let status = resp.status();
+        let text = resp.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(MicroClawError::Config(format!(
+                "Model fetch failed: {}",
+                extract_openai_error_detail(status, &text)
+            )));
+        }
+        let models = extract_anthropic_models_ids(&text);
+        if models.is_empty() {
+            return Err(MicroClawError::Config(
+                "Model fetch succeeded but no model IDs were returned".into(),
+            ));
+        }
+        return Ok(models);
+    }
+
+    let endpoint = resolve_openai_compat_models_endpoint(provider, base_url);
+    let mut req = client.get(endpoint);
+    if !api_key.trim().is_empty() {
+        req = req.bearer_auth(api_key);
+    }
+    if is_openai_codex_provider(provider) {
+        if let Some(account_id) = codex_account_id {
+            if !account_id.trim().is_empty() {
+                req = req.header("ChatGPT-Account-ID", account_id.trim());
+            }
+        }
+    }
+    let resp = req.send()?;
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(MicroClawError::Config(format!(
+            "Model fetch failed: {}",
+            extract_openai_error_detail(status, &text)
+        )));
+    }
+    let models = extract_openai_models_ids(&text);
+    if models.is_empty() {
+        return Err(MicroClawError::Config(
+            "Model fetch succeeded but no model IDs were returned".into(),
+        ));
+    }
+    Ok(models)
 }
 
 fn extract_openai_error_detail(status: reqwest::StatusCode, text: &str) -> String {
@@ -2266,6 +2470,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
         Line::from("• e: force manual text edit"),
         Line::from("• Ctrl+D / Del: clear field"),
         Line::from("• Ctrl+R: restore field default"),
+        Line::from("• Ctrl+L: fetch live models for current provider"),
         Line::from("• F2: validate + online checks"),
         Line::from("• s / Ctrl+S: save config"),
     ])
@@ -2497,6 +2702,43 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                 KeyCode::Tab => app.next(),
                 KeyCode::BackTab => app.prev(),
                 KeyCode::Enter => {
+                    if app.selected_field().key == "LLM_MODEL"
+                        && app.current_provider_requires_dynamic_models()
+                        && !app.has_cached_models_for_current_provider()
+                    {
+                        let (provider, api_key, base_url, codex_account_id) =
+                            match app.fetch_live_models_for_current_provider() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    app.status = format!("Model fetch failed: {e}");
+                                    continue;
+                                }
+                            };
+                        match run_with_spinner(
+                            &mut terminal,
+                            &mut app,
+                            "Fetching live models",
+                            move || {
+                                fetch_provider_models(
+                                    &provider,
+                                    &api_key,
+                                    &base_url,
+                                    codex_account_id.as_deref(),
+                                )
+                            },
+                        ) {
+                            Ok(models) => {
+                                if let Err(e) = app.apply_fetched_models(models) {
+                                    app.status = format!("Model fetch failed: {e}");
+                                    continue;
+                                }
+                            }
+                            Err(e) => {
+                                app.status = format!("Model fetch failed: {e}");
+                                continue;
+                            }
+                        }
+                    }
                     if app.open_picker_for_selected() {
                         app.status = format!("Selecting {}", app.selected_field().key);
                     } else {
@@ -2509,6 +2751,42 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                         app.cycle_provider(-1);
                         app.status = format!("Provider set to {}", app.field_value("LLM_PROVIDER"));
                     } else if app.selected_field().key == "LLM_MODEL" {
+                        if app.current_provider_requires_dynamic_models()
+                            && !app.has_cached_models_for_current_provider()
+                        {
+                            let (provider, api_key, base_url, codex_account_id) =
+                                match app.fetch_live_models_for_current_provider() {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        app.status = format!("Model fetch failed: {e}");
+                                        continue;
+                                    }
+                                };
+                            match run_with_spinner(
+                                &mut terminal,
+                                &mut app,
+                                "Fetching live models",
+                                move || {
+                                    fetch_provider_models(
+                                        &provider,
+                                        &api_key,
+                                        &base_url,
+                                        codex_account_id.as_deref(),
+                                    )
+                                },
+                            ) {
+                                Ok(models) => {
+                                    if let Err(e) = app.apply_fetched_models(models) {
+                                        app.status = format!("Model fetch failed: {e}");
+                                        continue;
+                                    }
+                                }
+                                Err(e) => {
+                                    app.status = format!("Model fetch failed: {e}");
+                                    continue;
+                                }
+                            }
+                        }
                         app.cycle_model(-1);
                         app.status = format!("Model set to {}", app.field_value("LLM_MODEL"));
                     }
@@ -2518,6 +2796,42 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                         app.cycle_provider(1);
                         app.status = format!("Provider set to {}", app.field_value("LLM_PROVIDER"));
                     } else if app.selected_field().key == "LLM_MODEL" {
+                        if app.current_provider_requires_dynamic_models()
+                            && !app.has_cached_models_for_current_provider()
+                        {
+                            let (provider, api_key, base_url, codex_account_id) =
+                                match app.fetch_live_models_for_current_provider() {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        app.status = format!("Model fetch failed: {e}");
+                                        continue;
+                                    }
+                                };
+                            match run_with_spinner(
+                                &mut terminal,
+                                &mut app,
+                                "Fetching live models",
+                                move || {
+                                    fetch_provider_models(
+                                        &provider,
+                                        &api_key,
+                                        &base_url,
+                                        codex_account_id.as_deref(),
+                                    )
+                                },
+                            ) {
+                                Ok(models) => {
+                                    if let Err(e) = app.apply_fetched_models(models) {
+                                        app.status = format!("Model fetch failed: {e}");
+                                        continue;
+                                    }
+                                }
+                                Err(e) => {
+                                    app.status = format!("Model fetch failed: {e}");
+                                    continue;
+                                }
+                            }
+                        }
                         app.cycle_model(1);
                         app.status = format!("Model set to {}", app.field_value("LLM_MODEL"));
                     }
@@ -2534,6 +2848,37 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                 }
                 KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.restore_selected_field_default();
+                }
+                KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let (provider, api_key, base_url, codex_account_id) =
+                        match app.fetch_live_models_for_current_provider() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                app.status = format!("Model fetch failed: {e}");
+                                continue;
+                            }
+                        };
+                    match run_with_spinner(
+                        &mut terminal,
+                        &mut app,
+                        "Fetching live models",
+                        move || {
+                            fetch_provider_models(
+                                &provider,
+                                &api_key,
+                                &base_url,
+                                codex_account_id.as_deref(),
+                            )
+                        },
+                    ) {
+                        Ok(models) => match app.apply_fetched_models(models) {
+                            Ok(count) => {
+                                app.status = format!("Fetched {count} models from provider API")
+                            }
+                            Err(e) => app.status = format!("Model fetch failed: {e}"),
+                        },
+                        Err(e) => app.status = format!("Model fetch failed: {e}"),
+                    };
                 }
                 KeyCode::F(2) => match app.validate_local().and_then(|_| app.validate_online()) {
                     Ok(checks) => app.status = format!("Validation passed: {}", checks.join(" | ")),
@@ -2991,5 +3336,51 @@ sandbox:
             .find(|f| f.key == "LLM_API_KEY")
             .expect("LLM_API_KEY field missing");
         assert!(app.is_field_required(api_key_field));
+    }
+
+    #[test]
+    fn test_extract_openai_models_ids() {
+        let body = r#"{"data":[{"id":"gpt-5.2"},{"id":"gpt-5"}]}"#;
+        let ids = extract_openai_models_ids(body);
+        assert_eq!(ids, vec!["gpt-5".to_string(), "gpt-5.2".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_anthropic_models_ids() {
+        let body = r#"{"data":[{"id":"claude-sonnet"},{"id":"claude-opus"}]}"#;
+        let ids = extract_anthropic_models_ids(body);
+        assert_eq!(
+            ids,
+            vec!["claude-opus".to_string(), "claude-sonnet".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_model_options_prefers_fetched_cache() {
+        let mut app = SetupApp::new();
+        app.set_provider("openai");
+        let cache_key = app.current_model_cache_key();
+        app.fetched_model_options.insert(
+            cache_key,
+            vec!["gpt-live-a".to_string(), "gpt-live-b".to_string()],
+        );
+        let options = app.model_options();
+        assert_eq!(
+            options,
+            vec!["gpt-live-a".to_string(), "gpt-live-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_non_preset_provider_requires_dynamic_models() {
+        let mut app = SetupApp::new();
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_PROVIDER") {
+            field.value = "lab-local".to_string();
+        }
+        assert!(app.current_provider_requires_dynamic_models());
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_PROVIDER") {
+            field.value = "openai".to_string();
+        }
+        assert!(!app.current_provider_requires_dynamic_models());
     }
 }
