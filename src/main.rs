@@ -16,7 +16,18 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     name = "microclaw",
     version = VERSION,
     about = "MicroClaw multi-channel agent runtime",
-    long_about = "MicroClaw multi-channel agent runtime\n\nQuick Start:\n  1) microclaw setup\n  2) microclaw doctor\n  3) microclaw start\n\nChannel requirement:\n  Enable at least one input channel, or use Web UI (enabled by default).\n\nMore:\n  https://microclaw.ai"
+    long_about = r#"MicroClaw multi-channel agent runtime
+
+Quick Start:
+  1) microclaw setup
+  2) microclaw doctor
+  3) microclaw start
+
+Channel requirement:
+  Enable at least one input channel, or use Web UI (enabled by default).
+
+More:
+  https://microclaw.ai"#
 )]
 struct Cli {
     #[command(subcommand)]
