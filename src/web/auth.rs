@@ -242,7 +242,10 @@ pub(super) async fn api_auth_create_api_key(
         return Err((StatusCode::BAD_REQUEST, "label is required".into()));
     }
     if body.scopes.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "at least one scope is required".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "at least one scope is required".into(),
+        ));
     }
     let raw_key = format!("mk_{}", uuid::Uuid::new_v4().simple());
     let prefix = raw_key.chars().take(10).collect::<String>();
