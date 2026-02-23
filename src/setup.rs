@@ -155,14 +155,14 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "OpenAI",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.openai.com/v1",
-        models: &["gpt-5.2"],
+        models: &["gpt-5.2", "gpt-5", "gpt-5-mini"],
     },
     ProviderPreset {
         id: "openai-codex",
         label: "OpenAI Codex",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "",
-        models: &["gpt-5.3-codex"],
+        models: &["gpt-5.3-codex", "gpt-5.2-codex", "gpt-5-codex"],
     },
     ProviderPreset {
         id: "openrouter",
@@ -171,8 +171,8 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         default_base_url: "https://openrouter.ai/api/v1",
         models: &[
             "openrouter/auto",
-            "anthropic/claude-sonnet-4.5",
             "openai/gpt-5.2",
+            "anthropic/claude-sonnet-4.5",
         ],
     },
     ProviderPreset {
@@ -180,7 +180,11 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Anthropic",
         protocol: ProviderProtocol::Anthropic,
         default_base_url: "",
-        models: &["claude-sonnet-4-5-20250929", "claude-opus-4-6-20260205"],
+        models: &[
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-6-20260205",
+            "claude-haiku-4-5-20250929",
+        ],
     },
     ProviderPreset {
         id: "ollama",
@@ -194,35 +198,43 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Google DeepMind",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
-        models: &["gemini-2.5-pro", "gemini-2.5-flash"],
+        models: &[
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ],
     },
     ProviderPreset {
         id: "alibaba",
         label: "Alibaba Cloud (Qwen / DashScope)",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        models: &["qwen3-max", "qwen-max-latest"],
+        models: &["qwen3-max", "qwen3-plus", "qwen-max-latest"],
     },
     ProviderPreset {
         id: "deepseek",
         label: "DeepSeek",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.deepseek.com/v1",
-        models: &["deepseek-chat", "deepseek-reasoner"],
+        models: &["deepseek-chat", "deepseek-reasoner", "deepseek-v3"],
     },
     ProviderPreset {
         id: "moonshot",
         label: "Moonshot AI (Kimi)",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.moonshot.cn/v1",
-        models: &["kimi-k2.5", "kimi-k2"],
+        models: &["kimi-k2.5", "kimi-k2", "kimi-latest"],
     },
     ProviderPreset {
         id: "mistral",
         label: "Mistral AI",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.mistral.ai/v1",
-        models: &["mistral-large-latest", "ministral-8b-latest"],
+        models: &[
+            "mistral-large-latest",
+            "mistral-medium-latest",
+            "ministral-8b-latest",
+        ],
     },
     ProviderPreset {
         id: "azure",
@@ -230,7 +242,7 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url:
             "https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT",
-        models: &["gpt-5.2", "gpt-5"],
+        models: &["gpt-5.2", "gpt-5", "gpt-4.1"],
     },
     ProviderPreset {
         id: "bedrock",
@@ -240,6 +252,7 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         models: &[
             "anthropic.claude-opus-4-6-v1",
             "anthropic.claude-sonnet-4-5-v2",
+            "anthropic.claude-haiku-4-5-v1",
         ],
     },
     ProviderPreset {
@@ -247,42 +260,54 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Zhipu AI (GLM / Z.AI)",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://open.bigmodel.cn/api/paas/v4",
-        models: &["glm-4.7", "glm-4.7-flash"],
+        models: &["glm-4.7", "glm-4.7-flash", "glm-4.5-air"],
     },
     ProviderPreset {
         id: "minimax",
         label: "MiniMax",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.minimax.io/v1",
-        models: &["MiniMax-M2.1"],
+        models: &["MiniMax-M2.5", "MiniMax-M2.5-Thinking", "MiniMax-M2.1"],
     },
     ProviderPreset {
         id: "cohere",
         label: "Cohere",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.cohere.ai/compatibility/v1",
-        models: &["command-a-03-2025", "command-r-plus-08-2024"],
+        models: &[
+            "command-a-03-2025",
+            "command-r-plus-08-2024",
+            "command-r-08-2024",
+        ],
     },
     ProviderPreset {
         id: "tencent",
         label: "Tencent AI Lab",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.hunyuan.cloud.tencent.com/v1",
-        models: &["hunyuan-t1-latest", "hunyuan-turbos-latest"],
+        models: &[
+            "hunyuan-t1-latest",
+            "hunyuan-turbos-latest",
+            "hunyuan-standard-latest",
+        ],
     },
     ProviderPreset {
         id: "xai",
         label: "xAI",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.x.ai/v1",
-        models: &["grok-4", "grok-3"],
+        models: &["grok-4", "grok-4-fast", "grok-3"],
     },
     ProviderPreset {
         id: "huggingface",
         label: "Hugging Face",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://router.huggingface.co/v1",
-        models: &["Qwen/Qwen3-Coder-Next", "meta-llama/Llama-3.3-70B-Instruct"],
+        models: &[
+            "Qwen/Qwen3-Coder-Next",
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "deepseek-ai/DeepSeek-V3",
+        ],
     },
     ProviderPreset {
         id: "together",
@@ -292,6 +317,7 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         models: &[
             "deepseek-ai/DeepSeek-V3",
             "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
         ],
     },
     ProviderPreset {
@@ -328,6 +354,8 @@ fn provider_display(provider: &str) -> String {
         format!("{provider} - custom")
     }
 }
+
+const MODEL_PICKER_MANUAL_INPUT: &str = "<Manual input...>";
 
 #[derive(Clone)]
 struct Field {
@@ -1284,6 +1312,12 @@ impl SetupApp {
         }
     }
 
+    fn model_picker_options(&self) -> Vec<String> {
+        let mut options = self.model_options();
+        options.push(MODEL_PICKER_MANUAL_INPUT.to_string());
+        options
+    }
+
     fn open_picker_for_selected(&mut self) -> bool {
         match self.selected_field().key.as_str() {
             "LLM_PROVIDER" => {
@@ -1300,7 +1334,7 @@ impl SetupApp {
                 if provider.eq_ignore_ascii_case("custom") {
                     return false;
                 }
-                let options = self.model_options();
+                let options = self.model_picker_options();
                 if options.is_empty() {
                     return false;
                 }
@@ -1308,7 +1342,7 @@ impl SetupApp {
                 let idx = options
                     .iter()
                     .position(|m| *m == current_model)
-                    .unwrap_or(0);
+                    .unwrap_or(options.len().saturating_sub(1));
                 self.picker = Some(PickerState {
                     kind: PickerKind::Model,
                     selected: idx,
@@ -1341,7 +1375,7 @@ impl SetupApp {
         let selected = picker.selected;
         let options_len = match kind {
             PickerKind::Provider => PROVIDER_PRESETS.len(),
-            PickerKind::Model => self.model_options().len(),
+            PickerKind::Model => self.model_picker_options().len(),
             PickerKind::Channels => Self::channel_options().len(),
         };
         if options_len == 0 {
@@ -1385,9 +1419,14 @@ impl SetupApp {
                 }
             }
             PickerKind::Model => {
-                let options = self.model_options();
+                let options = self.model_picker_options();
                 if let Some(chosen) = options.get(picker.selected) {
-                    if let Some(model) = self.fields.iter_mut().find(|f| f.key == "LLM_MODEL") {
+                    if chosen == MODEL_PICKER_MANUAL_INPUT {
+                        self.editing = true;
+                        self.status = "Editing LLM_MODEL (manual input)".to_string();
+                    } else if let Some(model) =
+                        self.fields.iter_mut().find(|f| f.key == "LLM_MODEL")
+                    {
                         model.value = chosen.clone();
                         self.status = format!("Model set to {chosen}");
                     }
@@ -2302,7 +2341,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                     .map(|p| format!("{} - {}", p.id, p.label))
                     .collect(),
             ),
-            PickerKind::Model => ("Select LLM Model", app.model_options()),
+            PickerKind::Model => ("Select LLM Model", app.model_picker_options()),
             PickerKind::Channels => (
                 "Select Channels (Space=toggle, Enter=apply)",
                 SetupApp::channel_options()
@@ -2991,5 +3030,39 @@ sandbox:
             .find(|f| f.key == "LLM_API_KEY")
             .expect("LLM_API_KEY field missing");
         assert!(app.is_field_required(api_key_field));
+    }
+
+    #[test]
+    fn test_default_model_for_minimax_is_m2_5() {
+        assert_eq!(default_model_for_provider("minimax"), "MiniMax-M2.5");
+    }
+
+    #[test]
+    fn test_model_picker_options_include_manual_input() {
+        let app = SetupApp::new();
+        let options = app.model_picker_options();
+        assert_eq!(
+            options.last().map(String::as_str),
+            Some(MODEL_PICKER_MANUAL_INPUT)
+        );
+    }
+
+    #[test]
+    fn test_model_picker_manual_input_enters_edit_mode() {
+        let mut app = SetupApp::new();
+        let model_idx = app
+            .fields
+            .iter()
+            .position(|f| f.key == "LLM_MODEL")
+            .expect("LLM_MODEL field missing");
+        app.selected = model_idx;
+        assert!(app.open_picker_for_selected());
+        let manual_idx = app.model_picker_options().len().saturating_sub(1);
+        if let Some(picker) = app.picker.as_mut() {
+            picker.selected = manual_idx;
+        }
+        app.apply_picker_selection();
+        assert!(app.editing);
+        assert!(app.status.contains("manual input"));
     }
 }
