@@ -1450,6 +1450,7 @@ async fn handle_web_slash_command(state: &WebState, text: &str, chat_id: i64) ->
         let status = build_status_response(
             state.app_state.db.clone(),
             &state.app_state.config,
+            &state.app_state.llm_model_overrides,
             chat_id,
             "web",
         )
@@ -1458,7 +1459,12 @@ async fn handle_web_slash_command(state: &WebState, text: &str, chat_id: i64) ->
     }
 
     if trimmed == "/model" || trimmed.starts_with("/model ") {
-        return Some(build_model_response(&state.app_state.config, trimmed));
+        return Some(build_model_response(
+            &state.app_state.config,
+            &state.app_state.llm_model_overrides,
+            "web",
+            trimmed,
+        ));
     }
 
     maybe_handle_plugin_command(&state.app_state.config, trimmed, chat_id, "web").await
