@@ -247,6 +247,11 @@ pub fn load_plugin_report(config: &Config) -> PluginLoadReport {
                 }
             }
             Err(e) => {
+                report.errors.push(format!(
+                    "{}: failed to parse plugin manifest: {}",
+                    path.display(),
+                    e
+                ));
                 warn!(path = %path.display(), error = %e, "failed to load plugin manifest");
             }
         }
@@ -503,18 +508,17 @@ pub fn handle_plugins_admin_command(
     command_text: &str,
 ) -> Option<String> {
     let trimmed = command_text.trim();
-    let is_plugins_cmd =
-        trimmed == "/plugins" || trimmed.starts_with("/plugins ") || trimmed == "/plugins@bot";
-    if !is_plugins_cmd {
+    let (first_token, rest) = first_token_and_rest(trimmed);
+    if !command_token_base(first_token).eq_ignore_ascii_case("/plugins") {
         return None;
     }
     if !config.control_chat_ids.contains(&caller_chat_id) {
         return Some("Plugin admin commands require control chat permission.".to_string());
     }
 
-    let arg = trimmed
+    let arg = rest
         .split_whitespace()
-        .nth(1)
+        .next()
         .unwrap_or("list")
         .to_ascii_lowercase();
     let report = load_plugin_report(config);
@@ -568,9 +572,8 @@ pub fn handle_plugins_admin_command(
 }
 
 pub fn command_matches(input: &str, configured: &str) -> bool {
-    let trimmed = input.trim();
-    let first_token = trimmed.split_whitespace().next().unwrap_or("");
-    first_token.eq_ignore_ascii_case(configured)
+    let (first_token, _) = first_token_and_rest(input);
+    command_token_base(first_token).eq_ignore_ascii_case(configured)
 }
 
 pub async fn execute_plugin_slash_command(
@@ -605,11 +608,8 @@ pub async fn execute_plugin_slash_command(
                 ));
             }
 
-            let args = trimmed
-                .strip_prefix(command.command.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            let (_, args) = first_token_and_rest(trimmed);
+            let args = args.to_string();
 
             let mut vars = HashMap::new();
             vars.insert("channel".to_string(), caller_channel.to_string());
@@ -768,6 +768,22 @@ fn is_channel_allowed(channel: &str, allowed: &[String]) -> bool {
     }
     let normalized = channel.trim().to_ascii_lowercase();
     allowed.iter().any(|v| v == &normalized)
+}
+
+fn first_token_and_rest(input: &str) -> (&str, &str) {
+    let trimmed = input.trim();
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or("");
+    let rest = parts.next().unwrap_or("").trim();
+    (first, rest)
+}
+
+fn command_token_base(token: &str) -> &str {
+    if token.starts_with('/') {
+        token.split_once('@').map(|(base, _)| base).unwrap_or(token)
+    } else {
+        token
+    }
 }
 
 fn render_template(template: &str, vars: &HashMap<String, String>, shell_escape: bool) -> String {
@@ -1140,8 +1156,22 @@ mod tests {
     fn test_command_matches_first_token() {
         assert!(command_matches("/hello world", "/hello"));
         assert!(command_matches(" /HELLO   world", "/hello"));
+        assert!(command_matches("/hello@MicroClawBot world", "/hello"));
         assert!(!command_matches("/hello-world", "/hello"));
         assert!(!command_matches("hello", "/hello"));
+    }
+
+    #[test]
+    fn test_plugin_report_surfaces_manifest_parse_errors() {
+        let root = make_temp_plugins_dir("parse_error");
+        std::fs::write(root.join("bad.yaml"), "name: [invalid").unwrap();
+        let cfg = config_with_plugins_dir(&root);
+        let report = load_plugin_report(&cfg);
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("failed to parse plugin manifest")));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1360,6 +1390,28 @@ commands:
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn test_plugin_admin_supports_mention_suffix() {
+        let root = make_temp_plugins_dir("admin_mention");
+        std::fs::write(
+            root.join("good.yaml"),
+            r#"
+name: good
+enabled: true
+commands:
+  - command: /ok
+    response: "ok"
+"#,
+        )
+        .unwrap();
+
+        let mut cfg = config_with_plugins_dir(&root);
+        cfg.control_chat_ids = vec![42];
+        let out = handle_plugins_admin_command(&cfg, 42, "/plugins@AnyBotName list").unwrap();
+        assert!(out.contains("Plugins"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn test_plugin_slash_command_permissions_matrix() {
         let root = make_temp_plugins_dir("slash_perm");
@@ -1425,6 +1477,31 @@ commands:
         .unwrap();
         let cfg = config_with_plugins_dir(&root);
         let out = execute_plugin_slash_command(&cfg, "web", 7, "/echo hello world")
+            .await
+            .unwrap();
+        assert!(out.contains("echo=hello world"), "got: {out}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_plugin_slash_command_mention_keeps_args() {
+        let root = make_temp_plugins_dir("slash_mention_args");
+        std::fs::write(
+            root.join("cmd.yaml"),
+            r#"
+name: mentionargs
+enabled: true
+commands:
+  - command: /echo
+    run:
+      command: "printf 'echo=%s\n' {{args}}"
+      timeout_secs: 5
+      execution_policy: host_only
+"#,
+        )
+        .unwrap();
+        let cfg = config_with_plugins_dir(&root);
+        let out = execute_plugin_slash_command(&cfg, "telegram", 7, "/echo@SomeBot hello world")
             .await
             .unwrap();
         assert!(out.contains("echo=hello world"), "got: {out}");
