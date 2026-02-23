@@ -211,6 +211,23 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         models: &["deepseek-chat", "deepseek-reasoner"],
     },
     ProviderPreset {
+        id: "synthetic",
+        label: "Synthetic",
+        protocol: ProviderProtocol::OpenAiCompat,
+        default_base_url: "https://api.synthetic.new/openai/v1",
+        models: &["hf:openai/gpt-oss-120b", "hf:deepseek-ai/DeepSeek-V3-0324"],
+    },
+    ProviderPreset {
+        id: "chutes",
+        label: "Chutes",
+        protocol: ProviderProtocol::OpenAiCompat,
+        default_base_url: "https://llm.chutes.ai/v1",
+        models: &[
+            "deepseek-ai/DeepSeek-V3-0324",
+            "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        ],
+    },
+    ProviderPreset {
         id: "moonshot",
         label: "Moonshot AI (Kimi)",
         protocol: ProviderProtocol::OpenAiCompat,
@@ -2181,7 +2198,7 @@ fn save_config_yaml(
     yaml.push('\n');
 
     yaml.push_str(
-        "# LLM provider (anthropic, openai-codex, ollama, openai, openrouter, deepseek, google, etc.)\n",
+        "# LLM provider (anthropic, openai-codex, ollama, openai, openrouter, deepseek, synthetic, chutes, google, etc.)\n",
     );
     yaml.push_str(&format!("llm_provider: \"{}\"\n", get("LLM_PROVIDER")));
     yaml.push_str("# API key for LLM provider\n");
@@ -3382,5 +3399,11 @@ sandbox:
             field.value = "openai".to_string();
         }
         assert!(!app.current_provider_requires_dynamic_models());
+    }
+
+    #[test]
+    fn test_provider_presets_include_synthetic_and_chutes() {
+        assert!(find_provider_preset("synthetic").is_some());
+        assert!(find_provider_preset("chutes").is_some());
     }
 }

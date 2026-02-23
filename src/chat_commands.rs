@@ -476,6 +476,8 @@ fn resolve_openai_models_url(profile: &ResolvedLlmProviderProfile) -> String {
     let default_base = match backend.as_str() {
         "openai" => "https://api.openai.com/v1",
         "deepseek" => "https://api.deepseek.com/v1",
+        "synthetic" => "https://api.synthetic.new/openai/v1",
+        "chutes" => "https://llm.chutes.ai/v1",
         _ => "https://api.openai.com/v1",
     };
     let base = profile
@@ -621,9 +623,9 @@ mod tests {
     use super::{
         build_model_response, build_models_response, build_provider_response,
         is_placeholder_model_list, parse_anthropic_models_json_ids, parse_models_command_args,
-        parse_openai_models_json_ids,
+        parse_openai_models_json_ids, resolve_openai_models_url,
     };
-    use crate::config::{Config, LlmProviderProfile};
+    use crate::config::{Config, LlmProviderProfile, ResolvedLlmProviderProfile};
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -930,5 +932,25 @@ mod tests {
         server.join().unwrap();
         assert!(bad.contains("Model 'not-real' is not configured"));
         assert!(bad.contains("model-live-a"));
+    }
+
+    #[test]
+    fn resolve_openai_models_url_supports_synthetic_and_chutes_defaults() {
+        let mk = |provider: &str| ResolvedLlmProviderProfile {
+            alias: provider.to_string(),
+            provider: provider.to_string(),
+            api_key: String::new(),
+            llm_base_url: None,
+            default_model: "x".to_string(),
+            models: vec!["x".to_string()],
+        };
+        assert_eq!(
+            resolve_openai_models_url(&mk("synthetic")),
+            "https://api.synthetic.new/openai/v1/models"
+        );
+        assert_eq!(
+            resolve_openai_models_url(&mk("chutes")),
+            "https://llm.chutes.ai/v1/models"
+        );
     }
 }
