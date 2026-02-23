@@ -15,27 +15,10 @@ const LONG_ABOUT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     r#"
 
-Usage:
-  microclaw <command>
-
-Commands:
-  start         Start runtime (enabled channels)
-  setup         Full-screen setup wizard (or `setup --enable-sandbox`)
-  doctor        Preflight diagnostics
-  gateway       Manage service (install/start/stop/status/logs)
-  skill         Manage ClawHub skills (search/install/list/inspect)
-  hooks         Manage runtime hooks (list/info/enable/disable)
-  web           Manage Web UI Configurations
-  version       Show version
-  help          Show this help
-
 Quick Start:
   1) microclaw setup
   2) microclaw doctor
   3) microclaw start
-
-Channel requirement:
-  Enable at least one input channel, or use Web UI (enabled by default).
 
 More:
   https://microclaw.ai"#
@@ -45,9 +28,7 @@ More:
 #[command(
     name = "microclaw",
     version = VERSION,
-    help_template = "{about-with-newline}",
-    about = "MicroClaw multi-channel agent runtime",
-    long_about = LONG_ABOUT
+    about = LONG_ABOUT
 )]
 struct Cli {
     #[command(subcommand)]
