@@ -6,7 +6,7 @@ pub(super) async fn api_get_config(
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     metrics_http_inc(&state).await;
-    require_scope(&state, &headers, AuthScope::Admin).await?;
+    require_scope(&state, &headers, AuthScope::Read).await?;
 
     let path = config_path_for_save()?;
     Ok(Json(json!({
@@ -22,7 +22,7 @@ pub(super) async fn api_config_self_check(
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     metrics_http_inc(&state).await;
-    require_scope(&state, &headers, AuthScope::Admin).await?;
+    require_scope(&state, &headers, AuthScope::Read).await?;
 
     let mut warnings = Vec::<ConfigWarning>::new();
     let has_password = call_blocking(state.app_state.db.clone(), |db| db.get_auth_password_hash())

@@ -339,6 +339,11 @@ fn ensure_chat_identity_schema(conn: &Connection) -> Result<(), MicroClawError> 
          ON chats(channel, external_chat_id)",
         [],
     )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chats_channel_title
+         ON chats(channel, chat_title)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -1103,6 +1108,28 @@ impl Database {
             "SELECT chat_type FROM chats WHERE chat_id = ?1",
             params![chat_id],
             |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn get_chat_id_by_channel_and_title(
+        &self,
+        channel: &str,
+        chat_title: &str,
+    ) -> Result<Option<i64>, MicroClawError> {
+        let conn = self.lock_conn();
+        let result = conn.query_row(
+            "SELECT chat_id
+             FROM chats
+             WHERE channel = ?1 AND chat_title = ?2
+             ORDER BY last_message_time DESC
+             LIMIT 1",
+            params![channel, chat_title],
+            |row| row.get::<_, i64>(0),
         );
         match result {
             Ok(v) => Ok(Some(v)),
@@ -4297,6 +4324,40 @@ mod tests {
             db.get_chat_external_id(discord).unwrap().as_deref(),
             Some("12345")
         );
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_get_chat_id_by_channel_and_title_finds_non_recent_chat() {
+        let (db, dir) = test_db();
+
+        for i in 0..5000 {
+            db.resolve_or_create_chat_id(
+                "web",
+                &format!("ext-{i}"),
+                Some(&format!("title-{i}")),
+                "web",
+            )
+            .unwrap();
+        }
+        let target = db
+            .resolve_or_create_chat_id("web", "legacy-ext", Some("legacy-session"), "web")
+            .unwrap();
+        for i in 5000..9300 {
+            db.resolve_or_create_chat_id(
+                "web",
+                &format!("ext-{i}"),
+                Some(&format!("title-{i}")),
+                "web",
+            )
+            .unwrap();
+        }
+
+        let found = db
+            .get_chat_id_by_channel_and_title("web", "legacy-session")
+            .unwrap();
+        assert_eq!(found, Some(target));
 
         cleanup(&dir);
     }

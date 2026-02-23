@@ -121,5 +121,5 @@ if ($removed -eq 0) {
 Write-Info ""
 Write-Info "microclaw has been removed."
 Write-Info "Optional cleanup (not removed automatically):"
-Write-Info "  Remove-Item -Recurse -Force .\\microclaw.data\\runtime"
+Write-Info "  Remove-Item -Recurse -Force $HOME\\.microclaw\\runtime"
 Write-Info "  Remove-Item -Force .\\microclaw.config.yaml,.\\microclaw.config.yml"

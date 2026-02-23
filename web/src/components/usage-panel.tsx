@@ -198,7 +198,7 @@ export function UsagePanel(props: UsagePanelProps) {
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content maxWidth="980px" className="overflow-hidden flex flex-col" style={{ width: '980px', height: '760px', maxWidth: '980px', maxHeight: '760px' }}>
+      <Dialog.Content maxWidth="980px" className="min-h-0 overflow-hidden flex flex-col" style={{ width: '980px', height: '760px', maxWidth: '980px', maxHeight: '760px' }}>
         <Dialog.Title>Usage Panel</Dialog.Title>
         <Dialog.Description size="2" mb="3">
           Token and memory observability for session <code>{usageSession || sessionKey}</code>
@@ -213,74 +213,76 @@ export function UsagePanel(props: UsagePanelProps) {
             </Button>
           </Flex>
         </div>
-        <Card className="min-h-0 flex-1 overflow-auto p-3">
-          {usageLoading ? (
-            <Text size="2">Loading usage report...</Text>
-          ) : usageError ? (
-            <Callout.Root color="red" size="1" variant="soft">
-              <Callout.Text>{usageError}</Callout.Text>
-            </Callout.Root>
-          ) : (
-            <div className="space-y-4">
-              {usageMemory ? (
-                <div className="space-y-3">
-                  <Flex justify="between" align="center">
-                    <Text size="2" weight="bold">Memory Observability</Text>
-                    <Text size="1" color="gray">24h + 7d trends</Text>
-                  </Flex>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <Card className="p-3">
-                      <Text size="1" color="gray">Memory Pool</Text>
-                      <Text size="4" weight="bold">{fmtInt(usageMemory.total)}</Text>
-                      <Text size="1" color="gray">
-                        active {fmtInt(usageMemory.active)} / archived {fmtInt(usageMemory.archived)}
-                      </Text>
-                    </Card>
-                    <Card className="p-3">
-                      <Text size="1" color="gray">Avg Confidence</Text>
-                      <Text size="4" weight="bold">{(usageMemory.avg_confidence * 100).toFixed(1)}%</Text>
-                      <Text size="1" color="gray">low confidence: {fmtInt(usageMemory.low_confidence)}</Text>
-                    </Card>
-                    <Card className="p-3">
-                      <Text size="1" color="gray">Reflector 24h</Text>
-                      <Text size="4" weight="bold">{fmtInt(usageMemory.reflector_runs_24h)}</Text>
-                      <Text size="1" color="gray">
-                        +{fmtInt(usageMemory.reflector_inserted_24h)} / ~{fmtInt(usageMemory.reflector_updated_24h)} / -{fmtInt(usageMemory.reflector_skipped_24h)}
-                      </Text>
-                    </Card>
-                    <Card className="p-3">
-                      <Text size="1" color="gray">Injection Coverage 24h</Text>
-                      <Text size="4" weight="bold">
-                        {fmtPct(usageMemory.injection_selected_24h, usageMemory.injection_candidates_24h)}
-                      </Text>
-                      <Text size="1" color="gray">
-                        {fmtInt(usageMemory.injection_selected_24h)} selected / {fmtInt(usageMemory.injection_candidates_24h)} candidates
-                      </Text>
-                    </Card>
-                  </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Card className="min-h-0 p-3">
+            {usageLoading ? (
+              <Text size="2">Loading usage report...</Text>
+            ) : usageError ? (
+              <Callout.Root color="red" size="1" variant="soft">
+                <Callout.Text>{usageError}</Callout.Text>
+              </Callout.Root>
+            ) : (
+              <div className="space-y-4">
+                {usageMemory ? (
+                  <div className="space-y-3">
+                    <Flex justify="between" align="center">
+                      <Text size="2" weight="bold">Memory Observability</Text>
+                      <Text size="1" color="gray">24h + 7d trends</Text>
+                    </Flex>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <Card className="p-3">
+                        <Text size="1" color="gray" className="block">Memory Pool</Text>
+                        <Text size="4" weight="bold" className="mt-1 block">{fmtInt(usageMemory.total)}</Text>
+                        <Text size="1" color="gray" className="mt-1 block">
+                          active {fmtInt(usageMemory.active)} / archived {fmtInt(usageMemory.archived)}
+                        </Text>
+                      </Card>
+                      <Card className="p-3">
+                        <Text size="1" color="gray" className="block">Avg Confidence</Text>
+                        <Text size="4" weight="bold" className="mt-1 block">{(usageMemory.avg_confidence * 100).toFixed(1)}%</Text>
+                        <Text size="1" color="gray" className="mt-1 block">low confidence: {fmtInt(usageMemory.low_confidence)}</Text>
+                      </Card>
+                      <Card className="p-3">
+                        <Text size="1" color="gray" className="block">Reflector 24h</Text>
+                        <Text size="4" weight="bold" className="mt-1 block">{fmtInt(usageMemory.reflector_runs_24h)}</Text>
+                        <Text size="1" color="gray" className="mt-1 block">
+                          +{fmtInt(usageMemory.reflector_inserted_24h)} / ~{fmtInt(usageMemory.reflector_updated_24h)} / -{fmtInt(usageMemory.reflector_skipped_24h)}
+                        </Text>
+                      </Card>
+                      <Card className="p-3">
+                        <Text size="1" color="gray" className="block">Injection Coverage 24h</Text>
+                        <Text size="4" weight="bold" className="mt-1 block">
+                          {fmtPct(usageMemory.injection_selected_24h, usageMemory.injection_candidates_24h)}
+                        </Text>
+                        <Text size="1" color="gray" className="mt-1 block">
+                          {fmtInt(usageMemory.injection_selected_24h)} selected / {fmtInt(usageMemory.injection_candidates_24h)} candidates
+                        </Text>
+                      </Card>
+                    </div>
 
-                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                    <TrendRow title="Reflector Inserts (24h)" subtitle="hourly buckets" values={trend24h.inserted} color="#10b981" />
-                    <TrendRow title="Reflector Updates (24h)" subtitle="hourly buckets" values={trend24h.updated} color="#3b82f6" />
-                    <TrendRow title="Reflector Skips (24h)" subtitle="hourly buckets" values={trend24h.skipped} color="#f59e0b" />
-                    <TrendRow title="Injection Coverage (24h)" subtitle="selected/candidates %" values={trend24h.coverage} color="#a855f7" />
-                  </div>
+                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                      <TrendRow title="Reflector Inserts (24h)" subtitle="hourly buckets" values={trend24h.inserted} color="#10b981" />
+                      <TrendRow title="Reflector Updates (24h)" subtitle="hourly buckets" values={trend24h.updated} color="#3b82f6" />
+                      <TrendRow title="Reflector Skips (24h)" subtitle="hourly buckets" values={trend24h.skipped} color="#f59e0b" />
+                      <TrendRow title="Injection Coverage (24h)" subtitle="selected/candidates %" values={trend24h.coverage} color="#a855f7" />
+                    </div>
 
-                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                    <TrendRow title="Reflector Inserts (7d)" subtitle="daily buckets" values={trend7d.inserted} color="#059669" />
-                    <TrendRow title="Reflector Updates (7d)" subtitle="daily buckets" values={trend7d.updated} color="#2563eb" />
-                    <TrendRow title="Reflector Skips (7d)" subtitle="daily buckets" values={trend7d.skipped} color="#d97706" />
-                    <TrendRow title="Injection Coverage (7d)" subtitle="selected/candidates %" values={trend7d.coverage} color="#7e22ce" />
+                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                      <TrendRow title="Reflector Inserts (7d)" subtitle="daily buckets" values={trend7d.inserted} color="#059669" />
+                      <TrendRow title="Reflector Updates (7d)" subtitle="daily buckets" values={trend7d.updated} color="#2563eb" />
+                      <TrendRow title="Reflector Skips (7d)" subtitle="daily buckets" values={trend7d.skipped} color="#d97706" />
+                      <TrendRow title="Injection Coverage (7d)" subtitle="selected/candidates %" values={trend7d.coverage} color="#7e22ce" />
+                    </div>
                   </div>
-                </div>
-              ) : null}
-              <Card className="p-3">
-                <Text size="2" weight="bold">Token Usage Report</Text>
-                <pre className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-6">{usageReport || '(no usage data)'}</pre>
-              </Card>
-            </div>
-          )}
-        </Card>
+                ) : null}
+                <Card className="p-3">
+                  <Text size="2" weight="bold">Token Usage Report</Text>
+                  <pre className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-6">{usageReport || '(no usage data)'}</pre>
+                </Card>
+              </div>
+            )}
+          </Card>
+        </div>
       </Dialog.Content>
     </Dialog.Root>
   )

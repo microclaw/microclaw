@@ -374,7 +374,7 @@ Todo 列表存储在 `<data_dir>/runtime/groups/{chat_id}/TODO.json`，跨会话
 
 ### 1. 创建渠道机器人凭据
 
-至少启用一个渠道：Telegram、Discord、Slack、飞书/Lark、Matrix、WhatsApp、iMessage、Email、Nostr、Signal、DingTalk、QQ、IRC，或 Web UI。
+至少启用一个渠道，或使用 Web UI（默认开启）。
 
 Telegram（可选）：
 1. 打开 Telegram，搜索 [@BotFather](https://t.me/BotFather)
@@ -587,7 +587,7 @@ microclaw gateway uninstall
 - 如果用户已经在配置里设置了 `data_dir` / `skills_dir` / `working_dir`，会继续沿用原有路径。
 - 如果未配置，则默认使用 `data_dir=~/.microclaw`、`skills_dir=<data_dir>/skills`、`working_dir=~/.microclaw/working_dir`。
 
-`*` 需要至少启用一个渠道：`telegram_bot_token`、`discord_bot_token`、`channels.slack`、`channels.feishu`、`channels.irc`，或 `web_enabled: true`。
+`*` 需要至少启用一个渠道配置；`web_enabled` 默认是开启的。
 
 ## Docker 沙箱
 

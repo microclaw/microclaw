@@ -323,14 +323,36 @@ pub async fn start_telegram_bot(
     ctx: TelegramRuntimeContext,
 ) -> anyhow::Result<()> {
     let handler = Update::filter_message().endpoint(handle_message);
+    let channel_name = ctx.channel_name.clone();
+    let listener = teloxide::update_listeners::polling_default(bot.clone()).await;
+    let listener_error_handler = teloxide::error_handlers::LoggingErrorHandler::with_custom_text(
+        format!("An error from the Telegram update listener ({channel_name})"),
+    );
 
-    Dispatcher::builder(bot, handler)
+    let mut dispatcher = Dispatcher::builder(bot, handler)
         .default_handler(|_| async {})
         .dependencies(dptree::deps![state, ctx])
         .enable_ctrlc_handler()
-        .build()
-        .dispatch()
-        .await;
+        .build();
+
+    match dispatcher
+        .try_dispatch_with_listener(listener, listener_error_handler)
+        .await
+    {
+        Ok(()) => {}
+        Err(teloxide::RequestError::Api(teloxide::ApiError::InvalidToken)) => {
+            warn!(
+                "Telegram channel '{}' disabled: invalid bot token. Update telegram_bot_token and restart.",
+                channel_name
+            );
+        }
+        Err(err) => {
+            warn!(
+                "Telegram channel '{}' stopped and was disabled due to startup error: {:?}",
+                channel_name, err
+            );
+        }
+    }
 
     Ok(())
 }

@@ -17,6 +17,7 @@ Core capabilities:
 ## Tech stack
 
 - Language: Rust (edition 2021)
+- CLI args: clap
 - Async runtime: Tokio
 - Telegram: teloxide
 - Discord: serenity

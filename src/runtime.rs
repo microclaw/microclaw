@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use tracing::info;
+use futures_util::FutureExt;
+use tracing::{info, warn};
 
 use crate::channels::dingtalk::{build_dingtalk_runtime_contexts, DingTalkRuntimeContext};
 use crate::channels::discord::{build_discord_runtime_contexts, DiscordRuntimeContext};
@@ -78,6 +80,31 @@ where
     runtimes
 }
 
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        return (*msg).to_string();
+    }
+    if let Some(msg) = payload.downcast_ref::<String>() {
+        return msg.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
+fn spawn_guarded<F>(task_name: String, future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        if let Err(payload) = AssertUnwindSafe(future).catch_unwind().await {
+            warn!(
+                "Task '{}' panicked; this channel task is skipped and other channels keep running. reason={}",
+                task_name,
+                panic_message(&*payload)
+            );
+        }
+    });
+}
+
 fn spawn_channel_runtimes<T, StartFn, Fut>(state: Arc<AppState>, runtimes: Vec<T>, start: StartFn)
 where
     T: Send + 'static,
@@ -86,7 +113,8 @@ where
 {
     for runtime_ctx in runtimes {
         let channel_state = state.clone();
-        tokio::spawn(start(channel_state, runtime_ctx));
+        let task_name = std::any::type_name::<T>().to_string();
+        spawn_guarded(task_name, start(channel_state, runtime_ctx));
     }
 }
 
@@ -570,7 +598,7 @@ pub async fn run(
             "Starting Web UI server on {}:{}",
             state.config.web_host, state.config.web_port
         );
-        tokio::spawn(async move {
+        spawn_guarded("web".to_string(), async move {
             crate::web::start_web_server(web_state).await;
         });
     }
@@ -583,7 +611,7 @@ pub async fn run(
                 "Starting Telegram bot adapter '{}' as @{}",
                 tg_ctx.channel_name, tg_ctx.bot_username
             );
-            tokio::spawn(async move {
+            spawn_guarded(format!("telegram:{}", tg_ctx.channel_name), async move {
                 let _ = crate::telegram::start_telegram_bot(telegram_state, bot, tg_ctx).await;
             });
         }
@@ -595,7 +623,7 @@ pub async fn run(
             return Err(anyhow!("IRC adapter state is missing"));
         };
         info!("Starting IRC bot");
-        tokio::spawn(async move {
+        spawn_guarded("irc".to_string(), async move {
             crate::channels::irc::start_irc_bot(irc_state, irc_adapter).await;
         });
     }

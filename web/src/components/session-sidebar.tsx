@@ -17,6 +17,7 @@ type SessionSidebarProps = {
   onOpenConfig: () => Promise<void>
   onOpenUsage: () => Promise<void>
   onNewSession: () => void
+  appVersion: string
 }
 
 function parseSessionKeyCreatedAt(sessionKey: string): Date | null {
@@ -62,6 +63,7 @@ export function SessionSidebar({
   onOpenConfig,
   onOpenUsage,
   onNewSession,
+  appVersion,
 }: SessionSidebarProps) {
   const isDark = appearance === 'dark'
   const [menu, setMenu] = useState<{ x: number; y: number; key: string } | null>(null)
@@ -272,7 +274,7 @@ export function SessionSidebar({
         <Button size="2" variant="soft" onClick={() => void onOpenConfig()} style={{ width: '100%', marginTop: '8px' }}>
           Runtime Config
         </Button>
-        <div className="mt-3 flex flex-col items-center gap-1">
+        <div className="mt-3 flex items-center justify-between gap-3">
           <a
             href="https://microclaw.ai"
             target="_blank"
@@ -281,6 +283,9 @@ export function SessionSidebar({
           >
             microclaw.ai
           </a>
+          <Text size="1" className={isDark ? 'text-slate-500' : 'text-slate-500'}>
+            {appVersion ? `v${appVersion}` : 'v--'}
+          </Text>
         </div>
       </div>
 
