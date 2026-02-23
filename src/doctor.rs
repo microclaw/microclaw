@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use clap::{Parser, Subcommand};
 use serde::Serialize;
 
 use crate::config::Config;
@@ -98,15 +99,31 @@ impl DoctorReport {
     }
 }
 
+#[derive(Debug, Parser)]
+#[command(
+    name = "microclaw doctor",
+    about = "Preflight diagnostics",
+    long_about = "Checks PATH, shell/runtime dependencies, browser automation prerequisites, MCP command dependencies, and sandbox readiness."
+)]
+struct DoctorCli {
+    #[command(subcommand)]
+    command: Option<DoctorCommand>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum DoctorCommand {
+    Sandbox,
+}
+
 pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
-    let json_output = args.iter().any(|a| a == "--json");
-    let sandbox_only = args.iter().any(|a| a == "sandbox");
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!(
-            "Usage: microclaw doctor [sandbox] [--json]\n\nChecks PATH, shell/runtime dependencies, browser automation prerequisites, MCP command dependencies, and sandbox readiness."
-        );
-        return Ok(());
-    }
+    let cli = DoctorCli::try_parse_from(
+        std::iter::once("doctor").chain(args.iter().map(std::string::String::as_str)),
+    )
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let json_output = cli.json;
+    let sandbox_only = matches!(cli.command, Some(DoctorCommand::Sandbox));
 
     match migrate_channels_config() {
         Ok(Some((path, changed))) => {

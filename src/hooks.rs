@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use clap::{Parser, Subcommand};
 use microclaw_storage::db::{call_blocking, Database};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -570,11 +571,15 @@ fn parse_hook_md(hook_md_path: &Path, dir: &Path) -> Option<HookDef> {
 }
 
 pub async fn handle_hooks_cli(args: &[String]) -> Result<()> {
-    let cmd = args.first().map(String::as_str).unwrap_or("list");
+    let cli = HooksCli::try_parse_from(
+        std::iter::once("hooks").chain(args.iter().map(std::string::String::as_str)),
+    )
+    .map_err(|e| anyhow!(e.to_string()))?;
+    let cmd = cli.command.unwrap_or(HooksCommand::List);
     let config = Config::load()?;
     let mgr = HookManager::from_config(&config);
     match cmd {
-        "list" => {
+        HooksCommand::List => {
             let hooks = mgr.list().await;
             if hooks.is_empty() {
                 println!("No hooks discovered.");
@@ -591,36 +596,47 @@ pub async fn handle_hooks_cli(args: &[String]) -> Result<()> {
             }
             Ok(())
         }
-        "info" => {
-            let Some(name) = args.get(1) else {
-                return Err(anyhow!("usage: microclaw hooks info <name>"));
-            };
-            let Some(info) = mgr.info(name).await else {
+        HooksCommand::Info { name } => {
+            let Some(info) = mgr.info(&name).await else {
                 return Err(anyhow!("hook not found: {name}"));
             };
             println!("{}", serde_json::to_string_pretty(&info)?);
             Ok(())
         }
-        "enable" => {
-            let Some(name) = args.get(1) else {
-                return Err(anyhow!("usage: microclaw hooks enable <name>"));
-            };
-            mgr.set_enabled(name, true).await?;
+        HooksCommand::Enable { name } => {
+            mgr.set_enabled(&name, true).await?;
             println!("enabled: {name}");
             Ok(())
         }
-        "disable" => {
-            let Some(name) = args.get(1) else {
-                return Err(anyhow!("usage: microclaw hooks disable <name>"));
-            };
-            mgr.set_enabled(name, false).await?;
+        HooksCommand::Disable { name } => {
+            mgr.set_enabled(&name, false).await?;
             println!("disabled: {name}");
             Ok(())
         }
-        _ => Err(anyhow!(
-            "unknown hooks subcommand: {cmd} (supported: list|info|enable|disable)"
-        )),
     }
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "microclaw hooks",
+    about = "Manage runtime hooks",
+    disable_help_subcommand = true
+)]
+struct HooksCli {
+    #[command(subcommand)]
+    command: Option<HooksCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+enum HooksCommand {
+    /// List discovered hooks
+    List,
+    /// Show hook detail by name
+    Info { name: String },
+    /// Enable a hook by name
+    Enable { name: String },
+    /// Disable a hook by name
+    Disable { name: String },
 }
 
 #[cfg(test)]

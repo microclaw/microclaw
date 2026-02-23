@@ -2,6 +2,7 @@ use crate::clawhub::service::{ClawHubGateway, RegistryClawHubGateway};
 use crate::config::Config;
 use crate::error::MicroClawError;
 use crate::skills::SkillManager;
+use clap::{Parser, Subcommand};
 use microclaw_clawhub::install::InstallOptions;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,22 +31,21 @@ where
 }
 
 pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), MicroClawError> {
-    let subcommand = args.first().map(|s| s.as_str()).unwrap_or("help");
+    let cli = SkillCli::try_parse_from(
+        std::iter::once("skill").chain(args.iter().map(std::string::String::as_str)),
+    )
+    .map_err(|e| MicroClawError::Config(e.to_string()))?;
+    let subcommand = cli.command;
 
     let gateway: Arc<dyn ClawHubGateway> = Arc::new(RegistryClawHubGateway::from_config(config));
 
     match subcommand {
-        "search" => {
-            let empty_query = "".to_string();
-            let query = args.get(1).map(|s| s.as_str()).unwrap_or(&empty_query);
-            if query.is_empty() {
-                eprintln!("Usage: microclaw skill search <query>");
-                return Ok(());
-            }
+        Some(SkillCommand::Search { query }) => {
             let gateway = gateway.clone();
             let results = retry_with_backoff(|| {
                 let gateway = gateway.clone();
-                async move { gateway.search(query, 10, "trending").await }
+                let query = query.clone();
+                async move { gateway.search(&query, 10, "trending").await }
             })
             .await;
             match results {
@@ -65,19 +65,13 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             }
             Ok(())
         }
-        "install" => {
-            let empty_slug = "".to_string();
-            let slug = args.get(1).map(|s| s.as_str()).unwrap_or(&empty_slug);
-            if slug.is_empty() {
-                eprintln!("Usage: microclaw skill install <slug>");
-                return Ok(());
-            }
+        Some(SkillCommand::Install { slug, force }) => {
             let skills_dir = PathBuf::from(config.skills_data_dir());
             let lockfile_path = config.clawhub_lockfile_path();
 
             let gateway = gateway.clone();
             let options = InstallOptions {
-                force: args.contains(&"--force".to_string()),
+                force,
                 skip_gates: false,
                 skip_security: config.clawhub.skip_security_warnings,
             };
@@ -86,9 +80,10 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
                 let skills_dir = skills_dir.clone();
                 let lockfile_path = lockfile_path.clone();
                 let options = options.clone();
+                let slug = slug.clone();
                 async move {
                     gateway
-                        .install(slug, None, &skills_dir, &lockfile_path, &options)
+                        .install(&slug, None, &skills_dir, &lockfile_path, &options)
                         .await
                 }
             })
@@ -104,7 +99,7 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             }
             Ok(())
         }
-        "list" => {
+        Some(SkillCommand::List) => {
             let lockfile_path = config.clawhub_lockfile_path();
             let lock = gateway.read_lockfile(&lockfile_path)?;
             if lock.skills.is_empty() {
@@ -120,27 +115,21 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             }
             Ok(())
         }
-        "available" => {
+        Some(SkillCommand::Available { all }) => {
             let manager = SkillManager::from_skills_dir(&config.skills_data_dir());
-            let include_unavailable = args.iter().any(|a| a == "--all");
-            if include_unavailable {
+            if all {
                 println!("{}", manager.list_skills_formatted_all());
             } else {
                 println!("{}", manager.list_skills_formatted());
             }
             Ok(())
         }
-        "inspect" => {
-            let empty_slug = "".to_string();
-            let slug = args.get(1).map(|s| s.as_str()).unwrap_or(&empty_slug);
-            if slug.is_empty() {
-                eprintln!("Usage: microclaw skill inspect <slug>");
-                return Ok(());
-            }
+        Some(SkillCommand::Inspect { slug }) => {
             let gateway = gateway.clone();
             let meta = retry_with_backoff(|| {
                 let gateway = gateway.clone();
-                async move { gateway.get_skill(slug).await }
+                let slug = slug.clone();
+                async move { gateway.get_skill(&slug).await }
             })
             .await;
             match meta {
@@ -160,7 +149,7 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             }
             Ok(())
         }
-        _ => {
+        None => {
             println!("Usage: microclaw skill <command>");
             println!("\nCommands:");
             println!("  search <query>   Search for skills");
@@ -171,4 +160,36 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             Ok(())
         }
     }
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "microclaw skill",
+    about = "Manage ClawHub skills",
+    disable_help_subcommand = true
+)]
+struct SkillCli {
+    #[command(subcommand)]
+    command: Option<SkillCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+enum SkillCommand {
+    /// Search for skills
+    Search { query: String },
+    /// Install a skill
+    Install {
+        slug: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// List installed skills
+    List,
+    /// List local skills (with diagnostics when --all)
+    Available {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show skill details
+    Inspect { slug: String },
 }
