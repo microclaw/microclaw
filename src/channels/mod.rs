@@ -9,6 +9,7 @@ pub mod nostr;
 pub mod qq;
 pub mod signal;
 pub mod slack;
+pub mod startup_guard;
 pub mod telegram;
 pub mod whatsapp;
 

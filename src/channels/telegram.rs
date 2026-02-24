@@ -9,6 +9,7 @@ use teloxide::types::{ChatAction, InputFile, ParseMode, ThreadId};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
+use crate::channels::startup_guard::{mark_channel_started, should_drop_pre_start_message};
 use crate::chat_commands::maybe_handle_plugin_command;
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -322,6 +323,7 @@ pub async fn start_telegram_bot(
     bot: Bot,
     ctx: TelegramRuntimeContext,
 ) -> anyhow::Result<()> {
+    mark_channel_started(&ctx.channel_name);
     let handler = Update::filter_message().endpoint(handle_message);
     let channel_name = ctx.channel_name.clone();
     let listener = teloxide::update_listeners::polling_default(bot.clone()).await;
@@ -624,6 +626,14 @@ async fn handle_message(
         .as_ref()
         .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone()))
         .unwrap_or_else(|| "Unknown".into());
+    let inbound_message_id = msg.id.0.to_string();
+    if should_drop_pre_start_message(
+        &tg_channel_name,
+        &inbound_message_id,
+        Some(msg.date.timestamp_millis()),
+    ) {
+        return Ok(());
+    }
 
     // Check group allowlist
     if (db_chat_type == "telegram_group" || db_chat_type == "telegram_supergroup")
@@ -670,7 +680,7 @@ async fn handle_message(
             text
         };
         let stored = StoredMessage {
-            id: msg.id.0.to_string(),
+            id: inbound_message_id,
             chat_id,
             sender_name,
             content: stored_content,
@@ -722,7 +732,6 @@ async fn handle_message(
     } else {
         text.clone()
     };
-    let inbound_message_id = msg.id.0.to_string();
     let stored = StoredMessage {
         id: inbound_message_id.clone(),
         chat_id,

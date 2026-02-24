@@ -9,6 +9,9 @@ use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
+use crate::channels::startup_guard::{
+    mark_channel_started, parse_epoch_ms_from_seconds_str, should_drop_pre_start_message,
+};
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
@@ -350,6 +353,7 @@ async fn send_whatsapp_text(
 }
 
 pub async fn start_whatsapp_bot(_app_state: Arc<AppState>, runtime: WhatsAppRuntimeContext) {
+    mark_channel_started(&runtime.channel_name);
     info!(
         "WhatsApp adapter '{}' is ready (webhook ingress via web server, phone_number_id={})",
         runtime.channel_name, runtime.phone_number_id
@@ -522,15 +526,15 @@ async fn whatsapp_webhook_handler(
                 if text.is_empty() {
                     continue;
                 }
-                handle_whatsapp_message(
-                    app_state.clone(),
-                    runtime_ctx.clone(),
-                    &message.from,
-                    &text,
-                    &message.id,
-                    &message.timestamp,
-                )
-                .await;
+                let state = app_state.clone();
+                let runtime = runtime_ctx.clone();
+                let from = message.from.clone();
+                let message_id = message.id.clone();
+                let timestamp = message.timestamp.clone();
+                tokio::spawn(async move {
+                    handle_whatsapp_message(state, runtime, &from, &text, &message_id, &timestamp)
+                        .await;
+                });
             }
         }
     }
@@ -544,7 +548,7 @@ async fn handle_whatsapp_message(
     from: &str,
     text: &str,
     message_id: &str,
-    _timestamp: &str,
+    timestamp: &str,
 ) {
     if !runtime.allowed_user_ids.is_empty() && !runtime.allowed_user_ids.iter().any(|u| u == from) {
         return;
@@ -609,6 +613,13 @@ async fn handle_whatsapp_message(
     } else {
         message_id.to_string()
     };
+    if should_drop_pre_start_message(
+        &runtime.channel_name,
+        &inbound_message_id,
+        parse_epoch_ms_from_seconds_str(timestamp),
+    ) {
+        return;
+    }
     let stored = StoredMessage {
         id: inbound_message_id.clone(),
         chat_id,

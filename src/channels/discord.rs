@@ -15,6 +15,7 @@ use tracing::{error, info, warn};
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::channels::startup_guard::{mark_channel_started, should_drop_pre_start_message};
 use crate::chat_commands::maybe_handle_plugin_command;
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -421,6 +422,14 @@ impl EventHandler for Handler {
         .await;
 
         let inbound_message_id = msg.id.get().to_string();
+        let message_ts_ms = Some(msg.timestamp.unix_timestamp().saturating_mul(1000));
+        if should_drop_pre_start_message(
+            &self.runtime.channel_name,
+            &inbound_message_id,
+            message_ts_ms,
+        ) {
+            return;
+        }
         let stored = StoredMessage {
             id: inbound_message_id.clone(),
             chat_id: channel_id,
@@ -611,6 +620,7 @@ pub async fn start_discord_bot(
     runtime: DiscordRuntimeContext,
     token: &str,
 ) {
+    mark_channel_started(&runtime.channel_name);
     let base_intents = GatewayIntents::GUILD_MESSAGES | GatewayIntents::DIRECT_MESSAGES;
     let full_intents = base_intents | GatewayIntents::MESSAGE_CONTENT;
 

@@ -9,6 +9,10 @@ use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
+use crate::channels::startup_guard::{
+    mark_channel_started, parse_epoch_ms_from_seconds_str, parse_epoch_ms_from_str,
+    should_drop_pre_start_message,
+};
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
@@ -113,6 +117,10 @@ struct SignalWebhookPayload {
     text: String,
     #[serde(default)]
     message_id: String,
+    #[serde(default)]
+    timestamp_ms: Option<i64>,
+    #[serde(default)]
+    timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +276,7 @@ impl ChannelAdapter for SignalAdapter {
 }
 
 pub async fn start_signal_bot(_app_state: Arc<AppState>, runtime: SignalRuntimeContext) {
+    mark_channel_started(&runtime.channel_name);
     info!("Signal adapter '{}' is ready", runtime.channel_name);
 }
 
@@ -326,6 +335,24 @@ async fn signal_webhook_handler(
     {
         return axum::http::StatusCode::FORBIDDEN;
     }
+    tokio::spawn({
+        let state = app_state.clone();
+        let runtime = runtime_ctx.clone();
+        let payload = payload.clone();
+        async move {
+            process_signal_webhook_message(state, runtime, payload).await;
+        }
+    });
+    axum::http::StatusCode::OK
+}
+
+async fn process_signal_webhook_message(
+    app_state: Arc<AppState>,
+    runtime_ctx: SignalRuntimeContext,
+    payload: SignalWebhookPayload,
+) {
+    let sender = payload.sender.trim().to_string();
+    let text = payload.text.trim().to_string();
     let external_chat_id = sender.to_string();
     let chat_id = call_blocking(app_state.db.clone(), {
         let channel_name = runtime_ctx.channel_name.clone();
@@ -343,31 +370,53 @@ async fn signal_webhook_handler(
     .await
     .unwrap_or(0);
     if chat_id == 0 {
-        return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+        error!("Signal: failed to resolve chat ID for {external_chat_id}");
+        return;
     }
-    if is_slash_command(text) {
+    if is_slash_command(&text) {
         if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, text).await
+            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, &text).await
         {
             let adapter = SignalAdapter::new(
                 runtime_ctx.channel_name.clone(),
                 runtime_ctx.send_command.clone(),
             );
-            let _ = adapter.send_text(sender, &reply).await;
-            return axum::http::StatusCode::OK;
+            let _ = adapter.send_text(&sender, &reply).await;
+            return;
         }
         let adapter = SignalAdapter::new(
             runtime_ctx.channel_name.clone(),
             runtime_ctx.send_command.clone(),
         );
-        let _ = adapter.send_text(sender, &unknown_command_response()).await;
-        return axum::http::StatusCode::OK;
+        let _ = adapter
+            .send_text(&sender, &unknown_command_response())
+            .await;
+        return;
     }
     let inbound_message_id = if payload.message_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
         payload.message_id.clone()
     };
+    let inbound_ts_ms = payload.timestamp_ms.or_else(|| {
+        payload
+            .timestamp
+            .as_deref()
+            .and_then(parse_epoch_ms_from_str)
+            .or_else(|| {
+                payload
+                    .timestamp
+                    .as_deref()
+                    .and_then(parse_epoch_ms_from_seconds_str)
+            })
+    });
+    if should_drop_pre_start_message(
+        &runtime_ctx.channel_name,
+        &inbound_message_id,
+        inbound_ts_ms,
+    ) {
+        return;
+    }
     let stored = StoredMessage {
         id: inbound_message_id.clone(),
         chat_id,
@@ -386,7 +435,7 @@ async fn signal_webhook_handler(
             "Signal: skipping duplicate message chat_id={} message_id={}",
             chat_id, inbound_message_id
         );
-        return axum::http::StatusCode::OK;
+        return;
     }
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
     match process_with_agent_with_events(
@@ -424,7 +473,7 @@ async fn signal_webhook_handler(
                     );
                 }
             } else if !response.is_empty() {
-                if let Err(e) = adapter.send_text(sender, &response).await {
+                if let Err(e) = adapter.send_text(&sender, &response).await {
                     error!("Signal: failed to send response: {e}");
                 }
                 let bot_msg = StoredMessage {
@@ -440,7 +489,7 @@ async fn signal_webhook_handler(
             } else {
                 let _ = adapter
                     .send_text(
-                        sender,
+                        &sender,
                         "I couldn't produce a visible reply after an automatic retry. Please try again.",
                     )
                     .await;
@@ -450,5 +499,4 @@ async fn signal_webhook_handler(
             error!("Signal: error processing message: {e}");
         }
     }
-    axum::http::StatusCode::OK
 }

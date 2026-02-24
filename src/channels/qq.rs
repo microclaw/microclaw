@@ -9,6 +9,10 @@ use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
+use crate::channels::startup_guard::{
+    mark_channel_started, parse_epoch_ms_from_seconds_str, parse_epoch_ms_from_str,
+    should_drop_pre_start_message,
+};
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
@@ -113,6 +117,10 @@ struct QQWebhookPayload {
     text: String,
     #[serde(default)]
     message_id: String,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    timestamp_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +276,7 @@ impl ChannelAdapter for QQAdapter {
 }
 
 pub async fn start_qq_bot(_app_state: Arc<AppState>, runtime: QQRuntimeContext) {
+    mark_channel_started(&runtime.channel_name);
     info!("QQ adapter '{}' is ready", runtime.channel_name);
 }
 
@@ -362,6 +371,25 @@ async fn qq_webhook_handler(
     } else {
         payload.message_id.clone()
     };
+    let inbound_ts_ms = payload.timestamp_ms.or_else(|| {
+        payload
+            .timestamp
+            .as_deref()
+            .and_then(parse_epoch_ms_from_str)
+            .or_else(|| {
+                payload
+                    .timestamp
+                    .as_deref()
+                    .and_then(parse_epoch_ms_from_seconds_str)
+            })
+    });
+    if should_drop_pre_start_message(
+        &runtime_ctx.channel_name,
+        &inbound_message_id,
+        inbound_ts_ms,
+    ) {
+        return axum::http::StatusCode::OK;
+    }
     let stored = StoredMessage {
         id: inbound_message_id.clone(),
         chat_id,

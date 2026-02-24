@@ -10,6 +10,9 @@ use tracing::{error, info, warn};
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::channels::startup_guard::{
+    mark_channel_started, parse_epoch_ms_from_seconds_fraction, should_drop_pre_start_message,
+};
 use crate::chat_commands::maybe_handle_plugin_command;
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -454,6 +457,7 @@ pub struct SlackRuntimeContext {
 }
 
 pub async fn start_slack_bot(app_state: Arc<AppState>, runtime: SlackRuntimeContext) {
+    mark_channel_started(&runtime.channel_name);
     let app_token = runtime.app_token.clone();
     let bot_token = runtime.bot_token.clone();
 
@@ -665,6 +669,13 @@ async fn handle_slack_message(
     } else {
         ts.to_string()
     };
+    if should_drop_pre_start_message(
+        &runtime.channel_name,
+        &inbound_message_id,
+        parse_epoch_ms_from_seconds_fraction(ts),
+    ) {
+        return;
+    }
 
     let trimmed = text.trim();
     if is_slash_command(trimmed) {

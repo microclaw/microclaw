@@ -10,6 +10,10 @@ use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
+use crate::channels::startup_guard::{
+    mark_channel_started, parse_epoch_ms_from_seconds_str, parse_epoch_ms_from_str,
+    should_drop_pre_start_message,
+};
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
@@ -144,6 +148,12 @@ struct EmailWebhookPayload {
     text: String,
     #[serde(default)]
     message_id: String,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    timestamp_ms: Option<i64>,
+    #[serde(default)]
+    sent_at: Option<String>,
 }
 
 fn pick_default_account_id(
@@ -341,6 +351,7 @@ fn send_email_via_sendmail(
 }
 
 pub async fn start_email_bot(_app_state: Arc<AppState>, runtime: EmailRuntimeContext) {
+    mark_channel_started(&runtime.channel_name);
     info!(
         "Email adapter '{}' is ready (webhook ingress + sendmail egress from={})",
         runtime.channel_name, runtime.from_address
@@ -421,6 +432,24 @@ async fn email_webhook_handler(
     {
         return axum::http::StatusCode::FORBIDDEN;
     }
+    tokio::spawn({
+        let state = app_state.clone();
+        let runtime = runtime_ctx.clone();
+        let payload = payload.clone();
+        async move {
+            process_email_webhook_message(state, runtime, payload).await;
+        }
+    });
+    axum::http::StatusCode::OK
+}
+
+async fn process_email_webhook_message(
+    app_state: Arc<AppState>,
+    runtime_ctx: EmailRuntimeContext,
+    payload: EmailWebhookPayload,
+) {
+    let from = payload.from.trim().to_string();
+    let trimmed_text = payload.text.trim().to_string();
 
     let external_chat_id = from.to_string();
     let chat_id = call_blocking(app_state.db.clone(), {
@@ -434,10 +463,11 @@ async fn email_webhook_handler(
     .await
     .unwrap_or(0);
     if chat_id == 0 {
-        return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+        error!("Email: failed to resolve chat ID for {external_chat_id}");
+        return;
     }
 
-    let trimmed = payload.text.trim();
+    let trimmed = trimmed_text.trim();
     if is_slash_command(trimmed) {
         if let Some(reply) =
             handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, trimmed).await
@@ -454,7 +484,7 @@ async fn email_webhook_handler(
                 "MicroClaw command reply",
                 &reply,
             );
-            return axum::http::StatusCode::OK;
+            return;
         }
         let target = if payload.reply_to.trim().is_empty() {
             from.to_string()
@@ -468,7 +498,7 @@ async fn email_webhook_handler(
             "MicroClaw command reply",
             &unknown_command_response(),
         );
-        return axum::http::StatusCode::OK;
+        return;
     }
 
     let inbound_message_id = if payload.message_id.trim().is_empty() {
@@ -476,6 +506,37 @@ async fn email_webhook_handler(
     } else {
         payload.message_id.clone()
     };
+    let inbound_ts_ms = payload.timestamp_ms.or_else(|| {
+        payload
+            .sent_at
+            .as_deref()
+            .and_then(parse_epoch_ms_from_str)
+            .or_else(|| {
+                payload
+                    .timestamp
+                    .as_deref()
+                    .and_then(parse_epoch_ms_from_str)
+            })
+            .or_else(|| {
+                payload
+                    .sent_at
+                    .as_deref()
+                    .and_then(parse_epoch_ms_from_seconds_str)
+            })
+            .or_else(|| {
+                payload
+                    .timestamp
+                    .as_deref()
+                    .and_then(parse_epoch_ms_from_seconds_str)
+            })
+    });
+    if should_drop_pre_start_message(
+        &runtime_ctx.channel_name,
+        &inbound_message_id,
+        inbound_ts_ms,
+    ) {
+        return;
+    }
     let stored = StoredMessage {
         id: inbound_message_id.clone(),
         chat_id,
@@ -494,7 +555,7 @@ async fn email_webhook_handler(
             "Email: skipping duplicate message chat_id={} message_id={}",
             chat_id, inbound_message_id
         );
-        return axum::http::StatusCode::OK;
+        return;
     }
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
@@ -577,6 +638,4 @@ async fn email_webhook_handler(
             error!("Email: error processing message: {e}");
         }
     }
-
-    axum::http::StatusCode::OK
 }

@@ -24,6 +24,7 @@ use tracing::{error, info, warn};
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::channels::startup_guard::{mark_channel_started, should_drop_pre_start_message};
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
@@ -401,6 +402,7 @@ enum MatrixIncomingEvent {
         event_id: String,
         body: String,
         mentioned_bot: bool,
+        event_time_ms: Option<i64>,
     },
     Reaction {
         room_id: String,
@@ -409,10 +411,12 @@ enum MatrixIncomingEvent {
         event_id: String,
         relates_to_event_id: String,
         key: String,
+        event_time_ms: Option<i64>,
     },
 }
 
 pub async fn start_matrix_bot(app_state: Arc<AppState>, runtime: MatrixRuntimeContext) {
+    mark_channel_started(&runtime.channel_name);
     if let Some(client) = build_matrix_sdk_client(app_state.clone(), &runtime).await {
         let client = Arc::new(client);
         matrix_sdk_clients()
@@ -465,6 +469,7 @@ pub async fn start_matrix_bot(app_state: Arc<AppState>, runtime: MatrixRuntimeCo
                                 event_id,
                                 body,
                                 mentioned_bot,
+                                event_time_ms,
                             } => {
                                 let msg = MatrixIncomingMessage {
                                     room_id,
@@ -474,6 +479,7 @@ pub async fn start_matrix_bot(app_state: Arc<AppState>, runtime: MatrixRuntimeCo
                                     body,
                                     mentioned_bot,
                                     prefer_sdk_send: false,
+                                    event_time_ms,
                                 };
                                 handle_matrix_message(state, runtime_ctx, msg).await;
                             }
@@ -484,6 +490,7 @@ pub async fn start_matrix_bot(app_state: Arc<AppState>, runtime: MatrixRuntimeCo
                                 event_id,
                                 relates_to_event_id,
                                 key,
+                                event_time_ms,
                             } => {
                                 let reaction = MatrixIncomingReaction {
                                     room_id,
@@ -492,6 +499,7 @@ pub async fn start_matrix_bot(app_state: Arc<AppState>, runtime: MatrixRuntimeCo
                                     event_id,
                                     relates_to_event_id,
                                     key,
+                                    event_time_ms,
                                 };
                                 handle_matrix_reaction(state, runtime_ctx, reaction).await;
                             }
@@ -784,6 +792,7 @@ async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntime
                 body,
                 mentioned_bot,
                 prefer_sdk_send: true,
+                event_time_ms: None,
             };
             handle_matrix_message(app_state, runtime, msg).await;
         }
@@ -831,6 +840,7 @@ async fn start_matrix_e2ee_sync(app_state: Arc<AppState>, runtime: MatrixRuntime
                 event_id: ev.event_id.to_string(),
                 relates_to_event_id: ev.content.relates_to.event_id.to_string(),
                 key: ev.content.relates_to.key.clone(),
+                event_time_ms: None,
             };
             handle_matrix_reaction(app_state, runtime, reaction).await;
         }
@@ -978,6 +988,7 @@ async fn sync_matrix_messages(
                     event_id,
                     body,
                     mentioned_bot,
+                    event_time_ms: event.get("origin_server_ts").and_then(|v| v.as_i64()),
                 });
             } else if event_type == "m.reaction" {
                 let key = event
@@ -1002,6 +1013,7 @@ async fn sync_matrix_messages(
                     event_id,
                     relates_to_event_id,
                     key,
+                    event_time_ms: event.get("origin_server_ts").and_then(|v| v.as_i64()),
                 });
             }
         }
@@ -1598,6 +1610,7 @@ struct MatrixIncomingMessage {
     body: String,
     mentioned_bot: bool,
     prefer_sdk_send: bool,
+    event_time_ms: Option<i64>,
 }
 
 struct MatrixIncomingReaction {
@@ -1607,6 +1620,7 @@ struct MatrixIncomingReaction {
     event_id: String,
     relates_to_event_id: String,
     key: String,
+    event_time_ms: Option<i64>,
 }
 
 async fn resolve_matrix_chat_id(
@@ -1658,6 +1672,13 @@ async fn handle_matrix_reaction(
     } else {
         reaction.event_id.clone()
     };
+    if should_drop_pre_start_message(
+        &runtime.channel_name,
+        &inbound_event_id,
+        reaction.event_time_ms,
+    ) {
+        return;
+    }
     let reaction_text = format!(
         "[reaction] {} reacted {} to {}",
         reaction.sender, reaction.key, reaction.relates_to_event_id
@@ -1704,6 +1725,9 @@ async fn handle_matrix_message(
     } else {
         msg.event_id.clone()
     };
+    if should_drop_pre_start_message(&runtime.channel_name, &inbound_event_id, msg.event_time_ms) {
+        return;
+    }
     let trimmed = msg.body.trim();
     if is_slash_command(trimmed) {
         if let Some(reply) =
