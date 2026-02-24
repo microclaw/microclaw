@@ -101,6 +101,60 @@ fn default_matrix_sync_timeout_ms() -> u64 {
     30_000
 }
 
+// Streaming configuration for Matrix (similar to Telegram)
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MatrixStreamingConfig {
+    #[serde(default = "default_matrix_streaming_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_matrix_edit_interval_ms")]
+    pub edit_interval_ms: u64,
+    #[serde(default = "default_matrix_max_edits_per_message")]
+    pub max_edits_per_message: usize,
+    #[serde(default = "default_matrix_reasoning_display")]
+    pub reasoning_display: MatrixReasoningDisplayMode,
+}
+
+impl Default for MatrixStreamingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_matrix_streaming_enabled(),
+            edit_interval_ms: default_matrix_edit_interval_ms(),
+            max_edits_per_message: default_matrix_max_edits_per_message(),
+            reasoning_display: default_matrix_reasoning_display(),
+        }
+    }
+}
+
+fn default_matrix_streaming_enabled() -> bool {
+    false // Opt-in for now
+}
+
+fn default_matrix_edit_interval_ms() -> u64 {
+    500 // Edit every 500ms to balance responsiveness and rate limits
+}
+
+fn default_matrix_max_edits_per_message() -> usize {
+    25 // Leave buffer for Matrix rate limits
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum MatrixReasoningDisplayMode {
+    Hidden,
+    Inline,
+    SeparateMessage,
+}
+
+impl Default for MatrixReasoningDisplayMode {
+    fn default() -> Self {
+        MatrixReasoningDisplayMode::Hidden
+    }
+}
+
+fn default_matrix_reasoning_display() -> MatrixReasoningDisplayMode {
+    MatrixReasoningDisplayMode::Hidden
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct MatrixAccountConfig {
     pub access_token: String,
@@ -146,6 +200,8 @@ pub struct MatrixChannelConfig {
     pub accounts: HashMap<String, MatrixAccountConfig>,
     #[serde(default)]
     pub default_account: Option<String>,
+    #[serde(default)]
+    pub streaming: MatrixStreamingConfig,
 }
 
 fn pick_default_account_id(
@@ -180,6 +236,7 @@ pub struct MatrixRuntimeContext {
     pub sync_timeout_ms: u64,
     pub backup_key: String,
     pub sdk_client: Option<Arc<RwLock<Option<Arc<MatrixSdkClient>>>>>,
+    pub streaming: MatrixStreamingConfig,
 }
 
 impl MatrixRuntimeContext {
@@ -295,6 +352,7 @@ pub fn build_matrix_runtime_contexts(config: &crate::config::Config) -> Vec<Matr
             sync_timeout_ms: account_cfg.sync_timeout_ms,
             backup_key: account_cfg.backup_key.clone(),
             sdk_client: None,
+            streaming: matrix_cfg.streaming.clone(),
         });
     }
 
@@ -319,6 +377,7 @@ pub fn build_matrix_runtime_contexts(config: &crate::config::Config) -> Vec<Matr
             sync_timeout_ms: matrix_cfg.sync_timeout_ms,
             backup_key: matrix_cfg.backup_key,
             sdk_client: None,
+            streaming: matrix_cfg.streaming.clone(),
         });
     }
 
@@ -1683,6 +1742,336 @@ async fn handle_matrix_reaction(
     }
 }
 
+// Matrix streaming state tracking
+#[derive(Debug)]
+struct MatrixStreamingState {
+    initial_event_id: String,
+    room_id: String,
+    edit_count: usize,
+    last_edit: std::time::Instant,
+    current_content: String,
+    reasoning_content: Option<String>,
+}
+
+// Parse reasoning blocks from response (same logic as Telegram)
+fn parse_matrix_reasoning_blocks(content: &str) -> (String, Option<String>) {
+    let mut main_content = content.to_string();
+    let mut reasoning = None;
+
+    // Check for <thinking> tags
+    if let Some(start) = main_content.find("<thinking>") {
+        if let Some(end) = main_content.find("</thinking>") {
+            let reasoning_text = main_content[start + 10..end].trim().to_string();
+            reasoning = Some(reasoning_text);
+            main_content = format!(
+                "{}{}",
+                main_content[..start].trim(),
+                main_content[end + 11..].trim()
+            );
+        }
+    }
+
+    // Check for <reasoning> tags
+    if reasoning.is_none() {
+        if let Some(start) = main_content.find("<reasoning>") {
+            if let Some(end) = main_content.find("</reasoning>") {
+                let reasoning_text = main_content[start + 11..end].trim().to_string();
+                reasoning = Some(reasoning_text);
+                main_content = format!(
+                    "{}{}",
+                    main_content[..start].trim(),
+                    main_content[end + 12..].trim()
+                );
+            }
+        }
+    }
+
+    (main_content, reasoning)
+}
+
+// Edit a Matrix message using m.replace relation
+async fn edit_matrix_message(
+    client: &reqwest::Client,
+    homeserver_url: &str,
+    access_token: &str,
+    room_id: &str,
+    original_event_id: &str,
+    new_text: &str,
+) -> Result<(), String> {
+    let homeserver = homeserver_url.trim_end_matches('/');
+    let txn_id = uuid::Uuid::new_v4().to_string();
+
+    // Build edit payload with m.replace relation
+    let payload = serde_json::json!({
+        "msgtype": "m.text",
+        "body": format!("* {}", new_text),
+        "m.new_content": {
+            "msgtype": "m.text",
+            "body": new_text
+        },
+        "m.relates_to": {
+            "rel_type": "m.replace",
+            "event_id": original_event_id
+        }
+    });
+
+    let url = format!(
+        "{homeserver}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+        urlencoding::encode(room_id),
+        txn_id
+    );
+
+    let response = client
+        .put(&url)
+        .bearer_auth(access_token.trim())
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Matrix edit request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "Matrix edit failed: HTTP {status} {}",
+            body.chars().take(300).collect::<String>()
+        ));
+    }
+
+    Ok(())
+}
+
+// Send streaming response for Matrix
+async fn send_matrix_streaming_response(
+    runtime: &MatrixRuntimeContext,
+    room_id: &str,
+    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+    streaming_config: &MatrixStreamingConfig,
+    prefer_sdk_send: bool,
+) -> Result<String, String> {
+    use tokio::time::{interval, Duration};
+
+    let http_client = reqwest::Client::new();
+    let mut accumulated_text = String::new();
+    let mut streaming_state: Option<MatrixStreamingState> = None;
+    let mut edit_interval = interval(Duration::from_millis(streaming_config.edit_interval_ms));
+    let mut edit_count = 0;
+    let max_edits = streaming_config.max_edits_per_message;
+
+    // Process events
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            AgentEvent::TextDelta { delta } => {
+                accumulated_text.push_str(&delta);
+
+                // Check if it's time to update
+                if streaming_state.is_none() {
+                    // Send initial message
+                    let initial_event_id = if prefer_sdk_send {
+                        // Use SDK to send initial message
+                        if let Some(sdk_client) = runtime.sdk_client.as_ref() {
+                            let slot = sdk_client.read().await;
+                            if let Some(client) = slot.as_ref() {
+                                if let Ok(room_id_parsed) = room_id.parse::<OwnedRoomId>() {
+                                    if let Some(room) = client.get_room(&room_id_parsed) {
+                                        let content =
+                                            RoomMessageEventContent::text_plain("⏳ Thinking...");
+                                        match room.send(content).await {
+                                            Ok(response) => response.event_id.to_string(),
+                                            Err(_) => {
+                                                // Fallback to HTTP
+                                                let payload = matrix_message_payload_for_text(
+                                                    "⏳ Thinking...",
+                                                );
+                                                send_matrix_message_payload(
+                                                    &http_client,
+                                                    &runtime.homeserver_url,
+                                                    &runtime.access_token,
+                                                    room_id,
+                                                    &payload,
+                                                )
+                                                .await
+                                                .unwrap_or_default()
+                                            }
+                                        }
+                                    } else {
+                                        String::new()
+                                    }
+                                } else {
+                                    String::new()
+                                }
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            // Use HTTP API
+                            let payload = matrix_message_payload_for_text("⏳ Thinking...");
+                            send_matrix_message_payload(
+                                &http_client,
+                                &runtime.homeserver_url,
+                                &runtime.access_token,
+                                room_id,
+                                &payload,
+                            )
+                            .await
+                            .unwrap_or_default()
+                        }
+                    } else {
+                        // Use HTTP API (non-SDK path)
+                        let payload = matrix_message_payload_for_text("⏳ Thinking...");
+                        send_matrix_message_payload(
+                            &http_client,
+                            &runtime.homeserver_url,
+                            &runtime.access_token,
+                            room_id,
+                            &payload,
+                        )
+                        .await
+                        .unwrap_or_default()
+                    };
+
+                    if initial_event_id.is_empty() {
+                        return Err("Failed to send initial Matrix message".to_string());
+                    }
+
+                    streaming_state = Some(MatrixStreamingState {
+                        initial_event_id,
+                        room_id: room_id.to_string(),
+                        edit_count: 0,
+                        last_edit: std::time::Instant::now(),
+                        current_content: String::new(),
+                        reasoning_content: None,
+                    });
+
+                    edit_interval.tick().await;
+                } else if let Some(ref mut state) = streaming_state {
+                    edit_interval.tick().await;
+
+                    // Check edit limit
+                    if edit_count >= max_edits {
+                        continue;
+                    }
+
+                    // Parse reasoning if needed
+                    let (main_content, reasoning) = if streaming_config.reasoning_display
+                        == MatrixReasoningDisplayMode::Hidden
+                    {
+                        parse_matrix_reasoning_blocks(&accumulated_text)
+                    } else {
+                        (accumulated_text.clone(), None)
+                    };
+
+                    // Skip if content hasn't changed meaningfully
+                    if main_content.trim() == state.current_content.trim() {
+                        continue;
+                    }
+
+                    // Edit the message
+                    let display_content = if main_content.trim().is_empty() {
+                        "⏳ Thinking...".to_string()
+                    } else {
+                        main_content.clone()
+                    };
+
+                    if let Err(e) = edit_matrix_message(
+                        &http_client,
+                        &runtime.homeserver_url,
+                        &runtime.access_token,
+                        &state.room_id,
+                        &state.initial_event_id,
+                        &display_content,
+                    )
+                    .await
+                    {
+                        warn!("Matrix streaming edit failed: {}", e);
+                        // Continue anyway, don't fail the whole stream
+                    } else {
+                        state.current_content = main_content.clone();
+                        state.reasoning_content = reasoning.clone();
+                        edit_count += 1;
+                    }
+                }
+            }
+            AgentEvent::ToolStart { name } => {
+                // Add tool usage indicator
+                let tool_indicator = format!("\n\n🛠️ Using tool: {}", name);
+                accumulated_text.push_str(&tool_indicator);
+
+                // Trigger immediate edit update if streaming
+                if let Some(ref mut state) = streaming_state {
+                    if edit_count < max_edits {
+                        let (main_content, _) = if streaming_config.reasoning_display
+                            == MatrixReasoningDisplayMode::Hidden
+                        {
+                            parse_matrix_reasoning_blocks(&accumulated_text)
+                        } else {
+                            (accumulated_text.clone(), None)
+                        };
+
+                        let _ = edit_matrix_message(
+                            &http_client,
+                            &runtime.homeserver_url,
+                            &runtime.access_token,
+                            &state.room_id,
+                            &state.initial_event_id,
+                            &main_content,
+                        )
+                        .await;
+                        edit_count += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Final update with complete content
+    if let Some(state) = streaming_state {
+        let (final_content, reasoning) =
+            if streaming_config.reasoning_display == MatrixReasoningDisplayMode::Hidden {
+                parse_matrix_reasoning_blocks(&accumulated_text)
+            } else {
+                (accumulated_text.clone(), None)
+            };
+
+        // Final edit
+        if edit_count < max_edits && final_content != state.current_content {
+            let _ = edit_matrix_message(
+                &http_client,
+                &runtime.homeserver_url,
+                &runtime.access_token,
+                &state.room_id,
+                &state.initial_event_id,
+                &final_content,
+            )
+            .await;
+        }
+
+        // Handle separate reasoning message if needed
+        if streaming_config.reasoning_display == MatrixReasoningDisplayMode::SeparateMessage {
+            if let Some(reasoning_text) = reasoning {
+                if !reasoning_text.is_empty() {
+                    let reasoning_msg = format!("🤔 Reasoning:\n{}", reasoning_text);
+                    let _ = send_matrix_text(
+                        &http_client,
+                        &runtime.homeserver_url,
+                        &runtime.access_token,
+                        room_id,
+                        &reasoning_msg,
+                    )
+                    .await;
+                }
+            }
+        }
+
+        Ok(final_content)
+    } else {
+        // No streaming state means we didn't receive any TextDelta
+        Ok(accumulated_text)
+    }
+}
+
 async fn handle_matrix_message(
     app_state: Arc<AppState>,
     runtime: MatrixRuntimeContext,
@@ -1758,6 +2147,10 @@ async fn handle_matrix_message(
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
 
+    // Check if streaming is enabled for this room
+    let streaming_config = runtime.streaming.clone();
+    let use_streaming = streaming_config.enabled;
+
     match process_with_agent_with_events(
         &app_state,
         AgentRequestContext {
@@ -1773,6 +2166,47 @@ async fn handle_matrix_message(
     {
         Ok(response) => {
             drop(event_tx);
+
+            // Try streaming first if enabled
+            if use_streaming {
+                match send_matrix_streaming_response(
+                    &runtime,
+                    &msg.room_id,
+                    &mut event_rx,
+                    &streaming_config,
+                    msg.prefer_sdk_send,
+                )
+                .await
+                {
+                    Ok(streamed_response) => {
+                        // Store the streamed response
+                        if !streamed_response.is_empty() {
+                            let bot_msg = StoredMessage {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                chat_id,
+                                sender_name: runtime.bot_username.clone(),
+                                content: streamed_response,
+                                is_from_bot: true,
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                            };
+                            let _ = call_blocking(app_state.db.clone(), move |db| {
+                                db.store_message(&bot_msg)
+                            })
+                            .await;
+                        }
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Matrix streaming failed, falling back to regular send: {}",
+                            e
+                        );
+                        // Fall through to regular send below
+                    }
+                }
+            }
+
+            // Regular (non-streaming) handling
             let mut used_send_message_tool = false;
             while let Some(event) = event_rx.recv().await {
                 if let AgentEvent::ToolStart { name } = event {
@@ -1937,6 +2371,7 @@ mod tests {
             sync_timeout_ms: 30_000,
             backup_key: String::new(),
             sdk_client: None,
+            streaming: crate::channels::matrix::MatrixStreamingConfig::default(),
         };
 
         assert!(runtime.should_respond("hello there", true, false));
@@ -1958,6 +2393,7 @@ mod tests {
             sync_timeout_ms: 30_000,
             backup_key: String::new(),
             sdk_client: None,
+            streaming: crate::channels::matrix::MatrixStreamingConfig::default(),
         };
 
         assert!(runtime.should_process_dm_sender("@alice:localhost"));
@@ -1978,6 +2414,7 @@ mod tests {
             sync_timeout_ms: 30_000,
             backup_key: String::new(),
             sdk_client: None,
+            streaming: crate::channels::matrix::MatrixStreamingConfig::default(),
         };
 
         assert!(runtime.should_process_group_room("!group:localhost"));

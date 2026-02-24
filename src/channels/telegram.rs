@@ -860,7 +860,7 @@ async fn handle_message(
     // Check if streaming is enabled for this chat
     let streaming_config = tg_ctx.streaming.clone();
     let use_streaming = streaming_config.enabled;
-    
+
     // Process through platform-agnostic agent engine.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
     match process_with_agent_with_events(
@@ -878,7 +878,7 @@ async fn handle_message(
     {
         Ok(response) => {
             typing_handle.abort();
-            
+
             // Try streaming if enabled
             let mut used_streaming = false;
             if use_streaming && !response.is_empty() {
@@ -889,7 +889,9 @@ async fn handle_message(
                     &response,
                     msg.thread_id,
                     &streaming_config,
-                ).await {
+                )
+                .await
+                {
                     Ok(_) => {
                         used_streaming = true;
                         // Store bot response
@@ -901,7 +903,9 @@ async fn handle_message(
                             is_from_bot: true,
                             timestamp: chrono::Utc::now().to_rfc3339(),
                         };
-                        let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                        let _ =
+                            call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg))
+                                .await;
                     }
                     Err(e) => {
                         warn!("Streaming failed, falling back to regular send: {}", e);
@@ -909,7 +913,7 @@ async fn handle_message(
                     }
                 }
             }
-            
+
             if !used_streaming {
                 drop(event_tx);
                 let mut used_send_message_tool = false;
@@ -945,7 +949,8 @@ async fn handle_message(
                         is_from_bot: true,
                         timestamp: chrono::Utc::now().to_rfc3339(),
                     };
-                    let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                    let _ =
+                        call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
                 } else {
                     let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.".to_string();
                     send_response(&bot, msg.chat.id, &fallback, msg.thread_id).await;
@@ -957,7 +962,8 @@ async fn handle_message(
                         is_from_bot: true,
                         timestamp: chrono::Utc::now().to_rfc3339(),
                     };
-                    let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                    let _ =
+                        call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
                 }
             }
         }
@@ -1230,7 +1236,7 @@ fn parse_reasoning_blocks(text: &str) -> (Option<String>, String) {
     // Handle <thinking> or <reasoning> tags
     let reasoning_start = text.find("<thinking>");
     let reasoning_end = text.find("</thinking>");
-    
+
     if let (Some(start), Some(end)) = (reasoning_start, reasoning_end) {
         if end > start {
             let reasoning = text[start + 10..end].trim().to_string();
@@ -1238,11 +1244,11 @@ fn parse_reasoning_blocks(text: &str) -> (Option<String>, String) {
             return (Some(reasoning), answer.trim().to_string());
         }
     }
-    
+
     // Handle <reasoning> tags as well
     let reasoning_start = text.find("<reasoning>");
     let reasoning_end = text.find("</reasoning>");
-    
+
     if let (Some(start), Some(end)) = (reasoning_start, reasoning_end) {
         if end > start {
             let reasoning = text[start + 11..end].trim().to_string();
@@ -1250,7 +1256,7 @@ fn parse_reasoning_blocks(text: &str) -> (Option<String>, String) {
             return (Some(reasoning), answer.trim().to_string());
         }
     }
-    
+
     (None, text.to_string())
 }
 
@@ -1269,20 +1275,20 @@ async fn send_streaming_response(
     } else {
         "🔍 Reasoning..."
     };
-    
+
     let mut initial_req = bot.send_message(chat_id, initial_text);
     if let Some(tid) = message_thread_id {
         initial_req = initial_req.message_thread_id(tid);
     }
-    
+
     let initial_msg = initial_req.await?;
     let mut streaming_state = StreamingState::new(initial_msg.id);
     let mut reasoning_message_id: Option<MessageId> = None;
-    
+
     // Set up edit interval
     let edit_interval = Duration::from_millis(config.edit_interval_ms);
     let mut last_edit_time = Instant::now();
-    
+
     // Process events
     while let Some(event) = event_rx.recv().await {
         match event {
@@ -1294,13 +1300,18 @@ async fn send_streaming_response(
                 }
                 if delta.contains("</thinking>") || delta.contains("</reasoning>") {
                     streaming_state.in_reasoning = false;
-                    
+
                     // Handle separate reasoning message
-                    if config.reasoning_display == ReasoningDisplayMode::SeparateMessage 
-                        && !streaming_state.reasoning_buffer.is_empty() {
+                    if config.reasoning_display == ReasoningDisplayMode::SeparateMessage
+                        && !streaming_state.reasoning_buffer.is_empty()
+                    {
                         let reasoning_text = format!(
                             "🧠 *Reasoning:*\n```\n{}\n```",
-                            streaming_state.reasoning_buffer.chars().take(3800).collect::<String>()
+                            streaming_state
+                                .reasoning_buffer
+                                .chars()
+                                .take(3800)
+                                .collect::<String>()
                         );
                         let mut reasoning_req = bot.send_message(chat_id, reasoning_text);
                         if let Some(tid) = message_thread_id {
@@ -1312,22 +1323,29 @@ async fn send_streaming_response(
                     }
                     continue;
                 }
-                
+
                 if streaming_state.in_reasoning {
                     streaming_state.reasoning_buffer.push_str(&delta);
                 } else {
                     streaming_state.buffer.push_str(&delta);
                 }
-                
+
                 // Check if we should edit now
-                let should_edit = last_edit_time.elapsed() >= edit_interval 
+                let should_edit = last_edit_time.elapsed() >= edit_interval
                     || streaming_state.edit_count < 3 // Edit more frequently at start
                     || streaming_state.buffer.len() % 100 == 0; // Edit every 100 chars
-                
+
                 if should_edit && streaming_state.edit_count < config.max_edits_per_message {
-                    let display_text = if streaming_state.in_reasoning && config.reasoning_display == ReasoningDisplayMode::Inline {
-                        format!("🧠 *Thinking...*\n{}\n\n💭 {}", 
-                            streaming_state.reasoning_buffer.chars().take(200).collect::<String>(),
+                    let display_text = if streaming_state.in_reasoning
+                        && config.reasoning_display == ReasoningDisplayMode::Inline
+                    {
+                        format!(
+                            "🧠 *Thinking...*\n{}\n\n💭 {}",
+                            streaming_state
+                                .reasoning_buffer
+                                .chars()
+                                .take(200)
+                                .collect::<String>(),
                             &streaming_state.buffer
                         )
                     } else if !streaming_state.buffer.is_empty() {
@@ -1335,23 +1353,30 @@ async fn send_streaming_response(
                     } else {
                         continue; // Skip empty edits
                     };
-                    
+
                     // Truncate if too long for Telegram (4096 limit)
                     let edit_text = if display_text.len() > 4000 {
                         format!("{}...(truncated)", &display_text[..4000])
                     } else {
                         display_text
                     };
-                    
+
                     // Edit message - note: edit_message_text doesn't support message_thread_id
                     // as the message already knows its context
-                    let edit_req = bot.edit_message_text(chat_id, streaming_state.message_id, edit_text);
-                    
+                    let edit_req =
+                        bot.edit_message_text(chat_id, streaming_state.message_id, edit_text);
+
                     // Try to edit with text (ParseMode doesn't work the same way for edits)
                     if let Err(_) = edit_req.await {
-                        let _ = bot.edit_message_text(chat_id, streaming_state.message_id, &streaming_state.buffer).await;
+                        let _ = bot
+                            .edit_message_text(
+                                chat_id,
+                                streaming_state.message_id,
+                                &streaming_state.buffer,
+                            )
+                            .await;
                     }
-                    
+
                     streaming_state.edit_count += 1;
                     last_edit_time = Instant::now();
                 }
@@ -1359,17 +1384,20 @@ async fn send_streaming_response(
             AgentEvent::ToolStart { name } => {
                 // Show tool usage
                 if streaming_state.edit_count < config.max_edits_per_message {
-                    let tool_text = format!("{}\n\n🔧 Using tool: {}", streaming_state.buffer, name);
-                    let _ = bot.edit_message_text(chat_id, streaming_state.message_id, &tool_text).await;
+                    let tool_text =
+                        format!("{}\n\n🔧 Using tool: {}", streaming_state.buffer, name);
+                    let _ = bot
+                        .edit_message_text(chat_id, streaming_state.message_id, &tool_text)
+                        .await;
                 }
             }
             _ => {} // Ignore other events
         }
     }
-    
+
     // Final edit with complete response
     let (reasoning, answer) = parse_reasoning_blocks(final_response);
-    
+
     // Send reasoning if not already sent and mode is separate
     if config.reasoning_display == ReasoningDisplayMode::SeparateMessage {
         if let Some(reasoning_text) = reasoning {
@@ -1386,16 +1414,22 @@ async fn send_streaming_response(
             }
         }
     }
-    
+
     // Final message edit - note: edit_message_text doesn't need message_thread_id
-    let final_text = if answer.is_empty() { final_response } else { &answer };
+    let final_text = if answer.is_empty() {
+        final_response
+    } else {
+        &answer
+    };
     let final_edit = bot.edit_message_text(chat_id, streaming_state.message_id, final_text);
-    
+
     // Try to edit - ParseMode doesn't work the same way for edits
     if let Err(_) = final_edit.await {
-        let _ = bot.edit_message_text(chat_id, streaming_state.message_id, final_text).await;
+        let _ = bot
+            .edit_message_text(chat_id, streaming_state.message_id, final_text)
+            .await;
     }
-    
+
     Ok(())
 }
 
