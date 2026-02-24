@@ -566,27 +566,25 @@ pub(crate) async fn process_with_agent_impl(
             drop(llm_tx);
             let _ = forward_handle.await;
             response
+        } else if let Some(provider) = scoped_provider.as_ref() {
+            provider
+                .send_message_with_model(
+                    &system_prompt,
+                    messages.clone(),
+                    Some(tool_defs.clone()),
+                    Some(&effective_model),
+                )
+                .await?
         } else {
-            if let Some(provider) = scoped_provider.as_ref() {
-                provider
-                    .send_message_with_model(
-                        &system_prompt,
-                        messages.clone(),
-                        Some(tool_defs.clone()),
-                        Some(&effective_model),
-                    )
-                    .await?
-            } else {
-                state
-                    .llm
-                    .send_message_with_model(
-                        &system_prompt,
-                        messages.clone(),
-                        Some(tool_defs.clone()),
-                        Some(&effective_model),
-                    )
-                    .await?
-            }
+            state
+                .llm
+                .send_message_with_model(
+                    &system_prompt,
+                    messages.clone(),
+                    Some(tool_defs.clone()),
+                    Some(&effective_model),
+                )
+                .await?
         };
 
         if let Some(usage) = &response.usage {
