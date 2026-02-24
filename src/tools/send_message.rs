@@ -430,6 +430,7 @@ mod tests {
                 model: None,
                 accounts: std::collections::HashMap::new(),
                 default_account: None,
+                streaming: crate::channels::telegram::TelegramStreamingConfig::default(),
             },
         );
         registry.register(Arc::new(tg_adapter));
