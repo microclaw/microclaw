@@ -8,7 +8,34 @@ use microclaw_storage::db::{call_blocking, Database};
 use microclaw_storage::usage::build_usage_report;
 
 pub fn is_slash_command(text: &str) -> bool {
-    text.trim_start().starts_with('/')
+    normalized_slash_command(text).is_some()
+}
+
+fn normalized_slash_command(text: &str) -> Option<&str> {
+    let mut s = text.trim_start();
+    loop {
+        if s.starts_with('/') {
+            return Some(s);
+        }
+        if s.starts_with("<@") {
+            let end = s.find('>')?;
+            s = s[end + 1..].trim_start();
+            continue;
+        }
+        if let Some(rest) = s.strip_prefix('@') {
+            if rest.is_empty() {
+                return None;
+            }
+            let end = rest
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(i, _)| i)
+                .unwrap_or(rest.len());
+            s = rest[end..].trim_start();
+            continue;
+        }
+        return None;
+    }
 }
 
 pub fn unknown_command_response() -> String {
@@ -21,7 +48,7 @@ pub async fn handle_chat_command(
     caller_channel: &str,
     command_text: &str,
 ) -> Option<String> {
-    let trimmed = command_text.trim();
+    let trimmed = normalized_slash_command(command_text)?.trim();
 
     if trimmed == "/reset" {
         let _ = call_blocking(state.db.clone(), move |db| db.clear_chat_context(chat_id)).await;
@@ -182,10 +209,23 @@ pub async fn maybe_handle_plugin_command(
     chat_id: i64,
     caller_channel: &str,
 ) -> Option<String> {
-    if let Some(admin) = crate::plugins::handle_plugins_admin_command(config, chat_id, command_text)
-    {
+    let normalized = normalized_slash_command(command_text)?;
+    if let Some(admin) = crate::plugins::handle_plugins_admin_command(config, chat_id, normalized) {
         return Some(admin);
     }
-    crate::plugins::execute_plugin_slash_command(config, caller_channel, chat_id, command_text)
-        .await
+    crate::plugins::execute_plugin_slash_command(config, caller_channel, chat_id, normalized).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_slash_command;
+
+    #[test]
+    fn test_is_slash_command_with_leading_mentions() {
+        assert!(is_slash_command("/status"));
+        assert!(is_slash_command("@bot /status"));
+        assert!(is_slash_command("<@U123> /status"));
+        assert!(is_slash_command(" <@U123>   @bot   /status"));
+        assert!(!is_slash_command("@bot hello"));
+    }
 }

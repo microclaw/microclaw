@@ -472,7 +472,12 @@ async fn handle_irc_message(
     }
 
     let trimmed = text.trim();
+    let should_respond =
+        !is_group || !cfg.mention_required_bool() || is_irc_mention(&text, cfg.nick.trim());
     if is_slash_command(trimmed) {
+        if !should_respond && !app_state.config.allow_group_slash_without_mention {
+            return;
+        }
         if let Some(reply) = handle_chat_command(&app_state, chat_id, "irc", trimmed).await {
             let _ = adapter.send_text(&response_target, &reply).await;
             return;
@@ -499,7 +504,7 @@ async fn handle_irc_message(
     };
     let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&stored)).await;
 
-    if is_group && cfg.mention_required_bool() && !is_irc_mention(&text, cfg.nick.trim()) {
+    if !should_respond {
         return;
     }
 

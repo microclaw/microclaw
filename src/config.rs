@@ -119,6 +119,9 @@ fn default_web_run_history_limit() -> usize {
 fn default_web_session_idle_ttl_seconds() -> u64 {
     300
 }
+fn default_allow_group_slash_without_mention() -> bool {
+    false
+}
 
 fn default_model_prices() -> Vec<ModelPrice> {
     Vec::new()
@@ -249,6 +252,8 @@ pub struct Config {
     pub discord_allowed_channels: Vec<u64>,
     #[serde(default)]
     pub discord_no_mention: bool,
+    #[serde(default = "default_allow_group_slash_without_mention")]
+    pub allow_group_slash_without_mention: bool,
 
     // --- Web UI ---
     #[serde(default = "default_web_enabled")]
@@ -489,6 +494,7 @@ impl Config {
             discord_bot_token: None,
             discord_allowed_channels: vec![],
             discord_no_mention: false,
+            allow_group_slash_without_mention: false,
             show_thinking: false,
             openai_compat_body_overrides: HashMap::new(),
             openai_compat_body_overrides_by_provider: HashMap::new(),

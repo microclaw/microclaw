@@ -427,7 +427,18 @@ async fn handle_message(
     let mut image_data: Option<(String, String)> = None; // (base64, media_type)
     let mut document_saved_path: Option<String> = None;
 
+    let should_respond = match runtime_chat_type {
+        "private" => true,
+        _ => {
+            let bot_mention = format!("@{}", tg_bot_username);
+            text.contains(&bot_mention)
+        }
+    };
+
     if is_slash_command(&text) {
+        if !should_respond && !state.config.allow_group_slash_without_mention {
+            return Ok(());
+        }
         let external_chat_id = raw_chat_id.to_string();
         let chat_title_for_lookup = chat_title.clone();
         let chat_type_for_lookup = db_chat_type.to_string();
@@ -752,14 +763,6 @@ async fn handle_message(
     }
 
     // Determine if we should respond
-    let should_respond = match runtime_chat_type {
-        "private" => true,
-        _ => {
-            let bot_mention = format!("@{}", tg_bot_username);
-            text.contains(&bot_mention)
-        }
-    };
-
     if !should_respond {
         return Ok(());
     }

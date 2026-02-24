@@ -1561,7 +1561,11 @@ async fn handle_feishu_message(
     };
 
     let trimmed = text.trim();
+    let should_respond = is_dm || is_mentioned;
     if is_slash_command(trimmed) {
+        if !should_respond && !app_state.config.allow_group_slash_without_mention {
+            return;
+        }
         if let Some(reply) =
             handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
         {
@@ -1622,7 +1626,6 @@ async fn handle_feishu_message(
     }
 
     // Determine if we should respond
-    let should_respond = is_dm || is_mentioned;
     if !should_respond {
         return;
     }

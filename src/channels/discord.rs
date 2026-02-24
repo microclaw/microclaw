@@ -374,7 +374,22 @@ impl EventHandler for Handler {
             return;
         }
 
+        let should_respond = if msg.guild_id.is_some() {
+            if self.runtime.no_mention {
+                true
+            } else {
+                let cache = &ctx.cache;
+                let bot_id = cache.current_user().id;
+                msg.mentions.iter().any(|u| u.id == bot_id)
+            }
+        } else {
+            true
+        };
+
         if is_slash_command(&text) {
+            if !should_respond && !self.app_state.config.allow_group_slash_without_mention {
+                return;
+            }
             if let Some(reply) = handle_chat_command(
                 &self.app_state,
                 channel_id,
@@ -452,21 +467,6 @@ impl EventHandler for Handler {
         }
 
         // Determine if we should respond
-        let should_respond = if msg.guild_id.is_some() {
-            if self.runtime.no_mention {
-                // Respond to all messages in guild (no @mention needed)
-                true
-            } else {
-                // In a guild: only respond to @mentions
-                let cache = &ctx.cache;
-                let bot_id = cache.current_user().id;
-                msg.mentions.iter().any(|u| u.id == bot_id)
-            }
-        } else {
-            // DM: respond to all messages
-            true
-        };
-
         if !should_respond {
             return;
         }

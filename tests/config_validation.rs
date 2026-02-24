@@ -34,6 +34,7 @@ fn minimal_config() -> Config {
         discord_bot_token: None,
         discord_allowed_channels: vec![],
         discord_no_mention: false,
+        allow_group_slash_without_mention: false,
         show_thinking: false,
         openai_compat_body_overrides: std::collections::HashMap::new(),
         openai_compat_body_overrides_by_provider: std::collections::HashMap::new(),

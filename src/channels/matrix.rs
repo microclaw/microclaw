@@ -1728,8 +1728,12 @@ async fn handle_matrix_message(
     if should_drop_pre_start_message(&runtime.channel_name, &inbound_event_id, msg.event_time_ms) {
         return;
     }
+    let should_respond = runtime.should_respond(&msg.body, msg.mentioned_bot, msg.is_direct);
     let trimmed = msg.body.trim();
     if is_slash_command(trimmed) {
+        if !should_respond && !app_state.config.allow_group_slash_without_mention {
+            return;
+        }
         if let Some(reply) =
             handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
         {
@@ -1767,8 +1771,6 @@ async fn handle_matrix_message(
         );
         return;
     }
-    let should_respond = runtime.should_respond(&msg.body, msg.mentioned_bot, msg.is_direct);
-
     if !should_respond {
         return;
     }

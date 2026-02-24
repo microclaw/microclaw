@@ -678,7 +678,12 @@ async fn handle_slack_message(
     }
 
     let trimmed = text.trim();
+    let mention_tag = format!("<@{bot_user_id}>");
+    let should_respond = is_dm || is_app_mention || text.contains(&mention_tag);
     if is_slash_command(trimmed) {
+        if !should_respond && !app_state.config.allow_group_slash_without_mention {
+            return;
+        }
         if let Some(reply) =
             handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
         {
@@ -719,9 +724,6 @@ async fn handle_slack_message(
     }
 
     // Determine if we should respond
-    let mention_tag = format!("<@{bot_user_id}>");
-    let should_respond = is_dm || is_app_mention || text.contains(&mention_tag);
-
     if !should_respond {
         return;
     }
