@@ -687,6 +687,20 @@ async fn resolve_effective_provider_and_model(
     (profile, model)
 }
 
+pub async fn maybe_handle_plugin_command(
+    config: &Config,
+    command_text: &str,
+    chat_id: i64,
+    caller_channel: &str,
+) -> Option<String> {
+    if let Some(admin) = crate::plugins::handle_plugins_admin_command(config, chat_id, command_text)
+    {
+        return Some(admin);
+    }
+    crate::plugins::execute_plugin_slash_command(config, caller_channel, chat_id, command_text)
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1038,7 +1052,7 @@ pub async fn maybe_handle_plugin_command(
 }
 
 #[cfg(test)]
-mod tests {
+mod slash_command_tests {
     use super::is_slash_command;
 
     #[test]
