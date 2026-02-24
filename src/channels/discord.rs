@@ -415,8 +415,23 @@ impl EventHandler for Handler {
         })
         .await;
 
+        let inbound_message_id = msg.id.get().to_string();
+        let already_seen = call_blocking(self.app_state.db.clone(), {
+            let inbound_message_id = inbound_message_id.clone();
+            move |db| db.message_exists(channel_id, &inbound_message_id)
+        })
+        .await
+        .unwrap_or(false);
+        if already_seen {
+            info!(
+                "Discord: skipping duplicate message chat_id={} message_id={}",
+                channel_id, inbound_message_id
+            );
+            return;
+        }
+
         let stored = StoredMessage {
-            id: msg.id.get().to_string(),
+            id: inbound_message_id,
             chat_id: channel_id,
             sender_name: sender_name.clone(),
             content: text.clone(),
@@ -489,7 +504,14 @@ impl EventHandler for Handler {
                     }
                 }
 
-                if !response.is_empty() {
+                if used_send_message_tool {
+                    if !response.is_empty() {
+                        info!(
+                            "Discord: suppressing final response for chat {} because send_message already delivered output",
+                            channel_id
+                        );
+                    }
+                } else if !response.is_empty() {
                     send_discord_response(&ctx, msg.channel_id, &response).await;
 
                     // Store bot response
@@ -505,7 +527,7 @@ impl EventHandler for Handler {
                         db.store_message(&bot_msg)
                     })
                     .await;
-                } else if !used_send_message_tool {
+                } else {
                     let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.".to_string();
                     send_discord_response(&ctx, msg.channel_id, &fallback).await;
 

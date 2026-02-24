@@ -576,6 +576,22 @@ async fn handle_whatsapp_message(
         return;
     }
 
+    if !message_id.trim().is_empty() {
+        let already_seen = call_blocking(app_state.db.clone(), {
+            let message_id = message_id.to_string();
+            move |db| db.message_exists(chat_id, &message_id)
+        })
+        .await
+        .unwrap_or(false);
+        if already_seen {
+            info!(
+                "WhatsApp: skipping duplicate message chat_id={} message_id={}",
+                chat_id, message_id
+            );
+            return;
+        }
+    }
+
     let stored = StoredMessage {
         id: if message_id.trim().is_empty() {
             uuid::Uuid::new_v4().to_string()
@@ -640,7 +656,14 @@ async fn handle_whatsapp_message(
                 }
             }
 
-            if !response.is_empty() {
+            if used_send_message_tool {
+                if !response.is_empty() {
+                    info!(
+                        "WhatsApp: suppressing final response for chat {} because send_message already delivered output",
+                        chat_id
+                    );
+                }
+            } else if !response.is_empty() {
                 if let Err(e) = send_whatsapp_text(
                     &reqwest::Client::new(),
                     &runtime.access_token,
@@ -664,7 +687,7 @@ async fn handle_whatsapp_message(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            } else if !used_send_message_tool {
+            } else {
                 let fallback =
                     "I couldn't produce a visible reply after an automatic retry. Please try again.";
                 let _ = send_whatsapp_text(

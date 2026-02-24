@@ -62,7 +62,10 @@ fn build_inbound_fingerprint(
         parts.push(format!("t={}", text.chars().take(200).collect::<String>()));
     }
     if let Some(caption) = msg.caption().map(str::trim).filter(|v| !v.is_empty()) {
-        parts.push(format!("c={}", caption.chars().take(200).collect::<String>()));
+        parts.push(format!(
+            "c={}",
+            caption.chars().take(200).collect::<String>()
+        ));
     }
     if let Some(group_id) = msg.media_group_id() {
         parts.push(format!("mg={}", group_id.0));
@@ -901,8 +904,7 @@ async fn handle_message(
                     timestamp: chrono::Utc::now().to_rfc3339(),
                 };
                 let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            }
-            else {
+            } else {
                 let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.".to_string();
                 send_response(&bot, msg.chat.id, &fallback, msg.thread_id).await;
                 let bot_msg = StoredMessage {

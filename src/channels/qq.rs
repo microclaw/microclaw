@@ -337,6 +337,21 @@ async fn qq_webhook_handler(
     if chat_id == 0 {
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
     }
+    if !payload.message_id.trim().is_empty() {
+        let already_seen = call_blocking(app_state.db.clone(), {
+            let message_id = payload.message_id.clone();
+            move |db| db.message_exists(chat_id, &message_id)
+        })
+        .await
+        .unwrap_or(false);
+        if already_seen {
+            info!(
+                "QQ: skipping duplicate message chat_id={} message_id={}",
+                chat_id, payload.message_id
+            );
+            return axum::http::StatusCode::OK;
+        }
+    }
     let stored = StoredMessage {
         id: if payload.message_id.trim().is_empty() {
             uuid::Uuid::new_v4().to_string()
@@ -390,7 +405,14 @@ async fn qq_webhook_handler(
                 runtime_ctx.channel_name.clone(),
                 runtime_ctx.send_command.clone(),
             );
-            if !response.is_empty() {
+            if used_send_message_tool {
+                if !response.is_empty() {
+                    info!(
+                        "QQ: suppressing final response for chat {} because send_message already delivered output",
+                        chat_id
+                    );
+                }
+            } else if !response.is_empty() {
                 if let Err(e) = adapter.send_text(user_id, &response).await {
                     error!("QQ: failed to send response: {e}");
                 }
@@ -404,7 +426,7 @@ async fn qq_webhook_handler(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            } else if !used_send_message_tool {
+            } else {
                 let _ = adapter
                     .send_text(
                         user_id,

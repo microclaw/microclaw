@@ -1637,6 +1637,22 @@ async fn handle_matrix_reaction(
         return;
     }
 
+    if !reaction.event_id.trim().is_empty() {
+        let already_seen = call_blocking(app_state.db.clone(), {
+            let event_id = reaction.event_id.clone();
+            move |db| db.message_exists(chat_id, &event_id)
+        })
+        .await
+        .unwrap_or(false);
+        if already_seen {
+            info!(
+                "Matrix: skipping duplicate reaction chat_id={} event_id={}",
+                chat_id, reaction.event_id
+            );
+            return;
+        }
+    }
+
     let reaction_text = format!(
         "[reaction] {} reacted {} to {}",
         reaction.sender, reaction.key, reaction.relates_to_event_id
@@ -1667,6 +1683,22 @@ async fn handle_matrix_message(
     if chat_id == 0 {
         error!("Matrix: failed to resolve chat ID for room {}", msg.room_id);
         return;
+    }
+
+    if !msg.event_id.trim().is_empty() {
+        let already_seen = call_blocking(app_state.db.clone(), {
+            let event_id = msg.event_id.clone();
+            move |db| db.message_exists(chat_id, &event_id)
+        })
+        .await
+        .unwrap_or(false);
+        if already_seen {
+            info!(
+                "Matrix: skipping duplicate message chat_id={} event_id={}",
+                chat_id, msg.event_id
+            );
+            return;
+        }
     }
 
     let incoming = StoredMessage {
@@ -1811,7 +1843,14 @@ async fn handle_matrix_message(
                 }
             }
 
-            if !response.is_empty() {
+            if used_send_message_tool {
+                if !response.is_empty() {
+                    info!(
+                        "Matrix: suppressing final response for chat {} because send_message already delivered output",
+                        chat_id
+                    );
+                }
+            } else if !response.is_empty() {
                 if let Some(reaction_key) = looks_like_reaction_token(&response) {
                     if !msg.event_id.trim().is_empty() {
                         if let Err(e) = send_matrix_reaction_runtime(
@@ -1859,7 +1898,7 @@ async fn handle_matrix_message(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            } else if !used_send_message_tool {
+            } else {
                 let fallback =
                     "I couldn't produce a visible reply after an automatic retry. Please try again.";
                 let _ =

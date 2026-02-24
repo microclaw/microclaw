@@ -532,7 +532,14 @@ async fn handle_irc_message(
                 }
             }
 
-            if !response.is_empty() {
+            if used_send_message_tool {
+                if !response.is_empty() {
+                    info!(
+                        "IRC: suppressing final response for chat {} because send_message already delivered output",
+                        chat_id
+                    );
+                }
+            } else if !response.is_empty() {
                 if let Err(e) = adapter.send_text(&response_target, &response).await {
                     error!("IRC: failed to send response: {e}");
                 }
@@ -546,7 +553,7 @@ async fn handle_irc_message(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            } else if !used_send_message_tool {
+            } else {
                 let fallback =
                     "I couldn't produce a visible reply after an automatic retry. Please try again.";
                 let _ = adapter.send_text(&response_target, fallback).await;

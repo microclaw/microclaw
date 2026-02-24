@@ -378,6 +378,22 @@ async fn nostr_webhook_handler(
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
     }
 
+    if !payload.event_id.trim().is_empty() {
+        let already_seen = call_blocking(app_state.db.clone(), {
+            let event_id = payload.event_id.clone();
+            move |db| db.message_exists(chat_id, &event_id)
+        })
+        .await
+        .unwrap_or(false);
+        if already_seen {
+            info!(
+                "Nostr: skipping duplicate message chat_id={} event_id={}",
+                chat_id, payload.event_id
+            );
+            return axum::http::StatusCode::OK;
+        }
+    }
+
     let stored = StoredMessage {
         id: if payload.event_id.trim().is_empty() {
             uuid::Uuid::new_v4().to_string()
@@ -433,7 +449,14 @@ async fn nostr_webhook_handler(
                     }
                 }
             }
-            if !response.is_empty() {
+            if used_send_message_tool {
+                if !response.is_empty() {
+                    info!(
+                        "Nostr: suppressing final response for chat {} because send_message already delivered output",
+                        chat_id
+                    );
+                }
+            } else if !response.is_empty() {
                 let adapter = NostrAdapter::new(
                     runtime_ctx.channel_name.clone(),
                     runtime_ctx.publish_command.clone(),
@@ -451,7 +474,7 @@ async fn nostr_webhook_handler(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            } else if !used_send_message_tool {
+            } else {
                 let adapter = NostrAdapter::new(
                     runtime_ctx.channel_name.clone(),
                     runtime_ctx.publish_command.clone(),
