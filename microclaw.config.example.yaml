@@ -1,7 +1,5 @@
 # MicroClaw configuration
 # Copy this file to microclaw.config.yaml and fill in the required values.
-
-
 # LLM provider (anthropic, openai-codex, ollama, openai, openrouter, deepseek, google, etc.)
 llm_provider: "anthropic"
 # API key for LLM provider (optional for ollama; openai-codex supports OAuth or api_key)
@@ -118,6 +116,16 @@ channels:
   #   # allowed_room_ids: ["!roomid:matrix.org"]
   #   # allowed_user_ids: ["@alice:matrix.org"]   # DM sender allowlist (empty = allow all DMs)
   #   # mention_required: true
+  # whatsapp:
+  #   enabled: false
+  #   access_token: "EAA..."
+  #   phone_number_id: "1234567890"
+  #   webhook_verify_token: ""
+  #   webhook_path: "/whatsapp/webhook"
+  #   # Optional sender allowlist
+  #   # allowed_user_ids: ["15551234567"]
+  #   # Optional Graph API version override
+  #   # api_version: "v21.0"
 
 # Local web UI (optional)
 # Channel on/off is controlled by `channels.web.enabled`.
