@@ -863,8 +863,16 @@ fn apply_openai_compat_body_overrides(
 
 #[derive(Debug, Deserialize)]
 struct OaiResponse {
+    #[serde(default, deserialize_with = "deserialize_oai_choices")]
     choices: Vec<OaiChoice>,
     usage: Option<OaiUsage>,
+}
+
+fn deserialize_oai_choices<'de, D>(deserializer: D) -> Result<Vec<OaiChoice>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<OaiChoice>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Deserialize)]
@@ -2190,6 +2198,13 @@ mod tests {
             ResponseContentBlock::Text { text } => assert_eq!(text, "(empty response)"),
             _ => panic!("Expected Text"),
         }
+    }
+
+    #[test]
+    fn test_deserialize_oai_response_null_choices() {
+        let raw = r#"{"id":"x","choices":null,"usage":null}"#;
+        let parsed: OaiResponse = serde_json::from_str(raw).unwrap();
+        assert!(parsed.choices.is_empty());
     }
 
     #[test]
