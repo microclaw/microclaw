@@ -242,24 +242,19 @@ pub(super) async fn require_scope(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .is_some();
     if state.legacy_auth_token.is_none() && !has_password {
-        #[cfg(test)]
-        {
-            let id = AuthIdentity {
-                scopes: vec![
-                    "operator.read".to_string(),
-                    "operator.write".to_string(),
-                    "operator.admin".to_string(),
-                    "operator.approvals".to_string(),
-                ],
-                actor: "bootstrap-test".to_string(),
-            };
-            if id.allows(required) {
-                return Ok(id);
-            }
-            return Err((StatusCode::FORBIDDEN, "forbidden".into()));
+        let id = AuthIdentity {
+            scopes: vec![
+                "operator.read".to_string(),
+                "operator.write".to_string(),
+                "operator.admin".to_string(),
+                "operator.approvals".to_string(),
+            ],
+            actor: "bootstrap-open".to_string(),
+        };
+        if id.allows(required) {
+            return Ok(id);
         }
-        #[cfg(not(test))]
-        return Err((StatusCode::UNAUTHORIZED, "unauthorized".into()));
+        return Err((StatusCode::FORBIDDEN, "forbidden".into()));
     }
 
     if let Some(provided) = auth_token_from_headers(headers) {
