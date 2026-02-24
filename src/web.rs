@@ -17,7 +17,8 @@ use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
 use crate::chat_commands::{
-    build_model_response, build_status_response, maybe_handle_plugin_command,
+    build_model_response, build_models_response, build_provider_response, build_providers_response,
+    build_status_response, maybe_handle_plugin_command,
 };
 use crate::config::{Config, WorkingDirIsolation};
 use crate::otlp::{OtlpExporter, OtlpMetricSnapshot};
@@ -1567,6 +1568,44 @@ async fn handle_web_slash_command(state: &WebState, text: &str, chat_id: i64) ->
                 state.app_state.llm_model_overrides.clone(),
                 "web",
                 chat_id,
+                trimmed,
+            )
+            .await,
+        );
+    }
+
+    if trimmed == "/providers" {
+        return Some(
+            build_providers_response(
+                &state.app_state.config,
+                state.app_state.llm_provider_overrides.clone(),
+                state.app_state.llm_model_overrides.clone(),
+                "web",
+            )
+            .await,
+        );
+    }
+
+    if trimmed == "/provider" || trimmed.starts_with("/provider ") {
+        return Some(
+            build_provider_response(
+                &state.app_state.config,
+                state.app_state.llm_provider_overrides.clone(),
+                state.app_state.llm_model_overrides.clone(),
+                "web",
+                trimmed,
+            )
+            .await,
+        );
+    }
+
+    if trimmed == "/models" || trimmed.starts_with("/models ") {
+        return Some(
+            build_models_response(
+                &state.app_state.config,
+                state.app_state.llm_provider_overrides.clone(),
+                state.app_state.llm_model_overrides.clone(),
+                "web",
                 trimmed,
             )
             .await,
