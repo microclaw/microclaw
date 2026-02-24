@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use teloxide::prelude::*;
-use teloxide::types::{ChatAction, InputFile, ParseMode, ThreadId};
+use teloxide::types::{ChatAction, InputFile, MessageId, ParseMode, ThreadId};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
@@ -18,6 +19,83 @@ use microclaw_channels::channel_adapter::ChannelAdapter;
 use microclaw_core::llm_types::{ContentBlock, ImageSource, MessageContent};
 use microclaw_core::text::floor_char_boundary;
 use microclaw_storage::db::{call_blocking, StoredMessage};
+
+/// Configuration for Telegram streaming and reasoning display
+#[derive(Debug, Clone, Deserialize)]
+pub struct TelegramStreamingConfig {
+    #[serde(default = "default_streaming_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_edit_interval_ms")]
+    pub edit_interval_ms: u64,
+    #[serde(default = "default_max_edits_per_message")]
+    pub max_edits_per_message: usize,
+    #[serde(default = "default_reasoning_display")]
+    pub reasoning_display: ReasoningDisplayMode,
+}
+
+impl Default for TelegramStreamingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_streaming_enabled(),
+            edit_interval_ms: default_edit_interval_ms(),
+            max_edits_per_message: default_max_edits_per_message(),
+            reasoning_display: default_reasoning_display(),
+        }
+    }
+}
+
+fn default_streaming_enabled() -> bool {
+    false // Opt-in for now
+}
+
+fn default_edit_interval_ms() -> u64 {
+    500 // Edit every 500ms to balance responsiveness and rate limits
+}
+
+fn default_max_edits_per_message() -> usize {
+    25 // Leave buffer below Telegram's ~30 edit limit
+}
+
+fn default_reasoning_display() -> ReasoningDisplayMode {
+    ReasoningDisplayMode::Hidden
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningDisplayMode {
+    Hidden,
+    Inline,
+    SeparateMessage,
+}
+
+impl Default for ReasoningDisplayMode {
+    fn default() -> Self {
+        ReasoningDisplayMode::Hidden
+    }
+}
+
+/// State for streaming message editing
+struct StreamingState {
+    message_id: MessageId,
+    buffer: String,
+    reasoning_buffer: String,
+    in_reasoning: bool,
+    edit_count: usize,
+    last_edit: Instant,
+}
+
+impl StreamingState {
+    fn new(message_id: MessageId) -> Self {
+        Self {
+            message_id,
+            buffer: String::new(),
+            reasoning_buffer: String::new(),
+            in_reasoning: false,
+            edit_count: 0,
+            last_edit: Instant::now(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TelegramAccountConfig {
@@ -54,6 +132,8 @@ pub struct TelegramChannelConfig {
     pub accounts: HashMap<String, TelegramAccountConfig>,
     #[serde(default)]
     pub default_account: Option<String>,
+    #[serde(default)]
+    pub streaming: TelegramStreamingConfig,
 }
 
 pub struct TelegramAdapter {
@@ -200,6 +280,7 @@ pub struct TelegramRuntimeContext {
     pub allowed_groups: Vec<i64>,
     pub allowed_user_ids: Vec<i64>,
     pub model: Option<String>,
+    pub streaming: TelegramStreamingConfig,
 }
 
 pub fn build_telegram_runtime_contexts(
@@ -279,6 +360,7 @@ pub fn build_telegram_runtime_contexts(
                 allowed_groups,
                 allowed_user_ids,
                 model,
+                streaming: tg_cfg.streaming.clone(),
             },
         ));
     }
@@ -301,6 +383,7 @@ pub fn build_telegram_runtime_contexts(
                     .map(str::trim)
                     .filter(|v| !v.is_empty())
                     .map(ToOwned::to_owned),
+                streaming: tg_cfg.streaming.clone(),
             },
         ));
     }
@@ -774,6 +857,10 @@ async fn handle_message(
         }
     });
 
+    // Check if streaming is enabled for this chat
+    let streaming_config = tg_ctx.streaming.clone();
+    let use_streaming = streaming_config.enabled;
+    
     // Process through platform-agnostic agent engine.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
     match process_with_agent_with_events(
@@ -791,53 +878,87 @@ async fn handle_message(
     {
         Ok(response) => {
             typing_handle.abort();
-            drop(event_tx);
-            let mut used_send_message_tool = false;
-            while let Some(event) = event_rx.recv().await {
-                if let AgentEvent::ToolStart { name } = event {
-                    if name == "send_message" {
-                        used_send_message_tool = true;
+            
+            // Try streaming if enabled
+            let mut used_streaming = false;
+            if use_streaming && !response.is_empty() {
+                match send_streaming_response(
+                    &bot,
+                    msg.chat.id,
+                    &mut event_rx,
+                    &response,
+                    msg.thread_id,
+                    &streaming_config,
+                ).await {
+                    Ok(_) => {
+                        used_streaming = true;
+                        // Store bot response
+                        let bot_msg = StoredMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            chat_id,
+                            sender_name: tg_bot_username.clone(),
+                            content: response.clone(),
+                            is_from_bot: true,
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        };
+                        let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                    }
+                    Err(e) => {
+                        warn!("Streaming failed, falling back to regular send: {}", e);
+                        // Fall through to regular send
                     }
                 }
             }
-
-            if used_send_message_tool {
-                if !response.is_empty() {
-                    info!(
-                        "Suppressing final response for chat {} because send_message already delivered output",
-                        chat_id
-                    );
-                } else {
-                    info!(
-                        "Agent returned empty final response for chat {}; likely delivered via send_message tool",
-                        chat_id
-                    );
+            
+            if !used_streaming {
+                drop(event_tx);
+                let mut used_send_message_tool = false;
+                while let Some(event) = event_rx.recv().await {
+                    if let AgentEvent::ToolStart { name } = event {
+                        if name == "send_message" {
+                            used_send_message_tool = true;
+                        }
+                    }
                 }
-            } else if !response.is_empty() {
-                send_response(&bot, msg.chat.id, &response, msg.thread_id).await;
 
-                // Store bot response
-                let bot_msg = StoredMessage {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    chat_id,
-                    sender_name: tg_bot_username.clone(),
-                    content: response,
-                    is_from_bot: true,
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                };
-                let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            } else {
-                let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.".to_string();
-                send_response(&bot, msg.chat.id, &fallback, msg.thread_id).await;
-                let bot_msg = StoredMessage {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    chat_id,
-                    sender_name: tg_bot_username.clone(),
-                    content: fallback,
-                    is_from_bot: true,
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                };
-                let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                if used_send_message_tool {
+                    if !response.is_empty() {
+                        info!(
+                            "Suppressing final response for chat {} because send_message already delivered output",
+                            chat_id
+                        );
+                    } else {
+                        info!(
+                            "Agent returned empty final response for chat {}; likely delivered via send_message tool",
+                            chat_id
+                        );
+                    }
+                } else if !response.is_empty() {
+                    send_response(&bot, msg.chat.id, &response, msg.thread_id).await;
+
+                    // Store bot response
+                    let bot_msg = StoredMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        chat_id,
+                        sender_name: tg_bot_username.clone(),
+                        content: response,
+                        is_from_bot: true,
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    };
+                    let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                } else {
+                    let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.".to_string();
+                    send_response(&bot, msg.chat.id, &fallback, msg.thread_id).await;
+                    let bot_msg = StoredMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        chat_id,
+                        sender_name: tg_bot_username.clone(),
+                        content: fallback,
+                        is_from_bot: true,
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    };
+                    let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                }
             }
         }
         Err(e) => {
@@ -1101,6 +1222,181 @@ fn render_markdown_v2_safe(text: &str) -> String {
     }
 
     out
+}
+
+/// Parse reasoning/thinking blocks from text
+/// Returns (reasoning_content, answer_content)
+fn parse_reasoning_blocks(text: &str) -> (Option<String>, String) {
+    // Handle <thinking> or <reasoning> tags
+    let reasoning_start = text.find("<thinking>");
+    let reasoning_end = text.find("</thinking>");
+    
+    if let (Some(start), Some(end)) = (reasoning_start, reasoning_end) {
+        if end > start {
+            let reasoning = text[start + 10..end].trim().to_string();
+            let answer = text[..start].to_string() + &text[end + 11..];
+            return (Some(reasoning), answer.trim().to_string());
+        }
+    }
+    
+    // Handle <reasoning> tags as well
+    let reasoning_start = text.find("<reasoning>");
+    let reasoning_end = text.find("</reasoning>");
+    
+    if let (Some(start), Some(end)) = (reasoning_start, reasoning_end) {
+        if end > start {
+            let reasoning = text[start + 11..end].trim().to_string();
+            let answer = text[..start].to_string() + &text[end + 12..];
+            return (Some(reasoning), answer.trim().to_string());
+        }
+    }
+    
+    (None, text.to_string())
+}
+
+/// Send a streaming response with message editing
+async fn send_streaming_response(
+    bot: &Bot,
+    chat_id: ChatId,
+    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+    final_response: &str,
+    message_thread_id: Option<ThreadId>,
+    config: &TelegramStreamingConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Send initial placeholder
+    let initial_text = if config.reasoning_display == ReasoningDisplayMode::Hidden {
+        "Thinking..."
+    } else {
+        "🔍 Reasoning..."
+    };
+    
+    let mut initial_req = bot.send_message(chat_id, initial_text);
+    if let Some(tid) = message_thread_id {
+        initial_req = initial_req.message_thread_id(tid);
+    }
+    
+    let initial_msg = initial_req.await?;
+    let mut streaming_state = StreamingState::new(initial_msg.id);
+    let mut reasoning_message_id: Option<MessageId> = None;
+    
+    // Set up edit interval
+    let edit_interval = Duration::from_millis(config.edit_interval_ms);
+    let mut last_edit_time = Instant::now();
+    
+    // Process events
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            AgentEvent::TextDelta { delta } => {
+                // Check for reasoning block markers
+                if delta.contains("<thinking>") || delta.contains("<reasoning>") {
+                    streaming_state.in_reasoning = true;
+                    continue;
+                }
+                if delta.contains("</thinking>") || delta.contains("</reasoning>") {
+                    streaming_state.in_reasoning = false;
+                    
+                    // Handle separate reasoning message
+                    if config.reasoning_display == ReasoningDisplayMode::SeparateMessage 
+                        && !streaming_state.reasoning_buffer.is_empty() {
+                        let reasoning_text = format!(
+                            "🧠 *Reasoning:*\n```\n{}\n```",
+                            streaming_state.reasoning_buffer.chars().take(3800).collect::<String>()
+                        );
+                        let mut reasoning_req = bot.send_message(chat_id, reasoning_text);
+                        if let Some(tid) = message_thread_id {
+                            reasoning_req = reasoning_req.message_thread_id(tid);
+                        }
+                        if let Ok(msg) = reasoning_req.parse_mode(ParseMode::MarkdownV2).await {
+                            reasoning_message_id = Some(msg.id);
+                        }
+                    }
+                    continue;
+                }
+                
+                if streaming_state.in_reasoning {
+                    streaming_state.reasoning_buffer.push_str(&delta);
+                } else {
+                    streaming_state.buffer.push_str(&delta);
+                }
+                
+                // Check if we should edit now
+                let should_edit = last_edit_time.elapsed() >= edit_interval 
+                    || streaming_state.edit_count < 3 // Edit more frequently at start
+                    || streaming_state.buffer.len() % 100 == 0; // Edit every 100 chars
+                
+                if should_edit && streaming_state.edit_count < config.max_edits_per_message {
+                    let display_text = if streaming_state.in_reasoning && config.reasoning_display == ReasoningDisplayMode::Inline {
+                        format!("🧠 *Thinking...*\n{}\n\n💭 {}", 
+                            streaming_state.reasoning_buffer.chars().take(200).collect::<String>(),
+                            &streaming_state.buffer
+                        )
+                    } else if !streaming_state.buffer.is_empty() {
+                        streaming_state.buffer.clone()
+                    } else {
+                        continue; // Skip empty edits
+                    };
+                    
+                    // Truncate if too long for Telegram (4096 limit)
+                    let edit_text = if display_text.len() > 4000 {
+                        format!("{}...(truncated)", &display_text[..4000])
+                    } else {
+                        display_text
+                    };
+                    
+                    // Edit message - note: edit_message_text doesn't support message_thread_id
+                    // as the message already knows its context
+                    let edit_req = bot.edit_message_text(chat_id, streaming_state.message_id, edit_text);
+                    
+                    // Try to edit with text (ParseMode doesn't work the same way for edits)
+                    if let Err(_) = edit_req.await {
+                        let _ = bot.edit_message_text(chat_id, streaming_state.message_id, &streaming_state.buffer).await;
+                    }
+                    
+                    streaming_state.edit_count += 1;
+                    last_edit_time = Instant::now();
+                }
+            }
+            AgentEvent::ToolStart { name } => {
+                // Show tool usage
+                if streaming_state.edit_count < config.max_edits_per_message {
+                    let tool_text = format!("{}\n\n🔧 Using tool: {}", streaming_state.buffer, name);
+                    let _ = bot.edit_message_text(chat_id, streaming_state.message_id, &tool_text).await;
+                }
+            }
+            _ => {} // Ignore other events
+        }
+    }
+    
+    // Final edit with complete response
+    let (reasoning, answer) = parse_reasoning_blocks(final_response);
+    
+    // Send reasoning if not already sent and mode is separate
+    if config.reasoning_display == ReasoningDisplayMode::SeparateMessage {
+        if let Some(reasoning_text) = reasoning {
+            if reasoning_message_id.is_none() && !reasoning_text.is_empty() {
+                let formatted_reasoning = format!(
+                    "🧠 *Reasoning:*\n```\n{}\n```",
+                    reasoning_text.chars().take(3800).collect::<String>()
+                );
+                let mut reasoning_req = bot.send_message(chat_id, formatted_reasoning);
+                if let Some(tid) = message_thread_id {
+                    reasoning_req = reasoning_req.message_thread_id(tid);
+                }
+                let _ = reasoning_req.parse_mode(ParseMode::MarkdownV2).await;
+            }
+        }
+    }
+    
+    // Final message edit - note: edit_message_text doesn't need message_thread_id
+    let final_text = if answer.is_empty() { final_response } else { &answer };
+    let final_edit = bot.edit_message_text(chat_id, streaming_state.message_id, final_text);
+    
+    // Try to edit - ParseMode doesn't work the same way for edits
+    if let Err(_) = final_edit.await {
+        let _ = bot.edit_message_text(chat_id, streaming_state.message_id, final_text).await;
+    }
+    
+    Ok(())
 }
 
 async fn send_telegram_markdown_or_plain(
