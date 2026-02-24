@@ -15,8 +15,8 @@ use tracing::{error, info, warn};
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
-use crate::chat_commands::handle_chat_command;
 use crate::chat_commands::maybe_handle_plugin_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -373,7 +373,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        if text.trim_start().starts_with('/') {
+        if is_slash_command(&text) {
             if let Some(reply) = handle_chat_command(
                 &self.app_state,
                 channel_id,
@@ -382,71 +382,24 @@ impl EventHandler for Handler {
             )
             .await
             {
-                let title = format!("discord-{external_channel_id}");
-                let _ = call_blocking(self.app_state.db.clone(), move |db| {
-                    db.upsert_chat(channel_id, Some(&title), "discord")
-                })
-                .await;
-                let inbound_message_id = msg.id.get().to_string();
-                let stored = StoredMessage {
-                    id: inbound_message_id.clone(),
-                    chat_id: channel_id,
-                    sender_name: sender_name.clone(),
-                    content: text.clone(),
-                    is_from_bot: false,
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                };
-                let inserted = call_blocking(self.app_state.db.clone(), move |db| {
-                    db.store_message_if_new(&stored)
-                })
-                .await
-                .unwrap_or(false);
-                if !inserted {
-                    info!(
-                        "Discord: skipping duplicate message chat_id={} message_id={}",
-                        channel_id, inbound_message_id
-                    );
-                    return;
-                }
                 let _ = msg.channel_id.say(&ctx.http, reply).await;
                 return;
             }
-        }
-        if let Some(plugin_response) = maybe_plugin_slash_response(
-            &self.app_state.config,
-            &text,
-            channel_id,
-            &self.runtime.channel_name,
-        )
-        .await
-        {
-            let title = format!("discord-{external_channel_id}");
-            let _ = call_blocking(self.app_state.db.clone(), move |db| {
-                db.upsert_chat(channel_id, Some(&title), "discord")
-            })
-            .await;
-            let inbound_message_id = msg.id.get().to_string();
-            let stored = StoredMessage {
-                id: inbound_message_id.clone(),
-                chat_id: channel_id,
-                sender_name: sender_name.clone(),
-                content: text.clone(),
-                is_from_bot: false,
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            };
-            let inserted = call_blocking(self.app_state.db.clone(), move |db| {
-                db.store_message_if_new(&stored)
-            })
+            if let Some(plugin_response) = maybe_plugin_slash_response(
+                &self.app_state.config,
+                &text,
+                channel_id,
+                &self.runtime.channel_name,
+            )
             .await
-            .unwrap_or(false);
-            if !inserted {
-                info!(
-                    "Discord: skipping duplicate message chat_id={} message_id={}",
-                    channel_id, inbound_message_id
-                );
+            {
+                let _ = msg.channel_id.say(&ctx.http, plugin_response).await;
                 return;
             }
-            let _ = msg.channel_id.say(&ctx.http, plugin_response).await;
+            let _ = msg
+                .channel_id
+                .say(&ctx.http, unknown_command_response())
+                .await;
             return;
         }
 

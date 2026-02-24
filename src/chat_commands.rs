@@ -7,6 +7,14 @@ use microclaw_core::llm_types::Message;
 use microclaw_storage::db::{call_blocking, Database};
 use microclaw_storage::usage::build_usage_report;
 
+pub fn is_slash_command(text: &str) -> bool {
+    text.trim_start().starts_with('/')
+}
+
+pub fn unknown_command_response() -> String {
+    "Unknown command.".to_string()
+}
+
 pub async fn handle_chat_command(
     state: &AppState,
     chat_id: i64,

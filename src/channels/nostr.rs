@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
-use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -378,6 +378,24 @@ async fn nostr_webhook_handler(
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
     }
 
+    if is_slash_command(content) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, content).await
+        {
+            let adapter = NostrAdapter::new(
+                runtime_ctx.channel_name.clone(),
+                runtime_ctx.publish_command.clone(),
+            );
+            let _ = adapter.send_text(pubkey, &reply).await;
+            return axum::http::StatusCode::OK;
+        }
+        let adapter = NostrAdapter::new(
+            runtime_ctx.channel_name.clone(),
+            runtime_ctx.publish_command.clone(),
+        );
+        let _ = adapter.send_text(pubkey, &unknown_command_response()).await;
+        return axum::http::StatusCode::OK;
+    }
     let inbound_event_id = if payload.event_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -402,19 +420,6 @@ async fn nostr_webhook_handler(
             chat_id, inbound_event_id
         );
         return axum::http::StatusCode::OK;
-    }
-
-    if content.starts_with('/') {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, content).await
-        {
-            let adapter = NostrAdapter::new(
-                runtime_ctx.channel_name.clone(),
-                runtime_ctx.publish_command.clone(),
-            );
-            let _ = adapter.send_text(pubkey, &reply).await;
-            return axum::http::StatusCode::OK;
-        }
     }
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();

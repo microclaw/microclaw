@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
-use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -576,6 +576,34 @@ async fn handle_whatsapp_message(
         return;
     }
 
+    let trimmed = text.trim();
+    if is_slash_command(trimmed) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
+        {
+            let _ = send_whatsapp_text(
+                &reqwest::Client::new(),
+                &runtime.access_token,
+                &runtime.phone_number_id,
+                &runtime.api_version,
+                external_chat_id,
+                &reply,
+            )
+            .await;
+            return;
+        }
+        let _ = send_whatsapp_text(
+            &reqwest::Client::new(),
+            &runtime.access_token,
+            &runtime.phone_number_id,
+            &runtime.api_version,
+            external_chat_id,
+            &unknown_command_response(),
+        )
+        .await;
+        return;
+    }
+
     let inbound_message_id = if message_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -600,24 +628,6 @@ async fn handle_whatsapp_message(
             chat_id, inbound_message_id
         );
         return;
-    }
-
-    let trimmed = text.trim();
-    if trimmed.starts_with('/') {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
-        {
-            let _ = send_whatsapp_text(
-                &reqwest::Client::new(),
-                &runtime.access_token,
-                &runtime.phone_number_id,
-                &runtime.api_version,
-                external_chat_id,
-                &reply,
-            )
-            .await;
-            return;
-        }
     }
 
     info!(

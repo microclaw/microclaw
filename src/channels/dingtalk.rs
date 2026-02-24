@@ -8,7 +8,7 @@ use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
-use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -358,6 +358,26 @@ async fn dingtalk_webhook_handler(
     if chat_id == 0 {
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
     }
+    if is_slash_command(text) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, text).await
+        {
+            let adapter = DingTalkAdapter::new(
+                runtime_ctx.channel_name.clone(),
+                runtime_ctx.robot_webhook_url.clone(),
+            );
+            let _ = adapter.send_text(chat_id_external, &reply).await;
+            return axum::http::StatusCode::OK;
+        }
+        let adapter = DingTalkAdapter::new(
+            runtime_ctx.channel_name.clone(),
+            runtime_ctx.robot_webhook_url.clone(),
+        );
+        let _ = adapter
+            .send_text(chat_id_external, &unknown_command_response())
+            .await;
+        return axum::http::StatusCode::OK;
+    }
     let inbound_message_id = if payload.message_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -382,18 +402,6 @@ async fn dingtalk_webhook_handler(
             chat_id, inbound_message_id
         );
         return axum::http::StatusCode::OK;
-    }
-    if text.starts_with('/') {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, text).await
-        {
-            let adapter = DingTalkAdapter::new(
-                runtime_ctx.channel_name.clone(),
-                runtime_ctx.robot_webhook_url.clone(),
-            );
-            let _ = adapter.send_text(chat_id_external, &reply).await;
-            return axum::http::StatusCode::OK;
-        }
     }
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
     match process_with_agent_with_events(

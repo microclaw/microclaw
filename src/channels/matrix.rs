@@ -21,19 +21,17 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::agent_engine::archive_conversation;
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
-use microclaw_core::llm_types::Message as LlmMessage;
 use microclaw_core::text::split_text;
 use microclaw_storage::db::call_blocking;
 use microclaw_storage::db::StoredMessage;
-use microclaw_storage::usage::build_usage_report;
 
 pub const SETUP_DEF: DynamicChannelDef = DynamicChannelDef {
     name: "matrix",
@@ -1706,6 +1704,25 @@ async fn handle_matrix_message(
     } else {
         msg.event_id.clone()
     };
+    let trimmed = msg.body.trim();
+    if is_slash_command(trimmed) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
+        {
+            let _ =
+                send_matrix_text_runtime(&runtime, &msg.room_id, &reply, msg.prefer_sdk_send).await;
+        } else {
+            let _ = send_matrix_text_runtime(
+                &runtime,
+                &msg.room_id,
+                &unknown_command_response(),
+                msg.prefer_sdk_send,
+            )
+            .await;
+        }
+        return;
+    }
+
     let incoming = StoredMessage {
         id: inbound_event_id.clone(),
         chat_id,
@@ -1726,97 +1743,7 @@ async fn handle_matrix_message(
         );
         return;
     }
-
-    let trimmed = msg.body.trim();
     let should_respond = runtime.should_respond(&msg.body, msg.mentioned_bot, msg.is_direct);
-    if trimmed == "/reset" {
-        let _ = call_blocking(app_state.db.clone(), move |db| {
-            db.clear_chat_context(chat_id)
-        })
-        .await;
-        let _ = send_matrix_text_runtime(
-            &runtime,
-            &msg.room_id,
-            "Context cleared (session + chat history).",
-            msg.prefer_sdk_send,
-        )
-        .await;
-        return;
-    }
-
-    if trimmed == "/skills" {
-        let formatted = app_state.skills.list_skills_formatted();
-        let _ =
-            send_matrix_text_runtime(&runtime, &msg.room_id, &formatted, msg.prefer_sdk_send).await;
-        return;
-    }
-
-    if trimmed == "/reload-skills" {
-        let reloaded = app_state.skills.reload();
-        let text = format!("Reloaded {} skills from disk.", reloaded.len());
-        let _ = send_matrix_text_runtime(&runtime, &msg.room_id, &text, msg.prefer_sdk_send).await;
-        return;
-    }
-
-    if trimmed == "/archive" {
-        if let Ok(Some((json, _))) =
-            call_blocking(app_state.db.clone(), move |db| db.load_session(chat_id)).await
-        {
-            let messages: Vec<LlmMessage> = serde_json::from_str(&json).unwrap_or_default();
-            if messages.is_empty() {
-                let _ = send_matrix_text_runtime(
-                    &runtime,
-                    &msg.room_id,
-                    "No session to archive.",
-                    msg.prefer_sdk_send,
-                )
-                .await;
-            } else {
-                archive_conversation(
-                    &app_state.config.data_dir,
-                    &runtime.channel_name,
-                    chat_id,
-                    &messages,
-                );
-                let _ = send_matrix_text_runtime(
-                    &runtime,
-                    &msg.room_id,
-                    &format!("Archived {} messages.", messages.len()),
-                    msg.prefer_sdk_send,
-                )
-                .await;
-            }
-        } else {
-            let _ = send_matrix_text_runtime(
-                &runtime,
-                &msg.room_id,
-                "No session to archive.",
-                msg.prefer_sdk_send,
-            )
-            .await;
-        }
-        return;
-    }
-
-    if trimmed == "/usage" {
-        match build_usage_report(app_state.db.clone(), chat_id).await {
-            Ok(report) => {
-                let _ =
-                    send_matrix_text_runtime(&runtime, &msg.room_id, &report, msg.prefer_sdk_send)
-                        .await;
-            }
-            Err(e) => {
-                let _ = send_matrix_text_runtime(
-                    &runtime,
-                    &msg.room_id,
-                    &format!("Failed to query usage statistics: {e}"),
-                    msg.prefer_sdk_send,
-                )
-                .await;
-            }
-        }
-        return;
-    }
 
     if !should_respond {
         return;

@@ -9,8 +9,8 @@ use teloxide::types::{ChatAction, InputFile, ParseMode, ThreadId};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
-use crate::chat_commands::handle_chat_command;
 use crate::chat_commands::maybe_handle_plugin_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -425,7 +425,7 @@ async fn handle_message(
     let mut image_data: Option<(String, String)> = None; // (base64, media_type)
     let mut document_saved_path: Option<String> = None;
 
-    if text.trim_start().starts_with('/') {
+    if is_slash_command(&text) {
         let external_chat_id = raw_chat_id.to_string();
         let chat_title_for_lookup = chat_title.clone();
         let chat_type_for_lookup = db_chat_type.to_string();
@@ -440,70 +440,20 @@ async fn handle_message(
         })
         .await
         .unwrap_or(raw_chat_id);
-        let inbound_message_id = msg.id.0.to_string();
-        let chat_title_owned = chat_title.clone();
-        let chat_type_owned = db_chat_type.to_string();
-        let sender_name = msg
-            .from
-            .as_ref()
-            .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone()))
-            .unwrap_or_else(|| "Unknown".into());
         if let Some(reply) = handle_chat_command(&state, chat_id, &tg_channel_name, &text).await {
-            let _ = call_blocking(state.db.clone(), move |db| {
-                db.upsert_chat(chat_id, chat_title_owned.as_deref(), &chat_type_owned)
-            })
-            .await;
-            let stored = StoredMessage {
-                id: inbound_message_id.clone(),
-                chat_id,
-                sender_name: sender_name.clone(),
-                content: text.clone(),
-                is_from_bot: false,
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            };
-            let inserted =
-                call_blocking(state.db.clone(), move |db| db.store_message_if_new(&stored))
-                    .await
-                    .unwrap_or(false);
-            if !inserted {
-                info!(
-                    "Skipping duplicate Telegram message: chat_id={}, message_id={}",
-                    chat_id, inbound_message_id
-                );
-                return Ok(());
-            }
             let _ = bot.send_message(msg.chat.id, reply).await;
             return Ok(());
         }
         if let Some(plugin_response) =
             maybe_plugin_slash_response(&state.config, &text, chat_id, &tg_channel_name).await
         {
-            let _ = call_blocking(state.db.clone(), move |db| {
-                db.upsert_chat(chat_id, chat_title_owned.as_deref(), &chat_type_owned)
-            })
-            .await;
-            let stored = StoredMessage {
-                id: inbound_message_id.clone(),
-                chat_id,
-                sender_name,
-                content: text.clone(),
-                is_from_bot: false,
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            };
-            let inserted =
-                call_blocking(state.db.clone(), move |db| db.store_message_if_new(&stored))
-                    .await
-                    .unwrap_or(false);
-            if !inserted {
-                info!(
-                    "Skipping duplicate Telegram message: chat_id={}, message_id={}",
-                    chat_id, inbound_message_id
-                );
-                return Ok(());
-            }
             let _ = bot.send_message(msg.chat.id, plugin_response).await;
             return Ok(());
         }
+        let _ = bot
+            .send_message(msg.chat.id, unknown_command_response())
+            .await;
+        return Ok(());
     }
 
     if let Some(photos) = msg.photo() {

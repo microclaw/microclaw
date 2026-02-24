@@ -10,8 +10,8 @@ use tracing::{error, info, warn};
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
-use crate::chat_commands::handle_chat_command;
 use crate::chat_commands::maybe_handle_plugin_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -666,6 +666,25 @@ async fn handle_slack_message(
         ts.to_string()
     };
 
+    let trimmed = text.trim();
+    if is_slash_command(trimmed) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
+        {
+            let _ = send_slack_response(bot_token, channel, &reply).await;
+            return;
+        }
+        if let Some(plugin_response) =
+            maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, &runtime.channel_name)
+                .await
+        {
+            let _ = send_slack_response(bot_token, channel, &plugin_response).await;
+            return;
+        }
+        let _ = send_slack_response(bot_token, channel, &unknown_command_response()).await;
+        return;
+    }
+
     // Store incoming message
     let stored = StoredMessage {
         id: inbound_message_id.clone(),
@@ -685,23 +704,6 @@ async fn handle_slack_message(
             "Slack: skipping duplicate message chat_id={} message_id={}",
             chat_id, inbound_message_id
         );
-        return;
-    }
-
-    let trimmed = text.trim();
-    if trimmed.starts_with('/') {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
-        {
-            let _ = send_slack_response(bot_token, channel, &reply).await;
-            return;
-        }
-    }
-    if let Some(plugin_response) =
-        maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, &runtime.channel_name)
-            .await
-    {
-        let _ = send_slack_response(bot_token, channel, &plugin_response).await;
         return;
     }
 

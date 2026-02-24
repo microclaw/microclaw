@@ -12,8 +12,8 @@ use tracing::{error, info, warn};
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
-use crate::chat_commands::handle_chat_command;
 use crate::chat_commands::maybe_handle_plugin_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -471,6 +471,24 @@ async fn handle_irc_message(
         return;
     }
 
+    let trimmed = text.trim();
+    if is_slash_command(trimmed) {
+        if let Some(reply) = handle_chat_command(&app_state, chat_id, "irc", trimmed).await {
+            let _ = adapter.send_text(&response_target, &reply).await;
+            return;
+        }
+        if let Some(plugin_response) =
+            maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, "irc").await
+        {
+            let _ = adapter.send_text(&response_target, &plugin_response).await;
+            return;
+        }
+        let _ = adapter
+            .send_text(&response_target, &unknown_command_response())
+            .await;
+        return;
+    }
+
     let stored = StoredMessage {
         id: uuid::Uuid::new_v4().to_string(),
         chat_id,
@@ -480,20 +498,6 @@ async fn handle_irc_message(
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&stored)).await;
-
-    let trimmed = text.trim();
-    if trimmed.starts_with('/') {
-        if let Some(reply) = handle_chat_command(&app_state, chat_id, "irc", trimmed).await {
-            let _ = adapter.send_text(&response_target, &reply).await;
-            return;
-        }
-    }
-    if let Some(plugin_response) =
-        maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, "irc").await
-    {
-        let _ = adapter.send_text(&response_target, &plugin_response).await;
-        return;
-    }
 
     if is_group && cfg.mention_required_bool() && !is_irc_mention(&text, cfg.nick.trim()) {
         return;

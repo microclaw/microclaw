@@ -12,8 +12,8 @@ use tracing::{error, info, warn};
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
-use crate::chat_commands::handle_chat_command;
 use crate::chat_commands::maybe_handle_plugin_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -1480,7 +1480,58 @@ async fn handle_feishu_message(
         return;
     }
 
-    // Store incoming message
+    // Handle slash commands
+    let http_client = reqwest::Client::new();
+    let token = match get_token(
+        &http_client,
+        base_url,
+        &feishu_cfg.app_id,
+        &feishu_cfg.app_secret,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            error!("Feishu: failed to get token for response: {e}");
+            return;
+        }
+    };
+
+    let trimmed = text.trim();
+    if is_slash_command(trimmed) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
+        {
+            let _ = send_feishu_response(&http_client, base_url, &token, external_chat_id, &reply)
+                .await;
+            return;
+        }
+        if let Some(plugin_response) =
+            maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, &runtime.channel_name)
+                .await
+        {
+            let _ = send_feishu_response(
+                &http_client,
+                base_url,
+                &token,
+                external_chat_id,
+                &plugin_response,
+            )
+            .await;
+            return;
+        }
+        let _ = send_feishu_response(
+            &http_client,
+            base_url,
+            &token,
+            external_chat_id,
+            &unknown_command_response(),
+        )
+        .await;
+        return;
+    }
+
+    // Store incoming non-command message
     let inbound_message_id = if message_id.is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -1504,48 +1555,6 @@ async fn handle_feishu_message(
             "Feishu: skipping duplicate message chat_id={} message_id={}",
             chat_id, inbound_message_id
         );
-        return;
-    }
-
-    // Handle slash commands
-    let http_client = reqwest::Client::new();
-    let token = match get_token(
-        &http_client,
-        base_url,
-        &feishu_cfg.app_id,
-        &feishu_cfg.app_secret,
-    )
-    .await
-    {
-        Ok(t) => t,
-        Err(e) => {
-            error!("Feishu: failed to get token for response: {e}");
-            return;
-        }
-    };
-
-    let trimmed = text.trim();
-    if trimmed.starts_with('/') {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
-        {
-            let _ = send_feishu_response(&http_client, base_url, &token, external_chat_id, &reply)
-                .await;
-            return;
-        }
-    }
-    if let Some(plugin_response) =
-        maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, &runtime.channel_name)
-            .await
-    {
-        let _ = send_feishu_response(
-            &http_client,
-            base_url,
-            &token,
-            external_chat_id,
-            &plugin_response,
-        )
-        .await;
         return;
     }
 
