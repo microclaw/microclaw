@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use matrix_sdk::attachment::AttachmentConfig;
@@ -22,19 +21,17 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::agent_engine::archive_conversation;
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
-use microclaw_core::llm_types::Message as LlmMessage;
 use microclaw_core::text::split_text;
 use microclaw_storage::db::call_blocking;
 use microclaw_storage::db::StoredMessage;
-use microclaw_storage::usage::build_usage_report;
 
 pub const SETUP_DEF: DynamicChannelDef = DynamicChannelDef {
     name: "matrix",
@@ -78,6 +75,22 @@ fn default_enabled() -> bool {
 fn matrix_sdk_clients() -> &'static RwLock<HashMap<String, Arc<MatrixSdkClient>>> {
     static CLIENTS: OnceLock<RwLock<HashMap<String, Arc<MatrixSdkClient>>>> = OnceLock::new();
     CLIENTS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn matrix_chat_locks() -> &'static Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn matrix_chat_lock(channel_name: &str, room_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let key = format!("{channel_name}:{room_id}");
+    let Ok(mut guard) = matrix_chat_locks().lock() else {
+        return Arc::new(tokio::sync::Mutex::new(()));
+    };
+    guard
+        .entry(key)
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 fn default_matrix_mention_required() -> bool {
@@ -1622,6 +1635,9 @@ async fn handle_matrix_reaction(
     runtime: MatrixRuntimeContext,
     reaction: MatrixIncomingReaction,
 ) {
+    let chat_lock = matrix_chat_lock(&runtime.channel_name, &reaction.room_id);
+    let _guard = chat_lock.lock().await;
+
     let chat_id = resolve_matrix_chat_id(
         app_state.clone(),
         &runtime,
@@ -1637,23 +1653,34 @@ async fn handle_matrix_reaction(
         return;
     }
 
+    let inbound_event_id = if reaction.event_id.trim().is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        reaction.event_id.clone()
+    };
     let reaction_text = format!(
         "[reaction] {} reacted {} to {}",
         reaction.sender, reaction.key, reaction.relates_to_event_id
     );
     let incoming = StoredMessage {
-        id: if reaction.event_id.trim().is_empty() {
-            uuid::Uuid::new_v4().to_string()
-        } else {
-            reaction.event_id
-        },
+        id: inbound_event_id.clone(),
         chat_id,
         sender_name: reaction.sender,
         content: reaction_text,
         is_from_bot: false,
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
-    let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&incoming)).await;
+    let inserted = call_blocking(app_state.db.clone(), move |db| {
+        db.store_message_if_new(&incoming)
+    })
+    .await
+    .unwrap_or(false);
+    if !inserted {
+        info!(
+            "Matrix: skipping duplicate reaction chat_id={} event_id={}",
+            chat_id, inbound_event_id
+        );
+    }
 }
 
 async fn handle_matrix_message(
@@ -1661,6 +1688,9 @@ async fn handle_matrix_message(
     runtime: MatrixRuntimeContext,
     msg: MatrixIncomingMessage,
 ) {
+    let chat_lock = matrix_chat_lock(&runtime.channel_name, &msg.room_id);
+    let _guard = chat_lock.lock().await;
+
     let chat_id =
         resolve_matrix_chat_id(app_state.clone(), &runtime, &msg.room_id, msg.is_direct).await;
 
@@ -1669,84 +1699,23 @@ async fn handle_matrix_message(
         return;
     }
 
-    let incoming = StoredMessage {
-        id: if msg.event_id.trim().is_empty() {
-            uuid::Uuid::new_v4().to_string()
-        } else {
-            msg.event_id.clone()
-        },
-        chat_id,
-        sender_name: msg.sender.clone(),
-        content: msg.body.clone(),
-        is_from_bot: false,
-        timestamp: chrono::Utc::now().to_rfc3339(),
+    let inbound_event_id = if msg.event_id.trim().is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        msg.event_id.clone()
     };
-    let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&incoming)).await;
-
     let trimmed = msg.body.trim();
-    let should_respond = runtime.should_respond(&msg.body, msg.mentioned_bot, msg.is_direct);
-    if trimmed == "/reset" {
-        let _ = call_blocking(app_state.db.clone(), move |db| {
-            db.clear_chat_context(chat_id)
-        })
-        .await;
-        let _ = send_matrix_text_runtime(
-            &runtime,
-            &msg.room_id,
-            "Context cleared (session + chat history).",
-            msg.prefer_sdk_send,
-        )
-        .await;
-        return;
-    }
-
-    if trimmed == "/skills" {
-        let formatted = app_state.skills.list_skills_formatted();
-        let _ =
-            send_matrix_text_runtime(&runtime, &msg.room_id, &formatted, msg.prefer_sdk_send).await;
-        return;
-    }
-
-    if trimmed == "/reload-skills" {
-        let reloaded = app_state.skills.reload();
-        let text = format!("Reloaded {} skills from disk.", reloaded.len());
-        let _ = send_matrix_text_runtime(&runtime, &msg.room_id, &text, msg.prefer_sdk_send).await;
-        return;
-    }
-
-    if trimmed == "/archive" {
-        if let Ok(Some((json, _))) =
-            call_blocking(app_state.db.clone(), move |db| db.load_session(chat_id)).await
+    if is_slash_command(trimmed) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
         {
-            let messages: Vec<LlmMessage> = serde_json::from_str(&json).unwrap_or_default();
-            if messages.is_empty() {
-                let _ = send_matrix_text_runtime(
-                    &runtime,
-                    &msg.room_id,
-                    "No session to archive.",
-                    msg.prefer_sdk_send,
-                )
-                .await;
-            } else {
-                archive_conversation(
-                    &app_state.config.data_dir,
-                    &runtime.channel_name,
-                    chat_id,
-                    &messages,
-                );
-                let _ = send_matrix_text_runtime(
-                    &runtime,
-                    &msg.room_id,
-                    &format!("Archived {} messages.", messages.len()),
-                    msg.prefer_sdk_send,
-                )
-                .await;
-            }
+            let _ =
+                send_matrix_text_runtime(&runtime, &msg.room_id, &reply, msg.prefer_sdk_send).await;
         } else {
             let _ = send_matrix_text_runtime(
                 &runtime,
                 &msg.room_id,
-                "No session to archive.",
+                &unknown_command_response(),
                 msg.prefer_sdk_send,
             )
             .await;
@@ -1754,25 +1723,27 @@ async fn handle_matrix_message(
         return;
     }
 
-    if trimmed == "/usage" {
-        match build_usage_report(app_state.db.clone(), chat_id).await {
-            Ok(report) => {
-                let _ =
-                    send_matrix_text_runtime(&runtime, &msg.room_id, &report, msg.prefer_sdk_send)
-                        .await;
-            }
-            Err(e) => {
-                let _ = send_matrix_text_runtime(
-                    &runtime,
-                    &msg.room_id,
-                    &format!("Failed to query usage statistics: {e}"),
-                    msg.prefer_sdk_send,
-                )
-                .await;
-            }
-        }
+    let incoming = StoredMessage {
+        id: inbound_event_id.clone(),
+        chat_id,
+        sender_name: msg.sender.clone(),
+        content: msg.body.clone(),
+        is_from_bot: false,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let inserted = call_blocking(app_state.db.clone(), move |db| {
+        db.store_message_if_new(&incoming)
+    })
+    .await
+    .unwrap_or(false);
+    if !inserted {
+        info!(
+            "Matrix: skipping duplicate message chat_id={} event_id={}",
+            chat_id, inbound_event_id
+        );
         return;
     }
+    let should_respond = runtime.should_respond(&msg.body, msg.mentioned_bot, msg.is_direct);
 
     if !should_respond {
         return;
@@ -1811,7 +1782,14 @@ async fn handle_matrix_message(
                 }
             }
 
-            if !response.is_empty() {
+            if used_send_message_tool {
+                if !response.is_empty() {
+                    info!(
+                        "Matrix: suppressing final response for chat {} because send_message already delivered output",
+                        chat_id
+                    );
+                }
+            } else if !response.is_empty() {
                 if let Some(reaction_key) = looks_like_reaction_token(&response) {
                     if !msg.event_id.trim().is_empty() {
                         if let Err(e) = send_matrix_reaction_runtime(
@@ -1859,7 +1837,7 @@ async fn handle_matrix_message(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            } else if !used_send_message_tool {
+            } else {
                 let fallback =
                     "I couldn't produce a visible reply after an automatic retry. Please try again.";
                 let _ =

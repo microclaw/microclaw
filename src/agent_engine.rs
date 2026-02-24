@@ -138,6 +138,53 @@ fn format_user_message(sender_name: &str, content: &str) -> String {
     )
 }
 
+fn is_slash_command_text(text: &str) -> bool {
+    text.trim_start().starts_with('/')
+}
+
+fn is_wrapped_slash_command_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("<user_message ") || !trimmed.ends_with("</user_message>") {
+        return false;
+    }
+    let Some(start) = trimmed.find('>') else {
+        return false;
+    };
+    let end = trimmed.len() - "</user_message>".len();
+    if start + 1 > end {
+        return false;
+    }
+    is_slash_command_text(&trimmed[start + 1..end])
+}
+
+fn strip_slash_command_user_lines(messages: &mut Vec<Message>) {
+    let mut filtered = Vec::with_capacity(messages.len());
+    for mut msg in messages.drain(..) {
+        if msg.role != "user" {
+            filtered.push(msg);
+            continue;
+        }
+        match &mut msg.content {
+            MessageContent::Text(t) => {
+                let kept = t
+                    .lines()
+                    .filter(|line| {
+                        let trimmed = line.trim();
+                        !is_slash_command_text(trimmed) && !is_wrapped_slash_command_line(trimmed)
+                    })
+                    .collect::<Vec<_>>();
+                if kept.is_empty() {
+                    continue;
+                }
+                *t = kept.join("\n");
+                filtered.push(msg);
+            }
+            _ => filtered.push(msg),
+        }
+    }
+    *messages = filtered;
+}
+
 fn jaccard_similarity_ratio(a: &str, b: &str) -> f64 {
     use std::collections::HashSet;
     let a_words: HashSet<&str> = a.split_whitespace().collect();
@@ -168,7 +215,7 @@ async fn maybe_handle_explicit_memory_command(
     let Some(last_user_text) = latest_user
         .into_iter()
         .rev()
-        .find(|m| !m.is_from_bot)
+        .find(|m| !m.is_from_bot && !is_slash_command_text(&m.content))
         .map(|m| m.content)
     else {
         return Ok(None);
@@ -289,6 +336,7 @@ pub(crate) async fn process_with_agent_impl(
     {
         // Session exists — deserialize and append new user messages
         let mut session_messages: Vec<Message> = serde_json::from_str(&json).unwrap_or_default();
+        strip_slash_command_user_lines(&mut session_messages);
 
         if session_messages.is_empty() {
             // Corrupted session, fall back to DB history
@@ -301,6 +349,9 @@ pub(crate) async fn process_with_agent_impl(
             })
             .await?;
             for stored_msg in &new_msgs {
+                if is_slash_command_text(&stored_msg.content) {
+                    continue;
+                }
                 let content = format_user_message(&stored_msg.sender_name, &stored_msg.content);
                 // Merge if last message is also from user
                 if let Some(last) = session_messages.last_mut() {
@@ -871,6 +922,10 @@ pub(crate) async fn load_messages_from_db(
         })
         .await?
     };
+    let history: Vec<StoredMessage> = history
+        .into_iter()
+        .filter(|m| m.is_from_bot || !is_slash_command_text(&m.content))
+        .collect();
     let bot_username = state.config.bot_username_for_channel(caller_channel);
     Ok(history_to_claude_messages(&history, &bot_username))
 }
@@ -1258,6 +1313,9 @@ pub(crate) fn history_to_claude_messages(
     let mut messages = Vec::new();
 
     for msg in history {
+        if !msg.is_from_bot && is_slash_command_text(&msg.content) {
+            continue;
+        }
         let role = if msg.is_from_bot { "assistant" } else { "user" };
 
         let content = if msg.is_from_bot {
@@ -1558,7 +1616,10 @@ async fn compact_messages(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_db_memory_context, process_with_agent, AgentRequestContext};
+    use super::{
+        build_db_memory_context, history_to_claude_messages, process_with_agent,
+        AgentRequestContext,
+    };
     use crate::config::{Config, WorkingDirIsolation};
     use crate::llm::LlmProvider;
     use crate::memory::MemoryManager;
@@ -1959,6 +2020,46 @@ mod tests {
         assert!(prompt.contains("simple, low-risk, read-only requests"));
         assert!(prompt.contains("call the tool immediately and return the result directly"));
         assert!(prompt.contains("Do not ask confirmation questions"));
+    }
+
+    #[test]
+    fn test_history_to_claude_messages_skips_slash_commands() {
+        let history = vec![
+            StoredMessage {
+                id: "u1".into(),
+                chat_id: 1,
+                sender_name: "alice".into(),
+                content: "/skills".into(),
+                is_from_bot: false,
+                timestamp: "2026-01-01T00:00:00Z".into(),
+            },
+            StoredMessage {
+                id: "b1".into(),
+                chat_id: 1,
+                sender_name: "bot".into(),
+                content: "Available skills (1): ...".into(),
+                is_from_bot: true,
+                timestamp: "2026-01-01T00:00:01Z".into(),
+            },
+            StoredMessage {
+                id: "u2".into(),
+                chat_id: 1,
+                sender_name: "alice".into(),
+                content: "你好".into(),
+                is_from_bot: false,
+                timestamp: "2026-01-01T00:00:02Z".into(),
+            },
+        ];
+        let out = history_to_claude_messages(&history, "bot");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "user");
+        match &out[0].content {
+            microclaw_core::llm_types::MessageContent::Text(t) => {
+                assert!(t.contains("你好"));
+                assert!(!t.contains("/skills"));
+            }
+            _ => panic!("expected text"),
+        }
     }
 
     #[test]

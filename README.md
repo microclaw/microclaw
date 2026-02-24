@@ -338,6 +338,11 @@ See full manifest schema and examples: `docs/plugins/overview.md`.
 - `/status` -- show provider/model plus current chat session/task status
 - `/model` -- show current provider/model (`/model <name>` currently reports switch is not supported yet)
 
+Command handling rules:
+- Any input starting with `/` is treated as a command.
+- Slash commands do **not** enter agent conversation history/session context.
+- Unknown slash commands return `Unknown command.`.
+
 ## MCP
 
 MicroClaw supports MCP servers configured in `<data_dir>/mcp.json` and optional fragments in `<data_dir>/mcp.d/*.json` with protocol negotiation and configurable transport.

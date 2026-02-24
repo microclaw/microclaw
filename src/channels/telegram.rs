@@ -9,8 +9,8 @@ use teloxide::types::{ChatAction, InputFile, ParseMode, ThreadId};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
-use crate::chat_commands::handle_chat_command;
 use crate::chat_commands::maybe_handle_plugin_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -425,7 +425,7 @@ async fn handle_message(
     let mut image_data: Option<(String, String)> = None; // (base64, media_type)
     let mut document_saved_path: Option<String> = None;
 
-    if text.trim_start().starts_with('/') {
+    if is_slash_command(&text) {
         let external_chat_id = raw_chat_id.to_string();
         let chat_title_for_lookup = chat_title.clone();
         let chat_type_for_lookup = db_chat_type.to_string();
@@ -444,11 +444,15 @@ async fn handle_message(
             let _ = bot.send_message(msg.chat.id, reply).await;
             return Ok(());
         }
-    }
-    if let Some(plugin_response) =
-        maybe_plugin_slash_response(&state.config, &text, raw_chat_id, &tg_channel_name).await
-    {
-        let _ = bot.send_message(msg.chat.id, plugin_response).await;
+        if let Some(plugin_response) =
+            maybe_plugin_slash_response(&state.config, &text, chat_id, &tg_channel_name).await
+        {
+            let _ = bot.send_message(msg.chat.id, plugin_response).await;
+            return Ok(());
+        }
+        let _ = bot
+            .send_message(msg.chat.id, unknown_command_response())
+            .await;
         return Ok(());
     }
 
@@ -673,7 +677,7 @@ async fn handle_message(
             is_from_bot: false,
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
-        let _ = call_blocking(state.db.clone(), move |db| db.store_message(&stored)).await;
+        let _ = call_blocking(state.db.clone(), move |db| db.store_message_if_new(&stored)).await;
         return Ok(());
     }
 
@@ -718,15 +722,25 @@ async fn handle_message(
     } else {
         text.clone()
     };
+    let inbound_message_id = msg.id.0.to_string();
     let stored = StoredMessage {
-        id: msg.id.0.to_string(),
+        id: inbound_message_id.clone(),
         chat_id,
         sender_name: sender_name.clone(),
         content: stored_content,
         is_from_bot: false,
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
-    let _ = call_blocking(state.db.clone(), move |db| db.store_message(&stored)).await;
+    let inserted = call_blocking(state.db.clone(), move |db| db.store_message_if_new(&stored))
+        .await
+        .unwrap_or(false);
+    if !inserted {
+        info!(
+            "Skipping duplicate Telegram message: chat_id={}, message_id={}",
+            chat_id, inbound_message_id
+        );
+        return Ok(());
+    }
 
     // Determine if we should respond
     let should_respond = match runtime_chat_type {
@@ -787,7 +801,19 @@ async fn handle_message(
                 }
             }
 
-            if !response.is_empty() {
+            if used_send_message_tool {
+                if !response.is_empty() {
+                    info!(
+                        "Suppressing final response for chat {} because send_message already delivered output",
+                        chat_id
+                    );
+                } else {
+                    info!(
+                        "Agent returned empty final response for chat {}; likely delivered via send_message tool",
+                        chat_id
+                    );
+                }
+            } else if !response.is_empty() {
                 send_response(&bot, msg.chat.id, &response, msg.thread_id).await;
 
                 // Store bot response
@@ -800,13 +826,6 @@ async fn handle_message(
                     timestamp: chrono::Utc::now().to_rfc3339(),
                 };
                 let _ = call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            }
-            // If response is empty, agent likely delivered via send_message tool directly.
-            else if used_send_message_tool {
-                info!(
-                    "Agent returned empty final response for chat {}; likely delivered via send_message tool",
-                    chat_id
-                );
             } else {
                 let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.".to_string();
                 send_response(&bot, msg.chat.id, &fallback, msg.thread_id).await;

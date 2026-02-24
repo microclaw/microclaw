@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -10,8 +10,8 @@ use tracing::{error, info, warn};
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
-use crate::chat_commands::handle_chat_command;
 use crate::chat_commands::maybe_handle_plugin_command;
+use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -193,6 +193,21 @@ async fn maybe_plugin_slash_response(
     channel_name: &str,
 ) -> Option<String> {
     maybe_handle_plugin_command(config, text, chat_id, channel_name).await
+}
+
+static SLACK_CHAT_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
+fn slack_chat_lock(channel_name: &str, external_chat_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let key = format!("{channel_name}:{external_chat_id}");
+    let cache = SLACK_CHAT_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut guard) = cache.lock() else {
+        return Arc::new(tokio::sync::Mutex::new(()));
+    };
+    guard
+        .entry(key)
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 impl SlackAdapter {
@@ -617,6 +632,9 @@ async fn handle_slack_message(
     is_app_mention: bool,
     ts: &str,
 ) {
+    let chat_lock = slack_chat_lock(&runtime.channel_name, channel);
+    let _guard = chat_lock.lock().await;
+
     let chat_type = if is_dm { "slack_dm" } else { "slack" };
     let title = format!("slack-{channel}");
 
@@ -642,35 +660,50 @@ async fn handle_slack_message(
         return;
     }
 
-    // Store incoming message
-    let stored = StoredMessage {
-        id: if ts.is_empty() {
-            uuid::Uuid::new_v4().to_string()
-        } else {
-            ts.to_string()
-        },
-        chat_id,
-        sender_name: user.to_string(),
-        content: text.to_string(),
-        is_from_bot: false,
-        timestamp: chrono::Utc::now().to_rfc3339(),
+    let inbound_message_id = if ts.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        ts.to_string()
     };
-    let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&stored)).await;
 
     let trimmed = text.trim();
-    if trimmed.starts_with('/') {
+    if is_slash_command(trimmed) {
         if let Some(reply) =
             handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
         {
             let _ = send_slack_response(bot_token, channel, &reply).await;
             return;
         }
+        if let Some(plugin_response) =
+            maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, &runtime.channel_name)
+                .await
+        {
+            let _ = send_slack_response(bot_token, channel, &plugin_response).await;
+            return;
+        }
+        let _ = send_slack_response(bot_token, channel, &unknown_command_response()).await;
+        return;
     }
-    if let Some(plugin_response) =
-        maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, &runtime.channel_name)
-            .await
-    {
-        let _ = send_slack_response(bot_token, channel, &plugin_response).await;
+
+    // Store incoming message
+    let stored = StoredMessage {
+        id: inbound_message_id.clone(),
+        chat_id,
+        sender_name: user.to_string(),
+        content: text.to_string(),
+        is_from_bot: false,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let inserted = call_blocking(app_state.db.clone(), move |db| {
+        db.store_message_if_new(&stored)
+    })
+    .await
+    .unwrap_or(false);
+    if !inserted {
+        info!(
+            "Slack: skipping duplicate message chat_id={} message_id={}",
+            chat_id, inbound_message_id
+        );
         return;
     }
 
@@ -715,7 +748,14 @@ async fn handle_slack_message(
                 }
             }
 
-            if !response.is_empty() {
+            if used_send_message_tool {
+                if !response.is_empty() {
+                    info!(
+                        "Slack: suppressing final response for chat {} because send_message already delivered output",
+                        chat_id
+                    );
+                }
+            } else if !response.is_empty() {
                 if let Err(e) = send_slack_response(bot_token, channel, &response).await {
                     error!("Slack: failed to send response: {e}");
                 }
@@ -730,7 +770,7 @@ async fn handle_slack_message(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
-            } else if !used_send_message_tool {
+            } else {
                 let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.";
                 let _ = send_slack_response(bot_token, channel, fallback).await;
 

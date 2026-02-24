@@ -1562,7 +1562,12 @@ async fn handle_web_slash_command(state: &WebState, text: &str, chat_id: i64) ->
         ));
     }
 
-    maybe_handle_plugin_command(&state.app_state.config, trimmed, chat_id, "web").await
+    if let Some(plugin_response) =
+        maybe_handle_plugin_command(&state.app_state.config, trimmed, chat_id, "web").await
+    {
+        return Some(plugin_response);
+    }
+    Some("Unknown command.".to_string())
 }
 
 async fn api_audit_logs(

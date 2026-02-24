@@ -975,6 +975,36 @@ impl Database {
         Ok(())
     }
 
+    pub fn store_message_if_new(&self, msg: &StoredMessage) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let affected = conn.execute(
+            "INSERT OR IGNORE INTO messages (id, chat_id, sender_name, content, is_from_bot, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                msg.id,
+                msg.chat_id,
+                msg.sender_name,
+                msg.content,
+                msg.is_from_bot as i32,
+                msg.timestamp,
+            ],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub fn message_exists(&self, chat_id: i64, message_id: &str) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM messages WHERE chat_id = ?1 AND id = ?2 LIMIT 1",
+                params![chat_id, message_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(exists)
+    }
+
     pub fn get_recent_messages(
         &self,
         chat_id: i64,
@@ -3641,6 +3671,43 @@ mod tests {
         let messages = db.get_recent_messages(100, 10).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "updated");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_message_exists() {
+        let (db, dir) = test_db();
+        assert!(!db.message_exists(100, "msg1").unwrap());
+
+        db.store_message(&StoredMessage {
+            id: "msg1".into(),
+            chat_id: 100,
+            sender_name: "alice".into(),
+            content: "hello".into(),
+            is_from_bot: false,
+            timestamp: "2024-01-01T00:00:00Z".into(),
+        })
+        .unwrap();
+
+        assert!(db.message_exists(100, "msg1").unwrap());
+        assert!(!db.message_exists(100, "msg2").unwrap());
+        assert!(!db.message_exists(200, "msg1").unwrap());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_store_message_if_new() {
+        let (db, dir) = test_db();
+        let msg = StoredMessage {
+            id: "msg-new".into(),
+            chat_id: 100,
+            sender_name: "alice".into(),
+            content: "hello".into(),
+            is_from_bot: false,
+            timestamp: "2024-01-01T00:00:00Z".into(),
+        };
+        assert!(db.store_message_if_new(&msg).unwrap());
+        assert!(!db.store_message_if_new(&msg).unwrap());
         cleanup(&dir);
     }
 
