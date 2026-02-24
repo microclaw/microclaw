@@ -2,6 +2,7 @@ use super::*;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use sha2::{Digest, Sha256};
+use std::net::IpAddr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -33,12 +34,17 @@ impl AuthIdentity {
 }
 
 pub(super) fn auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|raw| raw.strip_prefix("Bearer "))
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+    let raw = headers.get("authorization")?.to_str().ok()?.trim();
+    let mut parts = raw.splitn(2, char::is_whitespace);
+    let scheme = parts.next()?.trim();
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let token = parts.next()?.trim();
+    if token.is_empty() {
+        return None;
+    }
+    Some(token.to_string())
 }
 
 pub(super) fn bootstrap_token_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -68,16 +74,20 @@ pub(super) fn parse_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
-pub(super) fn session_cookie_header(session_id: &str, expires_at: &str) -> String {
+pub(super) fn session_cookie_header(session_id: &str, expires_at: &str, secure: bool) -> String {
     let mut header =
         format!("mc_session={session_id}; Path=/; HttpOnly; SameSite=Strict; Expires={expires_at}");
-    header.push_str("; Secure");
+    if secure {
+        header.push_str("; Secure");
+    }
     header
 }
 
-pub(super) fn csrf_cookie_header(csrf_token: &str, expires_at: &str) -> String {
+pub(super) fn csrf_cookie_header(csrf_token: &str, expires_at: &str, secure: bool) -> String {
     let mut header = format!("mc_csrf={csrf_token}; Path=/; SameSite=Strict; Expires={expires_at}");
-    header.push_str("; Secure");
+    if secure {
+        header.push_str("; Secure");
+    }
     header
 }
 
@@ -135,12 +145,39 @@ pub(super) fn client_key_from_headers_with_config(headers: &HeaderMap, config: &
     if !trust_xff {
         return "global".to_string();
     }
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "global".to_string())
+    parse_forwarded_client_ip(headers).unwrap_or_else(|| "global".to_string())
+}
+
+fn parse_forwarded_client_ip(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get("x-forwarded-for")?.to_str().ok()?;
+    raw.split(',')
+        .find_map(|part| normalize_forwarded_ip(part.trim()))
+}
+
+fn normalize_forwarded_ip(value: &str) -> Option<String> {
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+
+    if let Some(rest) = value.strip_prefix('[') {
+        let (host, _) = rest.split_once("]:")?;
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return Some(ip.to_string());
+        }
+        return None;
+    }
+
+    if let Some((host, port)) = value.rsplit_once(':') {
+        if !host.contains(':') && port.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
 }
 
 async fn audit_auth_event(
@@ -330,4 +367,64 @@ pub(super) async fn require_scope(
     )
     .await;
     Err((StatusCode::UNAUTHORIZED, "unauthorized".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn xff_enabled_config() -> Config {
+        let mut config = Config::test_defaults();
+        let mut web = serde_yaml::Mapping::new();
+        web.insert(
+            serde_yaml::Value::String("trust_x_forwarded_for".to_string()),
+            serde_yaml::Value::Bool(true),
+        );
+        config
+            .channels
+            .insert("web".to_string(), serde_yaml::Value::Mapping(web));
+        config
+    }
+
+    #[test]
+    fn test_auth_token_from_headers_accepts_case_insensitive_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "bearer test-key".parse().unwrap());
+        assert_eq!(
+            auth_token_from_headers(&headers).as_deref(),
+            Some("test-key")
+        );
+    }
+
+    #[test]
+    fn test_auth_token_from_headers_rejects_non_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Basic abc".parse().unwrap());
+        assert!(auth_token_from_headers(&headers).is_none());
+    }
+
+    #[test]
+    fn test_client_key_from_headers_uses_valid_xff_ip() {
+        let cfg = xff_enabled_config();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            " 198.51.100.12:443, 10.0.0.1".parse().unwrap(),
+        );
+        assert_eq!(
+            client_key_from_headers_with_config(&headers, &cfg),
+            "198.51.100.12"
+        );
+    }
+
+    #[test]
+    fn test_client_key_from_headers_falls_back_for_invalid_xff() {
+        let cfg = xff_enabled_config();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "unknown, also-bad".parse().unwrap());
+        assert_eq!(
+            client_key_from_headers_with_config(&headers, &cfg),
+            "global"
+        );
+    }
 }

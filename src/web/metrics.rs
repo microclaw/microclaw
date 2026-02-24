@@ -9,7 +9,7 @@ pub(super) async fn api_metrics(
     persist_metrics_snapshot(&state).await?;
 
     let snapshot = state.metrics.lock().await.clone();
-    let active_sessions = state.request_hub.sessions.lock().await.len() as i64;
+    let active_sessions = state.request_hub.active_sessions().await as i64;
     Ok(Json(json!({
         "ok": true,
         "metrics": {
@@ -41,7 +41,7 @@ pub(super) async fn api_metrics_summary(
     persist_metrics_snapshot(&state).await?;
 
     let snapshot = state.metrics.lock().await.clone();
-    let active_sessions = state.request_hub.sessions.lock().await.len() as i64;
+    let active_sessions = state.request_hub.active_sessions().await as i64;
     let request_total = snapshot.request_ok + snapshot.request_error;
     let request_success_rate = if request_total > 0 {
         (snapshot.request_ok as f64) / (request_total as f64)

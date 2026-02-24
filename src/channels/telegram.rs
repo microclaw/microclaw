@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
 use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::maybe_handle_plugin_command;
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
@@ -307,20 +308,51 @@ pub fn build_telegram_runtime_contexts(
     runtimes
 }
 
+async fn maybe_plugin_slash_response(
+    config: &crate::config::Config,
+    text: &str,
+    chat_id: i64,
+    channel_name: &str,
+) -> Option<String> {
+    maybe_handle_plugin_command(config, text, chat_id, channel_name).await
+}
+
 pub async fn start_telegram_bot(
     state: Arc<AppState>,
     bot: Bot,
     ctx: TelegramRuntimeContext,
 ) -> anyhow::Result<()> {
     let handler = Update::filter_message().endpoint(handle_message);
+    let channel_name = ctx.channel_name.clone();
+    let listener = teloxide::update_listeners::polling_default(bot.clone()).await;
+    let listener_error_handler = teloxide::error_handlers::LoggingErrorHandler::with_custom_text(
+        format!("An error from the Telegram update listener ({channel_name})"),
+    );
 
-    Dispatcher::builder(bot, handler)
+    let mut dispatcher = Dispatcher::builder(bot, handler)
         .default_handler(|_| async {})
         .dependencies(dptree::deps![state, ctx])
         .enable_ctrlc_handler()
-        .build()
-        .dispatch()
-        .await;
+        .build();
+
+    match dispatcher
+        .try_dispatch_with_listener(listener, listener_error_handler)
+        .await
+    {
+        Ok(()) => {}
+        Err(teloxide::RequestError::Api(teloxide::ApiError::InvalidToken)) => {
+            warn!(
+                "Telegram channel '{}' disabled: invalid bot token. Update telegram_bot_token and restart.",
+                channel_name
+            );
+        }
+        Err(err) => {
+            warn!(
+                "Telegram channel '{}' stopped and was disabled due to startup error: {:?}",
+                channel_name, err
+            );
+        }
+    }
 
     Ok(())
 }
@@ -412,6 +444,12 @@ async fn handle_message(
             let _ = bot.send_message(msg.chat.id, reply).await;
             return Ok(());
         }
+    }
+    if let Some(plugin_response) =
+        maybe_plugin_slash_response(&state.config, &text, raw_chat_id, &tg_channel_name).await
+    {
+        let _ = bot.send_message(msg.chat.id, plugin_response).await;
+        return Ok(());
     }
 
     if let Some(photos) = msg.photo() {
@@ -1854,5 +1892,30 @@ mod tests {
             Some(789),
             999
         ));
+    }
+
+    #[tokio::test]
+    async fn test_telegram_plugin_slash_dispatch_helper() {
+        let root = std::env::temp_dir().join(format!("mc_tg_plugin_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("plugin.yaml"),
+            r#"
+name: tgplug
+enabled: true
+commands:
+  - command: /tgplug
+    response: "telegram-ok"
+"#,
+        )
+        .unwrap();
+
+        let mut cfg = crate::config::Config::test_defaults();
+        cfg.plugins.enabled = true;
+        cfg.plugins.dir = Some(root.to_string_lossy().to_string());
+
+        let out = maybe_plugin_slash_response(&cfg, "/tgplug", 1, "telegram").await;
+        assert_eq!(out.as_deref(), Some("telegram-ok"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

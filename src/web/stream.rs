@@ -1,4 +1,5 @@
 use super::*;
+use futures_util::FutureExt;
 
 pub(super) async fn api_send_stream(
     headers: HeaderMap,
@@ -16,7 +17,11 @@ pub(super) async fn api_send_stream(
     }
 
     let session_key = normalize_session_key(body.session_key.as_deref());
-    if let Err((status, msg)) = state.request_hub.begin(&session_key, &state.limits).await {
+    if let Err((status, msg)) = state
+        .request_hub
+        .begin(&session_key, &identity.actor, &state.limits)
+        .await
+    {
         info!(
             target: "web",
             endpoint = "/api/send_stream",
@@ -50,161 +55,196 @@ pub(super) async fn api_send_stream(
 
     tokio::spawn(async move {
         let run_start = Instant::now();
-        let _guard = lock.lock().await;
-        state_for_task
-            .run_hub
-            .publish(
-                &run_id_for_task,
-                "status",
-                json!({"message": "running"}).to_string(),
-                limits.run_history_limit,
-            )
-            .await;
+        let worker = async {
+            let _guard = lock.lock().await;
+            state_for_task
+                .run_hub
+                .publish(
+                    &run_id_for_task,
+                    "status",
+                    json!({"message": "running"}).to_string(),
+                    limits.run_history_limit,
+                )
+                .await;
 
-        let (evt_tx, mut evt_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
-        let run_hub = state_for_task.run_hub.clone();
-        let state_for_events = state_for_task.clone();
-        let run_id_for_events = run_id_for_task.clone();
-        let run_history_limit = limits.run_history_limit;
-        let forward = tokio::spawn(async move {
-            while let Some(evt) = evt_rx.recv().await {
-                match evt {
-                    AgentEvent::Iteration { iteration } => {
-                        run_hub
-                            .publish(
-                                &run_id_for_events,
-                                "status",
-                                json!({"message": format!("iteration {iteration}")}).to_string(),
-                                run_history_limit,
+            let (evt_tx, mut evt_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+            let run_hub = state_for_task.run_hub.clone();
+            let state_for_events = state_for_task.clone();
+            let run_id_for_events = run_id_for_task.clone();
+            let run_history_limit = limits.run_history_limit;
+            let forward = tokio::spawn(async move {
+                while let Some(evt) = evt_rx.recv().await {
+                    match evt {
+                        AgentEvent::Iteration { iteration } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "status",
+                                    json!({"message": format!("iteration {iteration}")})
+                                        .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
+                        AgentEvent::ToolStart { name } => {
+                            super::metrics_apply_agent_event(
+                                &state_for_events,
+                                &AgentEvent::ToolStart { name: name.clone() },
                             )
                             .await;
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "tool_start",
+                                    json!({"name": name}).to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
+                        AgentEvent::ToolResult {
+                            name,
+                            is_error,
+                            preview,
+                            duration_ms,
+                            status_code,
+                            bytes,
+                            error_type,
+                        } => {
+                            super::metrics_apply_agent_event(
+                                &state_for_events,
+                                &AgentEvent::ToolResult {
+                                    name: name.clone(),
+                                    is_error,
+                                    preview: preview.clone(),
+                                    duration_ms,
+                                    status_code,
+                                    bytes,
+                                    error_type: error_type.clone(),
+                                },
+                            )
+                            .await;
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "tool_result",
+                                    json!({
+                                        "name": name,
+                                        "is_error": is_error,
+                                        "preview": preview,
+                                        "duration_ms": duration_ms,
+                                        "status_code": status_code,
+                                        "bytes": bytes,
+                                        "error_type": error_type
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
+                        AgentEvent::TextDelta { delta } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "delta",
+                                    json!({"delta": delta}).to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
+                        AgentEvent::FinalResponse { .. } => {}
                     }
-                    AgentEvent::ToolStart { name } => {
-                        super::metrics_apply_agent_event(
-                            &state_for_events,
-                            &AgentEvent::ToolStart { name: name.clone() },
+                }
+            });
+
+            match send_and_store_response_with_events(state_for_task.clone(), body, Some(&evt_tx))
+                .await
+            {
+                Ok(resp) => {
+                    metrics_llm_completion_inc(&state_for_task).await;
+                    metrics_record_request_result(
+                        &state_for_task,
+                        true,
+                        run_start.elapsed().as_millis() as i64,
+                    )
+                    .await;
+                    let response_text = resp
+                        .0
+                        .get("response")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+
+                    state_for_task
+                        .run_hub
+                        .publish(
+                            &run_id_for_task,
+                            "done",
+                            json!({"response": response_text}).to_string(),
+                            limits.run_history_limit,
                         )
                         .await;
-                        run_hub
-                            .publish(
-                                &run_id_for_events,
-                                "tool_start",
-                                json!({"name": name}).to_string(),
-                                run_history_limit,
-                            )
-                            .await;
-                    }
-                    AgentEvent::ToolResult {
-                        name,
-                        is_error,
-                        preview,
-                        duration_ms,
-                        status_code,
-                        bytes,
-                        error_type,
-                    } => {
-                        super::metrics_apply_agent_event(
-                            &state_for_events,
-                            &AgentEvent::ToolResult {
-                                name: name.clone(),
-                                is_error,
-                                preview: preview.clone(),
-                                duration_ms,
-                                status_code,
-                                bytes,
-                                error_type: error_type.clone(),
-                            },
+                }
+                Err((_, err_msg)) => {
+                    metrics_record_request_result(
+                        &state_for_task,
+                        false,
+                        run_start.elapsed().as_millis() as i64,
+                    )
+                    .await;
+                    state_for_task
+                        .run_hub
+                        .publish(
+                            &run_id_for_task,
+                            "error",
+                            json!({"error": err_msg}).to_string(),
+                            limits.run_history_limit,
                         )
                         .await;
-                        run_hub
-                            .publish(
-                                &run_id_for_events,
-                                "tool_result",
-                                json!({
-                                    "name": name,
-                                    "is_error": is_error,
-                                    "preview": preview,
-                                    "duration_ms": duration_ms,
-                                    "status_code": status_code,
-                                    "bytes": bytes,
-                                    "error_type": error_type
-                                })
-                                .to_string(),
-                                run_history_limit,
-                            )
-                            .await;
-                    }
-                    AgentEvent::TextDelta { delta } => {
-                        run_hub
-                            .publish(
-                                &run_id_for_events,
-                                "delta",
-                                json!({"delta": delta}).to_string(),
-                                run_history_limit,
-                            )
-                            .await;
-                    }
-                    AgentEvent::FinalResponse { .. } => {}
                 }
             }
-        });
+            drop(evt_tx);
+            let _ = forward.await;
+        };
 
-        match send_and_store_response_with_events(state_for_task.clone(), body, Some(&evt_tx)).await
-        {
-            Ok(resp) => {
-                metrics_llm_completion_inc(&state_for_task).await;
-                metrics_record_request_result(
-                    &state_for_task,
-                    true,
-                    run_start.elapsed().as_millis() as i64,
+        let panicked = std::panic::AssertUnwindSafe(worker)
+            .catch_unwind()
+            .await
+            .is_err();
+        if panicked {
+            metrics_record_request_result(
+                &state_for_task,
+                false,
+                run_start.elapsed().as_millis() as i64,
+            )
+            .await;
+            state_for_task
+                .run_hub
+                .publish(
+                    &run_id_for_task,
+                    "error",
+                    json!({"error": "internal stream task failure"}).to_string(),
+                    limits.run_history_limit,
                 )
                 .await;
-                let response_text = resp
-                    .0
-                    .get("response")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-
-                state_for_task
-                    .run_hub
-                    .publish(
-                        &run_id_for_task,
-                        "done",
-                        json!({"response": response_text}).to_string(),
-                        limits.run_history_limit,
-                    )
-                    .await;
-            }
-            Err((_, err_msg)) => {
-                metrics_record_request_result(
-                    &state_for_task,
-                    false,
-                    run_start.elapsed().as_millis() as i64,
-                )
-                .await;
-                state_for_task
-                    .run_hub
-                    .publish(
-                        &run_id_for_task,
-                        "error",
-                        json!({"error": err_msg}).to_string(),
-                        limits.run_history_limit,
-                    )
-                    .await;
-            }
+            tracing::error!(
+                target: "web",
+                endpoint = "/api/send_stream",
+                session_key = %session_key_for_release,
+                run_id = %run_id_for_task,
+                "stream task panicked"
+            );
         }
-        drop(evt_tx);
-        let _ = forward.await;
+
         state_for_task
             .request_hub
-            .end_with_limits(&session_key_for_release, &limits)
+            .end_with_limits(&session_key_for_release, &identity.actor, &limits)
             .await;
         info!(
             target: "web",
             endpoint = "/api/send_stream",
             session_key = %session_key_for_release,
             run_id = %run_id_for_task,
+            panicked = panicked,
             latency_ms = run_start.elapsed().as_millis(),
             "Stream run finished"
         );

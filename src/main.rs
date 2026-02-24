@@ -1,3 +1,6 @@
+use argon2::password_hash::{rand_core::OsRng, PasswordHashString, SaltString};
+use argon2::{Argon2, PasswordHasher};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use microclaw::config::Config;
 use microclaw::error::MicroClawError;
 use microclaw::{
@@ -7,39 +10,174 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const LONG_ABOUT: &str = concat!(
+    "\x1b[1mMicroClaw v",
+    env!("CARGO_PKG_VERSION"),
+    "\x1b[22m\n",
+    "\x1b[1mWebsite:\x1b[22m https://microclaw.ai\n",
+    "\x1b[1mGitHub:\x1b[22m https://github.com/microclaw/microclaw\n",
+    "\x1b[1mDiscord:\x1b[22m https://discord.gg/pvmezwkAk5\n",
+    "\n",
+    "\x1b[1mQuick Start:\x1b[22m\n",
+    "  1) microclaw setup\n",
+    "  2) microclaw doctor\n",
+    "  3) microclaw start",
+);
 
-fn print_help() {
-    println!(
-        r#"MicroClaw v{VERSION}
+#[derive(Debug, Parser)]
+#[command(
+    name = "microclaw",
+    version = VERSION,
+    about = LONG_ABOUT
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<MainCommand>,
+}
 
-Usage:
-  microclaw <command>
+#[derive(Debug, Subcommand)]
+enum MainCommand {
+    /// Start runtime (enabled channels)
+    Start,
+    /// Full-screen setup wizard (or `setup --enable-sandbox`)
+    Setup(SetupCommand),
+    /// Preflight diagnostics
+    Doctor {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Manage service (install/start/stop/status/logs)
+    Gateway {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Manage ClawHub skills (search/install/list/inspect)
+    Skill {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Manage runtime hooks (list/info/enable/disable)
+    Hooks {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Manage Web UI configurations
+    Web(WebCommand),
+    /// Re-embed active memories (requires `sqlite-vec` feature)
+    Reembed,
+    /// Show version
+    Version,
+}
 
-Commands:
-  start      Start runtime (enabled channels)
-  setup      Full-screen setup wizard (or `setup --enable-sandbox`)
-  doctor     Preflight diagnostics
-  hooks      Manage runtime hooks (list/info/enable/disable)
-  skill      Manage ClawHub skills (search/install/list/inspect)
-  gateway    Manage service (install/start/stop/status/logs)
-  version    Show version
-  help       Show this help
+#[derive(Debug, Args)]
+struct SetupCommand {
+    /// Enable sandbox mode in config
+    #[arg(long)]
+    enable_sandbox: bool,
+    /// Assume yes for follow-up prompts
+    #[arg(short = 'y', long)]
+    yes: bool,
+    /// Suppress follow-up tips
+    #[arg(long)]
+    quiet: bool,
+}
 
-Quick Start:
-  1) microclaw setup
-  2) microclaw doctor
-  3) microclaw start
+#[derive(Debug, Args)]
+struct WebCommand {
+    #[command(subcommand)]
+    action: Option<WebAction>,
+}
 
-Channel requirement:
-  Enable at least one channel: Telegram / Discord / Slack / Feishu / Matrix / IRC / Web UI.
-
-More:
-  https://microclaw.ai"#
-    );
+#[derive(Debug, Subcommand)]
+enum WebAction {
+    /// Set the exact new password (min 8 chars)
+    Password { value: String },
+    /// Generate and set a random password
+    PasswordGenerate,
+    /// Clear password hash and revoke sessions (test/reset)
+    PasswordClear,
 }
 
 fn print_version() {
     println!("microclaw {VERSION}");
+}
+
+fn print_web_help() {
+    println!(
+        r#"Manage Web UI Configurations
+
+Usage:
+  microclaw web [password <value> | password-generate | password-clear]
+
+Options:
+  password <value>      Set the exact new password (min 8 chars)
+  password-generate     Generate a random password
+  password-clear        Clear password hash and revoke sessions (test/reset)
+
+Notes:
+  - Existing Web login sessions are revoked automatically.
+  - Restart is not required."#
+    );
+}
+
+fn make_password_hash(password: &str) -> anyhow::Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    let hash: PasswordHashString = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| anyhow::anyhow!("password hashing failed: {e}"))?
+        .serialize();
+    Ok(hash.to_string())
+}
+
+fn generate_password() -> String {
+    let rand = uuid::Uuid::new_v4().simple().to_string();
+    format!("mc-{}-{}!", &rand[..6], &rand[6..12])
+}
+
+fn handle_web_cli(action: Option<WebAction>) -> anyhow::Result<()> {
+    if action.is_none() {
+        print_web_help();
+        return Ok(());
+    }
+
+    if matches!(action, Some(WebAction::PasswordClear)) {
+        let config = Config::load()?;
+        let runtime_data_dir = config.runtime_data_dir();
+        let database = db::Database::new(&runtime_data_dir)?;
+        database.clear_auth_password_hash()?;
+        let revoked = database.revoke_all_auth_sessions()?;
+        println!("Web password cleared.");
+        println!("Revoked web sessions: {revoked}");
+        println!(
+            "State is now uninitialized. On next `microclaw start`, default password bootstrap policy will apply."
+        );
+        return Ok(());
+    }
+
+    let (password, generated) = match action {
+        Some(WebAction::PasswordGenerate) => (generate_password(), true),
+        Some(WebAction::Password { value }) => (value, false),
+        Some(WebAction::PasswordClear) => unreachable!("handled above"),
+        None => unreachable!("handled above"),
+    };
+    let normalized = password.trim().to_string();
+    if normalized.len() < 8 {
+        anyhow::bail!("password must be at least 8 chars");
+    }
+
+    let config = Config::load()?;
+    let runtime_data_dir = config.runtime_data_dir();
+    let database = db::Database::new(&runtime_data_dir)?;
+    let hash = make_password_hash(&normalized)?;
+    database.upsert_auth_password_hash(&hash)?;
+    let revoked = database.revoke_all_auth_sessions()?;
+
+    println!("Web password reset successfully.");
+    println!("Revoked web sessions: {revoked}");
+    if generated {
+        println!("Generated password: {normalized}");
+    }
+    Ok(())
 }
 
 fn move_path(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -226,23 +364,19 @@ async fn reembed_memories() -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let command = args.get(1).map(|s| s.as_str());
+    let cli = Cli::parse();
 
-    match command {
-        Some("start") => {}
-        Some("gateway") => {
-            gateway::handle_gateway_cli(&args[2..])?;
+    match cli.command {
+        Some(MainCommand::Start) => {}
+        Some(MainCommand::Gateway { args }) => {
+            gateway::handle_gateway_cli(&args)?;
             return Ok(());
         }
-        Some("setup") => {
-            let setup_args = &args[2..];
-            if setup_args.iter().any(|a| a == "--enable-sandbox") {
+        Some(MainCommand::Setup(setup_args)) => {
+            if setup_args.enable_sandbox {
                 let path = setup::enable_sandbox_in_config()?;
                 println!("Sandbox enabled in {path}");
-                if !setup_args.iter().any(|a| a == "--yes" || a == "-y")
-                    && !setup_args.iter().any(|a| a == "--quiet")
-                {
+                if !setup_args.yes && !setup_args.quiet {
                     println!(
                         "Tip: run `microclaw doctor sandbox` to verify docker runtime and image readiness."
                     );
@@ -257,34 +391,35 @@ async fn main() -> anyhow::Result<()> {
             }
             return Ok(());
         }
-        Some("doctor") => {
-            doctor::run_cli(&args[2..])?;
+        Some(MainCommand::Doctor { args }) => {
+            doctor::run_cli(&args)?;
             return Ok(());
         }
-        Some("skill") => {
+        Some(MainCommand::Web(web)) => {
+            handle_web_cli(web.action)?;
+            return Ok(());
+        }
+        Some(MainCommand::Skill { args }) => {
             let config = Config::load()?;
-            microclaw::clawhub::cli::handle_skill_cli(&args[2..], &config).await?;
+            microclaw::clawhub::cli::handle_skill_cli(&args, &config).await?;
             return Ok(());
         }
-        Some("hooks") => {
-            hooks::handle_hooks_cli(&args[2..]).await?;
+        Some(MainCommand::Hooks { args }) => {
+            hooks::handle_hooks_cli(&args).await?;
             return Ok(());
         }
-        Some("reembed") => {
+        Some(MainCommand::Reembed) => {
             return reembed_memories().await;
         }
-        Some("version" | "--version" | "-V") => {
+        Some(MainCommand::Version) => {
             print_version();
             return Ok(());
         }
-        Some("help" | "--help" | "-h") | None => {
-            print_help();
+        None => {
+            let mut cmd = Cli::command();
+            cmd.print_help()?;
+            println!();
             return Ok(());
-        }
-        Some(unknown) => {
-            eprintln!("Unknown command: {unknown}\n");
-            print_help();
-            std::process::exit(1);
         }
     }
 

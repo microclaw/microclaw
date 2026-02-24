@@ -8,12 +8,21 @@ function read(file) {
   return fs.readFileSync(path.join(ROOT, file), 'utf8');
 }
 
+function normalizeGeneratedContent(text) {
+  const normalizedNewlines = text.replace(/\r\n?/g, '\n');
+  // Keep exactly one trailing newline to avoid churn from accidental blank lines.
+  return normalizedNewlines.replace(/\n*$/, '\n');
+}
+
 function writeIfChanged(file, content) {
   const abs = path.join(ROOT, file);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
-  const prev = fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : null;
-  if (prev !== content) {
-    fs.writeFileSync(abs, content);
+  const next = normalizeGeneratedContent(content);
+  const prev = fs.existsSync(abs)
+    ? normalizeGeneratedContent(fs.readFileSync(abs, 'utf8'))
+    : null;
+  if (prev !== next) {
+    fs.writeFileSync(abs, next);
     return true;
   }
   return false;

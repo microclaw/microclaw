@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::codex_auth::{
     codex_auth_file_has_access_token, is_openai_codex_provider, provider_allows_empty_api_key,
 };
+use crate::plugins::PluginsConfig;
 use microclaw_core::error::MicroClawError;
 pub use microclaw_tools::sandbox::{SandboxBackend, SandboxConfig, SandboxMode};
 pub use microclaw_tools::types::WorkingDirIsolation;
@@ -333,6 +334,10 @@ pub struct Config {
     #[serde(flatten)]
     pub clawhub: ClawHubConfig,
 
+    // --- Plugins ---
+    #[serde(default)]
+    pub plugins: PluginsConfig,
+
     // --- Voice / Speech-to-text ---
     /// Voice transcription provider: "openai" uses OpenAI Whisper API, "local" uses voice_transcription_command
     #[serde(default = "default_voice_provider", rename = "voice_provider")]
@@ -536,6 +541,7 @@ impl Config {
             reflector_interval_mins: 15,
             soul_path: None,
             clawhub: ClawHubConfig::default(),
+            plugins: PluginsConfig::default(),
             voice_provider: "openai".into(),
             voice_transcription_command: None,
             channels: HashMap::new(),
@@ -725,6 +731,14 @@ impl Config {
         if let Some(dir) = &self.skills_dir {
             let trimmed = dir.trim().to_string();
             self.skills_dir = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+        }
+        if let Some(dir) = &self.plugins.dir {
+            let trimmed = dir.trim().to_string();
+            self.plugins.dir = if trimmed.is_empty() {
                 None
             } else {
                 Some(trimmed)

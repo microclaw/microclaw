@@ -11,6 +11,7 @@ use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
 use crate::chat_commands::handle_chat_command;
+use crate::chat_commands::maybe_handle_plugin_command;
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
@@ -183,6 +184,15 @@ pub struct SlackAdapter {
     name: String,
     bot_token: String,
     http_client: reqwest::Client,
+}
+
+async fn maybe_plugin_slash_response(
+    config: &crate::config::Config,
+    text: &str,
+    chat_id: i64,
+    channel_name: &str,
+) -> Option<String> {
+    maybe_handle_plugin_command(config, text, chat_id, channel_name).await
 }
 
 impl SlackAdapter {
@@ -656,6 +666,13 @@ async fn handle_slack_message(
             return;
         }
     }
+    if let Some(plugin_response) =
+        maybe_plugin_slash_response(&app_state.config, trimmed, chat_id, &runtime.channel_name)
+            .await
+    {
+        let _ = send_slack_response(bot_token, channel, &plugin_response).await;
+        return;
+    }
 
     // Determine if we should respond
     let mention_tag = format!("<@{bot_user_id}>");
@@ -733,5 +750,35 @@ async fn handle_slack_message(
             error!("Error processing Slack message: {e}");
             let _ = send_slack_response(bot_token, channel, &format!("Error: {e}")).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_slack_plugin_slash_dispatch_helper() {
+        let root = std::env::temp_dir().join(format!("mc_slack_plugin_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("plugin.yaml"),
+            r#"
+name: slackplug
+enabled: true
+commands:
+  - command: /slackplug
+    response: "slack-ok"
+"#,
+        )
+        .unwrap();
+
+        let mut cfg = crate::config::Config::test_defaults();
+        cfg.plugins.enabled = true;
+        cfg.plugins.dir = Some(root.to_string_lossy().to_string());
+
+        let out = maybe_plugin_slash_response(&cfg, "/slackplug", 1, "slack").await;
+        assert_eq!(out.as_deref(), Some("slack-ok"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

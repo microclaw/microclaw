@@ -27,7 +27,7 @@ pub(super) async fn api_history(
     require_scope(&state, &headers, AuthScope::Read).await?;
 
     let session_key = normalize_session_key(query.session_key.as_deref());
-    let chat_id = resolve_chat_id_for_session_key(&state, &session_key).await?;
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
 
     let mut messages = call_blocking(state.app_state.db.clone(), move |db| {
         db.get_all_messages(chat_id)

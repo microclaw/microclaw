@@ -418,6 +418,14 @@ pub(crate) async fn process_with_agent_impl(
         &skills_catalog,
         soul_content.as_deref(),
     );
+    let plugin_context = crate::plugins::collect_plugin_context_injections(
+        &state.config,
+        context.caller_channel,
+        chat_id,
+        &query,
+    )
+    .await;
+    append_plugin_context_sections(&mut system_prompt, &plugin_context);
 
     // If image_data is present, convert the last user message to a blocks-based message with the image
     if let Some((base64_data, media_type)) = image_data {
@@ -1282,6 +1290,40 @@ Built-in execution playbook:
     prompt
 }
 
+fn append_plugin_context_sections(
+    system_prompt: &mut String,
+    injections: &[crate::plugins::PluginContextInjection],
+) {
+    if injections.is_empty() {
+        return;
+    }
+    let mut prompt_blocks = Vec::new();
+    let mut doc_blocks = Vec::new();
+    for injection in injections {
+        let header = format!("## [{}:{}]", injection.plugin_name, injection.provider_name);
+        let block = format!("{header}\n{}\n", injection.content.trim());
+        match injection.kind {
+            crate::plugins::PluginContextKind::Prompt => prompt_blocks.push(block),
+            crate::plugins::PluginContextKind::Document => doc_blocks.push(block),
+        }
+    }
+
+    if !prompt_blocks.is_empty() {
+        system_prompt.push_str("\n# Plugin Prompt Context\n\n");
+        for block in prompt_blocks {
+            system_prompt.push_str(&block);
+            system_prompt.push('\n');
+        }
+    }
+    if !doc_blocks.is_empty() {
+        system_prompt.push_str("\n# Plugin Documents\n\n");
+        for block in doc_blocks {
+            system_prompt.push_str(&block);
+            system_prompt.push('\n');
+        }
+    }
+}
+
 pub(crate) fn history_to_claude_messages(
     history: &[StoredMessage],
     _bot_username: &str,
@@ -2014,6 +2056,32 @@ mod tests {
         assert!(prompt.contains("simple, low-risk, read-only requests"));
         assert!(prompt.contains("call the tool immediately and return the result directly"));
         assert!(prompt.contains("Do not ask confirmation questions"));
+    }
+
+    #[test]
+    fn test_append_plugin_context_sections_splits_prompt_and_documents() {
+        let mut prompt = super::build_system_prompt("testbot", "web", "", 1, "", None);
+        let injections = vec![
+            crate::plugins::PluginContextInjection {
+                plugin_name: "p1".to_string(),
+                provider_name: "prompt1".to_string(),
+                kind: crate::plugins::PluginContextKind::Prompt,
+                content: "Act with strict JSON output.".to_string(),
+            },
+            crate::plugins::PluginContextInjection {
+                plugin_name: "p1".to_string(),
+                provider_name: "doc1".to_string(),
+                kind: crate::plugins::PluginContextKind::Document,
+                content: "API spec v1".to_string(),
+            },
+        ];
+        super::append_plugin_context_sections(&mut prompt, &injections);
+        assert!(prompt.contains("# Plugin Prompt Context"));
+        assert!(prompt.contains("[p1:prompt1]"));
+        assert!(prompt.contains("Act with strict JSON output."));
+        assert!(prompt.contains("# Plugin Documents"));
+        assert!(prompt.contains("[p1:doc1]"));
+        assert!(prompt.contains("API spec v1"));
     }
 
     #[test]

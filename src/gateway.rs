@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::logging;
 use anyhow::{anyhow, Context, Result};
+use clap::{Parser, Subcommand};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
@@ -53,27 +54,34 @@ struct LinuxRuntimeStatus {
 }
 
 pub fn handle_gateway_cli(args: &[String]) -> Result<()> {
-    let Some(action) = args.first().map(|s| s.as_str()) else {
+    let cli = match GatewayCli::try_parse_from(
+        std::iter::once("gateway").chain(args.iter().map(std::string::String::as_str)),
+    ) {
+        Ok(cli) => cli,
+        Err(err)
+            if matches!(
+                err.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) =>
+        {
+            err.print()?;
+            return Ok(());
+        }
+        Err(err) => return Err(anyhow!(err.to_string())),
+    };
+    let Some(action) = cli.action else {
         print_gateway_help();
         return Ok(());
     };
 
     match action {
-        "install" => install(&args[1..]),
-        "uninstall" => uninstall(),
-        "start" => start(),
-        "stop" => stop(),
-        "restart" => restart(),
-        "status" => status(&args[1..]),
-        "logs" => logs(args.get(1).map(|s| s.as_str())),
-        "help" | "--help" | "-h" => {
-            print_gateway_help();
-            Ok(())
-        }
-        _ => Err(anyhow!(
-            "Unknown gateway action: {}. Use: gateway <install|uninstall|start|stop|restart|status|logs>",
-            action
-        )),
+        GatewayAction::Install { force } => install(InstallOptions { force }),
+        GatewayAction::Uninstall => uninstall(),
+        GatewayAction::Start => start(),
+        GatewayAction::Stop => stop(),
+        GatewayAction::Restart => restart(),
+        GatewayAction::Status { json, deep } => status(StatusOptions { json, deep }),
+        GatewayAction::Logs { lines } => logs(lines),
     }
 }
 
@@ -85,20 +93,58 @@ USAGE:
     microclaw gateway <ACTION>
 
 ACTIONS:
-    install [--force]      Install and enable persistent gateway service
-    uninstall              Disable and remove persistent gateway service
-    start                  Start gateway service
-    stop                   Stop gateway service
-    restart                Restart gateway service
-    status [--json] [--deep]  Show gateway service status
-    logs [N]               Show last N lines of gateway logs (default: 200)
-    help                   Show this message
+    install [--force]           Install and enable persistent gateway service
+    uninstall                   Disable and remove persistent gateway service
+    start                       Start gateway service
+    stop                        Stop gateway service
+    restart                     Restart gateway service
+    status [--json] [--deep]    Show gateway service status
+    logs [N]                    Show last N lines of gateway logs (default: 200)
 "#
     );
 }
 
-fn install(args: &[String]) -> Result<()> {
-    let opts = parse_install_options(args)?;
+#[derive(Debug, Parser)]
+#[command(
+    name = "microclaw gateway",
+    about = "Gateway service management",
+    disable_help_subcommand = true
+)]
+struct GatewayCli {
+    #[command(subcommand)]
+    action: Option<GatewayAction>,
+}
+
+#[derive(Debug, Subcommand)]
+enum GatewayAction {
+    /// Install and enable persistent gateway service
+    Install {
+        /// Force reinstall and overwrite existing service files
+        #[arg(long)]
+        force: bool,
+    },
+    /// Disable and remove persistent gateway service
+    Uninstall,
+    /// Start gateway service
+    Start,
+    /// Stop gateway service
+    Stop,
+    /// Restart gateway service
+    Restart,
+    /// Show gateway service status
+    Status {
+        /// Print machine-readable JSON status
+        #[arg(long)]
+        json: bool,
+        /// Run deeper service audits
+        #[arg(long)]
+        deep: bool,
+    },
+    /// Show last N lines of gateway logs (default: 200)
+    Logs { lines: Option<usize> },
+}
+
+fn install(opts: InstallOptions) -> Result<()> {
     let ctx = build_context()?;
     if cfg!(target_os = "macos") {
         install_macos(&ctx, &opts)
@@ -159,8 +205,7 @@ fn restart() -> Result<()> {
     }
 }
 
-fn status(args: &[String]) -> Result<()> {
-    let opts = parse_status_options(args)?;
+fn status(opts: StatusOptions) -> Result<()> {
     let ctx = build_context()?;
 
     if cfg!(target_os = "macos") {
@@ -174,8 +219,8 @@ fn status(args: &[String]) -> Result<()> {
     }
 }
 
-fn logs(lines_arg: Option<&str>) -> Result<()> {
-    let lines = parse_log_lines(lines_arg)?;
+fn logs(lines: Option<usize>) -> Result<()> {
+    let lines = parse_log_lines(lines)?;
     let ctx = build_context()?;
     println!("== gateway logs: {} ==", ctx.runtime_logs_dir.display());
     let tailed = logging::read_last_lines_from_logs(&ctx.runtime_logs_dir, lines)?;
@@ -187,52 +232,12 @@ fn logs(lines_arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn parse_log_lines(lines_arg: Option<&str>) -> Result<usize> {
-    match lines_arg {
-        None => Ok(DEFAULT_LOG_LINES),
-        Some(raw) => {
-            let parsed = raw
-                .parse::<usize>()
-                .with_context(|| format!("Invalid log line count: {}", raw))?;
-            if parsed == 0 {
-                return Err(anyhow!("Log line count must be greater than 0"));
-            }
-            Ok(parsed)
-        }
+fn parse_log_lines(lines: Option<usize>) -> Result<usize> {
+    let parsed = lines.unwrap_or(DEFAULT_LOG_LINES);
+    if parsed == 0 {
+        return Err(anyhow!("Log line count must be greater than 0"));
     }
-}
-
-fn parse_install_options(args: &[String]) -> Result<InstallOptions> {
-    let mut opts = InstallOptions::default();
-    for arg in args {
-        match arg.as_str() {
-            "--force" => opts.force = true,
-            _ => {
-                return Err(anyhow!(
-                    "Unknown install option: {}. Supported: --force",
-                    arg
-                ));
-            }
-        }
-    }
-    Ok(opts)
-}
-
-fn parse_status_options(args: &[String]) -> Result<StatusOptions> {
-    let mut opts = StatusOptions::default();
-    for arg in args {
-        match arg.as_str() {
-            "--json" => opts.json = true,
-            "--deep" => opts.deep = true,
-            _ => {
-                return Err(anyhow!(
-                    "Unknown status option: {}. Supported: --json --deep",
-                    arg
-                ));
-            }
-        }
-    }
-    Ok(opts)
+    Ok(parsed)
 }
 
 fn build_context() -> Result<ServiceContext> {
@@ -1191,21 +1196,30 @@ mod tests {
     #[test]
     fn test_parse_log_lines_default_and_custom() {
         assert_eq!(parse_log_lines(None).unwrap(), DEFAULT_LOG_LINES);
-        assert_eq!(parse_log_lines(Some("20")).unwrap(), 20);
-        assert!(parse_log_lines(Some("0")).is_err());
-        assert!(parse_log_lines(Some("abc")).is_err());
+        assert_eq!(parse_log_lines(Some(20)).unwrap(), 20);
+        assert!(parse_log_lines(Some(0)).is_err());
     }
 
     #[test]
-    fn test_parse_options() {
-        let install = parse_install_options(&["--force".to_string()]).unwrap();
-        assert!(install.force);
-        assert!(parse_install_options(&["--bad".to_string()]).is_err());
+    fn test_parse_options_with_clap() {
+        let install =
+            GatewayCli::try_parse_from(["gateway", "install", "--force"]).expect("parse install");
+        match install.action {
+            Some(GatewayAction::Install { force }) => assert!(force),
+            _ => panic!("expected install action"),
+        }
+        assert!(GatewayCli::try_parse_from(["gateway", "install", "--bad"]).is_err());
 
-        let status = parse_status_options(&["--json".to_string(), "--deep".to_string()]).unwrap();
-        assert!(status.json);
-        assert!(status.deep);
-        assert!(parse_status_options(&["--bad".to_string()]).is_err());
+        let status = GatewayCli::try_parse_from(["gateway", "status", "--json", "--deep"])
+            .expect("parse status");
+        match status.action {
+            Some(GatewayAction::Status { json, deep }) => {
+                assert!(json);
+                assert!(deep);
+            }
+            _ => panic!("expected status action"),
+        }
+        assert!(GatewayCli::try_parse_from(["gateway", "status", "--bad"]).is_err());
     }
 
     #[test]

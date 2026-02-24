@@ -205,7 +205,20 @@ main() {
     log "Make sure '$HOME/.local/bin' is in PATH."
     log "Example: export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
-  log "Run: ${BIN_NAME} help"
+  log "${BIN_NAME}"
+  if need_cmd "${BIN_NAME}"; then
+    log "Running: ${BIN_NAME}"
+    if ! "${BIN_NAME}"; then
+      err "Auto-run failed. Try running: ${BIN_NAME}"
+    fi
+  else
+    log "Could not find '${BIN_NAME}' in PATH."
+    log "Add this directory to PATH: ${install_dir}"
+    if [ "$install_dir" = "$HOME/.local/bin" ]; then
+      log "Example: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+    log "Then run: ${install_dir}/${BIN_NAME}"
+  fi
 }
 
 main "$@"

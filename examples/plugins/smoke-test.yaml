@@ -1,0 +1,87 @@
+name: smoke_test
+enabled: true
+
+commands:
+  - command: /plugin-ping
+    description: Fast static check that plugin command dispatch works.
+    response: "plugin-ping ok (channel={{channel}}, chat={{chat_id}})"
+
+  - command: /plugin-host
+    description: Host execution check.
+    run:
+      command: "printf 'host-ok channel=%s chat=%s\\n' {{channel}} {{chat_id}}"
+      timeout_secs: 10
+      execution_policy: host_only
+
+  - command: /plugin-dual
+    description: Dual execution check (sandbox when enabled, host otherwise).
+    run:
+      command: "printf 'dual-ok channel=%s chat=%s\\n' {{channel}} {{chat_id}}"
+      timeout_secs: 10
+      execution_policy: dual
+
+  - command: /plugin-sandbox
+    description: Sandbox-only check (expected to fail if sandbox runtime is unavailable).
+    run:
+      command: "printf 'sandbox-ok channel=%s chat=%s\\n' {{channel}} {{chat_id}}"
+      timeout_secs: 10
+      execution_policy: sandbox_only
+
+  - command: /plugin-echo
+    description: Echo command args via shell execution.
+    run:
+      command: "printf 'echo=%s\\n' {{args}}"
+      timeout_secs: 10
+      execution_policy: host_only
+
+tools:
+  - name: plugin_smoke_echo
+    description: Echo a required text argument.
+    input_schema:
+      type: object
+      properties:
+        text:
+          type: string
+          description: Text to echo.
+      required: [text]
+    permissions:
+      execution_policy: host_only
+    run:
+      command: "printf 'tool-echo=%s\\n' {{text}}"
+      timeout_secs: 10
+
+  - name: plugin_smoke_dual_time
+    description: Return UTC time via dual policy.
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+    permissions:
+      execution_policy: dual
+    run:
+      command: "date -u +%Y-%m-%dT%H:%M:%SZ"
+      timeout_secs: 10
+
+  - name: plugin_smoke_sandbox_id
+    description: Return user id in sandbox.
+    input_schema:
+      type: object
+      properties: {}
+      required: []
+    permissions:
+      execution_policy: sandbox_only
+    run:
+      command: "id -u"
+      timeout_secs: 10
+
+context_providers:
+  - name: smoke_prompt
+    kind: prompt
+    content: "Plugin smoke context active for {{channel}}/{{chat_id}}."
+
+  - name: smoke_document
+    kind: document
+    run:
+      command: "printf 'Smoke doc: latest query=%s\\n' {{query}}"
+      timeout_secs: 10
+      execution_policy: host_only

@@ -12,7 +12,7 @@ resolver = "2"
 
 [package]
 name = "microclaw"
-version = "0.0.99"
+version = "0.0.109"
 edition = "2021"
 license = "MIT"
 default-run = "microclaw"
@@ -64,6 +64,7 @@ argon2 = "0.5"
 opentelemetry-proto = { version = "0.28", features = ["gen-tonic-messages"] }
 prost = "0.13"
 matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "native-tls", "sqlite", "bundled-sqlite"] }
+clap = { version = "4.5", features = ["derive"] }
 
 [dev-dependencies]
 tower = "0.5"

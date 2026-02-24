@@ -104,7 +104,7 @@ main() {
   log ""
   log "$BIN_NAME has been removed."
   log "Optional cleanup (not removed automatically):"
-  log "  rm -rf ./microclaw.data/runtime"
+  log "  rm -rf ~/.microclaw/runtime"
   log "  rm -f ./microclaw.config.yaml ./microclaw.config.yml"
 }
 

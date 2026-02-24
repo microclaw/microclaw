@@ -1,0 +1,28 @@
+name: context_test
+enabled: true
+
+commands:
+  - command: /plugin-context-help
+    description: Show how to validate plugin context injection behavior.
+    response: |
+      Context test plugin is active.
+      1) Ask: "say hello"
+      2) Expected: reply starts with "[CTX_TEST_OK]"
+      3) Ask: "what context doc token do you see?"
+      4) Expected token includes "CTX-DOC:web"
+
+context_providers:
+  - name: behavior_guard
+    kind: prompt
+    max_chars: 800
+    content: |
+      TEST MODE: prepend every user-visible reply with "[CTX_TEST_OK] ".
+      Keep this prefix exactly as written, then continue with normal helpful output.
+
+  - name: doc_token
+    kind: document
+    max_chars: 300
+    run:
+      command: "printf 'CTX-DOC:%s chat=%s query=%s\\n' {{channel}} {{chat_id}} {{query}}"
+      timeout_secs: 5
+      execution_policy: host_only

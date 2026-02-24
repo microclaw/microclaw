@@ -104,10 +104,18 @@ try {
     Write-Info "PATH already contains '$InstallDir'."
   }
 
+  Write-Info "microclaw"
   if (Get-Command microclaw -ErrorAction SilentlyContinue) {
-    Write-Info "Run: microclaw help"
+    Write-Info "Running: microclaw"
+    try {
+      & microclaw
+    } catch {
+      Write-Info "Auto-run failed. Try running: microclaw"
+    }
   } else {
-    Write-Info "If 'microclaw' is not found, open a new terminal and run: microclaw help"
+    Write-Info "Could not find 'microclaw' in PATH."
+    Write-Info "Add this directory to PATH: $InstallDir"
+    Write-Info "Then run: $targetPath"
   }
 
   if (-not (Get-Command agent-browser.cmd -ErrorAction SilentlyContinue) -and -not (Get-Command agent-browser -ErrorAction SilentlyContinue)) {

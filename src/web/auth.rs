@@ -5,17 +5,22 @@ pub(super) async fn api_auth_status(
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     metrics_http_inc(&state).await;
-    let has_password = call_blocking(state.app_state.db.clone(), |db| db.get_auth_password_hash())
+    let hash = call_blocking(state.app_state.db.clone(), |db| db.get_auth_password_hash())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .is_some();
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let has_password = hash.is_some();
+    let using_default_password = hash
+        .as_deref()
+        .map(|h| verify_password_hash(h, DEFAULT_WEB_PASSWORD))
+        .unwrap_or(false);
     let authenticated = require_scope(&state, &headers, AuthScope::Read)
         .await
         .is_ok();
     Ok(Json(json!({
         "ok": true,
         "authenticated": authenticated,
-        "has_password": has_password
+        "has_password": has_password,
+        "using_default_password": using_default_password
     })))
 }
 
@@ -135,13 +140,30 @@ pub(super) async fn api_auth_login(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Browsers do not send Secure cookies on plain HTTP localhost.
+    let secure_cookie = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
+        || headers
+            .get("origin")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.starts_with("https://"))
+            .unwrap_or(false)
+        || headers
+            .get("referer")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.starts_with("https://"))
+            .unwrap_or(false);
+
     let csrf_token = uuid::Uuid::new_v4().to_string();
-    let cookie = session_cookie_header(&session_id, &expires_http);
-    let csrf_cookie = csrf_cookie_header(&csrf_token, &expires_http);
+    let cookie = session_cookie_header(&session_id, &expires_http, secure_cookie);
+    let csrf_cookie = csrf_cookie_header(&csrf_token, &expires_http, secure_cookie);
     audit_log(&state, "operator", "login", "auth.login", None, "ok", None).await;
     Ok((
         StatusCode::OK,
-        [("set-cookie", cookie), ("set-cookie", csrf_cookie)],
+        axum::response::AppendHeaders([("set-cookie", cookie), ("set-cookie", csrf_cookie)]),
         Json(json!({
             "ok": true,
             "expires_at": expires_at,
@@ -164,10 +186,10 @@ pub(super) async fn api_auth_logout(
     }
     Ok((
         StatusCode::OK,
-        [
+        axum::response::AppendHeaders([
             ("set-cookie", clear_session_cookie_header()),
             ("set-cookie", clear_csrf_cookie_header()),
-        ],
+        ]),
         Json(json!({"ok": true})),
     ))
 }
@@ -272,7 +294,7 @@ pub(super) async fn api_auth_revoke_api_key(
     Path(key_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     metrics_http_inc(&state).await;
-    let identity = require_scope(&state, &headers, AuthScope::Approvals).await?;
+    let identity = require_scope(&state, &headers, AuthScope::Admin).await?;
     let revoked = call_blocking(state.app_state.db.clone(), move |db| {
         db.revoke_api_key(key_id)
     })
@@ -298,7 +320,7 @@ pub(super) async fn api_auth_rotate_api_key(
     Json(body): Json<RotateApiKeyRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     metrics_http_inc(&state).await;
-    let identity = require_scope(&state, &headers, AuthScope::Approvals).await?;
+    let identity = require_scope(&state, &headers, AuthScope::Admin).await?;
     let keys = call_blocking(state.app_state.db.clone(), |db| db.list_api_keys())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

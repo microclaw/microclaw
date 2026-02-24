@@ -29,6 +29,7 @@ import {
   Dialog,
   Flex,
   Heading,
+  Separator,
   Select,
   Switch,
   Tabs,
@@ -48,6 +49,17 @@ type ConfigPayload = Record<string, unknown>
 type StreamEvent = {
   event: string
   payload: Record<string, unknown>
+}
+
+type AuthStatusResponse = {
+  ok?: boolean
+  authenticated?: boolean
+  has_password?: boolean
+  using_default_password?: boolean
+}
+
+type HealthResponse = {
+  version?: string
 }
 
 type BackendMessage = {
@@ -276,6 +288,151 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'model', label: 'feishu_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Feishu bot model override for this account.', secret: false },
     ],
   },
+  {
+    name: 'matrix',
+    title: 'Matrix',
+    icon: '🧩',
+    steps: [
+      'Prepare a Matrix bot account on your homeserver.',
+      'Get homeserver URL, bot user ID, and access token.',
+      'Invite the bot to target rooms/chats.',
+    ],
+    hint: 'Required: homeserver_url, access_token, bot_user_id.',
+    fields: [
+      { yamlKey: 'homeserver_url', label: 'matrix_homeserver_url', placeholder: 'https://matrix.org', description: 'Matrix homeserver URL.', secret: false },
+      { yamlKey: 'access_token', label: 'matrix_access_token', placeholder: 'syt_xxx', description: 'Matrix access token for the bot account.', secret: true },
+      { yamlKey: 'bot_user_id', label: 'matrix_bot_user_id', placeholder: '@bot:example.org', description: 'Matrix bot user ID.', secret: false },
+      { yamlKey: 'bot_username', label: 'matrix_bot_username', placeholder: 'matrix_bot_name', description: 'Optional Matrix-specific bot username override.', secret: false },
+    ],
+  },
+  {
+    name: 'whatsapp',
+    title: 'WhatsApp',
+    icon: '🟢',
+    steps: [
+      'Create WhatsApp Cloud API app in Meta Developer dashboard.',
+      'Copy access token and phone number ID.',
+      'Configure webhook and verify token if needed.',
+    ],
+    hint: 'Required: access_token and phone_number_id.',
+    fields: [
+      { yamlKey: 'access_token', label: 'whatsapp_access_token', placeholder: 'EAAG...', description: 'WhatsApp Cloud API access token.', secret: true },
+      { yamlKey: 'phone_number_id', label: 'whatsapp_phone_number_id', placeholder: '1234567890', description: 'WhatsApp phone number ID.', secret: false },
+      { yamlKey: 'webhook_verify_token', label: 'whatsapp_webhook_verify_token', placeholder: 'verify-token', description: 'Optional webhook verify token.', secret: true },
+      { yamlKey: 'api_version', label: 'whatsapp_api_version', placeholder: 'v21.0', description: 'Graph API version.', secret: false },
+      { yamlKey: 'webhook_path', label: 'whatsapp_webhook_path', placeholder: '/whatsapp/webhook', description: 'Webhook path.', secret: false },
+      { yamlKey: 'allowed_user_ids', label: 'whatsapp_allowed_user_ids', placeholder: 'user1,user2', description: 'Optional allowed user IDs csv.', secret: false },
+      { yamlKey: 'bot_username', label: 'whatsapp_bot_username', placeholder: 'whatsapp_bot_name', description: 'Optional WhatsApp-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'whatsapp_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional WhatsApp bot model override for this account.', secret: false },
+    ],
+  },
+  {
+    name: 'imessage',
+    title: 'iMessage',
+    icon: '💬',
+    steps: [
+      'Run on macOS with osascript support.',
+      'Choose service type and connect sender workflow.',
+    ],
+    hint: 'Default service is iMessage.',
+    fields: [
+      { yamlKey: 'service', label: 'imessage_service', placeholder: 'iMessage', description: 'Service type (iMessage/SMS relay setup dependent).', secret: false },
+      { yamlKey: 'bot_username', label: 'imessage_bot_username', placeholder: 'imessage_bot_name', description: 'Optional iMessage-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'imessage_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional iMessage bot model override for this account.', secret: false },
+    ],
+  },
+  {
+    name: 'email',
+    title: 'Email',
+    icon: '✉️',
+    steps: [
+      'Set sender address and sendmail path.',
+      'Expose webhook endpoint if receiving inbound events.',
+      'Optionally restrict allowed senders.',
+    ],
+    hint: 'Required: from_address.',
+    fields: [
+      { yamlKey: 'from_address', label: 'email_from_address', placeholder: 'bot@example.com', description: 'Email sender address.', secret: false },
+      { yamlKey: 'sendmail_path', label: 'email_sendmail_path', placeholder: '/usr/sbin/sendmail', description: 'sendmail binary path.', secret: false },
+      { yamlKey: 'webhook_path', label: 'email_webhook_path', placeholder: '/email/webhook', description: 'Inbound webhook path.', secret: false },
+      { yamlKey: 'webhook_token', label: 'email_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
+      { yamlKey: 'allowed_senders', label: 'email_allowed_senders', placeholder: 'a@example.com,b@example.com', description: 'Optional allowed sender list csv.', secret: false },
+      { yamlKey: 'bot_username', label: 'email_bot_username', placeholder: 'email_bot_name', description: 'Optional Email-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'email_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Email bot model override for this account.', secret: false },
+    ],
+  },
+  {
+    name: 'nostr',
+    title: 'Nostr',
+    icon: '🟣',
+    steps: [
+      'Configure publish command used to send outgoing replies.',
+      'Configure webhook endpoint for incoming events.',
+    ],
+    hint: 'Recommended: set publish_command and webhook token.',
+    fields: [
+      { yamlKey: 'publish_command', label: 'nostr_publish_command', placeholder: 'nostril publish ...', description: 'Command used to publish messages.', secret: false },
+      { yamlKey: 'webhook_path', label: 'nostr_webhook_path', placeholder: '/nostr/events', description: 'Webhook path.', secret: false },
+      { yamlKey: 'webhook_token', label: 'nostr_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
+      { yamlKey: 'allowed_pubkeys', label: 'nostr_allowed_pubkeys', placeholder: 'npub1...,npub1...', description: 'Optional allowed pubkeys csv.', secret: false },
+      { yamlKey: 'bot_username', label: 'nostr_bot_username', placeholder: 'nostr_bot_name', description: 'Optional Nostr-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'nostr_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Nostr bot model override for this account.', secret: false },
+    ],
+  },
+  {
+    name: 'signal',
+    title: 'Signal',
+    icon: '🔐',
+    steps: [
+      'Configure send command used to send outgoing replies.',
+      'Configure webhook endpoint for incoming messages.',
+    ],
+    hint: 'Recommended: set send_command and webhook token.',
+    fields: [
+      { yamlKey: 'send_command', label: 'signal_send_command', placeholder: 'signal-cli send ...', description: 'Command used to send Signal messages.', secret: false },
+      { yamlKey: 'webhook_path', label: 'signal_webhook_path', placeholder: '/signal/messages', description: 'Webhook path.', secret: false },
+      { yamlKey: 'webhook_token', label: 'signal_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
+      { yamlKey: 'allowed_numbers', label: 'signal_allowed_numbers', placeholder: '+15551234567,+15559876543', description: 'Optional allowed numbers csv.', secret: false },
+      { yamlKey: 'bot_username', label: 'signal_bot_username', placeholder: 'signal_bot_name', description: 'Optional Signal-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'signal_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Signal bot model override for this account.', secret: false },
+    ],
+  },
+  {
+    name: 'dingtalk',
+    title: 'DingTalk',
+    icon: '🟡',
+    steps: [
+      'Create DingTalk robot integration.',
+      'Set robot webhook URL and inbound webhook route.',
+    ],
+    hint: 'Recommended: set robot_webhook_url and webhook token.',
+    fields: [
+      { yamlKey: 'robot_webhook_url', label: 'dingtalk_robot_webhook_url', placeholder: 'https://oapi.dingtalk.com/robot/send?...', description: 'DingTalk robot webhook URL.', secret: true },
+      { yamlKey: 'webhook_path', label: 'dingtalk_webhook_path', placeholder: '/dingtalk/events', description: 'Webhook path.', secret: false },
+      { yamlKey: 'webhook_token', label: 'dingtalk_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
+      { yamlKey: 'allowed_chat_ids', label: 'dingtalk_allowed_chat_ids', placeholder: 'chat1,chat2', description: 'Optional allowed chat IDs csv.', secret: false },
+      { yamlKey: 'bot_username', label: 'dingtalk_bot_username', placeholder: 'dingtalk_bot_name', description: 'Optional DingTalk-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'dingtalk_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional DingTalk bot model override for this account.', secret: false },
+    ],
+  },
+  {
+    name: 'qq',
+    title: 'QQ',
+    icon: '🐧',
+    steps: [
+      'Configure send command used to send outgoing replies.',
+      'Configure webhook endpoint for incoming messages.',
+    ],
+    hint: 'Recommended: set send_command and webhook token.',
+    fields: [
+      { yamlKey: 'send_command', label: 'qq_send_command', placeholder: 'qq-send ...', description: 'Command used to send QQ messages.', secret: false },
+      { yamlKey: 'webhook_path', label: 'qq_webhook_path', placeholder: '/qq/events', description: 'Webhook path.', secret: false },
+      { yamlKey: 'webhook_token', label: 'qq_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
+      { yamlKey: 'allowed_user_ids', label: 'qq_allowed_user_ids', placeholder: '10001,10002', description: 'Optional allowed user IDs csv.', secret: false },
+      { yamlKey: 'bot_username', label: 'qq_bot_username', placeholder: 'qq_bot_name', description: 'Optional QQ-specific bot username override.', secret: false },
+      { yamlKey: 'model', label: 'qq_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional QQ bot model override for this account.', secret: false },
+    ],
+  },
 ]
 
 const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string }[] = [
@@ -366,6 +523,12 @@ function writeSessionToUrl(sessionKey: string): void {
   window.history.replaceState(null, '', url.toString())
 }
 
+function readSessionFromUrl(): string {
+  if (typeof window === 'undefined') return ''
+  const url = new URL(window.location.href)
+  return url.searchParams.get('session')?.trim() || ''
+}
+
 function pickLatestSessionKey(items: SessionItem[]): string {
   if (items.length === 0) return makeSessionKey()
 
@@ -378,7 +541,7 @@ function pickLatestSessionKey(items: SessionItem[]): string {
     return parsed[0]?.item.session_key || makeSessionKey()
   }
 
-  return items[items.length - 1]?.session_key || makeSessionKey()
+  return items[0]?.session_key || makeSessionKey()
 }
 
 if (typeof document !== 'undefined') {
@@ -393,17 +556,79 @@ function makeHeaders(options: RequestInit = {}): HeadersInit {
   if (options.body && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json'
   }
+  // Backend currently validates CSRF by scope (including some GET admin endpoints),
+  // so attach token whenever present to avoid false 403 for authenticated browser sessions.
+  const csrf = readCookie('mc_csrf')
+  if (csrf && !hasHeader(headers, 'x-csrf-token')) {
+    headers['x-csrf-token'] = csrf
+  }
   return headers
+}
+
+class ApiError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+function hasHeader(headers: Record<string, string>, key: string): boolean {
+  const needle = key.toLowerCase()
+  return Object.keys(headers).some((k) => k.toLowerCase() === needle)
+}
+
+function readCookie(name: string): string {
+  if (typeof document === 'undefined') return ''
+  const encodedName = `${encodeURIComponent(name)}=`
+  const items = document.cookie ? document.cookie.split('; ') : []
+  for (const item of items) {
+    if (!item.startsWith(encodedName)) continue
+    return decodeURIComponent(item.slice(encodedName.length))
+  }
+  return ''
+}
+
+function readBootstrapTokenFromHash(): string {
+  if (typeof window === 'undefined') return ''
+  const raw = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash
+  const params = new URLSearchParams(raw)
+  return params.get('bootstrap')?.trim() || ''
+}
+
+function clearBootstrapTokenFromHash(): void {
+  if (typeof window === 'undefined') return
+  const raw = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash
+  const params = new URLSearchParams(raw)
+  if (!params.has('bootstrap')) return
+  params.delete('bootstrap')
+  const next = params.toString()
+  window.location.hash = next ? `#${next}` : ''
+}
+
+function generatePassword(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    const raw = crypto.randomUUID().replace(/-/g, '')
+    return `mc-${raw.slice(0, 6)}-${raw.slice(6, 12)}!`
+  }
+  const fallback = Math.random().toString(36).slice(2, 14)
+  return `mc-${fallback.slice(0, 6)}-${fallback.slice(6, 12)}!`
 }
 
 async function api<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const res = await fetch(path, { ...options, headers: makeHeaders(options) })
+  const res = await fetch(path, { ...options, headers: makeHeaders(options), credentials: 'same-origin' })
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
   if (!res.ok) {
-    throw new Error(String(data.error || data.message || `HTTP ${res.status}`))
+    throw new ApiError(String(data.error || data.message || `HTTP ${res.status}`), res.status)
   }
   return data as T
 }
@@ -789,6 +1014,23 @@ function App() {
   const [usageInjectionLogs, setUsageInjectionLogs] = useState<InjectionLogPoint[]>([])
   const [usageError, setUsageError] = useState<string>('')
   const [usageSession, setUsageSession] = useState<string>('')
+  const [authReady, setAuthReady] = useState<boolean>(false)
+  const [authHasPassword, setAuthHasPassword] = useState<boolean>(false)
+  const [authAuthenticated, setAuthAuthenticated] = useState<boolean>(false)
+  const [authUsingDefaultPassword, setAuthUsingDefaultPassword] = useState<boolean>(false)
+  const [authMessage, setAuthMessage] = useState<string>('')
+  const [loginPassword, setLoginPassword] = useState<string>('')
+  const [bootstrapToken, setBootstrapToken] = useState<string>(() => readBootstrapTokenFromHash())
+  const [bootstrapPassword, setBootstrapPassword] = useState<string>('')
+  const [bootstrapConfirm, setBootstrapConfirm] = useState<string>('')
+  const [generatedPasswordPreview, setGeneratedPasswordPreview] = useState<string>('')
+  const [authBusy, setAuthBusy] = useState<boolean>(false)
+  const [passwordPromptOpen, setPasswordPromptOpen] = useState<boolean>(false)
+  const [passwordPromptMessage, setPasswordPromptMessage] = useState<string>('')
+  const [passwordPromptBusy, setPasswordPromptBusy] = useState<boolean>(false)
+  const [newPassword, setNewPassword] = useState<string>('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState<string>('')
+  const [appVersion, setAppVersion] = useState<string>('')
 
   const sessionItems = useMemo(() => {
     const map = new Map<string, SessionItem>()
@@ -799,7 +1041,8 @@ function App() {
       }
     }
 
-    if (!map.has(sessionKey) && !sessionKey.startsWith('chat:')) {
+    const selectedMissingFromStoredList = !map.has(sessionKey)
+    if (selectedMissingFromStoredList && !sessionKey.startsWith('chat:')) {
       map.set(sessionKey, {
         session_key: sessionKey,
         label: sessionKey,
@@ -818,7 +1061,27 @@ function App() {
       })
     }
 
-    return Array.from(map.values())
+    const items = Array.from(map.values())
+    const selectedSynthetic = selectedMissingFromStoredList && !sessionKey.startsWith('chat:')
+    items.sort((a, b) => {
+      if (selectedSynthetic) {
+        if (a.session_key === sessionKey) return -1
+        if (b.session_key === sessionKey) return 1
+      }
+
+      const ta = Date.parse(a.last_message_time || '')
+      const tb = Date.parse(b.last_message_time || '')
+      const aOk = Number.isFinite(ta)
+      const bOk = Number.isFinite(tb)
+      if (aOk && bOk) {
+        if (tb !== ta) return tb - ta
+      } else if (aOk !== bOk) {
+        return aOk ? -1 : 1
+      }
+
+      return a.label.localeCompare(b.label)
+    })
+    return items
   }, [extraSessions, sessions, sessionKey])
 
   const selectedSession = useMemo(
@@ -829,19 +1092,262 @@ function App() {
   const selectedSessionLabel = selectedSession?.label || sessionKey
   const selectedSessionReadOnly = Boolean(selectedSession && selectedSession.chat_type !== 'web')
 
-  async function loadSessions(): Promise<void> {
+  function isUnauthorizedError(err: unknown): boolean {
+    return err instanceof ApiError && err.status === 401
+  }
+
+  function isForbiddenError(err: unknown): boolean {
+    return err instanceof ApiError && err.status === 403
+  }
+
+  function lockForAuth(message = 'Authentication required. Please sign in.'): void {
+    setAuthAuthenticated(false)
+    setAuthMessage(message)
+    setError(message)
+  }
+
+  async function refreshAuthStatus(): Promise<AuthStatusResponse> {
+    try {
+      const data = await api<AuthStatusResponse>('/api/auth/status')
+      const hasPassword = Boolean(data.has_password)
+      const authenticated = Boolean(data.authenticated)
+      const usingDefaultPassword = Boolean(data.using_default_password)
+      setAuthHasPassword(hasPassword)
+      setAuthAuthenticated(authenticated)
+      setAuthUsingDefaultPassword(usingDefaultPassword)
+      setAuthReady(true)
+      if (authenticated) {
+        setAuthMessage('')
+        setError('')
+      }
+      if (authenticated && usingDefaultPassword) {
+        setPasswordPromptOpen(true)
+      }
+      if (!usingDefaultPassword) {
+        setPasswordPromptOpen(false)
+      }
+      return data
+    } catch (e) {
+      setAuthReady(true)
+      throw e
+    }
+  }
+
+  async function loadAppVersion(): Promise<void> {
+    try {
+      const data = await api<HealthResponse>('/api/health')
+      setAppVersion(String(data.version || '').trim())
+    } catch {
+      // `/api/health` requires read scope; keep placeholder when unavailable.
+    }
+  }
+
+  async function loadInitialConversation(): Promise<void> {
+    setError('')
     const data = await api<{ sessions?: SessionItem[] }>('/api/sessions')
-    setSessions(Array.isArray(data.sessions) ? data.sessions : [])
+    const loaded = Array.isArray(data.sessions) ? data.sessions : []
+    setSessions(loaded)
+
+    const latestSession = pickLatestSessionKey(loaded)
+    const preferredSession = readSessionFromUrl()
+    const preferredExists = preferredSession
+      ? loaded.some((item) => item.session_key === preferredSession)
+      : false
+    const initialSession = preferredExists
+      ? preferredSession
+      : latestSession
+
+    setSessionKey(initialSession)
+    writeSessionToUrl(initialSession)
+    const initialExists = loaded.some((item) => item.session_key === initialSession)
+    if (initialExists) {
+      await loadHistory(initialSession)
+    } else {
+      setHistorySeed([])
+      setHistoryCountBySession((prev) => ({ ...prev, [initialSession]: 0 }))
+      setRuntimeNonce((x) => x + 1)
+      setError('')
+    }
+  }
+
+  async function loadSessions(): Promise<void> {
+    try {
+      const data = await api<{ sessions?: SessionItem[] }>('/api/sessions')
+      setSessions(Array.isArray(data.sessions) ? data.sessions : [])
+    } catch (e) {
+      if (isUnauthorizedError(e)) {
+        lockForAuth()
+        return
+      }
+      throw e
+    }
   }
 
   async function loadHistory(target = sessionKey): Promise<void> {
-    const query = new URLSearchParams({ session_key: target, limit: '200' })
-    const data = await api<{ messages?: BackendMessage[] }>(`/api/history?${query.toString()}`)
-    const rawMessages = Array.isArray(data.messages) ? data.messages : []
-    const mapped = mapBackendHistory(rawMessages)
-    setHistorySeed(mapped)
-    setHistoryCountBySession((prev) => ({ ...prev, [target]: rawMessages.length }))
-    setRuntimeNonce((x) => x + 1)
+    const isChannelSession = target.startsWith('chat:')
+    const isPersistedSession = sessions.some((s) => s.session_key === target)
+    if (!isChannelSession && !isPersistedSession) {
+      setHistorySeed([])
+      setHistoryCountBySession((prev) => ({ ...prev, [target]: 0 }))
+      setRuntimeNonce((x) => x + 1)
+      setError('')
+      return
+    }
+
+    try {
+      const query = new URLSearchParams({ session_key: target, limit: '200' })
+      const data = await api<{ messages?: BackendMessage[] }>(`/api/history?${query.toString()}`)
+      const rawMessages = Array.isArray(data.messages) ? data.messages : []
+      const mapped = mapBackendHistory(rawMessages)
+      setHistorySeed(mapped)
+      setHistoryCountBySession((prev) => ({ ...prev, [target]: rawMessages.length }))
+      setRuntimeNonce((x) => x + 1)
+      setError('')
+    } catch (e) {
+      if (isUnauthorizedError(e)) {
+        lockForAuth()
+        return
+      }
+      if (e instanceof ApiError && e.status === 404) {
+        setHistorySeed([])
+        setHistoryCountBySession((prev) => ({ ...prev, [target]: 0 }))
+        setRuntimeNonce((x) => x + 1)
+        setError('')
+        return
+      }
+      throw e
+    }
+  }
+
+  async function submitLogin(password: string): Promise<void> {
+    const normalized = password.trim()
+    if (!normalized) {
+      setAuthMessage('Please enter your password.')
+      return
+    }
+    setAuthBusy(true)
+    setAuthMessage('')
+    try {
+      await api('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ password: normalized }),
+      })
+      setLoginPassword('')
+      await refreshAuthStatus()
+      await loadInitialConversation()
+      setStatusText('Authenticated')
+    } catch (e) {
+      if (e instanceof ApiError) {
+        if (e.status === 401) {
+          setAuthMessage('Password is incorrect. Please try again or reset with `microclaw web password-generate`.')
+          return
+        }
+        if (e.status === 429) {
+          setAuthMessage('Too many login attempts. Please wait and retry.')
+          return
+        }
+      }
+      setAuthMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  async function submitBootstrapPassword(): Promise<void> {
+    const token = bootstrapToken.trim()
+    const password = bootstrapPassword.trim()
+    const confirm = bootstrapConfirm.trim()
+
+    if (!token) {
+      setAuthMessage('Bootstrap token is required.')
+      return
+    }
+    if (password.length < 8) {
+      setAuthMessage('Password must be at least 8 characters.')
+      return
+    }
+    if (password !== confirm) {
+      setAuthMessage('Passwords do not match.')
+      return
+    }
+
+    setAuthBusy(true)
+    setAuthMessage('')
+    try {
+      await api('/api/auth/password', {
+        method: 'POST',
+        headers: { 'x-bootstrap-token': token },
+        body: JSON.stringify({ password }),
+      })
+      clearBootstrapTokenFromHash()
+      await submitLogin(password)
+      setBootstrapPassword('')
+      setBootstrapConfirm('')
+      setGeneratedPasswordPreview('')
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        setAuthMessage('Bootstrap token is invalid or expired. Please copy the latest token from startup logs.')
+        return
+      }
+      setAuthMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  async function submitPasswordUpdate(): Promise<void> {
+    const password = newPassword.trim()
+    const confirm = newPasswordConfirm.trim()
+    if (password.length < 8) {
+      setPasswordPromptMessage('Password must be at least 8 characters.')
+      return
+    }
+    if (password !== confirm) {
+      setPasswordPromptMessage('Passwords do not match.')
+      return
+    }
+    setPasswordPromptBusy(true)
+    setPasswordPromptMessage('')
+    try {
+      await api('/api/auth/password', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      })
+      setNewPassword('')
+      setNewPasswordConfirm('')
+      await refreshAuthStatus()
+      setPasswordPromptOpen(false)
+      setStatusText('Password updated')
+    } catch (e) {
+      setPasswordPromptMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPasswordPromptBusy(false)
+    }
+  }
+
+  async function logout(): Promise<void> {
+    setStatusText('Signing out...')
+    setError('')
+    try {
+      await api('/api/auth/logout', { method: 'POST' })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSessions([])
+      setExtraSessions([])
+      setHistorySeed([])
+      setHistoryCountBySession({})
+      setRuntimeNonce((x) => x + 1)
+      setAppVersion('')
+      setSessionKey(makeSessionKey())
+      setUsageOpen(false)
+      setConfigOpen(false)
+      await refreshAuthStatus().catch(() => {
+        setAuthAuthenticated(false)
+      })
+      setAuthMessage('Signed out. Please sign in again.')
+      setStatusText('Signed out')
+    }
   }
 
   const adapter = useMemo<ChatModelAdapter>(
@@ -880,13 +1386,14 @@ function App() {
           const streamResponse = await fetch(`/api/stream?${query.toString()}`, {
             method: 'GET',
             headers: makeHeaders(),
+            credentials: 'same-origin',
             cache: 'no-store',
             signal: options.abortSignal,
           })
 
           if (!streamResponse.ok) {
             const text = await streamResponse.text().catch(() => '')
-            throw new Error(text || `HTTP ${streamResponse.status}`)
+            throw new ApiError(text || `HTTP ${streamResponse.status}`, streamResponse.status)
           }
 
           let assistantText = ''
@@ -998,6 +1505,12 @@ function App() {
               break
             }
           }
+        } catch (e) {
+          if (isUnauthorizedError(e)) {
+            lockForAuth('Session expired. Please sign in again.')
+            setStatusText('Auth required')
+          }
+          throw e
         } finally {
           setSending(false)
           void loadSessions()
@@ -1106,80 +1619,106 @@ function App() {
     setSaveStatus('')
     setConfigSelfCheckError('')
     setConfigSelfCheckLoading(true)
-    const [data, selfCheck] = await Promise.all([
-      api<{ config?: ConfigPayload }>('/api/config'),
-      api<ConfigSelfCheck>('/api/config/self_check').catch((e) => {
-        setConfigSelfCheckError(e instanceof Error ? e.message : String(e))
-        return null
-      }),
-    ])
-    setConfig(data.config || null)
-    setConfigSelfCheck(selfCheck)
-    setConfigSelfCheckLoading(false)
-    const channelsCfg = (data.config?.channels as Record<string, Record<string, unknown>> | undefined) || {}
-    const telegramCfg = channelsCfg.telegram || {}
-    const telegramDefaultAccount = defaultAccountIdFromChannelConfig(telegramCfg)
-    const telegramAccountCfg = defaultAccountConfig(telegramCfg)
-    const discordCfg = channelsCfg.discord || {}
-    const discordDefaultAccount = defaultAccountIdFromChannelConfig(discordCfg)
-    const discordAccountCfg = defaultAccountConfig(discordCfg)
-    setConfigDraft({
-      llm_provider: data.config?.llm_provider || '',
-      model: data.config?.model || defaultModelForProvider(String(data.config?.llm_provider || 'anthropic')),
-      llm_base_url: String(data.config?.llm_base_url || ''),
-      api_key: '',
-      telegram_bot_token: '',
-      bot_username: String(data.config?.bot_username || ''),
-      telegram_account_id: telegramDefaultAccount,
-      telegram_bot_username: String(telegramAccountCfg.bot_username || telegramCfg.bot_username || ''),
-      telegram_model: String(telegramAccountCfg.model || telegramCfg.model || ''),
-      discord_bot_token: '',
-      discord_account_id: discordDefaultAccount,
-      discord_bot_username: String(discordAccountCfg.bot_username || discordCfg.bot_username || ''),
-      discord_model: String(discordAccountCfg.model || discordCfg.model || ''),
-      discord_allowed_channels_csv: Array.isArray(data.config?.discord_allowed_channels)
-        ? (data.config?.discord_allowed_channels as number[]).join(',')
-        : Array.isArray(discordAccountCfg.allowed_channels)
-          ? (discordAccountCfg.allowed_channels as number[]).join(',')
-        : '',
-      web_bot_username: String((channelsCfg.web?.bot_username) || ''),
-      working_dir_isolation: normalizeWorkingDirIsolation(
-        data.config?.working_dir_isolation || DEFAULT_CONFIG_VALUES.working_dir_isolation,
-      ),
-      max_tokens: Number(data.config?.max_tokens ?? 8192),
-      max_tool_iterations: Number(data.config?.max_tool_iterations ?? 100),
-      max_document_size_mb: Number(data.config?.max_document_size_mb ?? DEFAULT_CONFIG_VALUES.max_document_size_mb),
-      memory_token_budget: Number(data.config?.memory_token_budget ?? DEFAULT_CONFIG_VALUES.memory_token_budget),
-      show_thinking: Boolean(data.config?.show_thinking),
-      web_enabled: Boolean(data.config?.web_enabled),
-      web_host: String(data.config?.web_host || '127.0.0.1'),
-      web_port: Number(data.config?.web_port ?? 10961),
-      reflector_enabled: data.config?.reflector_enabled !== false,
-      reflector_interval_mins: Number(data.config?.reflector_interval_mins ?? DEFAULT_CONFIG_VALUES.reflector_interval_mins),
-      embedding_provider: String(data.config?.embedding_provider || ''),
-      embedding_api_key: '',
-      embedding_base_url: String(data.config?.embedding_base_url || ''),
-      embedding_model: String(data.config?.embedding_model || ''),
-      embedding_dim: String(data.config?.embedding_dim || ''),
-      // Dynamic channel fields — initialize from server config
-      ...Object.fromEntries(
-        DYNAMIC_CHANNELS.flatMap((ch) => {
-          const chCfg = channelsCfg[ch.name] || {}
-          const chAccountCfg = defaultAccountConfig(chCfg)
-          const pairs: Array<[string, unknown]> = [
-            [`${ch.name}__account_id`, defaultAccountIdFromChannelConfig(chCfg)],
-          ]
-          for (const f of ch.fields) {
-            pairs.push([
-            `${ch.name}__${f.yamlKey}`,
-            f.secret ? '' : String(chAccountCfg[f.yamlKey] || chCfg[f.yamlKey] || ''),
-          ])
-          }
-          return pairs
+    try {
+      const [data, selfCheck] = await Promise.all([
+        api<{ config?: ConfigPayload }>('/api/config'),
+        api<ConfigSelfCheck>('/api/config/self_check').catch((e) => {
+          setConfigSelfCheckError(e instanceof Error ? e.message : String(e))
+          return null
         }),
-      ),
-    })
-    setConfigOpen(true)
+      ])
+      setConfig(data.config || null)
+      setConfigSelfCheck(selfCheck)
+      const channelsCfg = (data.config?.channels as Record<string, Record<string, unknown>> | undefined) || {}
+      const telegramCfg = channelsCfg.telegram || {}
+      const telegramDefaultAccount = defaultAccountIdFromChannelConfig(telegramCfg)
+      const telegramAccountCfg = defaultAccountConfig(telegramCfg)
+      const discordCfg = channelsCfg.discord || {}
+      const discordDefaultAccount = defaultAccountIdFromChannelConfig(discordCfg)
+      const discordAccountCfg = defaultAccountConfig(discordCfg)
+      const ircCfg = channelsCfg.irc || {}
+      setConfigDraft({
+        llm_provider: data.config?.llm_provider || '',
+        model: data.config?.model || defaultModelForProvider(String(data.config?.llm_provider || 'anthropic')),
+        llm_base_url: String(data.config?.llm_base_url || ''),
+        api_key: '',
+        telegram_bot_token: '',
+        bot_username: String(data.config?.bot_username || ''),
+        telegram_account_id: telegramDefaultAccount,
+        telegram_bot_username: String(telegramAccountCfg.bot_username || telegramCfg.bot_username || ''),
+        telegram_model: String(telegramAccountCfg.model || telegramCfg.model || ''),
+        discord_bot_token: '',
+        discord_account_id: discordDefaultAccount,
+        discord_bot_username: String(discordAccountCfg.bot_username || discordCfg.bot_username || ''),
+        discord_model: String(discordAccountCfg.model || discordCfg.model || ''),
+        discord_allowed_channels_csv: Array.isArray(data.config?.discord_allowed_channels)
+          ? (data.config?.discord_allowed_channels as number[]).join(',')
+          : Array.isArray(discordAccountCfg.allowed_channels)
+            ? (discordAccountCfg.allowed_channels as number[]).join(',')
+          : '',
+        irc_server: String(ircCfg.server || ''),
+        irc_port: String(ircCfg.port || ''),
+        irc_nick: String(ircCfg.nick || ''),
+        irc_username: String(ircCfg.username || ''),
+        irc_real_name: String(ircCfg.real_name || ''),
+        irc_channels: String(ircCfg.channels || ''),
+        irc_password: '',
+        irc_mention_required: String(ircCfg.mention_required || ''),
+        irc_tls: String(ircCfg.tls || ''),
+        irc_tls_server_name: String(ircCfg.tls_server_name || ''),
+        irc_tls_danger_accept_invalid_certs: String(ircCfg.tls_danger_accept_invalid_certs || ''),
+        irc_model: String(ircCfg.model || ''),
+        web_bot_username: String((channelsCfg.web?.bot_username) || ''),
+        working_dir_isolation: normalizeWorkingDirIsolation(
+          data.config?.working_dir_isolation || DEFAULT_CONFIG_VALUES.working_dir_isolation,
+        ),
+        max_tokens: Number(data.config?.max_tokens ?? 8192),
+        max_tool_iterations: Number(data.config?.max_tool_iterations ?? 100),
+        max_document_size_mb: Number(data.config?.max_document_size_mb ?? DEFAULT_CONFIG_VALUES.max_document_size_mb),
+        memory_token_budget: Number(data.config?.memory_token_budget ?? DEFAULT_CONFIG_VALUES.memory_token_budget),
+        show_thinking: Boolean(data.config?.show_thinking),
+        web_enabled: Boolean(data.config?.web_enabled),
+        web_host: String(data.config?.web_host || '127.0.0.1'),
+        web_port: Number(data.config?.web_port ?? 10961),
+        reflector_enabled: data.config?.reflector_enabled !== false,
+        reflector_interval_mins: Number(data.config?.reflector_interval_mins ?? DEFAULT_CONFIG_VALUES.reflector_interval_mins),
+        embedding_provider: String(data.config?.embedding_provider || ''),
+        embedding_api_key: '',
+        embedding_base_url: String(data.config?.embedding_base_url || ''),
+        embedding_model: String(data.config?.embedding_model || ''),
+        embedding_dim: String(data.config?.embedding_dim || ''),
+        // Dynamic channel fields — initialize from server config
+        ...Object.fromEntries(
+          DYNAMIC_CHANNELS.flatMap((ch) => {
+            const chCfg = channelsCfg[ch.name] || {}
+            const chAccountCfg = defaultAccountConfig(chCfg)
+            const pairs: Array<[string, unknown]> = [
+              [`${ch.name}__account_id`, defaultAccountIdFromChannelConfig(chCfg)],
+            ]
+            for (const f of ch.fields) {
+              pairs.push([
+              `${ch.name}__${f.yamlKey}`,
+              f.secret ? '' : String(chAccountCfg[f.yamlKey] || chCfg[f.yamlKey] || ''),
+            ])
+            }
+            return pairs
+          }),
+        ),
+      })
+      setConfigOpen(true)
+    } catch (e) {
+      if (isUnauthorizedError(e)) {
+        lockForAuth('Session expired. Please sign in again.')
+        return
+      }
+      if (isForbiddenError(e)) {
+        setError('Forbidden: Runtime Config is not accessible with current credentials.')
+        return
+      }
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setConfigSelfCheckLoading(false)
+    }
   }
 
   async function openUsage(targetSession = sessionKey): Promise<void> {
@@ -1189,14 +1728,24 @@ function App() {
     setUsageMemory(null)
     setUsageReflectorRuns([])
     setUsageInjectionLogs([])
-    setUsageSession(targetSession)
+    const hasStoredSession = sessions.some((s) => s.session_key === targetSession)
+    const resolvedSession =
+      hasStoredSession
+        ? targetSession
+        : (sessions.length > 0 ? pickLatestSessionKey(sessions) : targetSession)
+    setUsageSession(resolvedSession)
     try {
-      const query = new URLSearchParams({ session_key: targetSession })
+      if (!hasStoredSession && sessions.length === 0) {
+        setUsageError('No usage data yet. Send a message in this session first.')
+        setUsageOpen(true)
+        return
+      }
+      const query = new URLSearchParams({ session_key: resolvedSession })
       const data = await api<{ report?: string; memory_observability?: MemoryObservability }>(`/api/usage?${query.toString()}`)
       setUsageReport(String(data.report || '').trim())
       setUsageMemory(data.memory_observability ?? null)
       const moQuery = new URLSearchParams({
-        session_key: targetSession,
+        session_key: resolvedSession,
         scope: 'chat',
         hours: '168',
         limit: '1000',
@@ -1210,6 +1759,15 @@ function App() {
       setUsageInjectionLogs(Array.isArray(series.injection_logs) ? series.injection_logs : [])
       setUsageOpen(true)
     } catch (e) {
+      if (isUnauthorizedError(e)) {
+        lockForAuth('Session expired. Please sign in again.')
+        return
+      }
+      if (isForbiddenError(e)) {
+        setUsageError('Forbidden: Usage panel requires permission.')
+        setUsageOpen(true)
+        return
+      }
       setUsageError(e instanceof Error ? e.message : String(e))
       setUsageOpen(true)
     } finally {
@@ -1316,6 +1874,42 @@ function App() {
         case 'embedding_dim':
           next.embedding_dim = DEFAULT_CONFIG_VALUES.embedding_dim
           break
+        case 'irc_server':
+          next.irc_server = ''
+          break
+        case 'irc_port':
+          next.irc_port = ''
+          break
+        case 'irc_nick':
+          next.irc_nick = ''
+          break
+        case 'irc_username':
+          next.irc_username = ''
+          break
+        case 'irc_real_name':
+          next.irc_real_name = ''
+          break
+        case 'irc_channels':
+          next.irc_channels = ''
+          break
+        case 'irc_password':
+          next.irc_password = ''
+          break
+        case 'irc_mention_required':
+          next.irc_mention_required = ''
+          break
+        case 'irc_tls':
+          next.irc_tls = ''
+          break
+        case 'irc_tls_server_name':
+          next.irc_tls_server_name = ''
+          break
+        case 'irc_tls_danger_accept_invalid_certs':
+          next.irc_tls_danger_accept_invalid_certs = ''
+          break
+        case 'irc_model':
+          next.irc_model = ''
+          break
         default:
           // Handle dynamic channel fields
           for (const ch of DYNAMIC_CHANNELS) {
@@ -1401,6 +1995,18 @@ function App() {
       )
       const discordBotUsername = String(configDraft.discord_bot_username || '').trim()
       const discordModel = String(configDraft.discord_model || '').trim()
+      const ircServer = String(configDraft.irc_server || '').trim()
+      const ircPort = String(configDraft.irc_port || '').trim()
+      const ircNick = String(configDraft.irc_nick || '').trim()
+      const ircUsername = String(configDraft.irc_username || '').trim()
+      const ircRealName = String(configDraft.irc_real_name || '').trim()
+      const ircChannels = String(configDraft.irc_channels || '').trim()
+      const ircPassword = String(configDraft.irc_password || '').trim()
+      const ircMentionRequired = String(configDraft.irc_mention_required || '').trim()
+      const ircTls = String(configDraft.irc_tls || '').trim()
+      const ircTlsServerName = String(configDraft.irc_tls_server_name || '').trim()
+      const ircTlsDangerAcceptInvalidCerts = String(configDraft.irc_tls_danger_accept_invalid_certs || '').trim()
+      const ircModel = String(configDraft.irc_model || '').trim()
 
       const embeddingApiKey = String(configDraft.embedding_api_key || '').trim()
       if (embeddingApiKey) payload.embedding_api_key = embeddingApiKey
@@ -1434,6 +2040,37 @@ function App() {
               ...(discordModel ? { model: discordModel } : {}),
             },
           },
+        }
+      }
+      if (
+        ircServer ||
+        ircPort ||
+        ircNick ||
+        ircUsername ||
+        ircRealName ||
+        ircChannels ||
+        ircPassword ||
+        ircMentionRequired ||
+        ircTls ||
+        ircTlsServerName ||
+        ircTlsDangerAcceptInvalidCerts ||
+        ircModel
+      ) {
+        channelConfigs.irc = {
+          ...(ircServer ? { server: ircServer } : {}),
+          ...(ircPort ? { port: ircPort } : {}),
+          ...(ircNick ? { nick: ircNick } : {}),
+          ...(ircUsername ? { username: ircUsername } : {}),
+          ...(ircRealName ? { real_name: ircRealName } : {}),
+          ...(ircChannels ? { channels: ircChannels } : {}),
+          ...(ircPassword ? { password: ircPassword } : {}),
+          ...(ircMentionRequired ? { mention_required: ircMentionRequired } : {}),
+          ...(ircTls ? { tls: ircTls } : {}),
+          ...(ircTlsServerName ? { tls_server_name: ircTlsServerName } : {}),
+          ...(ircTlsDangerAcceptInvalidCerts
+            ? { tls_danger_accept_invalid_certs: ircTlsDangerAcceptInvalidCerts }
+            : {}),
+          ...(ircModel ? { model: ircModel } : {}),
         }
       }
       for (const ch of DYNAMIC_CHANNELS) {
@@ -1493,17 +2130,12 @@ function App() {
   useEffect(() => {
     ;(async () => {
       try {
-        setError('')
-        const data = await api<{ sessions?: SessionItem[] }>('/api/sessions')
-        const loaded = Array.isArray(data.sessions) ? data.sessions : []
-        setSessions(loaded)
-
-        const latestSession = pickLatestSessionKey(loaded)
-        const initialSession = latestSession
-
-        setSessionKey(initialSession)
-        writeSessionToUrl(initialSession)
-        await loadHistory(initialSession)
+        const auth = await refreshAuthStatus()
+        if (auth.authenticated) {
+          await loadAppVersion()
+        }
+        if (!auth.has_password || !auth.authenticated) return
+        await loadInitialConversation()
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }
@@ -1512,9 +2144,16 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!authAuthenticated) return
     loadHistory(sessionKey).catch((e) => setError(e instanceof Error ? e.message : String(e)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionKey])
+  }, [sessionKey, authAuthenticated])
+
+  useEffect(() => {
+    if (!authAuthenticated) return
+    loadAppVersion().catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authAuthenticated])
 
   useEffect(() => {
     writeSessionToUrl(sessionKey)
@@ -1565,6 +2204,7 @@ function App() {
             onOpenConfig={openConfig}
             onOpenUsage={() => openUsage(sessionKey)}
             onNewSession={createSession}
+            appVersion={appVersion}
           />
 
           <main
@@ -1612,6 +2252,166 @@ function App() {
             </div>
           </main>
         </div>
+        <Dialog.Root open={authReady && !authHasPassword}>
+          <Dialog.Content maxWidth="520px">
+            <Dialog.Title>Set Operator Password</Dialog.Title>
+            <Dialog.Description size="2">
+              First-time setup: set an admin password using the bootstrap token from server logs.
+            </Dialog.Description>
+            <div className="mt-4 space-y-3">
+              <ConfigFieldCard
+                label="Bootstrap Token"
+                description={<>Copy <code>x-bootstrap-token</code> from MicroClaw startup logs.</>}
+              >
+                <TextField.Root
+                  className="mt-2"
+                  value={bootstrapToken}
+                  onChange={(e) => setBootstrapToken(e.target.value)}
+                  placeholder="902439dd-a93b-4c66-81bb-7ffba0057936"
+                />
+              </ConfigFieldCard>
+              <ConfigFieldCard
+                label="Password"
+                description={<>At least 8 characters.</>}
+              >
+                <TextField.Root
+                  className="mt-2"
+                  type="password"
+                  value={bootstrapPassword}
+                  onChange={(e) => setBootstrapPassword(e.target.value)}
+                  placeholder="********"
+                />
+                <div className="mt-2 flex items-center justify-end">
+                  <Button
+                    size="1"
+                    variant="soft"
+                    onClick={() => {
+                      const next = generatePassword()
+                      setBootstrapPassword(next)
+                      setBootstrapConfirm(next)
+                      setGeneratedPasswordPreview(next)
+                    }}
+                    disabled={authBusy}
+                  >
+                    Generate Password
+                  </Button>
+                </div>
+              </ConfigFieldCard>
+              <ConfigFieldCard label="Confirm Password" description={<>Re-enter the same password.</>}>
+                <TextField.Root
+                  className="mt-2"
+                  type="password"
+                  value={bootstrapConfirm}
+                  onChange={(e) => setBootstrapConfirm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void submitBootstrapPassword()
+                  }}
+                  placeholder="********"
+                />
+              </ConfigFieldCard>
+            </div>
+            {authMessage ? (
+              <Callout.Root color="red" size="1" variant="soft" className="mt-3">
+                <Callout.Text>{authMessage}</Callout.Text>
+              </Callout.Root>
+            ) : null}
+            {generatedPasswordPreview ? (
+              <Callout.Root color="green" size="1" variant="soft" className="mt-3">
+                <Callout.Text>Generated password: <code>{generatedPasswordPreview}</code></Callout.Text>
+              </Callout.Root>
+            ) : null}
+            <div className="mt-4 flex justify-end">
+              <Button onClick={() => void submitBootstrapPassword()} disabled={authBusy}>
+                {authBusy ? 'Applying...' : 'Set Password'}
+              </Button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Root>
+        <Dialog.Root open={authReady && authHasPassword && !authAuthenticated}>
+          <Dialog.Content maxWidth="460px">
+            <Dialog.Title>Sign In</Dialog.Title>
+            <Dialog.Description size="2">
+              Enter your operator password to access sessions and history.
+            </Dialog.Description>
+            {authUsingDefaultPassword ? (
+              <Callout.Root color="orange" size="1" variant="soft" className="mt-2">
+                <Callout.Text>
+                  No custom password is set yet. Temporary default password: <code>helloworld</code>
+                </Callout.Text>
+              </Callout.Root>
+            ) : null}
+            <ConfigFieldCard label="Password" description={<>Use the password configured for this Web UI.</>}>
+              <TextField.Root
+                className="mt-2"
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void submitLogin(loginPassword)
+                }}
+                placeholder="********"
+              />
+            </ConfigFieldCard>
+            {authMessage ? (
+              <Callout.Root color="red" size="1" variant="soft" className="mt-3">
+                <Callout.Text>{authMessage}</Callout.Text>
+              </Callout.Root>
+            ) : null}
+            <div className="mt-4 flex justify-end">
+              <Button onClick={() => void submitLogin(loginPassword)} disabled={authBusy}>
+                {authBusy ? 'Signing in...' : 'Sign In'}
+              </Button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Root>
+        <Dialog.Root open={authReady && authAuthenticated && authUsingDefaultPassword && passwordPromptOpen}>
+          <Dialog.Content maxWidth="520px">
+            <Dialog.Title>Change Default Password</Dialog.Title>
+            <Dialog.Description size="2">
+              You are using the default password <code>helloworld</code>. Set a new password now, or skip for now.
+            </Dialog.Description>
+            <div className="mt-4 space-y-3">
+              <ConfigFieldCard label="New Password" description={<>At least 8 characters.</>}>
+                <TextField.Root
+                  className="mt-2"
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="********"
+                />
+              </ConfigFieldCard>
+              <ConfigFieldCard label="Confirm Password" description={<>Re-enter the new password.</>}>
+                <TextField.Root
+                  className="mt-2"
+                  type="password"
+                  value={newPasswordConfirm}
+                  onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void submitPasswordUpdate()
+                  }}
+                  placeholder="********"
+                />
+              </ConfigFieldCard>
+            </div>
+            {passwordPromptMessage ? (
+              <Callout.Root color="red" size="1" variant="soft" className="mt-3">
+                <Callout.Text>{passwordPromptMessage}</Callout.Text>
+              </Callout.Root>
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="soft"
+                onClick={() => setPasswordPromptOpen(false)}
+                disabled={passwordPromptBusy}
+              >
+                Skip for now
+              </Button>
+              <Button onClick={() => void submitPasswordUpdate()} disabled={passwordPromptBusy}>
+                {passwordPromptBusy ? 'Updating...' : 'Update Password'}
+              </Button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Root>
         <Dialog.Root open={configOpen} onOpenChange={setConfigOpen}>
           <Dialog.Content maxWidth="1120px" className="overflow-hidden flex flex-col" style={{ width: "1120px", height: "760px", maxWidth: "1120px", maxHeight: "760px" }}>
             <Dialog.Title>Settings</Dialog.Title>
@@ -1681,7 +2481,7 @@ function App() {
                 <Tabs.Root defaultValue="general" orientation="vertical" className="h-full min-h-0">
                 <div className="grid h-full grid-cols-[240px_minmax(0,1fr)] gap-4">
                   <Card className="h-full p-3" style={sectionCardStyle}>
-                    <Tabs.List className="mc-settings-tabs-list flex w-full flex-col gap-1">
+                    <Tabs.List className="mc-settings-tabs-list flex h-full w-full flex-col gap-1">
                       <Text size="1" color="gray" className="px-2 pt-1 uppercase tracking-wide">Runtime</Text>
                       <Tabs.Trigger value="general" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">⚙️  General</Tabs.Trigger>
                       <Tabs.Trigger value="model" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">🧠  Model</Tabs.Trigger>
@@ -1689,12 +2489,34 @@ function App() {
                       <Text size="1" color="gray" className="px-2 pt-3 uppercase tracking-wide">Channels</Text>
                       <Tabs.Trigger value="telegram" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">✈️  Telegram</Tabs.Trigger>
                       <Tabs.Trigger value="discord" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">💬  Discord</Tabs.Trigger>
+                      <Tabs.Trigger value="irc" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">🧵  IRC</Tabs.Trigger>
                       {DYNAMIC_CHANNELS.map((ch) => (
                         <Tabs.Trigger key={ch.name} value={ch.name} className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">{ch.icon}  {ch.title}</Tabs.Trigger>
                       ))}
 
                       <Text size="1" color="gray" className="px-2 pt-3 uppercase tracking-wide">Integrations</Text>
                       <Tabs.Trigger value="web" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">🌐  Web</Tabs.Trigger>
+                      {authAuthenticated ? (
+                        <div className="mt-auto pt-3">
+                          <Separator size="4" />
+                          <button
+                            type="button"
+                            onClick={() => void logout()}
+                            className="mt-3 inline-flex w-full items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium transition hover:brightness-110 active:brightness-95"
+                            style={
+                              appearance === 'dark'
+                                ? {
+                                    borderColor: 'var(--mc-border-soft)',
+                                    background: 'var(--mc-bg-panel)',
+                                    color: 'var(--mc-text)',
+                                  }
+                                : undefined
+                            }
+                          >
+                            Log out
+                          </button>
+                        </div>
+                      ) : null}
                     </Tabs.List>
                   </Card>
 
@@ -2025,6 +2847,120 @@ function App() {
                               className="mt-2"
                               value={String(configDraft.discord_model || '')}
                               onChange={(e) => setConfigField('discord_model', e.target.value)}
+                              placeholder="claude-sonnet-4-5-20250929"
+                            />
+                          </ConfigFieldCard>
+                        </div>
+                      </div>
+                    </Tabs.Content>
+
+                    <Tabs.Content value="irc">
+                      <div className={sectionCardClass} style={sectionCardStyle}>
+                        <Text size="3" weight="bold">IRC</Text>
+                        <ConfigStepsCard
+                          steps={[
+                            <>Set IRC server and nick.</>,
+                            <>Set channels as comma-separated list, for example <code>#general,#bot</code>.</>,
+                            <>Use TLS fields when connecting to secure endpoints.</>,
+                          ]}
+                        />
+                        <Text size="1" color="gray" className="mt-3 block">
+                          Required for IRC runtime: server and nick.
+                        </Text>
+                        <div className="mt-4 space-y-3">
+                          <ConfigFieldCard label="irc_server" description={<>IRC server hostname.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_server || '')}
+                              onChange={(e) => setConfigField('irc_server', e.target.value)}
+                              placeholder="irc.libera.chat"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_port" description={<>IRC server port. Typical values: 6667 or 6697 (TLS).</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_port || '')}
+                              onChange={(e) => setConfigField('irc_port', e.target.value)}
+                              placeholder="6667"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_nick" description={<>Bot nickname.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_nick || '')}
+                              onChange={(e) => setConfigField('irc_nick', e.target.value)}
+                              placeholder="microclaw"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_username" description={<>Optional IRC username. Defaults to nick when empty.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_username || '')}
+                              onChange={(e) => setConfigField('irc_username', e.target.value)}
+                              placeholder="microclaw"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_real_name" description={<>Optional IRC real name/gecos field.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_real_name || '')}
+                              onChange={(e) => setConfigField('irc_real_name', e.target.value)}
+                              placeholder="MicroClaw"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_channels" description={<>Comma-separated target channels.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_channels || '')}
+                              onChange={(e) => setConfigField('irc_channels', e.target.value)}
+                              placeholder="#general,#support"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_password" description={<>Optional IRC server password. Leave blank to keep current secret unchanged.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_password || '')}
+                              onChange={(e) => setConfigField('irc_password', e.target.value)}
+                              placeholder="password"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_mention_required" description={<>In channels, require bot mention before responding (<code>true</code>/<code>false</code>).</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_mention_required || '')}
+                              onChange={(e) => setConfigField('irc_mention_required', e.target.value)}
+                              placeholder="true"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_tls" description={<>Enable TLS (<code>true</code>/<code>false</code>).</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_tls || '')}
+                              onChange={(e) => setConfigField('irc_tls', e.target.value)}
+                              placeholder="false"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_tls_server_name" description={<>Optional TLS SNI server name. Defaults to server.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_tls_server_name || '')}
+                              onChange={(e) => setConfigField('irc_tls_server_name', e.target.value)}
+                              placeholder="irc.libera.chat"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_tls_danger_accept_invalid_certs" description={<>Allow invalid TLS certs (<code>true</code>/<code>false</code>). Only for testing.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_tls_danger_accept_invalid_certs || '')}
+                              onChange={(e) => setConfigField('irc_tls_danger_accept_invalid_certs', e.target.value)}
+                              placeholder="false"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="irc_model" description={<>Optional IRC model override.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.irc_model || '')}
+                              onChange={(e) => setConfigField('irc_model', e.target.value)}
                               placeholder="claude-sonnet-4-5-20250929"
                             />
                           </ConfigFieldCard>
