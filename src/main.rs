@@ -206,27 +206,34 @@ fn move_path(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 fn migrate_legacy_runtime_layout(data_root: &Path, runtime_dir: &Path) {
-    if std::fs::create_dir_all(runtime_dir).is_err() {
-        return;
-    }
-
     let entries = match std::fs::read_dir(data_root) {
         Ok(entries) => entries,
         Err(_) => return,
     };
 
+    let mut runtime_dir_ready = false;
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name_str) = name.to_str() else {
             continue;
         };
-        if name_str == "skills" || name_str == "runtime" || name_str == "mcp.json" {
+        if name_str == "skills"
+            || name_str == "runtime"
+            || name_str == "mcp.json"
+            || name_str == "working_dir"
+        {
             continue;
         }
         let src = entry.path();
         let dst = runtime_dir.join(name_str);
         if dst.exists() {
             continue;
+        }
+        if !runtime_dir_ready {
+            if std::fs::create_dir_all(runtime_dir).is_err() {
+                return;
+            }
+            runtime_dir_ready = true;
         }
         if let Err(e) = move_path(&src, &dst) {
             tracing::warn!(
@@ -490,4 +497,44 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migrate_legacy_runtime_layout;
+    use std::path::Path;
+
+    fn unique_temp_dir() -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("microclaw-main-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp test dir");
+        dir
+    }
+
+    #[test]
+    fn migrate_legacy_runtime_layout_keeps_working_dir_at_data_root() {
+        let root = unique_temp_dir();
+        let runtime_dir = root.join("runtime");
+        let working_dir = root.join("working_dir");
+        std::fs::create_dir_all(&working_dir).expect("create working_dir");
+
+        migrate_legacy_runtime_layout(&root, Path::new(&runtime_dir));
+
+        assert!(working_dir.exists());
+        assert!(!runtime_dir.join("working_dir").exists());
+        assert!(!runtime_dir.exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrate_legacy_runtime_layout_does_not_create_runtime_dir_when_no_entries() {
+        let root = unique_temp_dir();
+        let runtime_dir = root.join("runtime");
+
+        migrate_legacy_runtime_layout(&root, Path::new(&runtime_dir));
+
+        assert!(!runtime_dir.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

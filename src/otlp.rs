@@ -95,11 +95,12 @@ impl OtlpExporter {
             .and_then(|v| v.as_u64())
             .map(|n| n.clamp(50, 60_000))
             .unwrap_or(500);
-        let retry_max_ms = map
+        let retry_max_ms_raw = map
             .get(serde_yaml::Value::String("otlp_retry_max_ms".to_string()))
             .and_then(|v| v.as_u64())
             .map(|n| n.clamp(100, 600_000))
             .unwrap_or(8_000);
+        let (retry_base_ms, retry_max_ms) = normalize_retry_window(retry_base_ms, retry_max_ms_raw);
 
         let mut headers = Vec::new();
         if let Some(hmap) = map
@@ -138,6 +139,11 @@ impl OtlpExporter {
             .try_send(snapshot)
             .map_err(|e| format!("otlp queue full or closed: {e}"))
     }
+}
+
+fn normalize_retry_window(retry_base_ms: u64, retry_max_ms: u64) -> (u64, u64) {
+    let normalized_max = retry_max_ms.max(retry_base_ms);
+    (retry_base_ms, normalized_max)
 }
 
 async fn run_worker(
@@ -434,5 +440,19 @@ mod tests {
         assert!(metrics
             .iter()
             .any(|m| m.name == "microclaw_mcp_circuit_open_rejections"));
+    }
+
+    #[test]
+    fn test_normalize_retry_window_keeps_valid_range() {
+        let (base, max) = normalize_retry_window(500, 8_000);
+        assert_eq!(base, 500);
+        assert_eq!(max, 8_000);
+    }
+
+    #[test]
+    fn test_normalize_retry_window_raises_max_when_needed() {
+        let (base, max) = normalize_retry_window(30_000, 100);
+        assert_eq!(base, 30_000);
+        assert_eq!(max, 30_000);
     }
 }

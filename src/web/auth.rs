@@ -1,4 +1,12 @@
 use super::*;
+use std::collections::HashSet;
+
+const ALLOWED_API_KEY_SCOPES: &[&str] = &[
+    "operator.read",
+    "operator.write",
+    "operator.admin",
+    "operator.approvals",
+];
 
 pub(super) async fn api_auth_status(
     headers: HeaderMap,
@@ -242,18 +250,8 @@ pub(super) async fn api_auth_create_api_key(
     let raw_key = format!("mk_{}", uuid::Uuid::new_v4().simple());
     let prefix = raw_key.chars().take(10).collect::<String>();
     let hash = sha256_hex(&raw_key);
-    let scopes = body
-        .scopes
-        .into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>();
-    if scopes.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "at least one scope is required".into(),
-        ));
-    }
+    let scopes = normalize_api_key_scopes(body.scopes)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg.to_string()))?;
     let expires_at = body
         .expires_days
         .map(|d| d.clamp(1, 3650))
@@ -327,13 +325,11 @@ pub(super) async fn api_auth_rotate_api_key(
     let Some(old) = keys.into_iter().find(|k| k.id == key_id) else {
         return Err((StatusCode::NOT_FOUND, "api key not found".into()));
     };
-    let scopes = body.scopes.unwrap_or(old.scopes);
-    if scopes.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "at least one scope is required".into(),
-        ));
-    }
+    let scopes = match body.scopes {
+        Some(candidate) => normalize_api_key_scopes(candidate)
+            .map_err(|msg| (StatusCode::BAD_REQUEST, msg.to_string()))?,
+        None => old.scopes,
+    };
     let label = body
         .label
         .unwrap_or_else(|| format!("{} (rotated)", old.label));
@@ -378,4 +374,55 @@ pub(super) async fn api_auth_rotate_api_key(
         "scopes": scopes,
         "expires_at": expires_at
     })))
+}
+
+fn normalize_api_key_scopes(scopes: Vec<String>) -> Result<Vec<String>, &'static str> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for scope in scopes.into_iter().map(|s| s.trim().to_string()) {
+        if scope.is_empty() {
+            continue;
+        }
+        if !ALLOWED_API_KEY_SCOPES.contains(&scope.as_str()) {
+            return Err("invalid scope");
+        }
+        if seen.insert(scope.clone()) {
+            normalized.push(scope);
+        }
+    }
+    if normalized.is_empty() {
+        return Err("at least one scope is required");
+    }
+    Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_api_key_scopes;
+
+    #[test]
+    fn normalize_api_key_scopes_trims_and_dedupes() {
+        let scopes = vec![
+            " operator.read ".to_string(),
+            "operator.read".to_string(),
+            "operator.write".to_string(),
+            "".to_string(),
+        ];
+        let out = normalize_api_key_scopes(scopes).expect("normalized scopes");
+        assert_eq!(out, vec!["operator.read", "operator.write"]);
+    }
+
+    #[test]
+    fn normalize_api_key_scopes_rejects_invalid_scope() {
+        let scopes = vec!["operator.root".to_string()];
+        let err = normalize_api_key_scopes(scopes).expect_err("expected invalid scope");
+        assert_eq!(err, "invalid scope");
+    }
+
+    #[test]
+    fn normalize_api_key_scopes_requires_non_empty() {
+        let scopes = vec![" ".to_string()];
+        let err = normalize_api_key_scopes(scopes).expect_err("expected non-empty scope error");
+        assert_eq!(err, "at least one scope is required");
+    }
 }
