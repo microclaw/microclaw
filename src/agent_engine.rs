@@ -380,6 +380,15 @@ pub(crate) async fn process_with_agent_impl(
             })
             .await?;
             for stored_msg in &new_msgs {
+                if run_control::is_aborted_source_message(
+                    context.caller_channel,
+                    chat_id,
+                    &stored_msg.id,
+                )
+                .await
+                {
+                    continue;
+                }
                 if is_slash_command_text(&stored_msg.content) {
                     continue;
                 }
