@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::agent_engine::archive_conversation;
 use crate::config::Config;
+use crate::run_control;
 use crate::runtime::AppState;
 use microclaw_core::llm_types::Message;
 use microclaw_storage::db::{call_blocking, Database};
@@ -53,6 +54,14 @@ pub async fn handle_chat_command(
     if trimmed == "/reset" {
         let _ = call_blocking(state.db.clone(), move |db| db.clear_chat_context(chat_id)).await;
         return Some("Context cleared (session + chat history).".to_string());
+    }
+
+    if trimmed == "/stop" {
+        let stopped = run_control::abort_runs(caller_channel, chat_id).await;
+        if stopped > 0 {
+            return Some(format!("Stopping current run ({stopped} active)."));
+        }
+        return Some("No active run in this chat.".to_string());
     }
 
     if trimmed == "/skills" {

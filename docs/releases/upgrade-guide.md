@@ -8,6 +8,7 @@ This release adds:
 - hook runtime and `microclaw hooks` CLI
 - session fork metadata and APIs
 - metrics APIs/history
+- slash-command behavior change: `/stop` now aborts the active run for the current chat (it no longer clears chat history/session data)
 
 ## Pre-Upgrade Checklist
 
@@ -50,6 +51,8 @@ For cookie-authenticated write/admin APIs, include CSRF header:
 3. `GET /api/sessions/tree`
 4. `GET /api/metrics`
 5. `GET /api/config/self_check` (no unaccepted `high` warnings)
+6. In any chat, start a long-running request and send `/stop`; verify the in-flight run is aborted.
+7. Verify `/reset` still clears chat context (session + chat history) as before.
 
 ## Merge Notes (PR #40)
 

@@ -8,10 +8,12 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_fraction, should_drop_pre_start_message,
+    should_drop_recent_duplicate_message,
 };
 use crate::chat_commands::maybe_handle_plugin_command;
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
@@ -636,9 +638,6 @@ async fn handle_slack_message(
     is_app_mention: bool,
     ts: &str,
 ) {
-    let chat_lock = slack_chat_lock(&runtime.channel_name, channel);
-    let _guard = chat_lock.lock().await;
-
     let chat_type = if is_dm { "slack_dm" } else { "slack" };
     let title = format!("slack-{channel}");
 
@@ -676,6 +675,9 @@ async fn handle_slack_message(
     ) {
         return;
     }
+    if should_drop_recent_duplicate_message(&runtime.channel_name, &inbound_message_id) {
+        return;
+    }
 
     let trimmed = text.trim();
     let mention_tag = format!("<@{bot_user_id}>");
@@ -700,6 +702,9 @@ async fn handle_slack_message(
         let _ = send_slack_response(bot_token, channel, &unknown_command_response()).await;
         return;
     }
+
+    let chat_lock = slack_chat_lock(&runtime.channel_name, channel);
+    let _guard = chat_lock.lock().await;
 
     // Store incoming message
     let stored = StoredMessage {
@@ -801,7 +806,9 @@ async fn handle_slack_message(
         }
         Err(e) => {
             error!("Error processing Slack message: {e}");
-            let _ = send_slack_response(bot_token, channel, &format!("Error: {e}")).await;
+            if !should_suppress_user_error(&e) {
+                let _ = send_slack_response(bot_token, channel, &format!("Error: {e}")).await;
+            }
         }
     }
 }

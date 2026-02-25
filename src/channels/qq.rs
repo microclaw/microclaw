@@ -11,7 +11,7 @@ use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_str, parse_epoch_ms_from_str,
-    should_drop_pre_start_message,
+    should_drop_pre_start_message, should_drop_recent_duplicate_message,
 };
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -346,26 +346,6 @@ async fn qq_webhook_handler(
     if chat_id == 0 {
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
     }
-    if is_slash_command(text) {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, text).await
-        {
-            let adapter = QQAdapter::new(
-                runtime_ctx.channel_name.clone(),
-                runtime_ctx.send_command.clone(),
-            );
-            let _ = adapter.send_text(user_id, &reply).await;
-            return axum::http::StatusCode::OK;
-        }
-        let adapter = QQAdapter::new(
-            runtime_ctx.channel_name.clone(),
-            runtime_ctx.send_command.clone(),
-        );
-        let _ = adapter
-            .send_text(user_id, &unknown_command_response())
-            .await;
-        return axum::http::StatusCode::OK;
-    }
     let inbound_message_id = if payload.message_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -388,6 +368,29 @@ async fn qq_webhook_handler(
         &inbound_message_id,
         inbound_ts_ms,
     ) {
+        return axum::http::StatusCode::OK;
+    }
+    if should_drop_recent_duplicate_message(&runtime_ctx.channel_name, &inbound_message_id) {
+        return axum::http::StatusCode::OK;
+    }
+    if is_slash_command(text) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, text).await
+        {
+            let adapter = QQAdapter::new(
+                runtime_ctx.channel_name.clone(),
+                runtime_ctx.send_command.clone(),
+            );
+            let _ = adapter.send_text(user_id, &reply).await;
+            return axum::http::StatusCode::OK;
+        }
+        let adapter = QQAdapter::new(
+            runtime_ctx.channel_name.clone(),
+            runtime_ctx.send_command.clone(),
+        );
+        let _ = adapter
+            .send_text(user_id, &unknown_command_response())
+            .await;
         return axum::http::StatusCode::OK;
     }
     let stored = StoredMessage {

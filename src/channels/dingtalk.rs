@@ -10,7 +10,7 @@ use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_str, parse_epoch_ms_from_str,
-    should_drop_pre_start_message,
+    should_drop_pre_start_message, should_drop_recent_duplicate_message,
 };
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -388,26 +388,6 @@ async fn process_dingtalk_webhook_message(
         error!("DingTalk: failed to resolve chat ID for {external_chat_id}");
         return;
     }
-    if is_slash_command(&text) {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, &text).await
-        {
-            let adapter = DingTalkAdapter::new(
-                runtime_ctx.channel_name.clone(),
-                runtime_ctx.robot_webhook_url.clone(),
-            );
-            let _ = adapter.send_text(&chat_id_external, &reply).await;
-            return;
-        }
-        let adapter = DingTalkAdapter::new(
-            runtime_ctx.channel_name.clone(),
-            runtime_ctx.robot_webhook_url.clone(),
-        );
-        let _ = adapter
-            .send_text(&chat_id_external, &unknown_command_response())
-            .await;
-        return;
-    }
     let inbound_message_id = if payload.message_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -436,6 +416,29 @@ async fn process_dingtalk_webhook_message(
         &inbound_message_id,
         inbound_ts_ms,
     ) {
+        return;
+    }
+    if should_drop_recent_duplicate_message(&runtime_ctx.channel_name, &inbound_message_id) {
+        return;
+    }
+    if is_slash_command(&text) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, &text).await
+        {
+            let adapter = DingTalkAdapter::new(
+                runtime_ctx.channel_name.clone(),
+                runtime_ctx.robot_webhook_url.clone(),
+            );
+            let _ = adapter.send_text(&chat_id_external, &reply).await;
+            return;
+        }
+        let adapter = DingTalkAdapter::new(
+            runtime_ctx.channel_name.clone(),
+            runtime_ctx.robot_webhook_url.clone(),
+        );
+        let _ = adapter
+            .send_text(&chat_id_external, &unknown_command_response())
+            .await;
         return;
     }
     let stored = StoredMessage {

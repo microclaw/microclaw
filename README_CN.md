@@ -277,6 +277,7 @@ MicroClaw 支持 [Anthropic Agent Skills](https://github.com/anthropics/skills) 
 **添加技能：** 在 `<data_dir>/skills/` 下创建子目录，放入包含 YAML frontmatter（`name` 和 `description`）和 markdown 指令的 `SKILL.md` 文件。
 
 **命令：**
+- `/stop` -- 中止当前聊天正在执行的 run（保留历史/会话数据）
 - `/reset` -- 清除当前聊天上下文（会话 + 聊天历史）
 - `/skills` -- 列出所有可用技能
 - `/reload-skills` -- 从磁盘重新加载技能
@@ -290,6 +291,7 @@ MicroClaw 支持 [Anthropic Agent Skills](https://github.com/anthropics/skills) 
 - 支持“前置提及 + slash”形式（例如 `@bot /status`、`<@U123> /status`）。
 - slash 命令不会写入 agent 会话上下文。
 - 未知 slash 命令返回 `Unknown command.`。
+- 需要中断正在执行的请求时用 `/stop`；需要清空上下文时用 `/reset`。
 
 ## MCP
 

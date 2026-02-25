@@ -22,9 +22,12 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
-use crate::channels::startup_guard::{mark_channel_started, should_drop_pre_start_message};
+use crate::channels::startup_guard::{
+    mark_channel_started, should_drop_pre_start_message, should_drop_recent_duplicate_message,
+};
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
@@ -1709,9 +1712,6 @@ async fn handle_matrix_message(
     runtime: MatrixRuntimeContext,
     msg: MatrixIncomingMessage,
 ) {
-    let chat_lock = matrix_chat_lock(&runtime.channel_name, &msg.room_id);
-    let _guard = chat_lock.lock().await;
-
     let chat_id =
         resolve_matrix_chat_id(app_state.clone(), &runtime, &msg.room_id, msg.is_direct).await;
 
@@ -1726,6 +1726,9 @@ async fn handle_matrix_message(
         msg.event_id.clone()
     };
     if should_drop_pre_start_message(&runtime.channel_name, &inbound_event_id, msg.event_time_ms) {
+        return;
+    }
+    if should_drop_recent_duplicate_message(&runtime.channel_name, &inbound_event_id) {
         return;
     }
     let should_respond = runtime.should_respond(&msg.body, msg.mentioned_bot, msg.is_direct);
@@ -1750,6 +1753,9 @@ async fn handle_matrix_message(
         }
         return;
     }
+
+    let chat_lock = matrix_chat_lock(&runtime.channel_name, &msg.room_id);
+    let _guard = chat_lock.lock().await;
 
     let incoming = StoredMessage {
         id: inbound_event_id.clone(),
@@ -1884,13 +1890,15 @@ async fn handle_matrix_message(
         }
         Err(e) => {
             error!("Error processing Matrix message: {e}");
-            let _ = send_matrix_text_runtime(
-                &runtime,
-                &msg.room_id,
-                &format!("Error: {e}"),
-                msg.prefer_sdk_send,
-            )
-            .await;
+            if !should_suppress_user_error(&e) {
+                let _ = send_matrix_text_runtime(
+                    &runtime,
+                    &msg.room_id,
+                    &format!("Error: {e}"),
+                    msg.prefer_sdk_send,
+                )
+                .await;
+            }
         }
     }
 }

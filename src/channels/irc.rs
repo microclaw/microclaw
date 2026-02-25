@@ -10,6 +10,7 @@ use tokio_native_tls::TlsConnector as TokioTlsConnector;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
 use crate::chat_commands::maybe_handle_plugin_command;
@@ -580,9 +581,11 @@ async fn handle_irc_message(
         }
         Err(e) => {
             error!("Error processing IRC message: {e}");
-            let _ = adapter
-                .send_text(&response_target, &format!("Error: {e}"))
-                .await;
+            if !should_suppress_user_error(&e) {
+                let _ = adapter
+                    .send_text(&response_target, &format!("Error: {e}"))
+                    .await;
+            }
         }
     }
 }

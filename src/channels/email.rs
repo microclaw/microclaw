@@ -12,7 +12,7 @@ use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_str, parse_epoch_ms_from_str,
-    should_drop_pre_start_message,
+    should_drop_pre_start_message, should_drop_recent_duplicate_message,
 };
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -467,40 +467,6 @@ async fn process_email_webhook_message(
         return;
     }
 
-    let trimmed = trimmed_text.trim();
-    if is_slash_command(trimmed) {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, trimmed).await
-        {
-            let target = if payload.reply_to.trim().is_empty() {
-                from.to_string()
-            } else {
-                payload.reply_to.trim().to_string()
-            };
-            let _ = send_email_via_sendmail(
-                &runtime_ctx.sendmail_path,
-                &runtime_ctx.from_address,
-                &target,
-                "MicroClaw command reply",
-                &reply,
-            );
-            return;
-        }
-        let target = if payload.reply_to.trim().is_empty() {
-            from.to_string()
-        } else {
-            payload.reply_to.trim().to_string()
-        };
-        let _ = send_email_via_sendmail(
-            &runtime_ctx.sendmail_path,
-            &runtime_ctx.from_address,
-            &target,
-            "MicroClaw command reply",
-            &unknown_command_response(),
-        );
-        return;
-    }
-
     let inbound_message_id = if payload.message_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -535,6 +501,43 @@ async fn process_email_webhook_message(
         &inbound_message_id,
         inbound_ts_ms,
     ) {
+        return;
+    }
+    if should_drop_recent_duplicate_message(&runtime_ctx.channel_name, &inbound_message_id) {
+        return;
+    }
+
+    let trimmed = trimmed_text.trim();
+    if is_slash_command(trimmed) {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, trimmed).await
+        {
+            let target = if payload.reply_to.trim().is_empty() {
+                from.to_string()
+            } else {
+                payload.reply_to.trim().to_string()
+            };
+            let _ = send_email_via_sendmail(
+                &runtime_ctx.sendmail_path,
+                &runtime_ctx.from_address,
+                &target,
+                "MicroClaw command reply",
+                &reply,
+            );
+            return;
+        }
+        let target = if payload.reply_to.trim().is_empty() {
+            from.to_string()
+        } else {
+            payload.reply_to.trim().to_string()
+        };
+        let _ = send_email_via_sendmail(
+            &runtime_ctx.sendmail_path,
+            &runtime_ctx.from_address,
+            &target,
+            "MicroClaw command reply",
+            &unknown_command_response(),
+        );
         return;
     }
     let stored = StoredMessage {

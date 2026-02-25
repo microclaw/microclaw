@@ -8,9 +8,10 @@ use serde::Deserialize;
 use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
-use crate::agent_engine::{AgentEvent, AgentRequestContext};
+use crate::agent_engine::{should_suppress_user_error, AgentEvent, AgentRequestContext};
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_str, should_drop_pre_start_message,
+    should_drop_recent_duplicate_message,
 };
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -580,6 +581,22 @@ async fn handle_whatsapp_message(
         return;
     }
 
+    let inbound_message_id = if message_id.trim().is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        message_id.to_string()
+    };
+    if should_drop_pre_start_message(
+        &runtime.channel_name,
+        &inbound_message_id,
+        parse_epoch_ms_from_seconds_str(timestamp),
+    ) {
+        return;
+    }
+    if should_drop_recent_duplicate_message(&runtime.channel_name, &inbound_message_id) {
+        return;
+    }
+
     let trimmed = text.trim();
     if is_slash_command(trimmed) {
         if let Some(reply) =
@@ -605,19 +622,6 @@ async fn handle_whatsapp_message(
             &unknown_command_response(),
         )
         .await;
-        return;
-    }
-
-    let inbound_message_id = if message_id.trim().is_empty() {
-        uuid::Uuid::new_v4().to_string()
-    } else {
-        message_id.to_string()
-    };
-    if should_drop_pre_start_message(
-        &runtime.channel_name,
-        &inbound_message_id,
-        parse_epoch_ms_from_seconds_str(timestamp),
-    ) {
         return;
     }
     let stored = StoredMessage {
@@ -731,15 +735,17 @@ async fn handle_whatsapp_message(
         }
         Err(e) => {
             error!("WhatsApp: error processing message: {e}");
-            let _ = send_whatsapp_text(
-                &reqwest::Client::new(),
-                &runtime.access_token,
-                &runtime.phone_number_id,
-                &runtime.api_version,
-                external_chat_id,
-                &format!("Error: {e}"),
-            )
-            .await;
+            if !should_suppress_user_error(&e) {
+                let _ = send_whatsapp_text(
+                    &reqwest::Client::new(),
+                    &runtime.access_token,
+                    &runtime.phone_number_id,
+                    &runtime.api_version,
+                    external_chat_id,
+                    &format!("Error: {e}"),
+                )
+                .await;
+            }
         }
     }
 }

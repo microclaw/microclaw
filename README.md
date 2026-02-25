@@ -330,6 +330,7 @@ Plugin admin commands (control chats):
 See full manifest schema and examples: `docs/plugins/overview.md`.
 
 **Commands:**
+- `/stop` -- abort the current active run in this chat (keeps history/session data)
 - `/reset` -- clear current chat context (session + chat history)
 - `/skills` -- list all available skills
 - `/reload-skills` -- reload skills from disk
@@ -343,6 +344,7 @@ Command handling rules:
 - Inputs with leading mentions before slash are also treated as commands (for example `@bot /status`, `<@U123> /status`).
 - Slash commands do **not** enter agent conversation history/session context.
 - Unknown slash commands return `Unknown command.`.
+- Use `/stop` to interrupt an in-flight run; use `/reset` to wipe chat context.
 
 ## MCP
 

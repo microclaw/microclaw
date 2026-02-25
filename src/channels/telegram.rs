@@ -8,8 +8,12 @@ use teloxide::prelude::*;
 use teloxide::types::{ChatAction, InputFile, ParseMode, ThreadId};
 use tracing::{error, info, warn};
 
-use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
-use crate::channels::startup_guard::{mark_channel_started, should_drop_pre_start_message};
+use crate::agent_engine::{
+    process_with_agent_with_events, should_suppress_user_error, AgentEvent, AgentRequestContext,
+};
+use crate::channels::startup_guard::{
+    mark_channel_started, should_drop_pre_start_message, should_drop_recent_duplicate_message,
+};
 use crate::chat_commands::maybe_handle_plugin_command;
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -436,6 +440,17 @@ async fn handle_message(
     };
 
     if is_slash_command(&text) {
+        let inbound_message_id = msg.id.0.to_string();
+        if should_drop_pre_start_message(
+            &tg_channel_name,
+            &inbound_message_id,
+            Some(msg.date.timestamp_millis()),
+        ) {
+            return Ok(());
+        }
+        if should_drop_recent_duplicate_message(&tg_channel_name, &inbound_message_id) {
+            return Ok(());
+        }
         if !should_respond && !state.config.allow_group_slash_without_mention {
             return Ok(());
         }
@@ -643,6 +658,9 @@ async fn handle_message(
         &inbound_message_id,
         Some(msg.date.timestamp_millis()),
     ) {
+        return Ok(());
+    }
+    if should_drop_recent_duplicate_message(&tg_channel_name, &inbound_message_id) {
         return Ok(());
     }
 
@@ -855,11 +873,13 @@ async fn handle_message(
         Err(e) => {
             typing_handle.abort();
             error!("Error processing message: {}", e);
-            let mut req = bot.send_message(msg.chat.id, format!("Error: {e}"));
-            if let Some(tid) = msg.thread_id {
-                req = req.message_thread_id(tid);
+            if !should_suppress_user_error(&e) {
+                let mut req = bot.send_message(msg.chat.id, format!("Error: {e}"));
+                if let Some(tid) = msg.thread_id {
+                    req = req.message_thread_id(tid);
+                }
+                let _ = req.await;
             }
-            let _ = req.await;
         }
     }
 

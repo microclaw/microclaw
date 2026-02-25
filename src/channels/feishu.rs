@@ -10,8 +10,10 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::channels::startup_guard::should_drop_recent_duplicate_message;
 use crate::chat_commands::maybe_handle_plugin_command;
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
@@ -1442,6 +1444,10 @@ async fn handle_feishu_event(
             .or_else(|| v.as_i64())
     });
 
+    if should_drop_recent_duplicate_message(&runtime.channel_name, message_id) {
+        return;
+    }
+
     if let (Some(create_time_ms), Some(start_ms)) = (
         message_create_time_ms,
         runtime_start_ms(&runtime.channel_name),
@@ -1522,9 +1528,6 @@ async fn handle_feishu_message(
     is_mentioned: bool,
     message_id: &str,
 ) {
-    let chat_lock = feishu_chat_lock(&runtime.channel_name, external_chat_id);
-    let _guard = chat_lock.lock().await;
-
     let chat_type = if is_dm { "feishu_dm" } else { "feishu_group" };
     let title = format!("feishu-{external_chat_id}");
 
@@ -1562,6 +1565,32 @@ async fn handle_feishu_message(
 
     let trimmed = text.trim();
     let should_respond = is_dm || is_mentioned;
+    let inbound_message_id = if message_id.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        message_id.to_string()
+    };
+    let stored = StoredMessage {
+        id: inbound_message_id.clone(),
+        chat_id,
+        sender_name: user.to_string(),
+        content: text.to_string(),
+        is_from_bot: false,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let inserted = call_blocking(app_state.db.clone(), move |db| {
+        db.store_message_if_new(&stored)
+    })
+    .await
+    .unwrap_or(false);
+    if !inserted {
+        info!(
+            "Feishu: skipping duplicate message chat_id={} message_id={}",
+            chat_id, inbound_message_id
+        );
+        return;
+    }
+
     if is_slash_command(trimmed) {
         if !should_respond && !app_state.config.allow_group_slash_without_mention {
             return;
@@ -1598,32 +1627,8 @@ async fn handle_feishu_message(
         return;
     }
 
-    // Store incoming non-command message
-    let inbound_message_id = if message_id.is_empty() {
-        uuid::Uuid::new_v4().to_string()
-    } else {
-        message_id.to_string()
-    };
-    let stored = StoredMessage {
-        id: inbound_message_id.clone(),
-        chat_id,
-        sender_name: user.to_string(),
-        content: text.to_string(),
-        is_from_bot: false,
-        timestamp: chrono::Utc::now().to_rfc3339(),
-    };
-    let inserted = call_blocking(app_state.db.clone(), move |db| {
-        db.store_message_if_new(&stored)
-    })
-    .await
-    .unwrap_or(false);
-    if !inserted {
-        info!(
-            "Feishu: skipping duplicate message chat_id={} message_id={}",
-            chat_id, inbound_message_id
-        );
-        return;
-    }
+    let chat_lock = feishu_chat_lock(&runtime.channel_name, external_chat_id);
+    let _guard = chat_lock.lock().await;
 
     // Determine if we should respond
     if !should_respond {
@@ -1719,14 +1724,16 @@ async fn handle_feishu_message(
         }
         Err(e) => {
             error!("Error processing Feishu message: {e}");
-            let _ = send_feishu_response(
-                &http_client,
-                base_url,
-                &token,
-                external_chat_id,
-                &format!("Error: {e}"),
-            )
-            .await;
+            if !should_suppress_user_error(&e) {
+                let _ = send_feishu_response(
+                    &http_client,
+                    base_url,
+                    &token,
+                    external_chat_id,
+                    &format!("Error: {e}"),
+                )
+                .await;
+            }
         }
     }
 }

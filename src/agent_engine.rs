@@ -4,6 +4,7 @@ use tracing::{info, warn};
 
 use crate::embedding::EmbeddingProvider;
 use crate::hooks::HookOutcome;
+use crate::run_control;
 use crate::runtime::AppState;
 use crate::tools::ToolAuthContext;
 use microclaw_core::llm_types::{
@@ -97,10 +98,7 @@ pub async fn process_with_agent(
     override_prompt: Option<&str>,
     image_data: Option<(String, String)>,
 ) -> anyhow::Result<String> {
-    let engine = DefaultAgentEngine;
-    engine
-        .process(state, context, override_prompt, image_data)
-        .await
+    process_with_agent_with_events(state, context, override_prompt, image_data, None).await
 }
 
 pub async fn process_with_agent_with_events(
@@ -110,10 +108,43 @@ pub async fn process_with_agent_with_events(
     image_data: Option<(String, String)>,
     event_tx: Option<&UnboundedSender<AgentEvent>>,
 ) -> anyhow::Result<String> {
+    let source_message_id = call_blocking(state.db.clone(), move |db| {
+        db.get_recent_messages(context.chat_id, 20)
+    })
+    .await
+    .ok()
+    .and_then(|history| {
+        history
+            .into_iter()
+            .rev()
+            .find(|m| !m.is_from_bot && !is_slash_command_text(&m.content))
+            .map(|m| m.id)
+    });
+    let (run_id, cancelled, notify) =
+        run_control::register_run(context.caller_channel, context.chat_id, source_message_id).await;
     let engine = DefaultAgentEngine;
-    engine
-        .process_with_events(state, context, override_prompt, image_data, event_tx)
-        .await
+    let result = tokio::select! {
+        _ = async {
+            if run_control::is_cancelled(&cancelled) {
+                return;
+            }
+            notify.notified().await;
+        } => {
+            if let Some(tx) = event_tx {
+                let _ = tx.send(AgentEvent::FinalResponse { text: run_control::STOPPED_TEXT.to_string() });
+            }
+            Ok(run_control::STOPPED_TEXT.to_string())
+        }
+        out = engine.process_with_events(state, context, override_prompt, image_data, event_tx) => out,
+    };
+    run_control::unregister_run(context.caller_channel, context.chat_id, run_id).await;
+    result
+}
+
+pub fn should_suppress_user_error(err: &anyhow::Error) -> bool {
+    let text = err.to_string().to_ascii_lowercase();
+    text.contains("http error: error sending request for url")
+        || text.contains("error sending request for url")
 }
 
 fn sanitize_xml(s: &str) -> String {
@@ -349,6 +380,15 @@ pub(crate) async fn process_with_agent_impl(
             })
             .await?;
             for stored_msg in &new_msgs {
+                if run_control::is_aborted_source_message(
+                    context.caller_channel,
+                    chat_id,
+                    &stored_msg.id,
+                )
+                .await
+                {
+                    continue;
+                }
                 if is_slash_command_text(&stored_msg.content) {
                     continue;
                 }
@@ -926,8 +966,17 @@ pub(crate) async fn load_messages_from_db(
         .into_iter()
         .filter(|m| m.is_from_bot || !is_slash_command_text(&m.content))
         .collect();
+    let mut filtered = Vec::with_capacity(history.len());
+    for msg in history {
+        if !msg.is_from_bot
+            && run_control::is_aborted_source_message(caller_channel, chat_id, &msg.id).await
+        {
+            continue;
+        }
+        filtered.push(msg);
+    }
     let bot_username = state.config.bot_username_for_channel(caller_channel);
-    Ok(history_to_claude_messages(&history, &bot_username))
+    Ok(history_to_claude_messages(&filtered, &bot_username))
 }
 
 fn is_cjk(c: char) -> bool {

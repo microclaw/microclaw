@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod memory_backend;
 pub mod otlp;
 pub mod plugins;
+pub(crate) mod run_control;
 pub mod runtime;
 pub mod scheduler;
 pub mod setup;
