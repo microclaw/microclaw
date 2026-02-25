@@ -985,11 +985,13 @@ fn check_sandbox_config(report: &mut DoctorReport) {
             CheckStatus::Warn
         },
         format!(
-            "mode={} backend={:?} no_network={} require_runtime={}",
+            "mode={} backend={:?} no_network={} require_runtime={} security_profile={} cap_add=[{}]",
             mode_label,
             config.sandbox.backend,
             config.sandbox.no_network,
-            config.sandbox.require_runtime
+            config.sandbox.require_runtime,
+            config.sandbox.security_profile,
+            config.sandbox.cap_add.join(","),
         ),
         if matches!(config.sandbox.mode, SandboxMode::Off) {
             Some("Enable quickly: `microclaw setup --enable-sandbox`.".to_string())

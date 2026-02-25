@@ -9,7 +9,7 @@ use crate::codex_auth::{
 };
 use crate::plugins::PluginsConfig;
 use microclaw_core::error::MicroClawError;
-pub use microclaw_tools::sandbox::{SandboxBackend, SandboxConfig, SandboxMode};
+pub use microclaw_tools::sandbox::{SandboxBackend, SandboxConfig, SandboxMode, SecurityProfile};
 pub use microclaw_tools::types::WorkingDirIsolation;
 use microclaw_tools::web_content_validation::WebContentValidationConfig;
 use microclaw_tools::web_fetch::WebFetchUrlValidationConfig;

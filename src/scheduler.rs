@@ -159,7 +159,10 @@ async fn run_due_tasks(state: &Arc<AppState>) {
         let tz: chrono_tz::Tz = state.config.timezone.parse().unwrap_or(chrono_tz::Tz::UTC);
         let next_run = if task.schedule_type == "cron" {
             match cron::Schedule::from_str(&task.schedule_value) {
-                Ok(schedule) => schedule.upcoming(tz).next().map(|t| t.to_rfc3339()),
+                Ok(schedule) => schedule
+                    .upcoming(tz)
+                    .next()
+                    .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339()),
                 Err(e) => {
                     error!("Scheduler: invalid cron for task #{}: {e}", task.id);
                     None

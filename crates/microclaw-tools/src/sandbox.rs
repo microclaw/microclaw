@@ -37,6 +37,14 @@ fn default_sandbox_mount_allowlist_path() -> Option<String> {
     None
 }
 
+fn default_sandbox_security_profile() -> SecurityProfile {
+    SecurityProfile::Hardened
+}
+
+fn default_sandbox_cap_add() -> Vec<String> {
+    Vec::new()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxMode {
@@ -49,6 +57,29 @@ pub enum SandboxMode {
 pub enum SandboxBackend {
     Auto,
     Docker,
+}
+
+/// Container security profile controlling Linux capabilities and privilege escalation.
+///
+/// - `Hardened`: `--cap-drop ALL --security-opt no-new-privileges` (most restrictive; apt/chown/su will fail)
+/// - `Standard`: Docker default capabilities (apt/chown/su work normally)
+/// - `Privileged`: `--privileged` flag (full host-level access; use for debugging only)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityProfile {
+    Hardened,
+    Standard,
+    Privileged,
+}
+
+impl std::fmt::Display for SecurityProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SecurityProfile::Hardened => write!(f, "hardened"),
+            SecurityProfile::Standard => write!(f, "standard"),
+            SecurityProfile::Privileged => write!(f, "privileged"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,6 +98,10 @@ pub struct SandboxConfig {
     pub require_runtime: bool,
     #[serde(default = "default_sandbox_mount_allowlist_path")]
     pub mount_allowlist_path: Option<String>,
+    #[serde(default = "default_sandbox_security_profile")]
+    pub security_profile: SecurityProfile,
+    #[serde(default = "default_sandbox_cap_add")]
+    pub cap_add: Vec<String>,
     #[serde(default)]
     pub memory_limit: Option<String>,
     #[serde(default)]
@@ -85,6 +120,8 @@ impl Default for SandboxConfig {
             no_network: default_sandbox_no_network(),
             require_runtime: default_sandbox_require_runtime(),
             mount_allowlist_path: default_sandbox_mount_allowlist_path(),
+            security_profile: default_sandbox_security_profile(),
+            cap_add: default_sandbox_cap_add(),
             memory_limit: None,
             cpu_quota: None,
             pids_limit: None,
@@ -177,6 +214,32 @@ impl DockerSandbox {
         }
         args
     }
+
+    fn security_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        match self.config.security_profile {
+            SecurityProfile::Hardened => {
+                args.extend([
+                    "--cap-drop".to_string(),
+                    "ALL".to_string(),
+                    "--security-opt".to_string(),
+                    "no-new-privileges".to_string(),
+                ]);
+                for cap in &self.config.cap_add {
+                    args.extend(["--cap-add".to_string(), cap.clone()]);
+                }
+            }
+            SecurityProfile::Standard => {
+                for cap in &self.config.cap_add {
+                    args.extend(["--cap-add".to_string(), cap.clone()]);
+                }
+            }
+            SecurityProfile::Privileged => {
+                args.push("--privileged".to_string());
+            }
+        }
+        args
+    }
 }
 
 #[async_trait]
@@ -203,11 +266,8 @@ impl Sandbox for DockerSandbox {
             "-d".to_string(),
             "--name".to_string(),
             name.clone(),
-            "--cap-drop".to_string(),
-            "ALL".to_string(),
-            "--security-opt".to_string(),
-            "no-new-privileges".to_string(),
         ];
+        args.extend(self.security_args());
         if self.config.no_network {
             args.push("--network=none".to_string());
         }

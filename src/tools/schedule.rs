@@ -21,7 +21,7 @@ fn compute_next_run(cron_expr: &str, tz_name: &str) -> Result<String, String> {
         .upcoming(tz)
         .next()
         .ok_or_else(|| "No upcoming run found for this cron expression".to_string())?;
-    Ok(next.to_rfc3339())
+    Ok(next.with_timezone(&chrono::Utc).to_rfc3339())
 }
 
 // --- schedule_task ---
@@ -121,13 +121,15 @@ impl Tool for ScheduleTaskTool {
                 Err(e) => return ToolResult::error(e),
             },
             "once" => {
-                // Validate the timestamp parses
-                if chrono::DateTime::parse_from_rfc3339(schedule_value).is_err() {
-                    return ToolResult::error(
-                        "Invalid ISO 8601 timestamp for one-time schedule".into(),
-                    );
+                // Validate and normalize to UTC for consistent SQLite string comparison
+                match chrono::DateTime::parse_from_rfc3339(schedule_value) {
+                    Ok(dt) => dt.with_timezone(&chrono::Utc).to_rfc3339(),
+                    Err(_) => {
+                        return ToolResult::error(
+                            "Invalid ISO 8601 timestamp for one-time schedule".into(),
+                        );
+                    }
                 }
-                schedule_value.to_string()
             }
             _ => return ToolResult::error("schedule_type must be 'cron' or 'once'".into()),
         };
