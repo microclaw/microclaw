@@ -86,6 +86,14 @@ fn telegram_slot_model_key(slot: usize) -> String {
     format!("TELEGRAM_BOT{}_MODEL", slot)
 }
 
+fn default_slot_account_id(slot: usize) -> String {
+    if slot <= 1 {
+        default_account_id().to_string()
+    } else {
+        format!("No{slot}")
+    }
+}
+
 fn telegram_bot_count_key() -> &'static str {
     "TELEGRAM_BOT_COUNT"
 }
@@ -935,13 +943,7 @@ impl SetupApp {
                 value: existing
                     .get(&telegram_slot_id_key(slot))
                     .cloned()
-                    .unwrap_or_else(|| {
-                        if slot == 1 {
-                            default_account_id().to_string()
-                        } else {
-                            String::new()
-                        }
-                    }),
+                    .unwrap_or_else(|| default_slot_account_id(slot)),
                 required: false,
                 secret: false,
             });
@@ -1037,9 +1039,9 @@ impl SetupApp {
                                 existing
                                     .get(&account_key)
                                     .cloned()
-                                    .unwrap_or_else(|| default_account_id().to_string())
+                                    .unwrap_or_else(|| default_slot_account_id(slot))
                             } else {
-                                String::new()
+                                default_slot_account_id(slot)
                             }
                         }),
                     required: false,
@@ -1935,8 +1937,7 @@ impl SetupApp {
             let username = self.field_value(&telegram_slot_username_key(slot));
             let model = self.field_value(&telegram_slot_model_key(slot));
             let enabled = parse_boolish(&self.field_value(&telegram_slot_enabled_key(slot)), true)?;
-            let has_any =
-                !id.is_empty() || !token.is_empty() || !username.is_empty() || !model.is_empty();
+            let has_any = !token.is_empty() || !username.is_empty() || !model.is_empty();
             if !has_any {
                 continue;
             }
@@ -2312,12 +2313,11 @@ impl SetupApp {
                 for slot in 1..=bot_count {
                     let id_key = dynamic_slot_id_field_key(ch.name, slot);
                     let id_raw = self.field_value(&id_key);
-                    let has_any = !id_raw.is_empty()
-                        || ch.fields.iter().any(|f| {
-                            !self
-                                .field_value(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
-                                .is_empty()
-                        });
+                    let has_any = ch.fields.iter().any(|f| {
+                        !self
+                            .field_value(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
+                            .is_empty()
+                    });
                     if !has_any {
                         continue;
                     }
@@ -2818,11 +2818,7 @@ impl SetupApp {
                             return "true".into();
                         }
                         if key == dynamic_slot_id_field_key(ch.name, slot) {
-                            return if slot == 1 {
-                                default_account_id().to_string()
-                            } else {
-                                String::new()
-                            };
+                            return default_slot_account_id(slot);
                         }
                         for f in ch.fields {
                             if key == dynamic_slot_field_key(ch.name, slot, f.yaml_key) {
@@ -3401,10 +3397,8 @@ fn save_config_yaml(
         let username = get(&telegram_slot_username_key(slot));
         let model = get(&telegram_slot_model_key(slot));
         let enabled = parse_boolish(&get(&telegram_slot_enabled_key(slot)), true)?;
-        let has_any = !id.trim().is_empty()
-            || !token.trim().is_empty()
-            || !username.trim().is_empty()
-            || !model.trim().is_empty();
+        let has_any =
+            !token.trim().is_empty() || !username.trim().is_empty() || !model.trim().is_empty();
         if !has_any {
             continue;
         }
@@ -3499,17 +3493,13 @@ fn save_config_yaml(
             )
             .unwrap_or(1);
             let has_slot_presence = (1..=bot_count).any(|slot| {
-                !get(&dynamic_slot_id_field_key(ch.name, slot))
-                    .trim()
-                    .is_empty()
-                    || ch.presence_keys.iter().any(|yaml_key| {
-                        !get(&dynamic_slot_field_key(ch.name, slot, yaml_key))
-                            .trim()
-                            .is_empty()
-                    })
-                    || !get(&dynamic_slot_llm_provider_key(ch.name, slot))
+                ch.presence_keys.iter().any(|yaml_key| {
+                    !get(&dynamic_slot_field_key(ch.name, slot, yaml_key))
                         .trim()
                         .is_empty()
+                }) || !get(&dynamic_slot_llm_provider_key(ch.name, slot))
+                    .trim()
+                    .is_empty()
                     || !get(&dynamic_slot_llm_api_key_key(ch.name, slot))
                         .trim()
                         .is_empty()
@@ -3643,12 +3633,11 @@ fn save_config_yaml(
             let id = get(&dynamic_slot_id_field_key(ch.name, slot));
             let enabled =
                 parse_boolish(&get(&dynamic_slot_enabled_field_key(ch.name, slot)), true)?;
-            let has_any = !id.trim().is_empty()
-                || ch.fields.iter().any(|f| {
-                    !get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
-                        .trim()
-                        .is_empty()
-                });
+            let has_any = ch.fields.iter().any(|f| {
+                !get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
+                    .trim()
+                    .is_empty()
+            });
             if !has_any {
                 continue;
             }
