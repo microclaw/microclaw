@@ -86,6 +86,10 @@ fn telegram_slot_model_key(slot: usize) -> String {
     format!("TELEGRAM_BOT{}_MODEL", slot)
 }
 
+fn telegram_slot_allowed_user_ids_key(slot: usize) -> String {
+    format!("TELEGRAM_BOT{}_ALLOWED_USER_IDS", slot)
+}
+
 fn default_slot_account_id(slot: usize) -> String {
     if slot <= 1 {
         default_account_id().to_string()
@@ -323,6 +327,59 @@ fn parse_bot_count(value: &str, field_key: &str) -> Result<usize, MicroClawError
         )));
     }
     Ok(parsed)
+}
+
+fn parse_i64_list_field(value: &str, field_key: &str) -> Result<Vec<i64>, MicroClawError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let parse_item = |raw: &str| -> Result<i64, MicroClawError> {
+        raw.trim().parse::<i64>().map_err(|_| {
+            MicroClawError::Config(format!(
+                "{field_key} must contain integer IDs (csv like '123,456' or JSON array like '[123,456]')"
+            ))
+        })
+    };
+
+    if trimmed.starts_with('[') {
+        let parsed: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+            MicroClawError::Config(format!(
+                "{field_key} must be a valid JSON array when using [] syntax: {e}"
+            ))
+        })?;
+        let arr = parsed.as_array().ok_or_else(|| {
+            MicroClawError::Config(format!(
+                "{field_key} must be a JSON array when using [] syntax"
+            ))
+        })?;
+        let mut out = Vec::new();
+        for item in arr {
+            match item {
+                serde_json::Value::Number(n) => {
+                    let id = n.as_i64().ok_or_else(|| {
+                        MicroClawError::Config(format!("{field_key} contains non-integer number"))
+                    })?;
+                    out.push(id);
+                }
+                serde_json::Value::String(s) => out.push(parse_item(s)?),
+                _ => {
+                    return Err(MicroClawError::Config(format!(
+                        "{field_key} supports only integer values"
+                    )));
+                }
+            }
+        }
+        return Ok(out);
+    }
+
+    trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(parse_item)
+        .collect()
 }
 
 fn default_data_dir_for_setup() -> String {
@@ -987,6 +1044,16 @@ impl SetupApp {
                 required: false,
                 secret: false,
             });
+            app.fields.push(Field {
+                key: telegram_slot_allowed_user_ids_key(slot),
+                label: format!("Telegram bot #{slot} allowed user ids (csv/array, optional)"),
+                value: existing
+                    .get(&telegram_slot_allowed_user_ids_key(slot))
+                    .cloned()
+                    .unwrap_or_default(),
+                required: false,
+                secret: false,
+            });
         }
 
         // Generate fields for dynamic channels (slack, feishu, etc.)
@@ -1383,6 +1450,27 @@ impl SetupApp {
                                         .filter(|v| !v.is_empty())
                                     {
                                         map.insert(telegram_slot_model_key(slot), v.to_string());
+                                    }
+                                    if let Some(v) = account.get("allowed_user_ids") {
+                                        let mut ids = Vec::new();
+                                        if let Some(seq) = v.as_sequence() {
+                                            for item in seq {
+                                                if let Some(id) = item.as_i64() {
+                                                    ids.push(id.to_string());
+                                                } else if let Some(s) = item.as_str() {
+                                                    let t = s.trim();
+                                                    if !t.is_empty() {
+                                                        ids.push(t.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if !ids.is_empty() {
+                                            map.insert(
+                                                telegram_slot_allowed_user_ids_key(slot),
+                                                ids.join(","),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -1936,8 +2024,16 @@ impl SetupApp {
             let token = self.field_value(&telegram_slot_token_key(slot));
             let username = self.field_value(&telegram_slot_username_key(slot));
             let model = self.field_value(&telegram_slot_model_key(slot));
+            let allowed_user_ids_raw = self.field_value(&telegram_slot_allowed_user_ids_key(slot));
+            let allowed_user_ids = parse_i64_list_field(
+                &allowed_user_ids_raw,
+                &telegram_slot_allowed_user_ids_key(slot),
+            )?;
             let enabled = parse_boolish(&self.field_value(&telegram_slot_enabled_key(slot)), true)?;
-            let has_any = !token.is_empty() || !username.is_empty() || !model.is_empty();
+            let has_any = !token.is_empty()
+                || !username.is_empty()
+                || !model.is_empty()
+                || !allowed_user_ids.is_empty();
             if !has_any {
                 continue;
             }
@@ -1968,6 +2064,17 @@ impl SetupApp {
             }
             if !model.is_empty() {
                 account.insert("model".to_string(), serde_json::Value::String(model));
+            }
+            if !allowed_user_ids.is_empty() {
+                account.insert(
+                    "allowed_user_ids".to_string(),
+                    serde_json::Value::Array(
+                        allowed_user_ids
+                            .into_iter()
+                            .map(|id| serde_json::Value::Number(id.into()))
+                            .collect(),
+                    ),
+                );
             }
             out.insert(account_id, serde_json::Value::Object(account));
         }
@@ -2030,6 +2137,7 @@ impl SetupApp {
                         || key == telegram_slot_token_key(slot)
                         || key == telegram_slot_username_key(slot)
                         || key == telegram_slot_model_key(slot)
+                        || key == telegram_slot_allowed_user_ids_key(slot)
                     {
                         return slot <= self.telegram_bot_count();
                     }
@@ -2979,6 +3087,9 @@ impl SetupApp {
                     if key == telegram_slot_model_key(slot) {
                         return base + 5;
                     }
+                    if key == telegram_slot_allowed_user_ids_key(slot) {
+                        return base + 6;
+                    }
                 }
                 usize::MAX
             }
@@ -3396,9 +3507,16 @@ fn save_config_yaml(
         let token = get(&telegram_slot_token_key(slot));
         let username = get(&telegram_slot_username_key(slot));
         let model = get(&telegram_slot_model_key(slot));
+        let allowed_user_ids_raw = get(&telegram_slot_allowed_user_ids_key(slot));
+        let allowed_user_ids = parse_i64_list_field(
+            &allowed_user_ids_raw,
+            &telegram_slot_allowed_user_ids_key(slot),
+        )?;
         let enabled = parse_boolish(&get(&telegram_slot_enabled_key(slot)), true)?;
-        let has_any =
-            !token.trim().is_empty() || !username.trim().is_empty() || !model.trim().is_empty();
+        let has_any = !token.trim().is_empty()
+            || !username.trim().is_empty()
+            || !model.trim().is_empty()
+            || !allowed_user_ids.is_empty();
         if !has_any {
             continue;
         }
@@ -3427,6 +3545,17 @@ fn save_config_yaml(
             account.insert(
                 "model".into(),
                 serde_json::Value::String(model.trim().to_string()),
+            );
+        }
+        if !allowed_user_ids.is_empty() {
+            account.insert(
+                "allowed_user_ids".into(),
+                serde_json::Value::Array(
+                    allowed_user_ids
+                        .into_iter()
+                        .map(|id| serde_json::Value::Number(id.into()))
+                        .collect(),
+                ),
             );
         }
         telegram_slot_accounts.insert(account_id, serde_json::Value::Object(account));
@@ -4895,6 +5024,7 @@ sandbox:
             telegram_slot_id_key(1),
             telegram_slot_token_key(1),
             telegram_slot_username_key(1),
+            telegram_slot_allowed_user_ids_key(1),
             "DISCORD_BOT_TOKEN".to_string(),
             "DISCORD_ACCOUNT_ID".to_string(),
             dynamic_bot_count_field_key("feishu"),
@@ -4924,6 +5054,7 @@ sandbox:
             telegram_slot_id_key(1),
             telegram_slot_token_key(1),
             telegram_slot_username_key(1),
+            telegram_slot_allowed_user_ids_key(1),
             dynamic_bot_count_field_key("feishu"),
             dynamic_slot_id_field_key("feishu", 1),
             dynamic_slot_field_key("feishu", 1, "app_id"),
@@ -5252,6 +5383,42 @@ sandbox:
     }
 
     #[test]
+    fn test_validate_local_rejects_invalid_telegram_allowed_user_ids() {
+        let mut app = SetupApp::new();
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
+            field.value = "telegram".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_token_key(1))
+        {
+            field.value = "123456:token".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_username_key(1))
+        {
+            field.value = "botname".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_allowed_user_ids_key(1))
+        {
+            field.value = "123,abc".to_string();
+        }
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_API_KEY") {
+            field.value = "key".to_string();
+        }
+        let err = app.validate_local().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains(&telegram_slot_allowed_user_ids_key(1)));
+    }
+
+    #[test]
     fn test_validate_local_requires_slots_when_telegram_bot_count_gt_one() {
         let mut app = SetupApp::new();
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
@@ -5296,6 +5463,7 @@ sandbox:
         values.insert(telegram_slot_enabled_key(1), "true".into());
         values.insert(telegram_slot_token_key(1), "tg_main".into());
         values.insert(telegram_slot_username_key(1), "main_bot".into());
+        values.insert(telegram_slot_allowed_user_ids_key(1), "123,456".into());
         values.insert(telegram_slot_id_key(2), "support".into());
         values.insert(telegram_slot_enabled_key(2), "false".into());
         values.insert(telegram_slot_token_key(2), "tg_support".into());
@@ -5308,6 +5476,9 @@ sandbox:
         assert!(s.contains("      main:\n"));
         assert!(s.contains("        bot_token: tg_main\n"));
         assert!(s.contains("        bot_username: main_bot\n"));
+        assert!(s.contains("        allowed_user_ids:\n"));
+        assert!(s.contains("        - 123\n"));
+        assert!(s.contains("        - 456\n"));
         assert!(s.contains("      support:\n"));
         assert!(s.contains("        enabled: false\n"));
         assert!(s.contains("        bot_token: tg_support\n"));
