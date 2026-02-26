@@ -46,6 +46,28 @@ impl BashTool {
     }
 }
 
+fn contains_explicit_tmp_absolute_path(command: &str) -> bool {
+    let mut start = 0usize;
+    while let Some(offset) = command[start..].find("/tmp/") {
+        let idx = start + offset;
+        let prev = if idx == 0 {
+            None
+        } else {
+            command[..idx].chars().next_back()
+        };
+        if prev.is_none()
+            || matches!(
+                prev,
+                Some(' ' | '\t' | '\n' | '\'' | '"' | '=' | '(' | ':' | ';' | '|')
+            )
+        {
+            return true;
+        }
+        start = idx + 5;
+    }
+    false
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -83,12 +105,21 @@ impl Tool for BashTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(self.default_timeout_secs);
         let working_dir =
-            super::resolve_tool_working_dir(&self.working_dir, self.working_dir_isolation, &input);
+            super::resolve_tool_working_dir(&self.working_dir, self.working_dir_isolation, &input)
+                .join("tmp");
         if let Err(e) = tokio::fs::create_dir_all(&working_dir).await {
             return ToolResult::error(format!(
                 "Failed to create working directory {}: {e}",
                 working_dir.display()
             ));
+        }
+
+        if contains_explicit_tmp_absolute_path(command) {
+            return ToolResult::error(format!(
+                "Command contains absolute /tmp path, which is disallowed. Use paths under current chat working directory: {}",
+                working_dir.display()
+            ))
+            .with_error_type("path_policy_blocked");
         }
 
         info!("Executing bash in {}: {}", working_dir.display(), command);
@@ -185,6 +216,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_contains_explicit_tmp_absolute_path_detection() {
+        assert!(contains_explicit_tmp_absolute_path("ls /tmp/x"));
+        assert!(contains_explicit_tmp_absolute_path("A=\"/tmp/x\"; echo $A"));
+        assert!(!contains_explicit_tmp_absolute_path(
+            "ls /Users/eevv/work/project/tmp/x"
+        ));
+    }
+
     #[tokio::test]
     async fn test_bash_echo() {
         let tool = BashTool::new(".");
@@ -221,6 +261,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bash_blocks_tmp_absolute_path() {
+        let tool = BashTool::new(".");
+        let result = tool.execute(json!({"command": "ls /tmp/x"})).await;
+        assert!(result.is_error);
+        assert_eq!(result.error_type.as_deref(), Some("path_policy_blocked"));
+        assert!(result.content.contains("current chat working directory"));
+    }
+
+    #[tokio::test]
     async fn test_bash_missing_command() {
         let tool = BashTool::new(".");
         let result = tool.execute(json!({})).await;
@@ -251,7 +300,7 @@ mod tests {
             .await;
         assert!(!result.is_error);
 
-        let expected_marker = work.join("shared").join(marker);
+        let expected_marker = work.join("shared").join("tmp").join(marker);
         assert!(expected_marker.exists());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -281,6 +330,7 @@ mod tests {
             .join("chat")
             .join("telegram")
             .join("neg100123")
+            .join("tmp")
             .join(marker);
         assert!(expected_marker.exists());
 
