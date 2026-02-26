@@ -374,8 +374,14 @@ async fn qq_webhook_handler(
         return axum::http::StatusCode::OK;
     }
     if is_slash_command(text) {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, text).await
+        if let Some(reply) = handle_chat_command(
+            &app_state,
+            chat_id,
+            &runtime_ctx.channel_name,
+            text,
+            Some(user_id),
+        )
+        .await
         {
             let adapter = QQAdapter::new(
                 runtime_ctx.channel_name.clone(),

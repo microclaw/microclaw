@@ -509,8 +509,14 @@ async fn process_email_webhook_message(
 
     let trimmed = trimmed_text.trim();
     if is_slash_command(trimmed) {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, trimmed).await
+        if let Some(reply) = handle_chat_command(
+            &app_state,
+            chat_id,
+            &runtime_ctx.channel_name,
+            trimmed,
+            Some(from.as_str()),
+        )
+        .await
         {
             let target = if payload.reply_to.trim().is_empty() {
                 from.to_string()

@@ -599,8 +599,14 @@ async fn handle_whatsapp_message(
 
     let trimmed = text.trim();
     if is_slash_command(trimmed) {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
+        if let Some(reply) = handle_chat_command(
+            &app_state,
+            chat_id,
+            &runtime.channel_name,
+            trimmed,
+            Some(external_chat_id),
+        )
+        .await
         {
             let _ = send_whatsapp_text(
                 &reqwest::Client::new(),

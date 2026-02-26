@@ -406,11 +406,13 @@ impl EventHandler for Handler {
             if !should_respond && !self.app_state.config.allow_group_slash_without_mention {
                 return;
             }
+            let sender_id_text = msg.author.id.get().to_string();
             if let Some(reply) = handle_chat_command(
                 &self.app_state,
                 channel_id,
                 &self.runtime.channel_name,
                 &text,
+                Some(&sender_id_text),
             )
             .await
             {

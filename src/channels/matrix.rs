@@ -1737,8 +1737,14 @@ async fn handle_matrix_message(
         if !should_respond && !app_state.config.allow_group_slash_without_mention {
             return;
         }
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
+        if let Some(reply) = handle_chat_command(
+            &app_state,
+            chat_id,
+            &runtime.channel_name,
+            trimmed,
+            Some(msg.sender.as_str()),
+        )
+        .await
         {
             let _ =
                 send_matrix_text_runtime(&runtime, &msg.room_id, &reply, msg.prefer_sdk_send).await;

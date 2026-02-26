@@ -48,6 +48,7 @@ pub async fn handle_chat_command(
     chat_id: i64,
     caller_channel: &str,
     command_text: &str,
+    sender_id: Option<&str>,
 ) -> Option<String> {
     let trimmed = normalized_slash_command(command_text)?.trim();
 
@@ -109,6 +110,9 @@ pub async fn handle_chat_command(
     }
 
     if trimmed == "/start" {
+        if let Some(id) = sender_id.map(str::trim).filter(|v| !v.is_empty()) {
+            return Some(format!("Hello MicroClaw :) Your ID: {id}"));
+        }
         return Some("Hello MicroClaw :)".to_string());
     }
 

@@ -519,6 +519,7 @@ async fn handle_message(
         if !should_respond && !state.config.allow_group_slash_without_mention {
             return Ok(());
         }
+        let sender_id_text = sender_user_id.map(|v| v.to_string());
         let external_chat_id = raw_chat_id.to_string();
         let chat_title_for_lookup = chat_title.clone();
         let chat_type_for_lookup = db_chat_type.to_string();
@@ -533,7 +534,15 @@ async fn handle_message(
         })
         .await
         .unwrap_or(raw_chat_id);
-        if let Some(reply) = handle_chat_command(&state, chat_id, &tg_channel_name, &text).await {
+        if let Some(reply) = handle_chat_command(
+            &state,
+            chat_id,
+            &tg_channel_name,
+            &text,
+            sender_id_text.as_deref(),
+        )
+        .await
+        {
             let _ = bot.send_message(msg.chat.id, reply).await;
             return Ok(());
         }

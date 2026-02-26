@@ -401,8 +401,14 @@ async fn process_signal_webhook_message(
         return;
     }
     if is_slash_command(&text) {
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime_ctx.channel_name, &text).await
+        if let Some(reply) = handle_chat_command(
+            &app_state,
+            chat_id,
+            &runtime_ctx.channel_name,
+            &text,
+            Some(&sender),
+        )
+        .await
         {
             let adapter = SignalAdapter::new(
                 runtime_ctx.channel_name.clone(),

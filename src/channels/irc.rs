@@ -479,7 +479,9 @@ async fn handle_irc_message(
         if !should_respond && !app_state.config.allow_group_slash_without_mention {
             return;
         }
-        if let Some(reply) = handle_chat_command(&app_state, chat_id, "irc", trimmed).await {
+        if let Some(reply) =
+            handle_chat_command(&app_state, chat_id, "irc", trimmed, Some(&sender_nick)).await
+        {
             let _ = adapter.send_text(&response_target, &reply).await;
             return;
         }

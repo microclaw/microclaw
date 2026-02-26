@@ -686,8 +686,14 @@ async fn handle_slack_message(
         if !should_respond && !app_state.config.allow_group_slash_without_mention {
             return;
         }
-        if let Some(reply) =
-            handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
+        if let Some(reply) = handle_chat_command(
+            &app_state,
+            chat_id,
+            &runtime.channel_name,
+            trimmed,
+            Some(user),
+        )
+        .await
         {
             let _ = send_slack_response(bot_token, channel, &reply).await;
             return;
