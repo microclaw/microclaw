@@ -1613,11 +1613,13 @@ function App() {
     }
 
     const key = makeSessionKey()
+    const nowIso = new Date().toISOString()
     const item: SessionItem = {
       session_key: key,
       label: key,
       chat_id: 0,
       chat_type: 'web',
+      last_message_time: nowIso,
     }
     setExtraSessions((prev) => (prev.some((v) => v.session_key === key) ? prev : [item, ...prev]))
     setSessionKey(key)
