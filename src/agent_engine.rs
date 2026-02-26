@@ -185,6 +185,62 @@ fn format_user_message(sender_name: &str, content: &str) -> String {
     )
 }
 
+fn strip_xml_like_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn is_explicit_user_approval(text: &str) -> bool {
+    let cleaned = strip_xml_like_tags(text);
+    let normalized = cleaned.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+
+    let deny_markers = [
+        "don't",
+        "do not",
+        "not approve",
+        "deny",
+        "reject",
+        "cancel",
+        "stop",
+        "different",
+        "不同意",
+        "不批准",
+        "不要",
+        "取消",
+        "停止",
+    ];
+    if deny_markers.iter().any(|m| normalized.contains(m)) {
+        return false;
+    }
+
+    let approval_markers = [
+        "approve",
+        "approved",
+        "go ahead",
+        "proceed",
+        "run it",
+        "确认",
+        "批准",
+        "同意",
+        "继续",
+        "可以执行",
+        "执行吧",
+    ];
+    approval_markers.iter().any(|m| normalized.contains(m))
+}
+
 fn is_slash_command_text(text: &str) -> bool {
     text.trim_start().starts_with('/')
 }
@@ -455,6 +511,13 @@ pub(crate) async fn process_with_agent_impl(
         .chars()
         .take(500)
         .collect();
+    let latest_user_text_for_approval = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(message_to_text)
+        .unwrap_or_default();
+    let explicit_user_approval = is_explicit_user_approval(&latest_user_text_for_approval);
 
     // Build system prompt
     let file_memory = state.memory.build_memory_context(chat_id);
@@ -801,12 +864,24 @@ pub(crate) async fn process_with_agent_impl(
                     // Auto-retry on approval_required with explicit approval marker.
                     if result.is_error && result.error_type.as_deref() == Some("approval_required")
                     {
-                        executed_input = with_high_risk_approval_marker(&effective_input);
-                        info!("Auto-retrying tool '{}' after approval gate", name);
-                        result = state
-                            .tools
-                            .execute_with_auth(name, executed_input.clone(), &tool_auth)
-                            .await;
+                        let can_retry_with_approval =
+                            if state.config.high_risk_tool_user_confirmation_required {
+                                explicit_user_approval
+                            } else {
+                                true
+                            };
+                        if can_retry_with_approval {
+                            executed_input = with_high_risk_approval_marker(&effective_input);
+                            if state.config.high_risk_tool_user_confirmation_required {
+                                info!("Retrying tool '{}' after explicit user approval", name);
+                            } else {
+                                info!("Auto-retrying tool '{}' after approval gate", name);
+                            }
+                            result = state
+                                .tools
+                                .execute_with_auth(name, executed_input.clone(), &tool_auth)
+                                .await;
+                        }
                     }
                     if let Ok(hook_outcome) = state
                         .hooks
@@ -1864,13 +1939,18 @@ mod tests {
         test_state_with_llm(base_dir, Box::new(DummyLlm))
     }
 
-    fn test_state_with_llm(base_dir: &std::path::Path, llm: Box<dyn LlmProvider>) -> Arc<AppState> {
+    fn test_state_with_llm_and_confirmation(
+        base_dir: &std::path::Path,
+        llm: Box<dyn LlmProvider>,
+        require_user_confirmation: bool,
+    ) -> Arc<AppState> {
         let runtime_dir = base_dir.join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
         let mut cfg = Config::test_defaults();
         cfg.data_dir = base_dir.to_string_lossy().to_string();
         cfg.working_dir = base_dir.join("tmp").to_string_lossy().to_string();
         cfg.working_dir_isolation = WorkingDirIsolation::Shared;
+        cfg.high_risk_tool_user_confirmation_required = require_user_confirmation;
         cfg.web_port = 3900;
         let db = Arc::new(Database::new(runtime_dir.to_str().unwrap()).unwrap());
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
@@ -1890,6 +1970,10 @@ mod tests {
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
         })
+    }
+
+    fn test_state_with_llm(base_dir: &std::path::Path, llm: Box<dyn LlmProvider>) -> Arc<AppState> {
+        test_state_with_llm_and_confirmation(base_dir, llm, false)
     }
 
     fn store_user_message(db: &Database, chat_id: i64, text: &str) {
@@ -2190,6 +2274,104 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base_dir);
     }
 
+    struct HighRiskNeedsUserConfirmLlm {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for HighRiskNeedsUserConfirmLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            let idx = self.calls.fetch_add(1, Ordering::SeqCst);
+            if idx == 0 {
+                return Ok(MessagesResponse {
+                    content: vec![ResponseContentBlock::ToolUse {
+                        id: "tool-bash-confirm".to_string(),
+                        name: "bash".to_string(),
+                        input: json!({"command": "printf approved"}),
+                    }],
+                    stop_reason: Some("tool_use".to_string()),
+                    usage: None,
+                });
+            }
+
+            let mut saw_approval_required = false;
+            for msg in messages.iter().rev() {
+                if msg.role != "user" {
+                    continue;
+                }
+                if let microclaw_core::llm_types::MessageContent::Blocks(blocks) = &msg.content {
+                    for block in blocks {
+                        if let microclaw_core::llm_types::ContentBlock::ToolResult {
+                            content,
+                            is_error,
+                            ..
+                        } = block
+                        {
+                            if is_error.unwrap_or(false)
+                                && content.contains("Approval required for high-risk tool")
+                            {
+                                saw_approval_required = true;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            let text = if saw_approval_required {
+                "need explicit approval".to_string()
+            } else {
+                "unexpected".to_string()
+            };
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text { text }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_high_risk_tool_waits_for_user_confirmation_when_enabled() {
+        let base_dir =
+            std::env::temp_dir().join(format!("mc_agent_tool_confirm_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let llm = HighRiskNeedsUserConfirmLlm {
+            calls: calls.clone(),
+        };
+        let state = test_state_with_llm_and_confirmation(&base_dir, Box::new(llm), true);
+        let chat_id = state
+            .db
+            .resolve_or_create_chat_id("web", "approval-confirm-chat", Some("approval"), "web")
+            .unwrap();
+        store_user_message(&state.db, chat_id, "run bash");
+
+        let reply = process_with_agent(
+            &state,
+            AgentRequestContext {
+                caller_channel: "web",
+                chat_id,
+                chat_type: "web",
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reply, "need explicit approval");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
     #[test]
     fn test_build_system_prompt_with_soul() {
         let soul = "I am a friendly pirate assistant. I speak in pirate lingo and love adventure.";
@@ -2222,6 +2404,18 @@ mod tests {
         let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", None);
         assert!(prompt.contains("current chat working directory"));
         assert!(prompt.contains("avoid `/tmp` unless the user explicitly asks for it"));
+    }
+
+    #[test]
+    fn test_is_explicit_user_approval() {
+        assert!(super::is_explicit_user_approval(
+            "<user_message sender=\"u\">批准</user_message>"
+        ));
+        assert!(super::is_explicit_user_approval("Go ahead and run it"));
+        assert!(!super::is_explicit_user_approval("不要执行"));
+        assert!(!super::is_explicit_user_approval(
+            "not approve this command"
+        ));
     }
 
     #[test]

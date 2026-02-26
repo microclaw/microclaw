@@ -499,6 +499,9 @@ pub(super) async fn api_update_config(
     if let Some(v) = body.working_dir_isolation {
         cfg.working_dir_isolation = v;
     }
+    if let Some(v) = body.high_risk_tool_user_confirmation_required {
+        cfg.high_risk_tool_user_confirmation_required = v;
+    }
     if let Some(v) = body.telegram_bot_token {
         cfg.telegram_bot_token = v;
     }

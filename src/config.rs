@@ -71,6 +71,9 @@ fn default_working_dir() -> String {
 fn default_working_dir_isolation() -> WorkingDirIsolation {
     WorkingDirIsolation::Chat
 }
+fn default_high_risk_tool_user_confirmation_required() -> bool {
+    true
+}
 fn default_sandbox_image() -> String {
     "ubuntu:25.10".into()
 }
@@ -240,6 +243,8 @@ pub struct Config {
     pub working_dir: String,
     #[serde(default = "default_working_dir_isolation")]
     pub working_dir_isolation: WorkingDirIsolation,
+    #[serde(default = "default_high_risk_tool_user_confirmation_required")]
+    pub high_risk_tool_user_confirmation_required: bool,
     #[serde(default)]
     pub sandbox: SandboxConfig,
     #[serde(default = "default_timezone")]
@@ -481,6 +486,7 @@ impl Config {
             skills_dir: None,
             working_dir: default_working_dir(),
             working_dir_isolation: WorkingDirIsolation::Chat,
+            high_risk_tool_user_confirmation_required: true,
             sandbox: SandboxConfig::default(),
             openai_api_key: None,
             timezone: "UTC".into(),
@@ -1259,6 +1265,20 @@ voice_transcription_command: "whisper-mlx --file {file}"
             config.working_dir_isolation,
             WorkingDirIsolation::Shared
         ));
+    }
+
+    #[test]
+    fn test_high_risk_tool_user_confirmation_required_defaults_true() {
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.high_risk_tool_user_confirmation_required);
+    }
+
+    #[test]
+    fn test_high_risk_tool_user_confirmation_required_accepts_false() {
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nhigh_risk_tool_user_confirmation_required: false\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(!config.high_risk_tool_user_confirmation_required);
     }
 
     #[test]

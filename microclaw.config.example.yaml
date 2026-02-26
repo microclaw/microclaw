@@ -45,6 +45,9 @@ working_dir: "./tmp"
 # Working-dir isolation mode for bash/read_file/write_file/edit_file/glob/grep:
 # - "shared": uses working_dir/shared
 # - "chat": each chat uses working_dir/chat/<channel>/<chat_id>
+# High-risk tool execution requires explicit user confirmation when true.
+# Set false to auto-approve in-agent retry for high-risk tools (e.g. bash).
+high_risk_tool_user_confirmation_required: true
 working_dir_isolation: "chat"
 # IANA timezone for scheduling (e.g. "US/Eastern", "Europe/London")
 timezone: "UTC"

@@ -3956,6 +3956,7 @@ fn save_config_yaml(
         .cloned()
         .unwrap_or_else(default_working_dir_for_setup);
     yaml.push_str(&format!("working_dir: \"{}\"\n", working_dir));
+    yaml.push_str("high_risk_tool_user_confirmation_required: true\n");
     let sandbox_enabled = values
         .get("SANDBOX_ENABLED")
         .map(|v| {

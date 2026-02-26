@@ -808,6 +808,7 @@ struct UpdateConfigRequest {
     embedding_model: Option<Option<String>>,
     embedding_dim: Option<Option<usize>>,
     working_dir_isolation: Option<WorkingDirIsolation>,
+    high_risk_tool_user_confirmation_required: Option<bool>,
 
     telegram_bot_token: Option<String>,
     bot_username: Option<String>,

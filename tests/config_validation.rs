@@ -20,6 +20,7 @@ fn minimal_config() -> Config {
         skills_dir: None,
         working_dir: "./tmp".into(),
         working_dir_isolation: WorkingDirIsolation::Chat,
+        high_risk_tool_user_confirmation_required: true,
         sandbox: microclaw::config::SandboxConfig::default(),
         openai_api_key: None,
         timezone: "UTC".into(),
