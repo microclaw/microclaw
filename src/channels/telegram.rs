@@ -202,6 +202,7 @@ fn format_user_message(sender_name: &str, content: &str) -> String {
 pub struct TelegramRuntimeContext {
     pub channel_name: String,
     pub bot_username: String,
+    pub bot_user_id: Option<u64>,
     pub allowed_groups: Vec<i64>,
     pub allowed_user_ids: Vec<i64>,
     pub model: Option<String>,
@@ -281,6 +282,7 @@ pub fn build_telegram_runtime_contexts(
             TelegramRuntimeContext {
                 channel_name,
                 bot_username,
+                bot_user_id: None,
                 allowed_groups,
                 allowed_user_ids,
                 model,
@@ -298,6 +300,7 @@ pub fn build_telegram_runtime_contexts(
                 } else {
                     tg_cfg.bot_username.trim().to_string()
                 },
+                bot_user_id: None,
                 allowed_groups: tg_cfg.allowed_groups.clone(),
                 allowed_user_ids: tg_cfg.allowed_user_ids.clone(),
                 model: tg_cfg
@@ -328,6 +331,7 @@ pub async fn start_telegram_bot(
     mut ctx: TelegramRuntimeContext,
 ) -> anyhow::Result<()> {
     if let Ok(me) = bot.get_me().await {
+        ctx.bot_user_id = Some(me.user.id.0);
         if let Some(actual_username) = me.user.username {
             let actual = actual_username.to_string();
             if !actual.is_empty() && actual != ctx.bot_username {
@@ -425,6 +429,7 @@ async fn handle_message(
     let chat_title = msg.chat.title().map(|t| t.to_string());
     let tg_channel_name = tg_ctx.channel_name.clone();
     let tg_bot_username = tg_ctx.bot_username.clone();
+    let tg_bot_user_id = tg_ctx.bot_user_id;
     let tg_allowed_groups = tg_ctx.allowed_groups.clone();
     let tg_allowed_user_ids = tg_ctx.allowed_user_ids.clone();
     let sender_user_id = msg.from.as_ref().and_then(|u| i64::try_from(u.id.0).ok());
@@ -449,12 +454,28 @@ async fn handle_message(
         _ => {
             let bot_mention = format!("@{}", tg_bot_username);
             let mentioned = text.to_ascii_lowercase().contains(&bot_mention.to_ascii_lowercase());
+            let text_mentions_bot = tg_bot_user_id
+                .map(|bot_id| {
+                    msg.entities().is_some_and(|entities| {
+                        entities.iter().any(|e| match &e.kind {
+                            teloxide::types::MessageEntityKind::TextMention { user } => {
+                                user.id.0 == bot_id
+                            }
+                            _ => false,
+                        })
+                    })
+                })
+                .unwrap_or(false);
             let replied_to_bot = msg
                 .reply_to_message()
                 .and_then(|m| m.from.as_ref())
-                .map(|u| u.is_bot && u.username.as_deref() == Some(tg_bot_username.as_str()))
+                .map(|u| {
+                    u.is_bot
+                        && (Some(u.id.0) == tg_bot_user_id
+                            || u.username.as_deref() == Some(tg_bot_username.as_str()))
+                })
                 .unwrap_or(false);
-            mentioned || replied_to_bot
+            mentioned || text_mentions_bot || replied_to_bot
         }
     };
 
