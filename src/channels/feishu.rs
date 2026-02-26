@@ -208,7 +208,7 @@ pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<Feis
             verification_token: account_cfg.verification_token.clone(),
             encrypt_key: account_cfg.encrypt_key.clone(),
             model: account_cfg.model.clone(),
-            topic_mode: account_cfg.topic_mode.clone(),
+            topic_mode: account_cfg.topic_mode,
             accounts: HashMap::new(),
             default_account: None,
         };
