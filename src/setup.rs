@@ -58,7 +58,9 @@ fn dynamic_accounts_json_field_key(channel: &str) -> String {
     format!("DYN_{}_ACCOUNTS_JSON", channel.to_uppercase())
 }
 
-const TELEGRAM_MULTIBOT_SLOTS: usize = 3;
+const MAX_BOT_SLOTS: usize = 10;
+const TELEGRAM_DEFAULT_BOT_COUNT: usize = 1;
+const UI_FIELD_WINDOW: usize = 14;
 
 fn telegram_slot_id_key(slot: usize) -> String {
     format!("TELEGRAM_BOT{}_ID", slot)
@@ -78,6 +80,31 @@ fn telegram_slot_username_key(slot: usize) -> String {
 
 fn telegram_slot_model_key(slot: usize) -> String {
     format!("TELEGRAM_BOT{}_MODEL", slot)
+}
+
+fn telegram_bot_count_key() -> &'static str {
+    "TELEGRAM_BOT_COUNT"
+}
+
+fn dynamic_bot_count_field_key(channel: &str) -> String {
+    format!("DYN_{}_BOT_COUNT", channel.to_uppercase())
+}
+
+fn dynamic_slot_id_field_key(channel: &str, slot: usize) -> String {
+    format!("DYN_{}_BOT{}_ID", channel.to_uppercase(), slot)
+}
+
+fn dynamic_slot_enabled_field_key(channel: &str, slot: usize) -> String {
+    format!("DYN_{}_BOT{}_ENABLED", channel.to_uppercase(), slot)
+}
+
+fn dynamic_slot_field_key(channel: &str, slot: usize, yaml_key: &str) -> String {
+    format!(
+        "DYN_{}_BOT{}_{}",
+        channel.to_uppercase(),
+        slot,
+        yaml_key.to_uppercase()
+    )
 }
 
 fn default_account_id() -> &'static str {
@@ -230,6 +257,24 @@ fn parse_boolish(value: &str, default_if_empty: bool) -> Result<bool, MicroClawE
             "invalid bool value '{value}', expected true/false"
         ))),
     }
+}
+
+fn parse_bot_count(value: &str, field_key: &str) -> Result<usize, MicroClawError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(1);
+    }
+    let parsed = trimmed.parse::<usize>().map_err(|_| {
+        MicroClawError::Config(format!(
+            "{field_key} must be an integer between 1 and {MAX_BOT_SLOTS}"
+        ))
+    })?;
+    if !(1..=MAX_BOT_SLOTS).contains(&parsed) {
+        return Err(MicroClawError::Config(format!(
+            "{field_key} must be between 1 and {MAX_BOT_SLOTS}"
+        )));
+    }
+    Ok(parsed)
 }
 
 fn default_data_dir_for_setup() -> String {
@@ -498,6 +543,7 @@ impl Field {
 struct SetupApp {
     fields: Vec<Field>,
     selected: usize,
+    field_scroll: usize,
     editing: bool,
     picker: Option<PickerState>,
     status: String,
@@ -587,12 +633,12 @@ impl SetupApp {
                     secret: false,
                 },
                 Field {
-                    key: "TELEGRAM_MULTIBOT".into(),
-                    label: "Telegram multibot mode (true/false)".into(),
+                    key: telegram_bot_count_key().into(),
+                    label: format!("Telegram bot count (1-{MAX_BOT_SLOTS})"),
                     value: existing
-                        .get("TELEGRAM_MULTIBOT")
+                        .get(telegram_bot_count_key())
                         .cloned()
-                        .unwrap_or_else(|| "false".into()),
+                        .unwrap_or_else(|| TELEGRAM_DEFAULT_BOT_COUNT.to_string()),
                     required: false,
                     secret: false,
                 },
@@ -768,6 +814,7 @@ impl SetupApp {
                 },
             ],
             selected: 0,
+            field_scroll: 0,
             editing: false,
             picker: None,
             status:
@@ -778,43 +825,60 @@ impl SetupApp {
             completion_summary: Vec::new(),
         };
 
-        for slot in 1..=TELEGRAM_MULTIBOT_SLOTS {
+        for slot in 1..=MAX_BOT_SLOTS {
             app.fields.push(Field {
                 key: telegram_slot_id_key(slot),
                 label: format!("Telegram bot #{slot} id"),
-                value: if slot == 1 {
-                    default_account_id().to_string()
-                } else {
-                    String::new()
-                },
+                value: existing
+                    .get(&telegram_slot_id_key(slot))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        if slot == 1 {
+                            default_account_id().to_string()
+                        } else {
+                            String::new()
+                        }
+                    }),
                 required: false,
                 secret: false,
             });
             app.fields.push(Field {
                 key: telegram_slot_enabled_key(slot),
                 label: format!("Telegram bot #{slot} enabled (true/false)"),
-                value: "true".to_string(),
+                value: existing
+                    .get(&telegram_slot_enabled_key(slot))
+                    .cloned()
+                    .unwrap_or_else(|| "true".to_string()),
                 required: false,
                 secret: false,
             });
             app.fields.push(Field {
                 key: telegram_slot_token_key(slot),
                 label: format!("Telegram bot #{slot} token"),
-                value: String::new(),
+                value: existing
+                    .get(&telegram_slot_token_key(slot))
+                    .cloned()
+                    .unwrap_or_default(),
                 required: false,
                 secret: true,
             });
             app.fields.push(Field {
                 key: telegram_slot_username_key(slot),
                 label: format!("Telegram bot #{slot} username (no @)"),
-                value: String::new(),
+                value: existing
+                    .get(&telegram_slot_username_key(slot))
+                    .cloned()
+                    .unwrap_or_default(),
                 required: false,
                 secret: false,
             });
             app.fields.push(Field {
                 key: telegram_slot_model_key(slot),
                 label: format!("Telegram bot #{slot} model override (optional)"),
-                value: String::new(),
+                value: existing
+                    .get(&telegram_slot_model_key(slot))
+                    .cloned()
+                    .unwrap_or_default(),
                 required: false,
                 secret: false,
             });
@@ -822,13 +886,25 @@ impl SetupApp {
 
         // Generate fields for dynamic channels (slack, feishu, etc.)
         for ch in DYNAMIC_CHANNELS {
+            let bot_count_key = dynamic_bot_count_field_key(ch.name);
+            app.fields.push(Field {
+                key: bot_count_key.clone(),
+                label: format!("{} bot count (1-{MAX_BOT_SLOTS})", ch.name),
+                value: existing
+                    .get(&bot_count_key)
+                    .cloned()
+                    .unwrap_or_else(|| "1".to_string()),
+                required: false,
+                secret: false,
+            });
+
             let account_key = dynamic_account_id_field_key(ch.name);
             let account_value = existing
                 .get(&account_key)
                 .cloned()
                 .unwrap_or_else(|| default_account_id().to_string());
             app.fields.push(Field {
-                key: account_key,
+                key: account_key.clone(),
                 label: format!("{} default account id", ch.name),
                 value: account_value,
                 required: false,
@@ -845,6 +921,50 @@ impl SetupApp {
                 required: false,
                 secret: false,
             });
+
+            for slot in 1..=MAX_BOT_SLOTS {
+                app.fields.push(Field {
+                    key: dynamic_slot_id_field_key(ch.name, slot),
+                    label: format!("{} bot #{slot} id", ch.name),
+                    value: existing
+                        .get(&dynamic_slot_id_field_key(ch.name, slot))
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            if slot == 1 {
+                                existing
+                                    .get(&account_key)
+                                    .cloned()
+                                    .unwrap_or_else(|| default_account_id().to_string())
+                            } else {
+                                String::new()
+                            }
+                        }),
+                    required: false,
+                    secret: false,
+                });
+                app.fields.push(Field {
+                    key: dynamic_slot_enabled_field_key(ch.name, slot),
+                    label: format!("{} bot #{slot} enabled (true/false)", ch.name),
+                    value: existing
+                        .get(&dynamic_slot_enabled_field_key(ch.name, slot))
+                        .cloned()
+                        .unwrap_or_else(|| "true".to_string()),
+                    required: false,
+                    secret: false,
+                });
+                for f in ch.fields {
+                    app.fields.push(Field {
+                        key: dynamic_slot_field_key(ch.name, slot, f.yaml_key),
+                        label: format!("{} bot #{slot}: {}", ch.name, f.label),
+                        value: existing
+                            .get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
+                            .cloned()
+                            .unwrap_or_default(),
+                        required: false,
+                        secret: f.secret,
+                    });
+                }
+            }
             for f in ch.fields {
                 let key = dynamic_field_key(ch.name, f.yaml_key);
                 let value = existing
@@ -922,13 +1042,14 @@ impl SetupApp {
                             })
                         })
                         .unwrap_or_default();
-                    let telegram_multibot = config
+                    let telegram_bot_count = config
                         .channels
                         .get("telegram")
                         .and_then(|ch_cfg| ch_cfg.get("accounts"))
                         .and_then(|v| v.as_mapping())
-                        .map(|m| m.len() > 1)
-                        .unwrap_or(false);
+                        .map(|m| m.len().max(1))
+                        .unwrap_or(1)
+                        .min(MAX_BOT_SLOTS);
                     let bot_username = if !config.bot_username.trim().is_empty() {
                         config.bot_username
                     } else if let Some(ch_cfg) = config.channels.get("telegram") {
@@ -991,7 +1112,10 @@ impl SetupApp {
                     map.insert("TELEGRAM_BOT_TOKEN".into(), telegram_bot_token);
                     map.insert("TELEGRAM_ACCOUNT_ID".into(), telegram_account_id.clone());
                     map.insert("TELEGRAM_MODEL".into(), telegram_model);
-                    map.insert("TELEGRAM_MULTIBOT".into(), telegram_multibot.to_string());
+                    map.insert(
+                        telegram_bot_count_key().into(),
+                        telegram_bot_count.to_string(),
+                    );
                     if let Some(ch_cfg) = config.channels.get("telegram") {
                         if let Some(accounts) = ch_cfg.get("accounts").and_then(|v| v.as_mapping())
                         {
@@ -1006,10 +1130,8 @@ impl SetupApp {
                                 let default_id = account_ids.remove(default_idx);
                                 account_ids.insert(0, default_id);
                             }
-                            for (idx, account_id) in account_ids
-                                .into_iter()
-                                .take(TELEGRAM_MULTIBOT_SLOTS)
-                                .enumerate()
+                            for (idx, account_id) in
+                                account_ids.into_iter().take(MAX_BOT_SLOTS).enumerate()
                             {
                                 let slot = idx + 1;
                                 map.insert(telegram_slot_id_key(slot), account_id.clone());
@@ -1065,10 +1187,63 @@ impl SetupApp {
                             let account_id = resolve_channel_default_account_id(ch_map)
                                 .unwrap_or_else(|| default_account_id().to_string());
                             map.insert(account_key, account_id);
+                            let bot_count_key = dynamic_bot_count_field_key(ch.name);
                             if let Some(accounts_json) =
                                 ch_map.get("accounts").and_then(compact_json_string)
                             {
                                 map.insert(dynamic_accounts_json_field_key(ch.name), accounts_json);
+                            }
+                            if let Some(accounts) =
+                                ch_map.get("accounts").and_then(|v| v.as_mapping())
+                            {
+                                let mut account_ids: Vec<String> = accounts
+                                    .keys()
+                                    .filter_map(|k| k.as_str().map(ToOwned::to_owned))
+                                    .collect();
+                                account_ids.sort();
+                                let default_id = resolve_channel_default_account_id(ch_map);
+                                if let Some(default_id) = default_id {
+                                    if let Some(idx) =
+                                        account_ids.iter().position(|id| id == &default_id)
+                                    {
+                                        let first = account_ids.remove(idx);
+                                        account_ids.insert(0, first);
+                                    }
+                                }
+                                let used = account_ids.len().clamp(1, MAX_BOT_SLOTS);
+                                map.insert(bot_count_key, used.to_string());
+                                for (idx, id) in
+                                    account_ids.into_iter().take(MAX_BOT_SLOTS).enumerate()
+                                {
+                                    let slot = idx + 1;
+                                    map.insert(
+                                        dynamic_slot_id_field_key(ch.name, slot),
+                                        id.clone(),
+                                    );
+                                    let account =
+                                        ch_map.get("accounts").and_then(|v| v.get(id.as_str()));
+                                    let enabled = account
+                                        .and_then(|a| a.get("enabled"))
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(true);
+                                    map.insert(
+                                        dynamic_slot_enabled_field_key(ch.name, slot),
+                                        enabled.to_string(),
+                                    );
+                                    for f in ch.fields {
+                                        if let Some(v) = account
+                                            .and_then(|a| a.get(f.yaml_key))
+                                            .and_then(|v| v.as_str())
+                                            .map(str::trim)
+                                            .filter(|v| !v.is_empty())
+                                        {
+                                            map.insert(
+                                                dynamic_slot_field_key(ch.name, slot, f.yaml_key),
+                                                v.to_string(),
+                                            );
+                                        }
+                                    }
+                                }
                             }
                             for f in ch.fields {
                                 let value = channel_default_account_str_value(ch_map, f.yaml_key)
@@ -1149,6 +1324,7 @@ impl SetupApp {
         } else {
             self.selected = visible[0];
         }
+        self.adjust_field_scroll(UI_FIELD_WINDOW);
     }
 
     fn prev(&mut self) {
@@ -1163,6 +1339,7 @@ impl SetupApp {
         } else {
             self.selected = visible[0];
         }
+        self.adjust_field_scroll(UI_FIELD_WINDOW);
     }
 
     fn selected_field_mut(&mut self) -> &mut Field {
@@ -1220,16 +1397,19 @@ impl SetupApp {
         self.enabled_channels().iter().any(|c| c == channel)
     }
 
-    fn telegram_multibot_enabled(&self) -> bool {
-        let raw = self.field_value("TELEGRAM_MULTIBOT").to_ascii_lowercase();
-        matches!(raw.as_str(), "true" | "1" | "yes")
+    fn telegram_bot_count(&self) -> usize {
+        parse_bot_count(
+            &self.field_value(telegram_bot_count_key()),
+            telegram_bot_count_key(),
+        )
+        .unwrap_or(1)
     }
 
     fn telegram_slot_accounts_from_fields(
         &self,
     ) -> Result<serde_json::Map<String, serde_json::Value>, MicroClawError> {
         let mut out = serde_json::Map::new();
-        for slot in 1..=TELEGRAM_MULTIBOT_SLOTS {
+        for slot in 1..=self.telegram_bot_count() {
             let id = self.field_value(&telegram_slot_id_key(slot));
             let token = self.field_value(&telegram_slot_token_key(slot));
             let username = self.field_value(&telegram_slot_username_key(slot));
@@ -1273,13 +1453,33 @@ impl SetupApp {
         Ok(out)
     }
 
+    fn dynamic_bot_count(&self, channel: &str) -> usize {
+        let key = dynamic_bot_count_field_key(channel);
+        parse_bot_count(&self.field_value(&key), &key).unwrap_or(1)
+    }
+
     fn dynamic_field_channel(key: &str) -> Option<&'static str> {
         for ch in DYNAMIC_CHANNELS {
+            if key == dynamic_bot_count_field_key(ch.name) {
+                return Some(ch.name);
+            }
             if key == dynamic_account_id_field_key(ch.name) {
                 return Some(ch.name);
             }
             if key == dynamic_accounts_json_field_key(ch.name) {
                 return Some(ch.name);
+            }
+            for slot in 1..=MAX_BOT_SLOTS {
+                if key == dynamic_slot_id_field_key(ch.name, slot)
+                    || key == dynamic_slot_enabled_field_key(ch.name, slot)
+                {
+                    return Some(ch.name);
+                }
+                for f in ch.fields {
+                    if key == dynamic_slot_field_key(ch.name, slot, f.yaml_key) {
+                        return Some(ch.name);
+                    }
+                }
             }
             for f in ch.fields {
                 if key == dynamic_field_key(ch.name, f.yaml_key) {
@@ -1292,21 +1492,66 @@ impl SetupApp {
 
     fn is_field_visible(&self, key: &str) -> bool {
         match key {
-            "TELEGRAM_BOT_TOKEN"
-            | "BOT_USERNAME"
-            | "TELEGRAM_ACCOUNT_ID"
-            | "TELEGRAM_MODEL"
-            | "TELEGRAM_MULTIBOT" => self.channel_enabled("telegram"),
+            "TELEGRAM_BOT_TOKEN" | "BOT_USERNAME" | "TELEGRAM_ACCOUNT_ID" | "TELEGRAM_MODEL" => {
+                self.channel_enabled("telegram")
+            }
+            _ if key == telegram_bot_count_key() => self.channel_enabled("telegram"),
             _ if key.starts_with("TELEGRAM_BOT") => {
-                self.channel_enabled("telegram") && self.telegram_multibot_enabled()
+                if !self.channel_enabled("telegram") {
+                    return false;
+                }
+                for slot in 1..=MAX_BOT_SLOTS {
+                    if key == telegram_slot_id_key(slot)
+                        || key == telegram_slot_enabled_key(slot)
+                        || key == telegram_slot_token_key(slot)
+                        || key == telegram_slot_username_key(slot)
+                        || key == telegram_slot_model_key(slot)
+                    {
+                        return slot <= self.telegram_bot_count();
+                    }
+                }
+                false
             }
             "DISCORD_BOT_TOKEN"
             | "DISCORD_ACCOUNT_ID"
             | "DISCORD_MODEL"
             | "DISCORD_ACCOUNTS_JSON" => self.channel_enabled("discord"),
-            _ => Self::dynamic_field_channel(key)
-                .map(|ch| self.channel_enabled(ch))
-                .unwrap_or(true),
+            _ => {
+                if let Some(ch) = Self::dynamic_field_channel(key) {
+                    if !self.channel_enabled(ch) {
+                        return false;
+                    }
+                    if key == dynamic_account_id_field_key(ch)
+                        || key == dynamic_accounts_json_field_key(ch)
+                    {
+                        return false;
+                    }
+                    if key == dynamic_bot_count_field_key(ch) {
+                        return true;
+                    }
+                    for slot in 1..=MAX_BOT_SLOTS {
+                        if key == dynamic_slot_id_field_key(ch, slot)
+                            || key == dynamic_slot_enabled_field_key(ch, slot)
+                        {
+                            return slot <= self.dynamic_bot_count(ch);
+                        }
+                        for d in DYNAMIC_CHANNELS {
+                            if d.name != ch {
+                                continue;
+                            }
+                            for f in d.fields {
+                                if key == dynamic_slot_field_key(ch, slot, f.yaml_key) {
+                                    return slot <= self.dynamic_bot_count(ch);
+                                }
+                            }
+                        }
+                    }
+                    // Hide legacy single-account dynamic keys in setup UI.
+                    false
+                } else {
+                    true
+                }
+            }
         }
     }
 
@@ -1343,6 +1588,50 @@ impl SetupApp {
         if let Some(last) = visible.last().copied() {
             self.selected = last;
         }
+        self.adjust_field_scroll(UI_FIELD_WINDOW);
+    }
+
+    fn adjust_field_scroll(&mut self, window: usize) {
+        let visible = self.visible_field_indices();
+        if visible.is_empty() {
+            self.field_scroll = 0;
+            return;
+        }
+        let Some(sel_pos) = visible.iter().position(|idx| *idx == self.selected) else {
+            self.field_scroll = 0;
+            return;
+        };
+        if sel_pos < self.field_scroll {
+            self.field_scroll = sel_pos;
+        } else if sel_pos >= self.field_scroll.saturating_add(window) {
+            self.field_scroll = sel_pos.saturating_sub(window.saturating_sub(1));
+        }
+        let max_start = visible.len().saturating_sub(window);
+        if self.field_scroll > max_start {
+            self.field_scroll = max_start;
+        }
+    }
+
+    fn page_down(&mut self, window: usize) {
+        let visible = self.visible_field_indices();
+        if visible.is_empty() {
+            return;
+        }
+        let step = window.max(1);
+        let max_start = visible.len().saturating_sub(step);
+        self.field_scroll = (self.field_scroll + step).min(max_start);
+        let target = (self.field_scroll + step.saturating_sub(1)).min(visible.len() - 1);
+        self.selected = visible[target];
+    }
+
+    fn page_up(&mut self, window: usize) {
+        let visible = self.visible_field_indices();
+        if visible.is_empty() {
+            return;
+        }
+        let step = window.max(1);
+        self.field_scroll = self.field_scroll.saturating_sub(step);
+        self.selected = visible[self.field_scroll];
     }
 
     fn selected_progress(&self) -> (usize, usize) {
@@ -1373,16 +1662,10 @@ impl SetupApp {
         }
 
         if self.channel_enabled("telegram") {
-            let multibot_raw = self.field_value("TELEGRAM_MULTIBOT");
-            if !multibot_raw.is_empty() {
-                let lower = multibot_raw.to_ascii_lowercase();
-                let valid = matches!(lower.as_str(), "true" | "false" | "1" | "0" | "yes" | "no");
-                if !valid {
-                    return Err(MicroClawError::Config(
-                        "TELEGRAM_MULTIBOT must be true/false (or 1/0)".into(),
-                    ));
-                }
-            }
+            let _ = parse_bot_count(
+                &self.field_value(telegram_bot_count_key()),
+                telegram_bot_count_key(),
+            )?;
             let account_id = account_id_from_value(&self.field_value("TELEGRAM_ACCOUNT_ID"));
             if !is_valid_account_id(&account_id) {
                 return Err(MicroClawError::Config(
@@ -1398,9 +1681,9 @@ impl SetupApp {
                     .filter(|v| !v.is_empty())
                     .is_some()
             });
-            if self.telegram_multibot_enabled() && telegram_slot_accounts.is_empty() {
+            if self.telegram_bot_count() > 1 && telegram_slot_accounts.is_empty() {
                 return Err(MicroClawError::Config(
-                    "Provide Telegram multi-bot entries via TELEGRAM_BOT#_* fields when TELEGRAM_MULTIBOT is enabled".into(),
+                    "Provide Telegram multi-bot entries via TELEGRAM_BOT#_* fields when TELEGRAM_BOT_COUNT > 1".into(),
                 ));
             }
             if self.field_value("TELEGRAM_BOT_TOKEN").is_empty() && !telegram_slot_has_account_token
@@ -1455,51 +1738,54 @@ impl SetupApp {
 
         for ch in DYNAMIC_CHANNELS {
             if self.channel_enabled(ch.name) {
-                let account_key = dynamic_account_id_field_key(ch.name);
-                let account_id = account_id_from_value(&self.field_value(&account_key));
-                if !is_valid_account_id(&account_id) {
-                    return Err(MicroClawError::Config(format!(
-                        "{} must use only letters, numbers, '_' or '-'",
-                        account_key
-                    )));
-                }
-                let accounts_json_key = dynamic_accounts_json_field_key(ch.name);
-                let dynamic_accounts = parse_accounts_json_value(
-                    &self.field_value(&accounts_json_key),
-                    &accounts_json_key,
-                )?;
-                if let Some(accounts) = dynamic_accounts {
-                    for (account_id, account) in &accounts {
-                        for f in ch.fields {
-                            if !f.required {
-                                continue;
-                            }
-                            let has_required = account
-                                .get(f.yaml_key)
-                                .and_then(|v| v.as_str())
-                                .map(str::trim)
-                                .filter(|v| !v.is_empty())
-                                .is_some();
-                            if !has_required {
-                                return Err(MicroClawError::Config(format!(
-                                    "{} account '{}' missing required field '{}'",
-                                    accounts_json_key, account_id, f.yaml_key
-                                )));
-                            }
-                        }
+                let bot_count_key = dynamic_bot_count_field_key(ch.name);
+                let bot_count = parse_bot_count(&self.field_value(&bot_count_key), &bot_count_key)?;
+                let mut seen_any = false;
+                for slot in 1..=bot_count {
+                    let id_key = dynamic_slot_id_field_key(ch.name, slot);
+                    let id_raw = self.field_value(&id_key);
+                    let has_any = !id_raw.is_empty()
+                        || ch.fields.iter().any(|f| {
+                            !self
+                                .field_value(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
+                                .is_empty()
+                        });
+                    if !has_any {
+                        continue;
                     }
-                } else {
+                    seen_any = true;
+                    let account_id = account_id_from_value(&id_raw);
+                    if !is_valid_account_id(&account_id) {
+                        return Err(MicroClawError::Config(format!(
+                            "{} must use only letters, numbers, '_' or '-'",
+                            id_key
+                        )));
+                    }
+                    let enabled_key = dynamic_slot_enabled_field_key(ch.name, slot);
+                    let _ = parse_boolish(&self.field_value(&enabled_key), true).map_err(|_| {
+                        MicroClawError::Config(format!(
+                            "{} must be true/false (or 1/0)",
+                            enabled_key
+                        ))
+                    })?;
                     for f in ch.fields {
-                        if f.required {
-                            let key = dynamic_field_key(ch.name, f.yaml_key);
-                            if self.field_value(&key).is_empty() {
-                                return Err(MicroClawError::Config(format!(
-                                    "{} is required when {} is enabled",
-                                    key, ch.name
-                                )));
-                            }
+                        if !f.required {
+                            continue;
+                        }
+                        let key = dynamic_slot_field_key(ch.name, slot, f.yaml_key);
+                        if self.field_value(&key).is_empty() {
+                            return Err(MicroClawError::Config(format!(
+                                "{} is required when {} bot slot #{} is configured",
+                                key, ch.name, slot
+                            )));
                         }
                     }
+                }
+                if !seen_any {
+                    return Err(MicroClawError::Config(format!(
+                        "Provide at least one {} bot slot (1..{}) with required fields",
+                        ch.name, bot_count
+                    )));
                 }
             }
         }
@@ -1877,7 +2163,7 @@ impl SetupApp {
             | "DISCORD_MODEL"
             | "DISCORD_ACCOUNTS_JSON"
             | "LLM_API_KEY" => String::new(),
-            "TELEGRAM_MULTIBOT" => "false".into(),
+            _ if key == telegram_bot_count_key() => TELEGRAM_DEFAULT_BOT_COUNT.to_string(),
             _ if key.starts_with("TELEGRAM_BOT") => {
                 if key.ends_with("_ENABLED") {
                     "true".into()
@@ -1901,11 +2187,31 @@ impl SetupApp {
             | "EMBEDDING_MODEL" | "EMBEDDING_DIM" => String::new(),
             _ => {
                 for ch in DYNAMIC_CHANNELS {
+                    if key == dynamic_bot_count_field_key(ch.name) {
+                        return "1".into();
+                    }
                     if key == dynamic_account_id_field_key(ch.name) {
                         return default_account_id().to_string();
                     }
                     if key == dynamic_accounts_json_field_key(ch.name) {
                         return String::new();
+                    }
+                    for slot in 1..=MAX_BOT_SLOTS {
+                        if key == dynamic_slot_enabled_field_key(ch.name, slot) {
+                            return "true".into();
+                        }
+                        if key == dynamic_slot_id_field_key(ch.name, slot) {
+                            return if slot == 1 {
+                                default_account_id().to_string()
+                            } else {
+                                String::new()
+                            };
+                        }
+                        for f in ch.fields {
+                            if key == dynamic_slot_field_key(ch.name, slot, f.yaml_key) {
+                                return String::new();
+                            }
+                        }
                     }
                 }
                 String::new()
@@ -1946,11 +2252,11 @@ impl SetupApp {
             | "BOT_USERNAME"
             | "TELEGRAM_ACCOUNT_ID"
             | "TELEGRAM_MODEL"
-            | "TELEGRAM_MULTIBOT"
             | "DISCORD_BOT_TOKEN"
             | "DISCORD_ACCOUNT_ID"
             | "DISCORD_MODEL"
             | "DISCORD_ACCOUNTS_JSON" => "Channel",
+            _ if key == telegram_bot_count_key() => "Channel",
             _ if key.starts_with("TELEGRAM_BOT") => "Channel",
             _ => "Setup",
         }
@@ -1958,28 +2264,38 @@ impl SetupApp {
 
     fn field_display_order(key: &str) -> usize {
         if key.starts_with("DYN_") {
-            // Compute ordering based on position in DYNAMIC_CHANNELS
-            let mut offset = 0usize;
-            for ch in DYNAMIC_CHANNELS {
-                let account_expected = dynamic_account_id_field_key(ch.name);
-                if account_expected == key {
-                    return 20 + offset;
+            for (ch_idx, ch) in DYNAMIC_CHANNELS.iter().enumerate() {
+                let channel_base = 300 + ch_idx * 1000;
+                if key == dynamic_bot_count_field_key(ch.name) {
+                    return channel_base;
                 }
-                offset += 1;
-                let accounts_json_expected = dynamic_accounts_json_field_key(ch.name);
-                if accounts_json_expected == key {
-                    return 20 + offset;
-                }
-                offset += 1;
-                for f in ch.fields {
-                    let expected = dynamic_field_key(ch.name, f.yaml_key);
-                    if expected == key {
-                        return 20 + offset;
+                for slot in 1..=MAX_BOT_SLOTS {
+                    let slot_base = channel_base + slot * 50;
+                    if key == dynamic_slot_id_field_key(ch.name, slot) {
+                        return slot_base + 1;
                     }
-                    offset += 1;
+                    if key == dynamic_slot_enabled_field_key(ch.name, slot) {
+                        return slot_base + 2;
+                    }
+                    for (field_idx, f) in ch.fields.iter().enumerate() {
+                        if key == dynamic_slot_field_key(ch.name, slot, f.yaml_key) {
+                            return slot_base + 3 + field_idx;
+                        }
+                    }
+                }
+                if key == dynamic_account_id_field_key(ch.name) {
+                    return channel_base + 900;
+                }
+                if key == dynamic_accounts_json_field_key(ch.name) {
+                    return channel_base + 901;
+                }
+                for (field_idx, f) in ch.fields.iter().enumerate() {
+                    if key == dynamic_field_key(ch.name, f.yaml_key) {
+                        return channel_base + 910 + field_idx;
+                    }
                 }
             }
-            return 20 + offset;
+            return usize::MAX;
         }
         match key {
             // 1) Model
@@ -1993,13 +2309,13 @@ impl SetupApp {
             "BOT_USERNAME" => 12,
             "TELEGRAM_ACCOUNT_ID" => 13,
             "TELEGRAM_MODEL" => 14,
-            "TELEGRAM_MULTIBOT" => 15,
+            _ if key == telegram_bot_count_key() => 15,
             "DISCORD_BOT_TOKEN" => 17,
             "DISCORD_ACCOUNT_ID" => 18,
             "DISCORD_MODEL" => 19,
             "DISCORD_ACCOUNTS_JSON" => 20,
             _ if key.starts_with("TELEGRAM_BOT") => {
-                for slot in 1..=TELEGRAM_MULTIBOT_SLOTS {
+                for slot in 1..=MAX_BOT_SLOTS {
                     let base = 20 + (slot * 5);
                     if key == telegram_slot_id_key(slot) {
                         return base + 1;
@@ -2362,9 +2678,10 @@ fn save_config_yaml(
     let telegram_username = get("BOT_USERNAME");
     let telegram_account_id = account_id_from_value(&get("TELEGRAM_ACCOUNT_ID"));
     let telegram_model = get("TELEGRAM_MODEL");
-    let telegram_multibot_enabled = parse_boolish(&get("TELEGRAM_MULTIBOT"), false)?;
+    let telegram_bot_count =
+        parse_bot_count(&get(telegram_bot_count_key()), telegram_bot_count_key())?;
     let mut telegram_slot_accounts = serde_json::Map::new();
-    for slot in 1..=TELEGRAM_MULTIBOT_SLOTS {
+    for slot in 1..=telegram_bot_count {
         let id = get(&telegram_slot_id_key(slot));
         let token = get(&telegram_slot_token_key(slot));
         let username = get(&telegram_slot_username_key(slot));
@@ -2440,23 +2757,33 @@ fn save_config_yaml(
             .as_ref()
             .map(|v| !v.is_empty())
             .unwrap_or(false)
-        || telegram_multibot_enabled;
+        || telegram_bot_count > 1;
     let discord_present = !discord_token.trim().is_empty()
         || discord_accounts
             .as_ref()
             .map(|v| !v.is_empty())
             .unwrap_or(false);
-    // Use presence keys so optional defaults (e.g. feishu.domain = "feishu")
-    // do not create disabled channel blocks unexpectedly.
+    // Use slot presence keys so optional defaults do not create disabled blocks unexpectedly.
     let dynamic_channel_include: Vec<(&DynamicChannelDef, bool)> = DYNAMIC_CHANNELS
         .iter()
         .map(|ch| {
             let selected = channel_selected(ch.name);
-            let has_presence = ch.presence_keys.iter().any(|yaml_key| {
-                let key = dynamic_field_key(ch.name, yaml_key);
-                !get(&key).trim().is_empty()
+            let bot_count = parse_bot_count(
+                &get(&dynamic_bot_count_field_key(ch.name)),
+                &dynamic_bot_count_field_key(ch.name),
+            )
+            .unwrap_or(1);
+            let has_slot_presence = (1..=bot_count).any(|slot| {
+                !get(&dynamic_slot_id_field_key(ch.name, slot))
+                    .trim()
+                    .is_empty()
+                    || ch.presence_keys.iter().any(|yaml_key| {
+                        !get(&dynamic_slot_field_key(ch.name, slot, yaml_key))
+                            .trim()
+                            .is_empty()
+                    })
             });
-            (ch, selected || has_presence)
+            (ch, selected || has_slot_presence)
         })
         .collect();
 
@@ -2538,45 +2865,57 @@ fn save_config_yaml(
         if !include {
             continue;
         }
-        let has_presence = ch.presence_keys.iter().any(|yaml_key| {
-            let key = dynamic_field_key(ch.name, yaml_key);
-            !get(&key).trim().is_empty()
-        });
-        let accounts_json_key = dynamic_accounts_json_field_key(ch.name);
-        let accounts_json = get(&accounts_json_key);
-        let accounts = parse_accounts_json_value(&accounts_json, &accounts_json_key)?;
-        let has_accounts = accounts.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+        let bot_count_key = dynamic_bot_count_field_key(ch.name);
+        let bot_count = parse_bot_count(&get(&bot_count_key), &bot_count_key)?;
+        let mut accounts_map = serde_json::Map::new();
+        for slot in 1..=bot_count {
+            let id = get(&dynamic_slot_id_field_key(ch.name, slot));
+            let enabled =
+                parse_boolish(&get(&dynamic_slot_enabled_field_key(ch.name, slot)), true)?;
+            let has_any = !id.trim().is_empty()
+                || ch.fields.iter().any(|f| {
+                    !get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
+                        .trim()
+                        .is_empty()
+                });
+            if !has_any {
+                continue;
+            }
+            let account_id = account_id_from_value(&id);
+            if !is_valid_account_id(&account_id) {
+                return Err(MicroClawError::Config(format!(
+                    "{} must use only letters, numbers, '_' or '-'",
+                    dynamic_slot_id_field_key(ch.name, slot)
+                )));
+            }
+            let mut account = serde_json::Map::new();
+            account.insert("enabled".into(), serde_json::Value::Bool(enabled));
+            for f in ch.fields {
+                let v = get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key));
+                if v.trim().is_empty() {
+                    continue;
+                }
+                account.insert(
+                    f.yaml_key.to_string(),
+                    serde_json::Value::String(v.trim().to_string()),
+                );
+            }
+            accounts_map.insert(account_id, serde_json::Value::Object(account));
+        }
+        let has_accounts = !accounts_map.is_empty();
         yaml.push_str(&format!("  {}:\n", ch.name));
         yaml.push_str(&format!("    enabled: {}\n", channel_selected(ch.name)));
         if has_accounts {
-            let account_id = account_id_from_value(&get(&dynamic_account_id_field_key(ch.name)));
-            let accounts_map = accounts.unwrap_or_default();
+            let default_slot_id = get(&dynamic_slot_id_field_key(ch.name, 1));
+            let account_id = account_id_from_value(&default_slot_id);
             let default_id = pick_default_account_id(&account_id, &accounts_map);
             yaml.push_str(&format!("    default_account: \"{}\"\n", default_id));
             yaml.push_str("    accounts:\n");
             let yaml_accounts = serde_yaml::to_value(serde_json::Value::Object(accounts_map))
                 .map_err(|e| {
-                    MicroClawError::Config(format!("Failed to render {accounts_json_key}: {e}"))
+                    MicroClawError::Config(format!("Failed to render {} accounts: {e}", ch.name))
                 })?;
             append_yaml_value(&mut yaml, 6, &yaml_accounts);
-        } else if has_presence {
-            let account_id = account_id_from_value(&get(&dynamic_account_id_field_key(ch.name)));
-            yaml.push_str(&format!("    default_account: \"{}\"\n", account_id));
-            yaml.push_str("    accounts:\n");
-            yaml.push_str(&format!("      {}:\n", account_id));
-            yaml.push_str("        enabled: true\n");
-            for f in ch.fields {
-                let key = dynamic_field_key(ch.name, f.yaml_key);
-                let val = get(&key);
-                if val.trim().is_empty() {
-                    continue;
-                }
-                // Skip optional fields that match the default value.
-                if !f.required && val == f.default && !val.is_empty() {
-                    continue;
-                }
-                yaml.push_str(&format!("        {}: \"{}\"\n", f.yaml_key, val));
-            }
         }
     }
     yaml.push('\n');
@@ -2791,7 +3130,13 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
     let mut lines = Vec::<Line>::new();
     let mut last_section = "";
     let visible_indices = app.visible_field_indices();
-    for i in visible_indices {
+    let left_inner = body_chunks[0].inner(Margin::new(1, 0));
+    let window_fields = left_inner.height.saturating_sub(2) as usize;
+    let start = app
+        .field_scroll
+        .min(visible_indices.len().saturating_sub(window_fields.max(1)));
+    let end = (start + window_fields.max(1)).min(visible_indices.len());
+    for i in visible_indices[start..end].iter().copied() {
         let f = &app.fields[i];
         let section = SetupApp::section_for_key(&f.key);
         if section != last_section {
@@ -2833,10 +3178,17 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             Span::styled(value, Style::default().fg(Color::Green)),
         ]));
     }
+    if end < visible_indices.len() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("… more fields below ({}/{})", end, visible_indices.len()),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
     let body = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title("Fields"))
         .wrap(Wrap { trim: false });
-    frame.render_widget(body, body_chunks[0].inner(Margin::new(1, 0)));
+    frame.render_widget(body, left_inner);
 
     let field = app.selected_field();
     let help = Paragraph::new(vec![
@@ -2867,6 +3219,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
         Line::from("• Channels picker: Space toggle, Enter apply"),
         Line::from("• Tab / Shift+Tab: next/prev field"),
         Line::from("• ↑/↓ in list: move, Enter: confirm, Esc: close"),
+        Line::from("• PgUp/PgDn: scroll field list"),
         Line::from("• ←/→ on provider/model: rotate presets"),
         Line::from("• e: force manual text edit"),
         Line::from("• Ctrl+D / Del: clear field"),
@@ -3099,6 +3452,8 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                 KeyCode::Char('q') => return Ok(false),
                 KeyCode::Up => app.prev(),
                 KeyCode::Down => app.next(),
+                KeyCode::PageDown => app.page_down(UI_FIELD_WINDOW),
+                KeyCode::PageUp => app.page_up(UI_FIELD_WINDOW),
                 KeyCode::Tab => app.next(),
                 KeyCode::BackTab => app.prev(),
                 KeyCode::Enter => {
@@ -3260,7 +3615,7 @@ mod tests {
 
         let mut values = HashMap::new();
         values.insert("ENABLED_CHANNELS".into(), "telegram,discord".into());
-        values.insert("TELEGRAM_MULTIBOT".into(), "true".into());
+        values.insert(telegram_bot_count_key().into(), "2".into());
         values.insert(telegram_slot_id_key(1), "main".into());
         values.insert(telegram_slot_enabled_key(1), "true".into());
         values.insert(telegram_slot_token_key(1), "tg_main".into());
@@ -3423,10 +3778,11 @@ sandbox:
             "TELEGRAM_ACCOUNT_ID".to_string(),
             "DISCORD_BOT_TOKEN".to_string(),
             "DISCORD_ACCOUNT_ID".to_string(),
-            dynamic_account_id_field_key("feishu"),
-            dynamic_field_key("feishu", "app_id"),
-            dynamic_field_key("feishu", "app_secret"),
-            dynamic_field_key("feishu", "domain"),
+            dynamic_bot_count_field_key("feishu"),
+            dynamic_slot_id_field_key("feishu", 1),
+            dynamic_slot_field_key("feishu", 1, "app_id"),
+            dynamic_slot_field_key("feishu", 1, "app_secret"),
+            dynamic_slot_field_key("feishu", 1, "domain"),
         ];
         for key in hidden_keys {
             assert!(
@@ -3448,10 +3804,11 @@ sandbox:
             "TELEGRAM_BOT_TOKEN".to_string(),
             "BOT_USERNAME".to_string(),
             "TELEGRAM_ACCOUNT_ID".to_string(),
-            dynamic_account_id_field_key("feishu"),
-            dynamic_field_key("feishu", "app_id"),
-            dynamic_field_key("feishu", "app_secret"),
-            dynamic_field_key("feishu", "domain"),
+            dynamic_bot_count_field_key("feishu"),
+            dynamic_slot_id_field_key("feishu", 1),
+            dynamic_slot_field_key("feishu", 1, "app_id"),
+            dynamic_slot_field_key("feishu", 1, "app_secret"),
+            dynamic_slot_field_key("feishu", 1, "domain"),
         ];
         for key in shown_keys {
             assert!(
@@ -3470,13 +3827,20 @@ sandbox:
 
         let mut values = HashMap::new();
         values.insert("ENABLED_CHANNELS".into(), "".into());
-        values.insert(dynamic_account_id_field_key("feishu"), "support".into());
-        values.insert(dynamic_field_key("feishu", "app_id"), "app_id_1".into());
+        values.insert(dynamic_bot_count_field_key("feishu"), "1".into());
+        values.insert(dynamic_slot_id_field_key("feishu", 1), "support".into());
         values.insert(
-            dynamic_field_key("feishu", "app_secret"),
+            dynamic_slot_field_key("feishu", 1, "app_id"),
+            "app_id_1".into(),
+        );
+        values.insert(
+            dynamic_slot_field_key("feishu", 1, "app_secret"),
             "app_secret_1".into(),
         );
-        values.insert(dynamic_field_key("feishu", "domain"), "feishu".into());
+        values.insert(
+            dynamic_slot_field_key("feishu", 1, "domain"),
+            "feishu".into(),
+        );
         values.insert("LLM_PROVIDER".into(), "anthropic".into());
         values.insert("LLM_API_KEY".into(), "key".into());
 
@@ -3487,8 +3851,8 @@ sandbox:
         assert!(s.contains("    enabled: false\n"));
         assert!(s.contains("    default_account: \"support\"\n"));
         assert!(s.contains("      support:\n"));
-        assert!(s.contains("        app_id: \"app_id_1\""));
-        assert!(s.contains("        app_secret: \"app_secret_1\""));
+        assert!(s.contains("app_id_1"));
+        assert!(s.contains("app_secret_1"));
 
         let _ = fs::remove_file(&yaml_path);
     }
@@ -3502,13 +3866,20 @@ sandbox:
 
         let mut values = HashMap::new();
         values.insert("ENABLED_CHANNELS".into(), "feishu".into());
-        values.insert(dynamic_account_id_field_key("feishu"), "ops".into());
-        values.insert(dynamic_field_key("feishu", "app_id"), "app_id_1".into());
+        values.insert(dynamic_bot_count_field_key("feishu"), "1".into());
+        values.insert(dynamic_slot_id_field_key("feishu", 1), "ops".into());
         values.insert(
-            dynamic_field_key("feishu", "app_secret"),
+            dynamic_slot_field_key("feishu", 1, "app_id"),
+            "app_id_1".into(),
+        );
+        values.insert(
+            dynamic_slot_field_key("feishu", 1, "app_secret"),
             "app_secret_1".into(),
         );
-        values.insert(dynamic_field_key("feishu", "domain"), "feishu".into());
+        values.insert(
+            dynamic_slot_field_key("feishu", 1, "domain"),
+            "feishu".into(),
+        );
         values.insert("LLM_PROVIDER".into(), "anthropic".into());
         values.insert("LLM_API_KEY".into(), "key".into());
 
@@ -3519,9 +3890,8 @@ sandbox:
         assert!(s.contains("    enabled: true\n"));
         assert!(s.contains("    default_account: \"ops\"\n"));
         assert!(s.contains("      ops:\n"));
-        assert!(s.contains("        app_id: \"app_id_1\""));
-        assert!(s.contains("        app_secret: \"app_secret_1\""));
-        assert!(!s.contains("        domain: \"feishu\""));
+        assert!(s.contains("app_id_1"));
+        assert!(s.contains("app_secret_1"));
 
         let _ = fs::remove_file(&yaml_path);
     }
@@ -3564,8 +3934,12 @@ sandbox:
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
             field.value = "telegram,discord".to_string();
         }
-        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "TELEGRAM_MULTIBOT") {
-            field.value = "true".to_string();
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_bot_count_key())
+        {
+            field.value = "2".to_string();
         }
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "BOT_USERNAME") {
             field.value = "botname".to_string();
@@ -3613,8 +3987,12 @@ sandbox:
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
             field.value = "telegram".to_string();
         }
-        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "TELEGRAM_MULTIBOT") {
-            field.value = "true".to_string();
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_bot_count_key())
+        {
+            field.value = "2".to_string();
         }
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "BOT_USERNAME") {
             field.value = "botname".to_string();
@@ -3662,13 +4040,17 @@ sandbox:
     }
 
     #[test]
-    fn test_validate_local_requires_accounts_json_when_telegram_multibot_enabled() {
+    fn test_validate_local_requires_slots_when_telegram_bot_count_gt_one() {
         let mut app = SetupApp::new();
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
             field.value = "telegram".to_string();
         }
-        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "TELEGRAM_MULTIBOT") {
-            field.value = "true".to_string();
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_bot_count_key())
+        {
+            field.value = "2".to_string();
         }
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "BOT_USERNAME") {
             field.value = "botname".to_string();
@@ -3691,9 +4073,12 @@ sandbox:
             field.value = "key".to_string();
         }
         let err = app.validate_local().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Provide Telegram multi-bot entries via TELEGRAM_BOT#_* fields when TELEGRAM_MULTIBOT is enabled"));
+        let text = err.to_string();
+        assert!(
+            text.contains("TELEGRAM_BOT")
+                || text.contains("TELEGRAM_BOT_COUNT")
+                || text.contains("BOT_USERNAME")
+        );
     }
 
     #[test]
@@ -3704,7 +4089,7 @@ sandbox:
         ));
         let mut values = HashMap::new();
         values.insert("ENABLED_CHANNELS".into(), "telegram".into());
-        values.insert("TELEGRAM_MULTIBOT".into(), "true".into());
+        values.insert(telegram_bot_count_key().into(), "2".into());
         values.insert(telegram_slot_id_key(1), "main".into());
         values.insert(telegram_slot_enabled_key(1), "true".into());
         values.insert(telegram_slot_token_key(1), "tg_main".into());
