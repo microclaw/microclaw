@@ -932,6 +932,50 @@ function parseDiscordChannelCsv(input: string): number[] {
   return Array.from(new Set(out))
 }
 
+function parseI64ListCsvOrJsonArray(input: string, fieldName: string): number[] {
+  const trimmed = input.trim()
+  if (!trimmed) return []
+
+  const parsedAsCsv = (): number[] => {
+    const out: number[] = []
+    for (const part of trimmed.split(',')) {
+      const token = part.trim()
+      if (!token) continue
+      if (!/^-?\d+$/.test(token)) {
+        throw new Error(`${fieldName} must be a CSV of integers or a JSON integer array`)
+      }
+      const n = Number(token)
+      if (!Number.isSafeInteger(n)) {
+        throw new Error(`${fieldName} contains an out-of-range integer`)
+      }
+      out.push(n)
+    }
+    return Array.from(new Set(out))
+  }
+
+  if (trimmed.startsWith('[')) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch (e) {
+      throw new Error(`${fieldName} must be valid JSON array: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error(`${fieldName} must be a JSON array when using JSON format`)
+    }
+    const out: number[] = []
+    for (const item of parsed) {
+      if (typeof item !== 'number' || !Number.isSafeInteger(item)) {
+        throw new Error(`${fieldName} JSON array must contain integers only`)
+      }
+      out.push(item)
+    }
+    return Array.from(new Set(out))
+  }
+
+  return parsedAsCsv()
+}
+
 function normalizeWorkingDirIsolation(value: unknown): 'chat' | 'shared' {
   const normalized = String(value || '').trim().toLowerCase()
   return normalized === 'shared' ? 'shared' : 'chat'
@@ -1659,6 +1703,9 @@ function App() {
         telegram_account_id: telegramDefaultAccount,
         telegram_bot_username: String(telegramAccountCfg.bot_username || telegramCfg.bot_username || ''),
         telegram_model: String(telegramAccountCfg.model || telegramCfg.model || ''),
+        telegram_allowed_user_ids: Array.isArray(telegramCfg.allowed_user_ids)
+          ? (telegramCfg.allowed_user_ids as number[]).join(',')
+          : '',
         telegram_accounts_json: accountsJsonFromChannelConfig(telegramCfg),
         discord_bot_token: '',
         discord_account_id: discordDefaultAccount,
@@ -1825,6 +1872,9 @@ function App() {
           break
         case 'telegram_model':
           next.telegram_model = ''
+          break
+        case 'telegram_allowed_user_ids':
+          next.telegram_allowed_user_ids = ''
           break
         case 'telegram_accounts_json':
           next.telegram_accounts_json = ''
@@ -2027,6 +2077,10 @@ function App() {
       const telegramAccountId = normalizeAccountId(configDraft.telegram_account_id)
       const telegramBotUsername = String(configDraft.telegram_bot_username || '').trim()
       const telegramModel = String(configDraft.telegram_model || '').trim()
+      const telegramAllowedUserIds = parseI64ListCsvOrJsonArray(
+        String(configDraft.telegram_allowed_user_ids || ''),
+        'telegram_allowed_user_ids',
+      )
       const telegramAccounts = parseAccountsJson(
         'telegram_accounts_json',
         String(configDraft.telegram_accounts_json || ''),
@@ -2064,11 +2118,13 @@ function App() {
       if (telegramAccounts) {
         channelConfigs.telegram = {
           default_account: telegramAccountId,
+          ...(telegramAllowedUserIds.length > 0 ? { allowed_user_ids: telegramAllowedUserIds } : {}),
           accounts: telegramAccounts,
         }
-      } else if (tg || telegramBotUsername || telegramModel) {
+      } else if (tg || telegramBotUsername || telegramModel || telegramAllowedUserIds.length > 0) {
         channelConfigs.telegram = {
           default_account: telegramAccountId,
+          ...(telegramAllowedUserIds.length > 0 ? { allowed_user_ids: telegramAllowedUserIds } : {}),
           accounts: {
             [telegramAccountId]: {
               enabled: true,
@@ -2857,6 +2913,14 @@ function App() {
                               value={String(configDraft.telegram_model || '')}
                               onChange={(e) => setConfigField('telegram_model', e.target.value)}
                               placeholder="claude-sonnet-4-5-20250929"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="telegram_allowed_user_ids" description={<>Optional channel-level allowlist. Accepts CSV or JSON array (for example <code>123,456</code> or <code>[123,456]</code>). Merged with per-account <code>allowed_user_ids</code> in <code>telegram_accounts_json</code>.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.telegram_allowed_user_ids || '')}
+                              onChange={(e) => setConfigField('telegram_allowed_user_ids', e.target.value)}
+                              placeholder="123456789,987654321"
                             />
                           </ConfigFieldCard>
                           <ConfigFieldCard label="telegram_accounts_json" description={<>Optional multi-bot config JSON for <code>channels.telegram.accounts</code>. When set, this takes precedence over single-account fields above.</>}>
