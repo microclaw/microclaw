@@ -449,8 +449,8 @@ async fn handle_message(
     let mut image_data: Option<(String, String)> = None; // (base64, media_type)
     let mut document_saved_path: Option<String> = None;
 
-    let should_respond = match runtime_chat_type {
-        "private" => true,
+    let (mentioned, text_mentions_bot, replied_to_bot, should_respond) = match runtime_chat_type {
+        "private" => (false, false, false, true),
         _ => {
             let bot_mention = format!("@{}", tg_bot_username);
             let mentioned = text.to_ascii_lowercase().contains(&bot_mention.to_ascii_lowercase());
@@ -475,9 +475,24 @@ async fn handle_message(
                             || u.username.as_deref() == Some(tg_bot_username.as_str()))
                 })
                 .unwrap_or(false);
-            mentioned || text_mentions_bot || replied_to_bot
+            (
+                mentioned,
+                text_mentions_bot,
+                replied_to_bot,
+                mentioned || text_mentions_bot || replied_to_bot,
+            )
         }
     };
+
+    info!(
+        "Telegram inbound channel={} message_id={} chat_id={} chat_type={} should_respond={} text_preview={}",
+        tg_channel_name,
+        msg.id.0,
+        raw_chat_id,
+        runtime_chat_type,
+        should_respond,
+        text.chars().take(80).collect::<String>()
+    );
 
     if is_slash_command(&text) {
         let inbound_message_id = msg.id.0.to_string();
@@ -822,6 +837,16 @@ async fn handle_message(
 
     // Determine if we should respond
     if !should_respond {
+        info!(
+            "Telegram skip channel={} message_id={} reason=not_addressed mention={} text_mention={} reply_to_bot={} bot_username={} bot_user_id={:?}",
+            tg_channel_name,
+            msg.id.0,
+            mentioned,
+            text_mentions_bot,
+            replied_to_bot,
+            tg_bot_username,
+            tg_bot_user_id
+        );
         return Ok(());
     }
 
