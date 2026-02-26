@@ -88,6 +88,18 @@ fn telegram_bot_count_key() -> &'static str {
     "TELEGRAM_BOT_COUNT"
 }
 
+fn telegram_llm_provider_key() -> &'static str {
+    "TELEGRAM_LLM_PROVIDER"
+}
+
+fn telegram_llm_api_key_key() -> &'static str {
+    "TELEGRAM_LLM_API_KEY"
+}
+
+fn telegram_llm_base_url_key() -> &'static str {
+    "TELEGRAM_LLM_BASE_URL"
+}
+
 fn dynamic_bot_count_field_key(channel: &str) -> String {
     format!("DYN_{}_BOT_COUNT", channel.to_uppercase())
 }
@@ -554,6 +566,13 @@ struct SetupApp {
     completed: bool,
     backup_path: Option<String>,
     completion_summary: Vec<String>,
+    telegram_llm_page: Option<TelegramLlmPage>,
+}
+
+#[derive(Clone)]
+struct TelegramLlmPage {
+    selected: usize,
+    editing: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -612,6 +631,43 @@ impl SetupApp {
                         .get(telegram_bot_count_key())
                         .cloned()
                         .unwrap_or_else(|| TELEGRAM_DEFAULT_BOT_COUNT.to_string()),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: "TELEGRAM_MODEL".into(),
+                    label: "Telegram bot model override (optional)".into(),
+                    value: existing.get("TELEGRAM_MODEL").cloned().unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: telegram_llm_provider_key().into(),
+                    label: "Telegram LLM provider override (optional)".into(),
+                    value: existing
+                        .get(telegram_llm_provider_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: telegram_llm_api_key_key().into(),
+                    label: "Telegram LLM API key override (optional)".into(),
+                    value: existing
+                        .get(telegram_llm_api_key_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: true,
+                },
+                Field {
+                    key: telegram_llm_base_url_key().into(),
+                    label: "Telegram LLM base URL override (optional)".into(),
+                    value: existing
+                        .get(telegram_llm_base_url_key())
+                        .cloned()
+                        .unwrap_or_default(),
                     required: false,
                     secret: false,
                 },
@@ -798,6 +854,7 @@ impl SetupApp {
             completed: false,
             backup_path: None,
             completion_summary: Vec::new(),
+            telegram_llm_page: None,
         };
 
         for slot in 1..=MAX_BOT_SLOTS {
@@ -1007,15 +1064,43 @@ impl SetupApp {
                         .channels
                         .get("telegram")
                         .and_then(|ch_cfg| {
-                            channel_default_account_str_value(ch_cfg, "model").or_else(|| {
-                                ch_cfg
-                                    .get("model")
-                                    .and_then(|v| v.as_str())
-                                    .map(str::trim)
-                                    .filter(|v| !v.is_empty())
-                                    .map(ToOwned::to_owned)
-                            })
+                            ch_cfg
+                                .get("model")
+                                .and_then(|v| {
+                                    v.as_str()
+                                        .map(str::trim)
+                                        .filter(|v| !v.is_empty())
+                                        .map(ToOwned::to_owned)
+                                })
+                                .or_else(|| channel_default_account_str_value(ch_cfg, "model"))
                         })
+                        .unwrap_or_default();
+                    let telegram_llm_provider = config
+                        .channels
+                        .get("telegram")
+                        .and_then(|ch_cfg| ch_cfg.get("llm_provider"))
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_default();
+                    let telegram_llm_api_key = config
+                        .channels
+                        .get("telegram")
+                        .and_then(|ch_cfg| ch_cfg.get("api_key"))
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_default();
+                    let telegram_llm_base_url = config
+                        .channels
+                        .get("telegram")
+                        .and_then(|ch_cfg| ch_cfg.get("llm_base_url"))
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .map(ToOwned::to_owned)
                         .unwrap_or_default();
                     let telegram_bot_count = config
                         .channels
@@ -1087,6 +1172,18 @@ impl SetupApp {
                     map.insert("TELEGRAM_BOT_TOKEN".into(), telegram_bot_token.clone());
                     map.insert("TELEGRAM_ACCOUNT_ID".into(), telegram_account_id.clone());
                     map.insert("TELEGRAM_MODEL".into(), telegram_model.clone());
+                    map.insert(
+                        telegram_llm_provider_key().into(),
+                        telegram_llm_provider.clone(),
+                    );
+                    map.insert(
+                        telegram_llm_api_key_key().into(),
+                        telegram_llm_api_key.clone(),
+                    );
+                    map.insert(
+                        telegram_llm_base_url_key().into(),
+                        telegram_llm_base_url.clone(),
+                    );
                     map.insert(
                         telegram_bot_count_key().into(),
                         telegram_bot_count.to_string(),
@@ -1375,6 +1472,39 @@ impl SetupApp {
             .unwrap_or_default()
     }
 
+    fn set_field_value(&mut self, key: &str, value: String) {
+        if let Some(field) = self.fields.iter_mut().find(|f| f.key == key) {
+            field.value = value;
+        }
+    }
+
+    fn telegram_llm_keys() -> [&'static str; 4] {
+        [
+            telegram_llm_provider_key(),
+            telegram_llm_api_key_key(),
+            telegram_llm_base_url_key(),
+            "TELEGRAM_MODEL",
+        ]
+    }
+
+    fn telegram_llm_label_for_key(key: &str) -> &'static str {
+        match key {
+            "TELEGRAM_LLM_PROVIDER" => "Provider (optional)",
+            "TELEGRAM_LLM_API_KEY" => "API key (optional)",
+            "TELEGRAM_LLM_BASE_URL" => "Base URL (optional)",
+            "TELEGRAM_MODEL" => "Model (optional)",
+            _ => "",
+        }
+    }
+
+    fn open_telegram_llm_page(&mut self) {
+        self.telegram_llm_page = Some(TelegramLlmPage {
+            selected: 0,
+            editing: false,
+        });
+        self.status = "Editing Telegram LLM overrides".to_string();
+    }
+
     fn to_env_map(&self) -> HashMap<String, String> {
         let mut out = HashMap::new();
         for field in &self.fields {
@@ -1500,9 +1630,9 @@ impl SetupApp {
 
     fn is_field_visible(&self, key: &str) -> bool {
         match key {
-            "TELEGRAM_BOT_TOKEN" | "BOT_USERNAME" | "TELEGRAM_ACCOUNT_ID" | "TELEGRAM_MODEL" => {
-                false
-            }
+            "TELEGRAM_MODEL" => self.channel_enabled("telegram"),
+            "TELEGRAM_BOT_TOKEN" | "BOT_USERNAME" | "TELEGRAM_ACCOUNT_ID" => false,
+            "TELEGRAM_LLM_PROVIDER" | "TELEGRAM_LLM_API_KEY" | "TELEGRAM_LLM_BASE_URL" => false,
             _ if key == telegram_bot_count_key() => self.channel_enabled("telegram"),
             _ if key.starts_with("TELEGRAM_BOT") => {
                 if !self.channel_enabled("telegram") {
@@ -2222,6 +2352,9 @@ impl SetupApp {
             "TELEGRAM_BOT_TOKEN"
             | "BOT_USERNAME"
             | "TELEGRAM_MODEL"
+            | "TELEGRAM_LLM_PROVIDER"
+            | "TELEGRAM_LLM_API_KEY"
+            | "TELEGRAM_LLM_BASE_URL"
             | "DISCORD_BOT_TOKEN"
             | "DISCORD_MODEL"
             | "DISCORD_ACCOUNTS_JSON"
@@ -2315,6 +2448,9 @@ impl SetupApp {
             | "BOT_USERNAME"
             | "TELEGRAM_ACCOUNT_ID"
             | "TELEGRAM_MODEL"
+            | "TELEGRAM_LLM_PROVIDER"
+            | "TELEGRAM_LLM_API_KEY"
+            | "TELEGRAM_LLM_BASE_URL"
             | "DISCORD_BOT_TOKEN"
             | "DISCORD_ACCOUNT_ID"
             | "DISCORD_MODEL"
@@ -2378,8 +2514,11 @@ impl SetupApp {
             "TELEGRAM_BOT_TOKEN" => ORDER_CHANNEL_BASE + 1,
             "BOT_USERNAME" => ORDER_CHANNEL_BASE + 2,
             "TELEGRAM_ACCOUNT_ID" => ORDER_CHANNEL_BASE + 3,
-            "TELEGRAM_MODEL" => ORDER_CHANNEL_BASE + 4,
             _ if key == telegram_bot_count_key() => ORDER_CHANNEL_BASE + 5,
+            "TELEGRAM_MODEL" => ORDER_CHANNEL_BASE + 6,
+            "TELEGRAM_LLM_PROVIDER" => ORDER_CHANNEL_BASE + 7,
+            "TELEGRAM_LLM_API_KEY" => ORDER_CHANNEL_BASE + 8,
+            "TELEGRAM_LLM_BASE_URL" => ORDER_CHANNEL_BASE + 9,
             "DISCORD_BOT_TOKEN" => ORDER_CHANNEL_BASE + 900,
             "DISCORD_ACCOUNT_ID" => ORDER_CHANNEL_BASE + 901,
             "DISCORD_MODEL" => ORDER_CHANNEL_BASE + 902,
@@ -2765,6 +2904,9 @@ fn save_config_yaml(
     } else {
         get(&telegram_slot_model_key(1))
     };
+    let telegram_llm_provider = get(telegram_llm_provider_key());
+    let telegram_llm_api_key = get(telegram_llm_api_key_key());
+    let telegram_llm_base_url = get(telegram_llm_base_url_key());
     let telegram_bot_count =
         parse_bot_count(&get(telegram_bot_count_key()), telegram_bot_count_key())?;
     let mut telegram_slot_accounts = serde_json::Map::new();
@@ -2840,6 +2982,10 @@ fn save_config_yaml(
 
     let telegram_present = !telegram_token.trim().is_empty()
         || !telegram_username.trim().is_empty()
+        || !telegram_llm_provider.trim().is_empty()
+        || !telegram_llm_api_key.trim().is_empty()
+        || !telegram_llm_base_url.trim().is_empty()
+        || !telegram_model.trim().is_empty()
         || telegram_accounts
             .as_ref()
             .map(|v| !v.is_empty())
@@ -2888,6 +3034,27 @@ fn save_config_yaml(
     if channel_selected("telegram") || telegram_present {
         yaml.push_str("  telegram:\n");
         yaml.push_str(&format!("    enabled: {}\n", channel_selected("telegram")));
+        if !telegram_llm_provider.trim().is_empty() {
+            yaml.push_str(&format!(
+                "    llm_provider: \"{}\"\n",
+                telegram_llm_provider.trim()
+            ));
+        }
+        if !telegram_llm_api_key.trim().is_empty() {
+            yaml.push_str(&format!(
+                "    api_key: \"{}\"\n",
+                telegram_llm_api_key.trim()
+            ));
+        }
+        if !telegram_llm_base_url.trim().is_empty() {
+            yaml.push_str(&format!(
+                "    llm_base_url: \"{}\"\n",
+                telegram_llm_base_url.trim()
+            ));
+        }
+        if !telegram_model.trim().is_empty() {
+            yaml.push_str(&format!("    model: \"{}\"\n", telegram_model.trim()));
+        }
         if let Some(accounts) = &telegram_accounts {
             let default_id = pick_default_account_id(&telegram_account_id, accounts);
             yaml.push_str(&format!("    default_account: \"{}\"\n", default_id));
@@ -2914,9 +3081,7 @@ fn save_config_yaml(
                     telegram_username
                 ));
             }
-            if !telegram_model.trim().is_empty() {
-                yaml.push_str(&format!("        model: \"{}\"\n", telegram_model));
-            }
+            // Per-account model is still driven by slot fields; channel-level model is emitted above.
         }
     }
     if channel_selected("discord") || discord_present {
@@ -3248,6 +3413,18 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
         };
         let value = if f.key == "LLM_PROVIDER" {
             provider_display(&f.value)
+        } else if f.key == "TELEGRAM_MODEL" {
+            let provider = app.field_value(telegram_llm_provider_key());
+            let model = app.field_value("TELEGRAM_MODEL");
+            if provider.is_empty() && model.is_empty() {
+                String::new()
+            } else if provider.is_empty() {
+                model
+            } else if model.is_empty() {
+                format!("provider={provider}")
+            } else {
+                format!("provider={provider}, model={model}")
+            }
         } else {
             f.display_value(selected && app.editing)
         };
@@ -3303,6 +3480,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("• Enter: edit field / open selection list"),
+        Line::from("• Enter on Telegram model override: open channel LLM page"),
         Line::from("• Channels picker: Space toggle, Enter apply"),
         Line::from("• Tab / Shift+Tab: next/prev field"),
         Line::from("• ↑/↓ or j/k or Ctrl+N/Ctrl+P: move"),
@@ -3338,7 +3516,52 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
     .block(Block::default().borders(Borders::ALL).title("Status"));
     frame.render_widget(status, chunks[2]);
 
-    if let Some(picker) = &app.picker {
+    if let Some(page) = &app.telegram_llm_page {
+        let overlay_area = frame.area().inner(Margin::new(6, 3));
+        let mut lines = Vec::new();
+        for (idx, key) in SetupApp::telegram_llm_keys().iter().enumerate() {
+            let selected = idx == page.selected;
+            let pointer = if selected { "▶ " } else { "  " };
+            let label = SetupApp::telegram_llm_label_for_key(key);
+            let raw = app.field_value(key);
+            let value = if *key == telegram_llm_api_key_key() {
+                if selected && page.editing {
+                    raw
+                } else {
+                    mask_secret(&raw)
+                }
+            } else {
+                raw
+            };
+            let style = if selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{pointer}{label}: {value}"),
+                style,
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Enter edit/save · Esc close · ↑/↓/j/k/Ctrl+N/Ctrl+P move",
+            Style::default().fg(Color::DarkGray),
+        )));
+        let overlay = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Telegram Channel LLM Override")
+                    .style(Style::default().bg(Color::Black)),
+            )
+            .style(Style::default().bg(Color::Black))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(Clear, overlay_area);
+        frame.render_widget(overlay, overlay_area);
+    } else if let Some(picker) = &app.picker {
         let overlay_area = frame.area().inner(Margin::new(8, 4));
         let (title, options): (&str, Vec<String>) = match picker.kind {
             PickerKind::Provider => (
@@ -3494,6 +3717,105 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                 }
             }
 
+            if app.telegram_llm_page.is_some() {
+                let keys = SetupApp::telegram_llm_keys();
+                match key.code {
+                    KeyCode::Esc => {
+                        if let Some(page) = app.telegram_llm_page.as_mut() {
+                            if page.editing {
+                                page.editing = false;
+                                app.status = "Telegram LLM field edit canceled".into();
+                            } else {
+                                app.telegram_llm_page = None;
+                                app.status = "Closed Telegram LLM page".into();
+                            }
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if let Some(page) = app.telegram_llm_page.as_mut() {
+                            if !page.editing {
+                                page.selected = page.selected.saturating_sub(1);
+                            }
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if let Some(page) = app.telegram_llm_page.as_mut() {
+                            if !page.editing {
+                                page.selected =
+                                    (page.selected + 1).min(keys.len().saturating_sub(1));
+                            }
+                        }
+                    }
+                    KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if let Some(page) = app.telegram_llm_page.as_mut() {
+                            if !page.editing {
+                                page.selected = page.selected.saturating_sub(1);
+                            }
+                        }
+                    }
+                    KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if let Some(page) = app.telegram_llm_page.as_mut() {
+                            if !page.editing {
+                                page.selected =
+                                    (page.selected + 1).min(keys.len().saturating_sub(1));
+                            }
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if let Some(page) = app.telegram_llm_page.as_mut() {
+                            page.editing = !page.editing;
+                            if page.editing {
+                                app.status = "Editing Telegram LLM override field".into();
+                            } else {
+                                app.status = "Updated Telegram LLM override field".into();
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        let (editing, selected) = if let Some(page) = app.telegram_llm_page.as_ref()
+                        {
+                            (page.editing, page.selected)
+                        } else {
+                            (false, 0)
+                        };
+                        if editing {
+                            let key_name = keys[selected];
+                            if let Some(field) = app.fields.iter_mut().find(|f| f.key == key_name) {
+                                field.value.pop();
+                            }
+                        }
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        let (editing, selected) = if let Some(page) = app.telegram_llm_page.as_ref()
+                        {
+                            (page.editing, page.selected)
+                        } else {
+                            (false, 0)
+                        };
+                        if editing {
+                            let key_name = keys[selected];
+                            app.set_field_value(key_name, String::new());
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        let (editing, selected) = if let Some(page) = app.telegram_llm_page.as_ref()
+                        {
+                            (page.editing, page.selected)
+                        } else {
+                            (false, 0)
+                        };
+                        if editing {
+                            let key_name = keys[selected];
+                            let mut next = app.field_value(key_name);
+                            next.push(c);
+                            app.set_field_value(key_name, next);
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             if app.picker.is_some() {
                 match key.code {
                     KeyCode::Esc => {
@@ -3557,7 +3879,9 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                 KeyCode::Tab => app.next(),
                 KeyCode::BackTab => app.prev(),
                 KeyCode::Enter => {
-                    if app.open_picker_for_selected() {
+                    if app.selected_field().key == "TELEGRAM_MODEL" {
+                        app.open_telegram_llm_page();
+                    } else if app.open_picker_for_selected() {
                         app.status = format!("Selecting {}", app.selected_field().key);
                     } else {
                         app.editing = true;
