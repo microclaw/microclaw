@@ -568,6 +568,62 @@ html:not(.dark) .mc-msg-time {
   color: hsl(216 18% 46%);
 }
 
+.mc-think-details {
+  margin-top: 8px;
+  margin-left: 42px;
+  max-width: calc(var(--aui-thread-max-width) * 0.9);
+  border: 1px solid color-mix(in srgb, var(--mc-accent) 24%, #1d2a26);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--mc-accent) 8%, #06100d);
+  color: color-mix(in srgb, var(--mc-accent) 22%, #c9d8d2);
+  overflow: hidden;
+}
+
+.mc-think-details > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  user-select: none;
+}
+
+.mc-think-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-think-details > summary::before {
+  content: "▸";
+  margin-right: 6px;
+  font-size: 11px;
+}
+
+.mc-think-details[open] > summary::before {
+  content: "▾";
+}
+
+.mc-think-content {
+  margin: 0;
+  border-top: 1px solid color-mix(in srgb, var(--mc-accent) 20%, #1d2a26);
+  padding: 8px 10px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+html:not(.dark) .mc-think-details {
+  border-color: color-mix(in srgb, var(--mc-accent) 24%, #cbd5e1);
+  background: color-mix(in srgb, var(--mc-accent) 8%, #f8fafc);
+  color: color-mix(in srgb, var(--mc-accent) 40%, #334155);
+}
+
+html:not(.dark) .mc-think-content {
+  border-top-color: color-mix(in srgb, var(--mc-accent) 20%, #cbd5e1);
+}
+
 .mc-assistant-placeholder {
   display: inline-flex;
   align-items: center;

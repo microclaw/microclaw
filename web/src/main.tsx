@@ -44,6 +44,54 @@ import { SessionSidebar } from './components/session-sidebar'
 import { UsagePanel, type InjectionLogPoint, type MemoryObservability, type ReflectorRunPoint } from './components/usage-panel'
 import type { SessionItem } from './types'
 
+type ThinkExtraction = {
+  visibleText: string
+  thinkSegments: string[]
+}
+
+function extractThinkSegments(text: string): ThinkExtraction {
+  if (!text) return { visibleText: '', thinkSegments: [] }
+
+  const thinkSegments: string[] = []
+  let visibleText = ''
+  let index = 0
+
+  while (index < text.length) {
+    const start = text.indexOf('<think>', index)
+    if (start < 0) {
+      visibleText += text.slice(index)
+      break
+    }
+
+    visibleText += text.slice(index, start)
+    const contentStart = start + '<think>'.length
+    const end = text.indexOf('</think>', contentStart)
+
+    if (end < 0) {
+      const tail = text.slice(contentStart).trim()
+      if (tail) thinkSegments.push(tail)
+      break
+    }
+
+    const segment = text.slice(contentStart, end).trim()
+    if (segment) thinkSegments.push(segment)
+    index = end + '</think>'.length
+  }
+
+  return { visibleText, thinkSegments }
+}
+
+function collectThinkText(parts: readonly { type: string; text?: string }[] | undefined): string {
+  if (!Array.isArray(parts)) return ''
+  const segments: string[] = []
+  for (const part of parts) {
+    if (part.type !== 'text' || typeof part.text !== 'string') continue
+    const extracted = extractThinkSegments(part.text)
+    if (extracted.thinkSegments.length > 0) segments.push(...extracted.thinkSegments)
+  }
+  return segments.join('\n\n')
+}
+
 type ConfigPayload = Record<string, unknown>
 
 type StreamEvent = {
@@ -856,10 +904,12 @@ function MessageTimestamp({ align }: { align: 'left' | 'right' }) {
 }
 
 function CustomAssistantMessage() {
+  const thinkText = useMessage((m) => collectThinkText(m.content as readonly { type: string; text?: string }[] | undefined))
+
   const hasRenderableContent = useMessage((m) =>
     Array.isArray(m.content)
       ? m.content.some((part) => {
-          if (part.type === 'text') return Boolean(part.text?.trim())
+          if (part.type === 'text') return Boolean(extractThinkSegments(part.text ?? '').visibleText.trim())
           return part.type === 'tool-call'
         })
       : false,
@@ -878,6 +928,12 @@ function CustomAssistantMessage() {
           <span className="mc-assistant-placeholder-text">Thinking</span>
         </div>
       )}
+      {thinkText.trim() ? (
+        <details className="mc-think-details">
+          <summary>View thinking</summary>
+          <pre className="mc-think-content">{thinkText}</pre>
+        </details>
+      ) : null}
       <BranchPicker />
       <AssistantActionBar />
       <MessageTimestamp align="left" />
@@ -908,7 +964,9 @@ type ThreadPaneProps = {
 }
 
 function ThreadPane({ adapter, initialMessages, runtimeKey }: ThreadPaneProps) {
-  const MarkdownText = makeMarkdownText()
+  const MarkdownText = makeMarkdownText({
+    preprocess: (text) => extractThinkSegments(text).visibleText,
+  })
   const runtime = useLocalRuntime(adapter, {
     initialMessages,
     maxSteps: 100,
