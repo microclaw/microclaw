@@ -91,6 +91,7 @@ fn default_webhook_path() -> String {
     "/feishu/events".into()
 }
 
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct FeishuAccountConfig {
     pub app_id: String,
@@ -111,6 +112,8 @@ pub struct FeishuAccountConfig {
     pub bot_username: String,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub topic_mode: bool,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -139,6 +142,8 @@ pub struct FeishuChannelConfig {
     pub encrypt_key: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub topic_mode: bool,
     #[serde(default)]
     pub accounts: HashMap<String, FeishuAccountConfig>,
     #[serde(default)]
@@ -204,6 +209,7 @@ pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<Feis
             verification_token: account_cfg.verification_token.clone(),
             encrypt_key: account_cfg.encrypt_key.clone(),
             model: account_cfg.model.clone(),
+            topic_mode: account_cfg.topic_mode.clone(),
             accounts: HashMap::new(),
             default_account: None,
         };
@@ -903,21 +909,39 @@ const MSG_TYPE_PING: &str = "ping";
 // ---------------------------------------------------------------------------
 
 /// Send a text response to a Feishu chat, splitting at 4000 chars.
+///
+/// When `topic_mode` is `true`, replies to the original message in a thread.
+/// When `false` (default), sends a new message directly to the chat.
 async fn send_feishu_response(
     http_client: &reqwest::Client,
     base_url: &str,
     token: &str,
     chat_id: &str,
     text: &str,
+    message_id: &str,
+    topic_mode: bool,
 ) -> Result<(), String> {
     for chunk in split_text(text, 4000) {
         let content = serde_json::json!({ "text": chunk }).to_string();
-        let body = serde_json::json!({
-            "receive_id": chat_id,
-            "msg_type": "text",
-            "content": content,
-        });
-        let url = format!("{base_url}/open-apis/im/v1/messages?receive_id_type=chat_id");
+
+        let (url, body) = if topic_mode {
+            let body = serde_json::json!({
+                "msg_type": "text",
+                "content": content,
+                "reply_in_thread": true,
+            });
+            let url = format!("{base_url}/open-apis/im/v1/messages/{message_id}/reply");
+            (url, body)
+        } else {
+            let body = serde_json::json!({
+                "receive_id": chat_id,
+                "msg_type": "text",
+                "content": content,
+            });
+            let url = format!("{base_url}/open-apis/im/v1/messages?receive_id_type=chat_id");
+            (url, body)
+        };
+
         let resp = http_client
             .post(&url)
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
@@ -1443,7 +1467,10 @@ async fn handle_feishu_event(
             .and_then(|s| s.parse::<i64>().ok())
             .or_else(|| v.as_i64())
     });
-
+    info!(
+        "Feishu: received message chat_id={} message_id={} sender_open_id={} type={} content={}",
+        chat_id_str, message_id, sender_open_id, message_type, content_raw
+    );
     if should_drop_recent_duplicate_message(&runtime.channel_name, message_id) {
         return;
     }
@@ -1565,6 +1592,7 @@ async fn handle_feishu_message(
 
     let trimmed = text.trim();
     let should_respond = is_dm || is_mentioned;
+    let topic_mode = feishu_cfg.topic_mode;
     let inbound_message_id = if message_id.is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -1598,7 +1626,7 @@ async fn handle_feishu_message(
         if let Some(reply) =
             handle_chat_command(&app_state, chat_id, &runtime.channel_name, trimmed).await
         {
-            let _ = send_feishu_response(&http_client, base_url, &token, external_chat_id, &reply)
+            let _ = send_feishu_response(&http_client, base_url, &token, external_chat_id, &reply, message_id, topic_mode)
                 .await;
             return;
         }
@@ -1612,6 +1640,8 @@ async fn handle_feishu_message(
                 &token,
                 external_chat_id,
                 &plugin_response,
+                message_id,
+                topic_mode,
             )
             .await;
             return;
@@ -1622,6 +1652,8 @@ async fn handle_feishu_message(
             &token,
             external_chat_id,
             &unknown_command_response(),
+            message_id,
+            topic_mode,
         )
         .await;
         return;
@@ -1682,6 +1714,8 @@ async fn handle_feishu_message(
                     &token,
                     external_chat_id,
                     &response,
+                    message_id,
+                    topic_mode,
                 )
                 .await
                 {
@@ -1707,6 +1741,8 @@ async fn handle_feishu_message(
                     &token,
                     external_chat_id,
                     fallback,
+                    message_id,
+                    topic_mode,
                 )
                 .await;
 
@@ -1731,6 +1767,8 @@ async fn handle_feishu_message(
                     &token,
                     external_chat_id,
                     &format!("Error: {e}"),
+                    message_id,
+                    topic_mode,
                 )
                 .await;
             }
