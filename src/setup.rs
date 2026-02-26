@@ -597,16 +597,6 @@ impl SetupApp {
                     secret: false,
                 },
                 Field {
-                    key: "TELEGRAM_ACCOUNTS_JSON".into(),
-                    label: "Telegram bots JSON array/object (multi-bot)".into(),
-                    value: existing
-                        .get("TELEGRAM_ACCOUNTS_JSON")
-                        .cloned()
-                        .unwrap_or_default(),
-                    required: false,
-                    secret: false,
-                },
-                Field {
                     key: "DISCORD_BOT_TOKEN".into(),
                     label: "Discord bot token".into(),
                     value: existing.get("DISCORD_BOT_TOKEN").cloned().unwrap_or_default(),
@@ -932,12 +922,6 @@ impl SetupApp {
                             })
                         })
                         .unwrap_or_default();
-                    let telegram_accounts_json = config
-                        .channels
-                        .get("telegram")
-                        .and_then(|ch_cfg| ch_cfg.get("accounts"))
-                        .and_then(compact_json_string)
-                        .unwrap_or_default();
                     let telegram_multibot = config
                         .channels
                         .get("telegram")
@@ -1008,7 +992,6 @@ impl SetupApp {
                     map.insert("TELEGRAM_ACCOUNT_ID".into(), telegram_account_id.clone());
                     map.insert("TELEGRAM_MODEL".into(), telegram_model);
                     map.insert("TELEGRAM_MULTIBOT".into(), telegram_multibot.to_string());
-                    map.insert("TELEGRAM_ACCOUNTS_JSON".into(), telegram_accounts_json);
                     if let Some(ch_cfg) = config.channels.get("telegram") {
                         if let Some(accounts) = ch_cfg.get("accounts").and_then(|v| v.as_mapping())
                         {
@@ -1314,9 +1297,6 @@ impl SetupApp {
             | "TELEGRAM_ACCOUNT_ID"
             | "TELEGRAM_MODEL"
             | "TELEGRAM_MULTIBOT" => self.channel_enabled("telegram"),
-            "TELEGRAM_ACCOUNTS_JSON" => {
-                self.channel_enabled("telegram") && self.telegram_multibot_enabled()
-            }
             _ if key.starts_with("TELEGRAM_BOT") => {
                 self.channel_enabled("telegram") && self.telegram_multibot_enabled()
             }
@@ -1409,24 +1389,7 @@ impl SetupApp {
                     "TELEGRAM_ACCOUNT_ID must use only letters, numbers, '_' or '-'".into(),
                 ));
             }
-            let telegram_accounts = parse_accounts_json_value(
-                &self.field_value("TELEGRAM_ACCOUNTS_JSON"),
-                "TELEGRAM_ACCOUNTS_JSON",
-            )?;
             let telegram_slot_accounts = self.telegram_slot_accounts_from_fields()?;
-            let telegram_has_account_token = telegram_accounts
-                .as_ref()
-                .map(|accounts| {
-                    accounts.values().any(|account| {
-                        account
-                            .get("bot_token")
-                            .and_then(|v| v.as_str())
-                            .map(str::trim)
-                            .filter(|v| !v.is_empty())
-                            .is_some()
-                    })
-                })
-                .unwrap_or(false);
             let telegram_slot_has_account_token = telegram_slot_accounts.values().any(|account| {
                 account
                     .get("bot_token")
@@ -1435,20 +1398,15 @@ impl SetupApp {
                     .filter(|v| !v.is_empty())
                     .is_some()
             });
-            if self.telegram_multibot_enabled()
-                && telegram_accounts.is_none()
-                && telegram_slot_accounts.is_empty()
-            {
+            if self.telegram_multibot_enabled() && telegram_slot_accounts.is_empty() {
                 return Err(MicroClawError::Config(
-                    "Provide Telegram multi-bot entries via TELEGRAM_BOT#_* fields or TELEGRAM_ACCOUNTS_JSON when TELEGRAM_MULTIBOT is enabled".into(),
+                    "Provide Telegram multi-bot entries via TELEGRAM_BOT#_* fields when TELEGRAM_MULTIBOT is enabled".into(),
                 ));
             }
-            if self.field_value("TELEGRAM_BOT_TOKEN").is_empty()
-                && !telegram_has_account_token
-                && !telegram_slot_has_account_token
+            if self.field_value("TELEGRAM_BOT_TOKEN").is_empty() && !telegram_slot_has_account_token
             {
                 return Err(MicroClawError::Config(
-                    "TELEGRAM_BOT_TOKEN or TELEGRAM_ACCOUNTS_JSON(bot_token) is required when telegram is enabled".into(),
+                    "TELEGRAM_BOT_TOKEN or TELEGRAM_BOT#_TOKEN is required when telegram is enabled".into(),
                 ));
             }
             let username = self.field_value("BOT_USERNAME");
@@ -1634,24 +1592,17 @@ impl SetupApp {
         let tg_token = if !self.field_value("TELEGRAM_BOT_TOKEN").is_empty() {
             self.field_value("TELEGRAM_BOT_TOKEN")
         } else {
-            parse_accounts_json_value(
-                &self.field_value("TELEGRAM_ACCOUNTS_JSON"),
-                "TELEGRAM_ACCOUNTS_JSON",
-            )?
-            .and_then(|accounts| {
-                let mut ids: Vec<String> = accounts.keys().cloned().collect();
-                ids.sort();
-                ids.into_iter().find_map(|id| {
-                    accounts
-                        .get(&id)
-                        .and_then(|account| account.get("bot_token"))
+            self.telegram_slot_accounts_from_fields()?
+                .into_values()
+                .find_map(|account| {
+                    account
+                        .get("bot_token")
                         .and_then(|v| v.as_str())
                         .map(str::trim)
                         .filter(|v| !v.is_empty())
                         .map(ToOwned::to_owned)
                 })
-            })
-            .unwrap_or_default()
+                .unwrap_or_default()
         };
         let env_username = self
             .field_value("BOT_USERNAME")
@@ -1922,7 +1873,6 @@ impl SetupApp {
             "TELEGRAM_BOT_TOKEN"
             | "BOT_USERNAME"
             | "TELEGRAM_MODEL"
-            | "TELEGRAM_ACCOUNTS_JSON"
             | "DISCORD_BOT_TOKEN"
             | "DISCORD_MODEL"
             | "DISCORD_ACCOUNTS_JSON"
@@ -1997,7 +1947,6 @@ impl SetupApp {
             | "TELEGRAM_ACCOUNT_ID"
             | "TELEGRAM_MODEL"
             | "TELEGRAM_MULTIBOT"
-            | "TELEGRAM_ACCOUNTS_JSON"
             | "DISCORD_BOT_TOKEN"
             | "DISCORD_ACCOUNT_ID"
             | "DISCORD_MODEL"
@@ -2045,7 +1994,6 @@ impl SetupApp {
             "TELEGRAM_ACCOUNT_ID" => 13,
             "TELEGRAM_MODEL" => 14,
             "TELEGRAM_MULTIBOT" => 15,
-            "TELEGRAM_ACCOUNTS_JSON" => 16,
             "DISCORD_BOT_TOKEN" => 17,
             "DISCORD_ACCOUNT_ID" => 18,
             "DISCORD_MODEL" => 19,
@@ -2414,9 +2362,6 @@ fn save_config_yaml(
     let telegram_username = get("BOT_USERNAME");
     let telegram_account_id = account_id_from_value(&get("TELEGRAM_ACCOUNT_ID"));
     let telegram_model = get("TELEGRAM_MODEL");
-    let telegram_accounts_json = get("TELEGRAM_ACCOUNTS_JSON");
-    let telegram_accounts_from_json =
-        parse_accounts_json_value(&telegram_accounts_json, "TELEGRAM_ACCOUNTS_JSON")?;
     let telegram_multibot_enabled = parse_boolish(&get("TELEGRAM_MULTIBOT"), false)?;
     let mut telegram_slot_accounts = serde_json::Map::new();
     for slot in 1..=TELEGRAM_MULTIBOT_SLOTS {
@@ -2464,7 +2409,7 @@ fn save_config_yaml(
     let telegram_accounts = if !telegram_slot_accounts.is_empty() {
         Some(telegram_slot_accounts)
     } else {
-        telegram_accounts_from_json
+        None
     };
     let discord_token = get("DISCORD_BOT_TOKEN");
     let discord_account_id = account_id_from_value(&get("DISCORD_ACCOUNT_ID"));
@@ -2535,7 +2480,7 @@ fn save_config_yaml(
             yaml.push_str("    accounts:\n");
             let yaml_accounts = serde_yaml::to_value(serde_json::Value::Object(accounts.clone()))
                 .map_err(|e| {
-                MicroClawError::Config(format!("Failed to render TELEGRAM_ACCOUNTS_JSON: {e}"))
+                MicroClawError::Config(format!("Failed to render Telegram multi-bot accounts: {e}"))
             })?;
             append_yaml_value(&mut yaml, 6, &yaml_accounts);
         } else if telegram_present {
@@ -3315,10 +3260,15 @@ mod tests {
 
         let mut values = HashMap::new();
         values.insert("ENABLED_CHANNELS".into(), "telegram,discord".into());
-        values.insert(
-            "TELEGRAM_ACCOUNTS_JSON".into(),
-            r#"{"main":{"enabled":true,"bot_token":"tg_main","bot_username":"tg_main_bot"},"ops":{"enabled":true,"bot_token":"tg_ops","bot_username":"tg_ops_bot"}}"#.into(),
-        );
+        values.insert("TELEGRAM_MULTIBOT".into(), "true".into());
+        values.insert(telegram_slot_id_key(1), "main".into());
+        values.insert(telegram_slot_enabled_key(1), "true".into());
+        values.insert(telegram_slot_token_key(1), "tg_main".into());
+        values.insert(telegram_slot_username_key(1), "tg_main_bot".into());
+        values.insert(telegram_slot_id_key(2), "ops".into());
+        values.insert(telegram_slot_enabled_key(2), "true".into());
+        values.insert(telegram_slot_token_key(2), "tg_ops".into());
+        values.insert(telegram_slot_username_key(2), "tg_ops_bot".into());
         values.insert("TELEGRAM_ACCOUNT_ID".into(), "main".into());
         values.insert(
             "DISCORD_ACCOUNTS_JSON".into(),
@@ -3623,11 +3573,23 @@ sandbox:
         if let Some(field) = app
             .fields
             .iter_mut()
-            .find(|f| f.key == "TELEGRAM_ACCOUNTS_JSON")
+            .find(|f| f.key == telegram_slot_id_key(1))
         {
-            field.value =
-                r#"{"main":{"enabled":true,"bot_token":"123456:token","bot_username":"botname"}}"#
-                    .to_string();
+            field.value = "main".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_token_key(1))
+        {
+            field.value = "123456:token".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_username_key(1))
+        {
+            field.value = "botname".to_string();
         }
         if let Some(field) = app
             .fields
@@ -3660,9 +3622,37 @@ sandbox:
         if let Some(field) = app
             .fields
             .iter_mut()
-            .find(|f| f.key == "TELEGRAM_ACCOUNTS_JSON")
+            .find(|f| f.key == telegram_slot_id_key(1))
         {
-            field.value = r#"[{"id":"main","enabled":true,"bot_token":"123456:token","bot_username":"botname"},{"id":"support","enabled":true,"bot_token":"999:token2"}]"#.to_string();
+            field.value = "main".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_token_key(1))
+        {
+            field.value = "123456:token".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_username_key(1))
+        {
+            field.value = "botname".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_id_key(2))
+        {
+            field.value = "support".to_string();
+        }
+        if let Some(field) = app
+            .fields
+            .iter_mut()
+            .find(|f| f.key == telegram_slot_token_key(2))
+        {
+            field.value = "999:token2".to_string();
         }
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_API_KEY") {
             field.value = "key".to_string();
@@ -3697,20 +3687,13 @@ sandbox:
         {
             field.value.clear();
         }
-        if let Some(field) = app
-            .fields
-            .iter_mut()
-            .find(|f| f.key == "TELEGRAM_ACCOUNTS_JSON")
-        {
-            field.value.clear();
-        }
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_API_KEY") {
             field.value = "key".to_string();
         }
         let err = app.validate_local().unwrap_err();
         assert!(err
             .to_string()
-            .contains("Provide Telegram multi-bot entries via TELEGRAM_BOT#_* fields or TELEGRAM_ACCOUNTS_JSON when TELEGRAM_MULTIBOT is enabled"));
+            .contains("Provide Telegram multi-bot entries via TELEGRAM_BOT#_* fields when TELEGRAM_MULTIBOT is enabled"));
     }
 
     #[test]
