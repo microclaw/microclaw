@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
+use std::{cell::Cell, cell::RefCell};
 
 use chrono::Utc;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -544,6 +546,8 @@ struct SetupApp {
     fields: Vec<Field>,
     selected: usize,
     field_scroll: usize,
+    visible_cache_sig: Cell<u64>,
+    visible_cache_indices: RefCell<Vec<usize>>,
     editing: bool,
     picker: Option<PickerState>,
     status: String,
@@ -815,6 +819,8 @@ impl SetupApp {
             ],
             selected: 0,
             field_scroll: 0,
+            visible_cache_sig: Cell::new(u64::MAX),
+            visible_cache_indices: RefCell::new(Vec::new()),
             editing: false,
             picker: None,
             status:
@@ -1556,17 +1562,39 @@ impl SetupApp {
     }
 
     fn visible_field_indices(&self) -> Vec<usize> {
-        self.fields
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, field)| {
-                if self.is_field_visible(&field.key) {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        let sig = self.visibility_signature();
+        if self.visible_cache_sig.get() != sig {
+            let indices = self
+                .fields
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, field)| {
+                    if self.is_field_visible(&field.key) {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            *self.visible_cache_indices.borrow_mut() = indices;
+            self.visible_cache_sig.set(sig);
+        }
+        self.visible_cache_indices.borrow().clone()
+    }
+
+    fn visibility_signature(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for field in &self.fields {
+            let key = field.key.as_str();
+            if key == "ENABLED_CHANNELS"
+                || key == telegram_bot_count_key()
+                || key.starts_with("DYN_") && key.ends_with("_BOT_COUNT")
+            {
+                key.hash(&mut hasher);
+                field.value.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 
     fn ensure_selected_visible(&mut self) {
