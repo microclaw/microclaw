@@ -221,14 +221,22 @@ impl Tool for ScheduleTaskTool {
             },
             "once" => {
                 // Validate and normalize to UTC for consistent SQLite string comparison.
-                let dt_utc = match parse_once_schedule_value(schedule_value, tz_name) {
+                let mut dt_utc = match parse_once_schedule_value(schedule_value, tz_name) {
                     Ok(dt) => dt,
                     Err(e) => return ToolResult::error(e),
                 };
-                if dt_utc <= Utc::now() {
-                    return ToolResult::error(
-                        "One-time schedule timestamp must be in the future".into(),
-                    );
+                let now = Utc::now();
+                if dt_utc <= now {
+                    let lag = now - dt_utc;
+                    // Tolerate small scheduling races (e.g. model picks current minute :00 and
+                    // tool executes a few seconds later) by shifting to the next minute.
+                    if lag <= chrono::Duration::seconds(59) {
+                        dt_utc += chrono::Duration::minutes(1);
+                    } else {
+                        return ToolResult::error(
+                            "One-time schedule timestamp must be in the future".into(),
+                        );
+                    }
                 }
                 dt_utc.to_rfc3339()
             }
@@ -1011,7 +1019,7 @@ mod tests {
     async fn test_schedule_task_rejects_past_once_timestamp() {
         let (db, dir) = test_db();
         let tool = ScheduleTaskTool::new(test_registry(), db, "UTC".into());
-        let past = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+        let past = (Utc::now() - chrono::Duration::minutes(2)).to_rfc3339();
         let result = tool
             .execute(json!({
                 "chat_id": 100,
@@ -1022,6 +1030,32 @@ mod tests {
             .await;
         assert!(result.is_error);
         assert!(result.content.contains("must be in the future"));
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_schedule_task_once_small_past_is_shifted_to_next_minute() {
+        let (db, dir) = test_db();
+        let tool = ScheduleTaskTool::new(test_registry(), db.clone(), "UTC".into());
+        let slightly_past = (Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+        let result = tool
+            .execute(json!({
+                "chat_id": 100,
+                "prompt": "test",
+                "schedule_type": "once",
+                "schedule_value": slightly_past
+            }))
+            .await;
+        assert!(!result.is_error, "Error: {}", result.content);
+
+        let tasks = call_blocking(db.clone(), move |conn| conn.get_tasks_for_chat(100))
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        let next = chrono::DateTime::parse_from_rfc3339(&tasks[0].next_run)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(next > Utc::now());
         cleanup(&dir);
     }
 
