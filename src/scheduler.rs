@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::Utc;
+use tokio::time::{Duration, Instant, MissedTickBehavior};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent;
@@ -18,8 +19,25 @@ use microclaw_storage::db::call_blocking;
 pub fn spawn_scheduler(state: Arc<AppState>) {
     tokio::spawn(async move {
         info!("Scheduler started");
+        // Run once at startup so overdue tasks are not delayed until the first tick.
+        run_due_tasks(&state).await;
+
+        // Align polling to wall-clock minute boundaries for stable "every minute" behavior.
+        let now = Utc::now();
+        let secs_into_minute = now.timestamp().rem_euclid(60) as u64;
+        let nanos = now.timestamp_subsec_nanos() as u64;
+        let mut delay = Duration::from_secs(60 - secs_into_minute);
+        if secs_into_minute == 0 {
+            delay = Duration::from_secs(60);
+        }
+        delay = delay.saturating_sub(Duration::from_nanos(nanos));
+
+        let mut ticker = tokio::time::interval_at(Instant::now() + delay, Duration::from_secs(60));
+        // If processing falls behind, skip missed ticks instead of burst catch-up runs.
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            ticker.tick().await;
             run_due_tasks(&state).await;
         }
     });

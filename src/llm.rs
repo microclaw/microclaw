@@ -21,59 +21,87 @@ use microclaw_core::llm_types::{
     ResponseContentBlock, ToolDefinition, Usage,
 };
 
-/// Remove orphaned `ToolResult` blocks whose `tool_use_id` does not match any
-/// `ToolUse` block in the conversation.  This can happen after session
-/// compaction splits a tool_use / tool_result pair.
+/// Remove invalid `ToolResult` blocks that cannot be matched to the most recent
+/// assistant `ToolUse` turn. This can happen after session compaction or
+/// malformed history reconstruction.
 fn sanitize_messages(messages: Vec<Message>) -> Vec<Message> {
-    // Collect all tool_use IDs from assistant messages (owned to avoid borrow conflicts).
-    let known_ids: HashSet<String> = messages
-        .iter()
-        .filter(|m| m.role == "assistant")
-        .flat_map(|m| match &m.content {
-            MessageContent::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-            _ => vec![],
-        })
-        .collect();
+    let mut pending_tool_ids: HashSet<String> = HashSet::new();
+    let mut sanitized = Vec::new();
 
-    messages
-        .into_iter()
-        .filter_map(|msg| {
-            if msg.role != "user" {
-                return Some(msg);
+    for msg in messages {
+        match msg.content {
+            MessageContent::Text(text) => {
+                pending_tool_ids.clear();
+                sanitized.push(Message {
+                    role: msg.role,
+                    content: MessageContent::Text(text),
+                });
             }
-            match msg.content {
-                MessageContent::Blocks(blocks) => {
-                    let filtered: Vec<ContentBlock> = blocks
-                        .into_iter()
-                        .filter(|b| match b {
-                            ContentBlock::ToolResult { tool_use_id, .. } => {
-                                known_ids.contains(tool_use_id)
-                            }
-                            _ => true,
+            MessageContent::Blocks(blocks) => {
+                if msg.role == "assistant" {
+                    let assistant_tool_ids: HashSet<String> = blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                            _ => None,
                         })
                         .collect();
-                    if filtered.is_empty() {
-                        None // Drop entirely empty user messages
-                    } else {
-                        Some(Message {
-                            role: msg.role,
-                            content: MessageContent::Blocks(filtered),
-                        })
+                    pending_tool_ids = assistant_tool_ids;
+                    sanitized.push(Message {
+                        role: msg.role,
+                        content: MessageContent::Blocks(blocks),
+                    });
+                    continue;
+                }
+
+                if msg.role != "user" {
+                    pending_tool_ids.clear();
+                    sanitized.push(Message {
+                        role: msg.role,
+                        content: MessageContent::Blocks(blocks),
+                    });
+                    continue;
+                }
+
+                let has_tool_results = blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
+                if !has_tool_results {
+                    pending_tool_ids.clear();
+                    sanitized.push(Message {
+                        role: msg.role,
+                        content: MessageContent::Blocks(blocks),
+                    });
+                    continue;
+                }
+
+                let mut filtered = Vec::new();
+                for block in blocks {
+                    let keep = match &block {
+                        ContentBlock::ToolResult { tool_use_id, .. } => {
+                            pending_tool_ids.contains(tool_use_id)
+                        }
+                        _ => true,
+                    };
+                    if keep {
+                        if let ContentBlock::ToolResult { tool_use_id, .. } = &block {
+                            pending_tool_ids.remove(tool_use_id);
+                        }
+                        filtered.push(block);
                     }
                 }
-                other => Some(Message {
-                    role: msg.role,
-                    content: other,
-                }),
+
+                if !filtered.is_empty() {
+                    sanitized.push(Message {
+                        role: msg.role,
+                        content: MessageContent::Blocks(filtered),
+                    });
+                }
             }
-        })
-        .collect()
+        }
+    }
+
+    sanitized
 }
 
 #[derive(Default)]
@@ -1443,24 +1471,9 @@ fn translate_messages_to_oai_with_reasoning(
     messages: &[Message],
     include_reasoning_for_tool_calls: bool,
 ) -> Vec<serde_json::Value> {
-    // Collect all tool_use IDs present in assistant messages so we can
-    // skip orphaned tool_results (e.g. after session compaction).
-    let known_tool_ids: std::collections::HashSet<&str> = messages
-        .iter()
-        .filter(|m| m.role == "assistant")
-        .flat_map(|m| match &m.content {
-            MessageContent::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::ToolUse { id, .. } => Some(id.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-            _ => vec![],
-        })
-        .collect();
-
     let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut pending_tool_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     // System message
     if !system.is_empty() {
@@ -1470,10 +1483,18 @@ fn translate_messages_to_oai_with_reasoning(
     for msg in messages {
         match &msg.content {
             MessageContent::Text(text) => {
+                pending_tool_ids.clear();
                 out.push(json!({"role": msg.role, "content": text}));
             }
             MessageContent::Blocks(blocks) => {
                 if msg.role == "assistant" {
+                    let assistant_tool_ids: std::collections::HashSet<String> = blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                            _ => None,
+                        })
+                        .collect();
                     // Collect text and tool_calls
                     let text: String = blocks
                         .iter()
@@ -1510,6 +1531,7 @@ fn translate_messages_to_oai_with_reasoning(
                         m["tool_calls"] = json!(tool_calls);
                     }
                     out.push(m);
+                    pending_tool_ids = assistant_tool_ids;
                 } else {
                     // User role — tool_results, images, or text
                     let has_tool_results = blocks
@@ -1517,8 +1539,8 @@ fn translate_messages_to_oai_with_reasoning(
                         .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
 
                     if has_tool_results {
+                        let mut emitted_any_tool = false;
                         // Each tool result → separate "tool" message
-                        // Skip orphaned tool_results whose IDs are not in any assistant message
                         for block in blocks {
                             if let ContentBlock::ToolResult {
                                 tool_use_id,
@@ -1526,9 +1548,11 @@ fn translate_messages_to_oai_with_reasoning(
                                 is_error,
                             } = block
                             {
-                                if !known_tool_ids.contains(tool_use_id.as_str()) {
+                                if !pending_tool_ids.contains(tool_use_id) {
                                     continue;
                                 }
+                                emitted_any_tool = true;
+                                pending_tool_ids.remove(tool_use_id);
                                 let c = if is_error == &Some(true) {
                                     format!("[Error] {content}")
                                 } else {
@@ -1541,7 +1565,11 @@ fn translate_messages_to_oai_with_reasoning(
                                 }));
                             }
                         }
+                        if !emitted_any_tool {
+                            pending_tool_ids.clear();
+                        }
                     } else {
+                        pending_tool_ids.clear();
                         // Images + text → multipart content array
                         let has_images = blocks
                             .iter()
@@ -1620,25 +1648,13 @@ fn translate_tools_to_oai_responses(tools: &[ToolDefinition]) -> Vec<serde_json:
 }
 
 fn translate_messages_to_oai_responses_input(messages: &[Message]) -> Vec<serde_json::Value> {
-    let known_tool_ids: std::collections::HashSet<&str> = messages
-        .iter()
-        .filter(|m| m.role == "assistant")
-        .flat_map(|m| match &m.content {
-            MessageContent::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::ToolUse { id, .. } => Some(id.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-            _ => vec![],
-        })
-        .collect();
-
     let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut pending_tool_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for msg in messages {
         match &msg.content {
             MessageContent::Text(text) => {
+                pending_tool_ids.clear();
                 out.push(json!({
                     "type": "message",
                     "role": msg.role,
@@ -1647,6 +1663,13 @@ fn translate_messages_to_oai_responses_input(messages: &[Message]) -> Vec<serde_
             }
             MessageContent::Blocks(blocks) => {
                 if msg.role == "assistant" {
+                    let assistant_tool_ids: std::collections::HashSet<String> = blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                            _ => None,
+                        })
+                        .collect();
                     let text: String = blocks
                         .iter()
                         .filter_map(|b| match b {
@@ -1673,11 +1696,13 @@ fn translate_messages_to_oai_responses_input(messages: &[Message]) -> Vec<serde_
                             }));
                         }
                     }
+                    pending_tool_ids = assistant_tool_ids;
                 } else {
                     let has_tool_results = blocks
                         .iter()
                         .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
                     if has_tool_results {
+                        let mut emitted_any_tool = false;
                         for block in blocks {
                             if let ContentBlock::ToolResult {
                                 tool_use_id,
@@ -1685,9 +1710,11 @@ fn translate_messages_to_oai_responses_input(messages: &[Message]) -> Vec<serde_
                                 is_error,
                             } = block
                             {
-                                if !known_tool_ids.contains(tool_use_id.as_str()) {
+                                if !pending_tool_ids.contains(tool_use_id) {
                                     continue;
                                 }
+                                emitted_any_tool = true;
+                                pending_tool_ids.remove(tool_use_id);
                                 let c = if is_error == &Some(true) {
                                     format!("[Error] {content}")
                                 } else {
@@ -1700,7 +1727,11 @@ fn translate_messages_to_oai_responses_input(messages: &[Message]) -> Vec<serde_
                                 }));
                             }
                         }
+                        if !emitted_any_tool {
+                            pending_tool_ids.clear();
+                        }
                     } else {
+                        pending_tool_ids.clear();
                         let has_images = blocks
                             .iter()
                             .any(|b| matches!(b, ContentBlock::Image { .. }));
@@ -2060,6 +2091,39 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_messages_tool_result_with_intervening_turn_is_skipped() {
+        // Even if tool_use_id exists somewhere in history, it must be tied to the
+        // most recent assistant tool_calls turn.
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "glob".into(),
+                    input: json!({}),
+                }]),
+            },
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Text("intervening assistant message".into()),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "stale result".into(),
+                    is_error: None,
+                }]),
+            },
+        ];
+        let out = translate_messages_to_oai("", &msgs);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["role"], "assistant");
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[1]["content"], "intervening assistant message");
+    }
+
+    #[test]
     fn test_translate_messages_image_block() {
         let msgs = vec![Message {
             role: "user".into(),
@@ -2088,6 +2152,38 @@ mod tests {
             .starts_with("data:image/png;base64,"));
         assert_eq!(content[1]["type"], "text");
         assert_eq!(content[1]["text"], "describe");
+    }
+
+    #[test]
+    fn test_translate_messages_to_oai_responses_skips_stale_function_call_output() {
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "glob".into(),
+                    input: json!({}),
+                }]),
+            },
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Text("intervening assistant message".into()),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "stale result".into(),
+                    is_error: None,
+                }]),
+            },
+        ];
+
+        let out = translate_messages_to_oai_responses_input(&msgs);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["type"], "function_call");
+        assert_eq!(out[1]["type"], "message");
+        assert_eq!(out[1]["role"], "assistant");
     }
 
     // -----------------------------------------------------------------------
@@ -2827,6 +2923,37 @@ mod tests {
         }];
         let sanitized = sanitize_messages(msgs);
         assert!(sanitized.is_empty());
+    }
+
+    #[test]
+    fn test_sanitize_messages_drops_stale_tool_result_after_intervening_message() {
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    input: json!({}),
+                }]),
+            },
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Text("unrelated assistant turn".into()),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "stale".into(),
+                    is_error: None,
+                }]),
+            },
+        ];
+
+        let sanitized = sanitize_messages(msgs);
+        assert_eq!(sanitized.len(), 2);
+        assert_eq!(sanitized[0].role, "assistant");
+        assert_eq!(sanitized[1].role, "assistant");
     }
 
     #[test]
