@@ -231,6 +231,14 @@ mod tests {
         }
     }
 
+    fn echo_env_command(var_name: &str) -> String {
+        if cfg!(target_os = "windows") {
+            format!("echo %{var_name}%")
+        } else {
+            format!("echo ${var_name}")
+        }
+    }
+
     #[test]
     fn test_contains_explicit_tmp_absolute_path_detection() {
         assert!(contains_explicit_tmp_absolute_path("ls /tmp/x"));
@@ -383,7 +391,7 @@ mod tests {
         let tool = BashTool::new(work.to_str().unwrap());
         let result = tool
             .execute(json!({
-                "command": "echo $TEST_SKILL_VAR",
+                "command": echo_env_command("TEST_SKILL_VAR"),
                 "__microclaw_envs": {
                     "TEST_SKILL_VAR": "skill_value_42"
                 }
