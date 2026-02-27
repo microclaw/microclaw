@@ -190,7 +190,15 @@ impl Tool for ScheduleTaskTool {
             "once" => {
                 // Validate and normalize to UTC for consistent SQLite string comparison
                 match chrono::DateTime::parse_from_rfc3339(schedule_value) {
-                    Ok(dt) => dt.with_timezone(&chrono::Utc).to_rfc3339(),
+                    Ok(dt) => {
+                        let dt_utc = dt.with_timezone(&chrono::Utc);
+                        if dt_utc <= Utc::now() {
+                            return ToolResult::error(
+                                "One-time schedule timestamp must be in the future".into(),
+                            );
+                        }
+                        dt_utc.to_rfc3339()
+                    }
                     Err(_) => {
                         return ToolResult::error(
                             "Invalid ISO 8601 timestamp for one-time schedule".into(),
@@ -952,6 +960,24 @@ mod tests {
             .await;
         assert!(result.is_error);
         assert!(result.content.contains("Invalid ISO 8601"));
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_schedule_task_rejects_past_once_timestamp() {
+        let (db, dir) = test_db();
+        let tool = ScheduleTaskTool::new(test_registry(), db, "UTC".into());
+        let past = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+        let result = tool
+            .execute(json!({
+                "chat_id": 100,
+                "prompt": "test",
+                "schedule_type": "once",
+                "schedule_value": past
+            }))
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("must be in the future"));
         cleanup(&dir);
     }
 
