@@ -32,7 +32,7 @@ pub use microclaw_tools::runtime::{
     ToolAuthContext, ToolResult, ToolRisk,
 };
 use microclaw_tools::runtime::{inject_auth_context, require_high_risk_approval};
-use microclaw_tools::sandbox::{SandboxMode, SandboxRouter};
+use microclaw_tools::sandbox::{ExtraMount, SandboxMode, SandboxRouter};
 
 pub struct ToolRegistry {
     config: Config,
@@ -57,13 +57,17 @@ impl ToolRegistry {
                 e
             );
         }
-        let sandbox_router = Arc::new(SandboxRouter::new(config.sandbox.clone(), &working_dir));
+        let skills_data_dir = config.skills_data_dir();
+        let sandbox_router = Arc::new(SandboxRouter::new(
+            config.sandbox.clone(),
+            &working_dir,
+            Self::build_extra_mounts(&working_dir, &skills_data_dir),
+        ));
         tracing::info!(
             mode = ?sandbox_router.mode(),
             backend = sandbox_router.backend_name(),
             "Sandbox initialized"
         );
-        let skills_data_dir = config.skills_data_dir();
         let mut tools: Vec<Box<dyn Tool>> = vec![
             Box::new(
                 bash::BashTool::new_with_isolation(
@@ -207,7 +211,11 @@ impl ToolRegistry {
             );
         }
         let skills_data_dir = config.skills_data_dir();
-        let sandbox_router = Arc::new(SandboxRouter::new(config.sandbox.clone(), &working_dir));
+        let sandbox_router = Arc::new(SandboxRouter::new(
+            config.sandbox.clone(),
+            &working_dir,
+            Self::build_extra_mounts(&working_dir, &skills_data_dir),
+        ));
         let memory_backend = Arc::new(MemoryBackend::local_only(db.clone()));
         let tools: Vec<Box<dyn Tool>> = vec![
             Box::new(
@@ -264,6 +272,21 @@ impl ToolRegistry {
             sandbox_runtime_available: sandbox_router.runtime_available(),
             cached_static_definitions: OnceLock::new(),
         }
+    }
+
+    fn build_extra_mounts(working_dir: &PathBuf, skills_data_dir: &str) -> Vec<ExtraMount> {
+        let skills_path = PathBuf::from(skills_data_dir);
+        let canonical_skills = std::fs::canonicalize(&skills_path).unwrap_or(skills_path.clone());
+        let canonical_working =
+            std::fs::canonicalize(working_dir).unwrap_or_else(|_| working_dir.clone());
+        let mut mounts = Vec::new();
+        if canonical_skills.exists() && canonical_skills != canonical_working {
+            mounts.push(ExtraMount {
+                host_path: canonical_skills,
+                read_only: true,
+            });
+        }
+        mounts
     }
 
     pub fn add_tool(&mut self, tool: Box<dyn Tool>) {

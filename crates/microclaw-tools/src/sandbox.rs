@@ -183,14 +183,26 @@ impl Sandbox for NoSandbox {
     }
 }
 
+/// An additional bind mount to expose inside the sandbox container.
+#[derive(Debug, Clone)]
+pub struct ExtraMount {
+    pub host_path: PathBuf,
+    pub read_only: bool,
+}
+
 pub struct DockerSandbox {
     config: SandboxConfig,
     mount_dir: PathBuf,
+    extra_mounts: Vec<ExtraMount>,
 }
 
 impl DockerSandbox {
-    pub fn new(config: SandboxConfig, mount_dir: PathBuf) -> Self {
-        Self { config, mount_dir }
+    pub fn new(config: SandboxConfig, mount_dir: PathBuf, extra_mounts: Vec<ExtraMount>) -> Self {
+        Self {
+            config,
+            mount_dir,
+            extra_mounts,
+        }
     }
 
     fn container_name(&self, session_key: &str) -> String {
@@ -274,6 +286,11 @@ impl Sandbox for DockerSandbox {
         args.extend(self.resource_args());
         let mount = self.mount_dir.display().to_string();
         args.extend(["-v".to_string(), format!("{mount}:{mount}:rw")]);
+        for em in &self.extra_mounts {
+            let p = em.host_path.display().to_string();
+            let mode = if em.read_only { "ro" } else { "rw" };
+            args.extend(["-v".to_string(), format!("{p}:{p}:{mode}")]);
+        }
         args.push(self.config.image.clone());
         args.extend(["sleep".to_string(), "infinity".to_string()]);
 
@@ -331,12 +348,12 @@ pub struct SandboxRouter {
 }
 
 impl SandboxRouter {
-    pub fn new(config: SandboxConfig, working_dir: &Path) -> Self {
+    pub fn new(config: SandboxConfig, working_dir: &Path, extra_mounts: Vec<ExtraMount>) -> Self {
         let mount_dir = resolve_mount_dir(working_dir, &config);
         let backend: Arc<dyn Sandbox> = match config.backend {
             SandboxBackend::Auto | SandboxBackend::Docker => {
                 if docker_available() {
-                    Arc::new(DockerSandbox::new(config.clone(), mount_dir))
+                    Arc::new(DockerSandbox::new(config.clone(), mount_dir, extra_mounts))
                 } else {
                     Arc::new(NoSandbox)
                 }
@@ -579,7 +596,7 @@ mod tests {
 
     #[test]
     fn test_router_default_backend_name() {
-        let router = SandboxRouter::new(SandboxConfig::default(), Path::new("./tmp"));
+        let router = SandboxRouter::new(SandboxConfig::default(), Path::new("./tmp"), vec![]);
         let name = router.backend_name();
         assert!(name == "docker" || name == "none");
     }

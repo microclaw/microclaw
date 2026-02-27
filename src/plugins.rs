@@ -899,6 +899,7 @@ async fn execute_with_template(
     let router = Arc::new(SandboxRouter::new(
         config.sandbox.clone(),
         &base_working_dir,
+        vec![],
     ));
     execute_command_with_policy(
         router,
@@ -1040,6 +1041,7 @@ async fn execute_plugin_tool_spec(
     let router = Arc::new(SandboxRouter::new(
         config.sandbox.clone(),
         &base_working_dir,
+        vec![],
     ));
     let result = execute_command_with_policy(
         router,
