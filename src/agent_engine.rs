@@ -592,6 +592,7 @@ pub(crate) async fn process_with_agent_impl(
         &memory_context,
         chat_id,
         &skills_catalog,
+        &state.config.timezone,
         soul_content.as_deref(),
     );
     let plugin_context = crate::plugins::collect_plugin_context_injections(
@@ -1420,8 +1421,19 @@ pub(crate) fn build_system_prompt(
     memory_context: &str,
     chat_id: i64,
     skills_catalog: &str,
+    configured_timezone: &str,
     soul_content: Option<&str>,
 ) -> String {
+    let now_utc = chrono::Utc::now();
+    let tz_label = configured_timezone
+        .parse::<chrono_tz::Tz>()
+        .map(|tz| tz.to_string())
+        .unwrap_or_else(|_| "UTC".to_string());
+    let now_local = configured_timezone
+        .parse::<chrono_tz::Tz>()
+        .map(|tz| now_utc.with_timezone(&tz).to_rfc3339())
+        .unwrap_or_else(|_| now_utc.to_rfc3339());
+
     // If a SOUL.md is provided, use it as the identity preamble instead of the default
     let identity = if let Some(soul) = soul_content {
         format!(
@@ -1447,6 +1459,9 @@ You have access to the following capabilities:
 - Search file contents using regex (`grep`)
 - Read and write persistent memory (`memory_read`, `memory_write`)
 - Search the web (`web_search`) and fetch web pages (`web_fetch`)
+- Get current date/time with timezone awareness (`get_current_time`)
+- Compare two timestamps and compute their delta (`compare_time`)
+- Evaluate basic arithmetic expressions (`calculate`)
 - Send messages mid-conversation (`send_message`) — use this to send intermediate updates
 - Schedule tasks (`schedule_task`, `list_scheduled_tasks`, `pause/resume/cancel_scheduled_task`, `get_task_history`)
 - Export chat history to markdown (`export_chat`)
@@ -1471,6 +1486,10 @@ Example of what TO do:
 
 The current chat_id is {chat_id}. Use this when calling send_message, schedule, export_chat, memory(chat scope), or todo tools.
 Permission model: you may only operate on the current chat unless this chat is configured as a control chat. If you try cross-chat operations without permission, tools will return a permission error.
+Current runtime time context:
+- configured_timezone: {tz_label}
+- current_local_time: {now_local}
+- current_utc_time: {now_utc}
 
 For complex, multi-step tasks: use todo_write to create a plan first, then execute each step and update the todo list as you go. This helps you stay organized and lets the user see progress.
 
@@ -1496,12 +1515,16 @@ Execution reliability requirements:
 Built-in execution playbook:
 - For actionable requests (send/capture/create/update/run), prefer tool execution over capability discussion.
 - For simple, low-risk, read-only requests (for example: current time, weather, exchange rates, stock quotes, schedules), if a tool can provide the answer, call the tool immediately and return the result directly.
+- For time/date requests, always prefer `get_current_time` and report both local timezone time and UTC when relevant.
+- For time comparison or "how long until/since" requests, use `compare_time` instead of guessing.
+- For numeric calculation requests, use `calculate` for arithmetic instead of mental math.
 - Do not ask confirmation questions like "Want me to check?" before calling a tool for simple read-only requests.
 - Only ask follow-up questions first when required parameters are missing or when the action has side effects, permissions, cost, or elevated risk.
 - Apply the same behavior across Telegram/Discord/Web unless a tool returns a channel-specific error.
 - Do not answer with "I can't from this runtime" unless a concrete tool attempt failed in this turn.
 - Always prefer absolute paths for files passed between tools (especially attachment_path).
 - For bash/file tools, treat the current chat working directory as the default workspace. Prefer relative paths under that workspace and avoid `/tmp` unless the user explicitly asks for it.
+- For coding tasks, follow this loop: inspect code (`read_file`/`grep`/`glob`) -> edit (`edit_file`/`write_file`) -> validate (`bash` tests/build) -> summarize concrete changes/results.
 - If you will call any tool or activate any skill in this turn, you must start by calling todo_write to create a concise task list before the first tool/skill call.
 - This requirement includes activate_skill: plan the work in todo_write first, then activate and execute.
 - If no tools/skills are needed, do not create a todo list.
@@ -2570,7 +2593,8 @@ mod tests {
     #[test]
     fn test_build_system_prompt_with_soul() {
         let soul = "I am a friendly pirate assistant. I speak in pirate lingo and love adventure.";
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", Some(soul));
+        let prompt =
+            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", Some(soul));
         assert!(prompt.contains("<soul>"));
         assert!(prompt.contains("pirate"));
         assert!(prompt.contains("</soul>"));
@@ -2581,14 +2605,14 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_without_soul() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
         assert!(!prompt.contains("<soul>"));
         assert!(prompt.contains("a helpful AI assistant across chat channels"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_direct_tool_calls_for_simple_read_only_requests() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
         assert!(prompt.contains("simple, low-risk, read-only requests"));
         assert!(prompt.contains("call the tool immediately and return the result directly"));
         assert!(prompt.contains("Do not ask confirmation questions"));
@@ -2596,7 +2620,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_prefers_chat_working_dir_over_tmp() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
         assert!(prompt.contains("current chat working directory"));
         assert!(prompt.contains("avoid `/tmp` unless the user explicitly asks for it"));
     }
@@ -2655,7 +2679,7 @@ mod tests {
 
     #[test]
     fn test_append_plugin_context_sections_splits_prompt_and_documents() {
-        let mut prompt = super::build_system_prompt("testbot", "web", "", 1, "", None);
+        let mut prompt = super::build_system_prompt("testbot", "web", "", 1, "", "UTC", None);
         let injections = vec![
             crate::plugins::PluginContextInjection {
                 plugin_name: "p1".to_string(),

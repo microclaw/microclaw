@@ -13,6 +13,7 @@ pub mod send_message;
 pub mod structured_memory;
 pub mod sub_agent;
 pub mod sync_skills;
+pub mod time_math;
 pub mod todo;
 pub mod web_fetch;
 pub mod web_search;
@@ -115,6 +116,9 @@ impl ToolRegistry {
             Box::new(web_search::WebSearchTool::new(
                 config.tool_timeout_secs("web_search", 15),
             )),
+            Box::new(time_math::GetCurrentTimeTool::new(config.timezone.clone())),
+            Box::new(time_math::CompareTimeTool::new(config.timezone.clone())),
+            Box::new(time_math::CalculateTool::new()),
             Box::new(send_message::SendMessageTool::new(
                 channel_registry.clone(),
                 db.clone(),
@@ -259,6 +263,9 @@ impl ToolRegistry {
             Box::new(web_search::WebSearchTool::new(
                 config.tool_timeout_secs("web_search", 15),
             )),
+            Box::new(time_math::GetCurrentTimeTool::new(config.timezone.clone())),
+            Box::new(time_math::CompareTimeTool::new(config.timezone.clone())),
+            Box::new(time_math::CalculateTool::new()),
             Box::new(activate_skill::ActivateSkillTool::new(&skills_data_dir)),
             Box::new(structured_memory::StructuredMemorySearchTool::new(
                 db,
