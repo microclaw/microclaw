@@ -301,6 +301,10 @@ fn append_yaml_value(yaml: &mut String, indent: usize, value: &serde_yaml::Value
     }
 }
 
+fn yaml_double_quoted(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn parse_boolish(value: &str, default_if_empty: bool) -> Result<bool, MicroClawError> {
     let raw = value.trim().to_ascii_lowercase();
     if raw.is_empty() {
@@ -3985,7 +3989,7 @@ fn save_config_yaml(
         .get("DATA_DIR")
         .cloned()
         .unwrap_or_else(default_data_dir_for_setup);
-    yaml.push_str(&format!("data_dir: \"{}\"\n", data_dir));
+    yaml.push_str(&format!("data_dir: {}\n", yaml_double_quoted(&data_dir)));
     let tz = values
         .get("TIMEZONE")
         .cloned()
@@ -3995,7 +3999,10 @@ fn save_config_yaml(
         .get("WORKING_DIR")
         .cloned()
         .unwrap_or_else(default_working_dir_for_setup);
-    yaml.push_str(&format!("working_dir: \"{}\"\n", working_dir));
+    yaml.push_str(&format!(
+        "working_dir: {}\n",
+        yaml_double_quoted(&working_dir)
+    ));
     let high_risk_confirm_required = values
         .get("HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED")
         .map(|v| {
@@ -4972,6 +4979,63 @@ mod tests {
         save_config_yaml(&yaml_path, &values).unwrap();
         let s = fs::read_to_string(&yaml_path).unwrap();
         assert!(s.contains("high_risk_tool_user_confirmation_required: false\n"));
+
+        let _ = fs::remove_file(&yaml_path);
+    }
+
+    #[test]
+    fn test_save_config_yaml_escapes_windows_directory_paths() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_windows_path_test_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "web".into());
+        values.insert("LLM_PROVIDER".into(), "anthropic".into());
+        values.insert("LLM_API_KEY".into(), "key".into());
+        values.insert("DATA_DIR".into(), r#"C:\Users\alice\.microclaw"#.into());
+        values.insert(
+            "WORKING_DIR".into(),
+            r#"C:\Users\alice\.microclaw\working_dir"#.into(),
+        );
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains(r#"data_dir: "C:\\Users\\alice\\.microclaw""#));
+        assert!(s.contains(
+            r#"working_dir: "C:\\Users\\alice\\.microclaw\\working_dir""#
+        ));
+
+        let cfg: crate::config::Config = serde_yaml::from_str(&s).unwrap();
+        assert_eq!(cfg.data_dir, r#"C:\Users\alice\.microclaw"#);
+        assert_eq!(cfg.working_dir, r#"C:\Users\alice\.microclaw\working_dir"#);
+
+        let _ = fs::remove_file(&yaml_path);
+    }
+
+    #[test]
+    fn test_save_config_yaml_keeps_unix_directory_paths_unchanged() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_unix_path_test_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "web".into());
+        values.insert("LLM_PROVIDER".into(), "anthropic".into());
+        values.insert("LLM_API_KEY".into(), "key".into());
+        values.insert("DATA_DIR".into(), "/home/alice/.microclaw".into());
+        values.insert("WORKING_DIR".into(), "/home/alice/.microclaw/working_dir".into());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains(r#"data_dir: "/home/alice/.microclaw""#));
+        assert!(s.contains(r#"working_dir: "/home/alice/.microclaw/working_dir""#));
+
+        let cfg: crate::config::Config = serde_yaml::from_str(&s).unwrap();
+        assert_eq!(cfg.data_dir, "/home/alice/.microclaw");
+        assert_eq!(cfg.working_dir, "/home/alice/.microclaw/working_dir");
 
         let _ = fs::remove_file(&yaml_path);
     }
