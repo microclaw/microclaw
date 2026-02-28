@@ -3,6 +3,7 @@ pub mod bash;
 pub mod browser;
 pub mod edit_file;
 pub mod export_chat;
+pub mod get_time;
 pub mod glob;
 pub mod grep;
 pub mod mcp;
@@ -115,6 +116,7 @@ impl ToolRegistry {
             Box::new(web_search::WebSearchTool::new(
                 config.tool_timeout_secs("web_search", 15),
             )),
+            Box::new(get_time::GetTimeTool::new(config.timezone.clone())),
             Box::new(send_message::SendMessageTool::new(
                 channel_registry.clone(),
                 db.clone(),
@@ -259,6 +261,7 @@ impl ToolRegistry {
             Box::new(web_search::WebSearchTool::new(
                 config.tool_timeout_secs("web_search", 15),
             )),
+            Box::new(get_time::GetTimeTool::new(config.timezone.clone())),
             Box::new(activate_skill::ActivateSkillTool::new(&skills_data_dir)),
             Box::new(structured_memory::StructuredMemorySearchTool::new(
                 db,

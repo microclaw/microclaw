@@ -1769,7 +1769,10 @@ impl Database {
         let conn = self.lock_conn();
         let tx = conn.unchecked_transaction()?;
         let mut affected = 0usize;
-        affected += tx.execute("DELETE FROM task_run_logs WHERE chat_id = ?1", params![chat_id])?;
+        affected += tx.execute(
+            "DELETE FROM task_run_logs WHERE chat_id = ?1",
+            params![chat_id],
+        )?;
         affected += tx.execute(
             "DELETE FROM scheduled_task_dlq WHERE chat_id = ?1",
             params![chat_id],
@@ -4300,11 +4303,10 @@ mod tests {
         assert!(db.get_recent_messages(100, 10).unwrap().is_empty());
         assert!(db.get_tasks_for_chat(100).unwrap().is_empty());
         assert!(db.get_task_run_logs(task_id, 10).unwrap().is_empty());
-        assert!(
-            db.list_scheduled_task_dlq(Some(100), Some(task_id), true, 10)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(db
+            .list_scheduled_task_dlq(Some(100), Some(task_id), true, 10)
+            .unwrap()
+            .is_empty());
         assert!(!db.search_memories(100, "Rust", 10).unwrap().is_empty());
         assert!(db.get_chat_type(100).unwrap().is_some());
 
