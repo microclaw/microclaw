@@ -19,6 +19,16 @@ use microclaw_storage::db::call_blocking;
 pub fn spawn_scheduler(state: Arc<AppState>) {
     tokio::spawn(async move {
         info!("Scheduler started");
+        if let Ok(recovered) =
+            call_blocking(state.db.clone(), move |db| db.recover_running_tasks()).await
+        {
+            if recovered > 0 {
+                warn!(
+                    "Scheduler: recovered {} task(s) left in running state from previous process",
+                    recovered
+                );
+            }
+        }
         // Run once at startup so overdue tasks are not delayed until the first tick.
         run_due_tasks(&state).await;
 
@@ -45,7 +55,8 @@ pub fn spawn_scheduler(state: Arc<AppState>) {
 
 async fn run_due_tasks(state: &Arc<AppState>) {
     let now = Utc::now().to_rfc3339();
-    let tasks = match call_blocking(state.db.clone(), move |db| db.get_due_tasks(&now)).await {
+    let tasks = match call_blocking(state.db.clone(), move |db| db.claim_due_tasks(&now, 200)).await
+    {
         Ok(t) => t,
         Err(e) => {
             error!("Scheduler: failed to query due tasks: {e}");

@@ -1317,6 +1317,57 @@ impl Database {
         Ok(tasks)
     }
 
+    pub fn claim_due_tasks(
+        &self,
+        now: &str,
+        limit: usize,
+    ) -> Result<Vec<ScheduledTask>, MicroClawError> {
+        let conn = self.lock_conn();
+        let tx = conn.unchecked_transaction()?;
+
+        let mut stmt = tx.prepare(
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+             FROM scheduled_tasks
+             WHERE status = 'active' AND next_run <= ?1
+             ORDER BY next_run ASC, id ASC
+             LIMIT ?2",
+        )?;
+        let candidates = stmt
+            .query_map(params![now, limit as i64], |row| {
+                Ok(ScheduledTask {
+                    id: row.get(0)?,
+                    chat_id: row.get(1)?,
+                    prompt: row.get(2)?,
+                    schedule_type: row.get(3)?,
+                    schedule_value: row.get(4)?,
+                    next_run: row.get(5)?,
+                    last_run: row.get(6)?,
+                    status: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        let mut claimed = Vec::new();
+        for task in candidates {
+            let rows = tx.execute(
+                "UPDATE scheduled_tasks
+                 SET status = 'running'
+                 WHERE id = ?1 AND status = 'active' AND next_run <= ?2",
+                params![task.id, now],
+            )?;
+            if rows > 0 {
+                let mut claimed_task = task;
+                claimed_task.status = "running".to_string();
+                claimed.push(claimed_task);
+            }
+        }
+
+        tx.commit()?;
+        Ok(claimed)
+    }
+
     pub fn get_tasks_for_chat(&self, chat_id: i64) -> Result<Vec<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
@@ -1405,7 +1456,9 @@ impl Database {
         match next_run {
             Some(next) => {
                 conn.execute(
-                    "UPDATE scheduled_tasks SET last_run = ?1, next_run = ?2 WHERE id = ?3",
+                    "UPDATE scheduled_tasks
+                     SET last_run = ?1, next_run = ?2, status = 'active'
+                     WHERE id = ?3",
                     params![last_run, next, task_id],
                 )?;
             }
@@ -1418,6 +1471,17 @@ impl Database {
             }
         }
         Ok(())
+    }
+
+    pub fn recover_running_tasks(&self) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let rows = conn.execute(
+            "UPDATE scheduled_tasks
+             SET status = 'active'
+             WHERE status = 'running'",
+            [],
+        )?;
+        Ok(rows)
     }
 
     // --- Task run logs ---
@@ -1769,7 +1833,10 @@ impl Database {
         let conn = self.lock_conn();
         let tx = conn.unchecked_transaction()?;
         let mut affected = 0usize;
-        affected += tx.execute("DELETE FROM task_run_logs WHERE chat_id = ?1", params![chat_id])?;
+        affected += tx.execute(
+            "DELETE FROM task_run_logs WHERE chat_id = ?1",
+            params![chat_id],
+        )?;
         affected += tx.execute(
             "DELETE FROM scheduled_task_dlq WHERE chat_id = ?1",
             params![chat_id],
@@ -3917,6 +3984,22 @@ mod tests {
     }
 
     #[test]
+    fn test_claim_due_tasks_is_single_consumer() {
+        let (db, dir) = test_db();
+        db.create_scheduled_task(100, "task1", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
+            .unwrap();
+
+        let first = db.claim_due_tasks("2024-06-01T00:00:00Z", 50).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].status, "running");
+
+        // A second claim in the same due window should not see the same task again.
+        let second = db.claim_due_tasks("2024-06-01T00:00:00Z", 50).unwrap();
+        assert!(second.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
     fn test_get_tasks_for_chat_filters_status() {
         let (db, dir) = test_db();
         let id1 = db
@@ -4003,6 +4086,26 @@ mod tests {
         assert_eq!(tasks[0].last_run.as_deref(), Some("2024-01-01T00:01:00Z"));
         assert_eq!(tasks[0].next_run, "2024-01-01T00:02:00Z");
         assert_eq!(tasks[0].status, "active");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_recover_running_tasks() {
+        let (db, dir) = test_db();
+        let id = db
+            .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
+            .unwrap();
+        assert_eq!(
+            db.claim_due_tasks("2024-01-01T00:00:00Z", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let recovered = db.recover_running_tasks().unwrap();
+        assert_eq!(recovered, 1);
+        let task = db.get_task_by_id(id).unwrap().unwrap();
+        assert_eq!(task.status, "active");
         cleanup(&dir);
     }
 
@@ -4300,11 +4403,10 @@ mod tests {
         assert!(db.get_recent_messages(100, 10).unwrap().is_empty());
         assert!(db.get_tasks_for_chat(100).unwrap().is_empty());
         assert!(db.get_task_run_logs(task_id, 10).unwrap().is_empty());
-        assert!(
-            db.list_scheduled_task_dlq(Some(100), Some(task_id), true, 10)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(db
+            .list_scheduled_task_dlq(Some(100), Some(task_id), true, 10)
+            .unwrap()
+            .is_empty());
         assert!(!db.search_memories(100, "Rust", 10).unwrap().is_empty());
         assert!(db.get_chat_type(100).unwrap().is_some());
 
