@@ -1186,6 +1186,57 @@ fn parse_message_content(content: &str, message_type: &str) -> String {
     }
 }
 
+/// Download a resource (image or file) from Feishu via GET /open-apis/im/v1/messages/{message_id}/resources/{key}?type={type}
+async fn download_feishu_resource(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    message_id: &str,
+    resource_key: &str,
+    resource_type: &str,
+) -> Result<Vec<u8>, String> {
+    let url = format!(
+        "{}/open-apis/im/v1/messages/{}/resources/{}?type={}",
+        base_url, message_id, resource_key, resource_type
+    );
+    let resp = http_client
+        .get(&url)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download Feishu resource: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Feishu resource download HTTP {status}: {body}"));
+    }
+
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("Failed to read Feishu resource bytes: {e}"))
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+fn guess_image_media_type(data: &[u8]) -> String {
+    if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        "image/png".into()
+    } else if data.starts_with(&[0xFF, 0xD8]) {
+        "image/jpeg".into()
+    } else if data.starts_with(b"GIF") {
+        "image/gif".into()
+    } else if data.starts_with(b"RIFF") && data.len() >= 12 && &data[8..12] == b"WEBP" {
+        "image/webp".into()
+    } else {
+        "image/jpeg".into()
+    }
+}
+
 /// Resolve the bot's own open_id via GET /open-apis/bot/v3/info.
 async fn resolve_bot_open_id(
     http_client: &reqwest::Client,
@@ -1702,6 +1753,8 @@ async fn handle_feishu_event(
         is_dm,
         is_mentioned,
         message_id,
+        message_type,
+        content_raw,
     )
     .await;
 }
@@ -1719,6 +1772,8 @@ async fn handle_feishu_message(
     is_dm: bool,
     is_mentioned: bool,
     message_id: &str,
+    message_type: &str,
+    content_raw: &str,
 ) {
     let chat_type = if is_dm { "feishu_dm" } else { "feishu_group" };
     let title = format!("feishu-{external_chat_id}");
@@ -1754,6 +1809,155 @@ async fn handle_feishu_message(
             return;
         }
     };
+
+    let mut text = text.to_string();
+    let mut image_data: Option<(String, String)> = None;
+
+    match message_type {
+        "image" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(content_raw) {
+                if let Some(image_key) = v.get("image_key").and_then(|k| k.as_str()) {
+                    match download_feishu_resource(
+                        &http_client,
+                        base_url,
+                        &token,
+                        message_id,
+                        image_key,
+                        "image",
+                    )
+                    .await
+                    {
+                        Ok(bytes) => {
+                            let media_type = guess_image_media_type(&bytes);
+                            image_data = Some((base64_encode(&bytes), media_type));
+                            if text.trim().is_empty() || text.trim().starts_with('{') {
+                                text = "[image]".to_string();
+                            }
+                        }
+                        Err(e) => {
+                            error!("Feishu: failed to download image {image_key}: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        "file" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(content_raw) {
+                let file_key = v.get("file_key").and_then(|k| k.as_str()).unwrap_or("");
+                let file_name = v
+                    .get("file_name")
+                    .and_then(|k| k.as_str())
+                    .unwrap_or("feishu-file.bin");
+
+                if !file_key.is_empty() {
+                    match download_feishu_resource(
+                        &http_client,
+                        base_url,
+                        &token,
+                        message_id,
+                        file_key,
+                        "file",
+                    )
+                    .await
+                    {
+                        Ok(bytes) => {
+                            let max_bytes = app_state
+                                .config
+                                .max_document_size_mb
+                                .saturating_mul(1024)
+                                .saturating_mul(1024);
+                            if (bytes.len() as u64) > max_bytes {
+                                let _ = send_feishu_response(
+                                    &http_client,
+                                    base_url,
+                                    &token,
+                                    external_chat_id,
+                                    &format!(
+                                        "File is too large ({} bytes). Max allowed is {} MB.",
+                                        bytes.len(),
+                                        app_state.config.max_document_size_mb
+                                    ),
+                                    message_id,
+                                    feishu_cfg.topic_mode,
+                                )
+                                .await;
+                                return;
+                            }
+
+                            let safe_name: String = file_name
+                                .chars()
+                                .map(|c| match c {
+                                    'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => c,
+                                    _ => '_',
+                                })
+                                .collect();
+
+                            let dir = std::path::Path::new(&app_state.config.working_dir)
+                                .join("uploads")
+                                .join(runtime.channel_name.replace('/', "_"))
+                                .join(external_chat_id);
+                            let mut document_saved_path: Option<String> = None;
+                            if let Err(e) = std::fs::create_dir_all(&dir) {
+                                error!("Failed to create upload dir {}: {e}", dir.display());
+                            } else {
+                                let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                                let path = dir.join(format!("{}-{}", ts, safe_name));
+                                match tokio::fs::write(&path, &bytes).await {
+                                    Ok(()) => {
+                                        document_saved_path = Some(path.display().to_string());
+                                    }
+                                    Err(e) => {
+                                        error!(
+                                            "Failed to save feishu file {}: {e}",
+                                            path.display()
+                                        );
+                                    }
+                                }
+                            }
+
+                            let file_note = format!(
+                                "[document] filename={} bytes={}{}",
+                                file_name,
+                                bytes.len(),
+                                document_saved_path
+                                    .as_ref()
+                                    .map(|p| format!(" saved_path={}", p))
+                                    .unwrap_or_default(),
+                            );
+
+                            if text.trim().is_empty() || text.trim().starts_with('{') {
+                                text = file_note;
+                            } else {
+                                text = format!("{}\n\n{}", text.trim(), file_note);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Feishu: failed to download file {file_key}: {e}");
+                            if text.trim().is_empty() || text.trim().starts_with('{') {
+                                text = format!("[document] download failed: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "audio" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(content_raw) {
+                if let Some(file_key) = v.get("file_key").and_then(|k| k.as_str()) {
+                    text = format!(
+                        "[audio message] file_key={} (audio transcription not yet supported for Feishu)",
+                        file_key
+                    );
+                }
+            }
+        }
+        "media" | "sticker" => {
+            if text.trim().is_empty() || text.trim().starts_with('{') {
+                text = format!("[{}]", message_type);
+            }
+        }
+        _ => {}
+    }
 
     let trimmed = text.trim();
     let should_respond = is_dm || is_mentioned;
@@ -1991,7 +2195,7 @@ async fn handle_feishu_message(
                 chat_type: if is_dm { "private" } else { "group" },
             },
             None,
-            None,
+            image_data,
             Some(&event_tx),
         )
         .await
@@ -2091,7 +2295,7 @@ async fn handle_feishu_message(
                 chat_type: if is_dm { "private" } else { "group" },
             },
             None,
-            None,
+            image_data,
             Some(&event_tx),
         )
         .await
