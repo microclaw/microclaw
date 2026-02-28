@@ -5015,6 +5015,32 @@ mod tests {
     }
 
     #[test]
+    fn test_save_config_yaml_keeps_unix_directory_paths_unchanged() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_unix_path_test_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "web".into());
+        values.insert("LLM_PROVIDER".into(), "anthropic".into());
+        values.insert("LLM_API_KEY".into(), "key".into());
+        values.insert("DATA_DIR".into(), "/home/alice/.microclaw".into());
+        values.insert("WORKING_DIR".into(), "/home/alice/.microclaw/working_dir".into());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains(r#"data_dir: "/home/alice/.microclaw""#));
+        assert!(s.contains(r#"working_dir: "/home/alice/.microclaw/working_dir""#));
+
+        let cfg: crate::config::Config = serde_yaml::from_str(&s).unwrap();
+        assert_eq!(cfg.data_dir, "/home/alice/.microclaw");
+        assert_eq!(cfg.working_dir, "/home/alice/.microclaw/working_dir");
+
+        let _ = fs::remove_file(&yaml_path);
+    }
+
+    #[test]
     fn test_save_config_yaml_uses_accounts_json_for_telegram_and_discord() {
         let yaml_path = std::env::temp_dir().join(format!(
             "microclaw_setup_accounts_json_test_{}.yaml",
