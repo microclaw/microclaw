@@ -15,8 +15,11 @@ impl MemoryManager {
         self.data_dir.join("AGENTS.md")
     }
 
-    fn chat_memory_path(&self, chat_id: i64) -> PathBuf {
-        self.data_dir.join(chat_id.to_string()).join("AGENTS.md")
+    fn chat_memory_path(&self, channel: &str, chat_id: i64) -> PathBuf {
+        self.data_dir
+            .join(channel.trim())
+            .join(chat_id.to_string())
+            .join("AGENTS.md")
     }
 
     pub fn read_global_memory(&self) -> Option<String> {
@@ -24,8 +27,8 @@ impl MemoryManager {
         std::fs::read_to_string(path).ok()
     }
 
-    pub fn read_chat_memory(&self, chat_id: i64) -> Option<String> {
-        let path = self.chat_memory_path(chat_id);
+    pub fn read_chat_memory(&self, channel: &str, chat_id: i64) -> Option<String> {
+        let path = self.chat_memory_path(channel, chat_id);
         std::fs::read_to_string(path).ok()
     }
 
@@ -39,15 +42,20 @@ impl MemoryManager {
     }
 
     #[allow(dead_code)]
-    pub fn write_chat_memory(&self, chat_id: i64, content: &str) -> std::io::Result<()> {
-        let path = self.chat_memory_path(chat_id);
+    pub fn write_chat_memory(
+        &self,
+        channel: &str,
+        chat_id: i64,
+        content: &str,
+    ) -> std::io::Result<()> {
+        let path = self.chat_memory_path(channel, chat_id);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(path, content)
     }
 
-    pub fn build_memory_context(&self, chat_id: i64) -> String {
+    pub fn build_memory_context(&self, channel: &str, chat_id: i64) -> String {
         let mut context = String::new();
 
         if let Some(global) = self.read_global_memory() {
@@ -58,7 +66,7 @@ impl MemoryManager {
             }
         }
 
-        if let Some(chat) = self.read_chat_memory(chat_id) {
+        if let Some(chat) = self.read_chat_memory(channel, chat_id) {
             if !chat.trim().is_empty() {
                 context.push_str("<chat_memory>\n");
                 context.push_str(&chat);
@@ -100,9 +108,10 @@ mod tests {
     #[test]
     fn test_chat_memory_path() {
         let (mm, dir) = test_memory_manager();
-        let path = mm.chat_memory_path(12345);
+        let path = mm.chat_memory_path("telegram", 12345);
         assert!(path.ends_with(
             std::path::Path::new("groups")
+                .join("telegram")
                 .join("12345")
                 .join("AGENTS.md")
         ));
@@ -113,7 +122,7 @@ mod tests {
     fn test_read_nonexistent_memory() {
         let (mm, dir) = test_memory_manager();
         assert!(mm.read_global_memory().is_none());
-        assert!(mm.read_chat_memory(100).is_none());
+        assert!(mm.read_chat_memory("telegram", 100).is_none());
         cleanup(&dir);
     }
 
@@ -129,19 +138,20 @@ mod tests {
     #[test]
     fn test_write_and_read_chat_memory() {
         let (mm, dir) = test_memory_manager();
-        mm.write_chat_memory(42, "chat 42 notes").unwrap();
-        let content = mm.read_chat_memory(42).unwrap();
+        mm.write_chat_memory("telegram", 42, "chat 42 notes")
+            .unwrap();
+        let content = mm.read_chat_memory("telegram", 42).unwrap();
         assert_eq!(content, "chat 42 notes");
 
         // Different chat should be empty
-        assert!(mm.read_chat_memory(99).is_none());
+        assert!(mm.read_chat_memory("telegram", 99).is_none());
         cleanup(&dir);
     }
 
     #[test]
     fn test_build_memory_context_empty() {
         let (mm, dir) = test_memory_manager();
-        let ctx = mm.build_memory_context(100);
+        let ctx = mm.build_memory_context("telegram", 100);
         assert!(ctx.is_empty());
         cleanup(&dir);
     }
@@ -150,7 +160,7 @@ mod tests {
     fn test_build_memory_context_with_global_only() {
         let (mm, dir) = test_memory_manager();
         mm.write_global_memory("I am global memory").unwrap();
-        let ctx = mm.build_memory_context(100);
+        let ctx = mm.build_memory_context("telegram", 100);
         assert!(ctx.contains("<global_memory>"));
         assert!(ctx.contains("I am global memory"));
         assert!(ctx.contains("</global_memory>"));
@@ -162,8 +172,8 @@ mod tests {
     fn test_build_memory_context_with_both() {
         let (mm, dir) = test_memory_manager();
         mm.write_global_memory("global stuff").unwrap();
-        mm.write_chat_memory(100, "chat stuff").unwrap();
-        let ctx = mm.build_memory_context(100);
+        mm.write_chat_memory("telegram", 100, "chat stuff").unwrap();
+        let ctx = mm.build_memory_context("telegram", 100);
         assert!(ctx.contains("<global_memory>"));
         assert!(ctx.contains("global stuff"));
         assert!(ctx.contains("<chat_memory>"));
@@ -175,7 +185,7 @@ mod tests {
     fn test_build_memory_context_ignores_whitespace_only() {
         let (mm, dir) = test_memory_manager();
         mm.write_global_memory("   \n  ").unwrap();
-        let ctx = mm.build_memory_context(100);
+        let ctx = mm.build_memory_context("telegram", 100);
         // Whitespace-only content should be ignored
         assert!(ctx.is_empty());
         cleanup(&dir);

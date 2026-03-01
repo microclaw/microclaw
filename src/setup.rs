@@ -13,7 +13,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::layout::{Constraint, Direction, Layout, Margin};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -63,6 +63,8 @@ fn dynamic_accounts_json_field_key(channel: &str) -> String {
 const MAX_BOT_SLOTS: usize = 10;
 const TELEGRAM_DEFAULT_BOT_COUNT: usize = 1;
 const UI_FIELD_WINDOW: usize = 14;
+const UI_HEADER_HEIGHT: u16 = 3;
+const UI_STATUS_HEIGHT: u16 = 2;
 const CONFIG_BACKUP_DIR_NAME: &str = "microclaw.config.backups";
 const MAX_CONFIG_BACKUPS: usize = 50;
 
@@ -84,6 +86,10 @@ fn telegram_slot_username_key(slot: usize) -> String {
 
 fn telegram_slot_model_key(slot: usize) -> String {
     format!("TELEGRAM_BOT{}_MODEL", slot)
+}
+
+fn telegram_slot_soul_path_key(slot: usize) -> String {
+    format!("TELEGRAM_BOT{}_SOUL_PATH", slot)
 }
 
 fn telegram_slot_allowed_user_ids_key(slot: usize) -> String {
@@ -161,6 +167,22 @@ fn dynamic_slot_llm_api_key_key(channel: &str, slot: usize) -> String {
 
 fn dynamic_slot_llm_base_url_key(channel: &str, slot: usize) -> String {
     format!("DYN_{}_BOT{}_LLM_BASE_URL", channel.to_uppercase(), slot)
+}
+
+fn dynamic_slot_soul_path_field_key(channel: &str, slot: usize) -> String {
+    format!("DYN_{}_BOT{}_SOUL_PATH", channel.to_uppercase(), slot)
+}
+
+fn trim_channel_prefix<'a>(channel: &str, label: &'a str) -> &'a str {
+    let trimmed = label.trim();
+    let prefix_len = channel.len();
+    if trimmed.len() > prefix_len
+        && trimmed[..prefix_len].eq_ignore_ascii_case(channel)
+        && trimmed.as_bytes().get(prefix_len) == Some(&b' ')
+    {
+        return trimmed[prefix_len + 1..].trim_start();
+    }
+    trimmed
 }
 
 fn default_account_id() -> &'static str {
@@ -397,6 +419,72 @@ fn parse_i64_list_field(value: &str, field_key: &str) -> Result<Vec<i64>, MicroC
         .collect()
 }
 
+fn normalize_soul_path_input(raw: &str, souls_dir: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return trimmed.to_string();
+    }
+    let base = souls_dir.trim().trim_end_matches(['/', '\\']);
+    let prefix = if base.is_empty() { "souls" } else { base };
+    if trimmed.to_ascii_lowercase().ends_with(".md") {
+        return format!("{prefix}/{trimmed}");
+    }
+    format!("{prefix}/{trimmed}.md")
+}
+
+fn soul_picker_file_names(data_dir: Option<&str>, souls_dir: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut roots = Vec::new();
+
+    if let Some(dir) = souls_dir {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            roots.push(Path::new(trimmed).to_path_buf());
+            if let Some(data) = data_dir {
+                let data_trimmed = data.trim();
+                if !data_trimmed.is_empty() {
+                    roots.push(Path::new(data_trimmed).join(trimmed));
+                }
+            }
+        }
+    }
+    roots.push(Path::new("souls").to_path_buf());
+    if let Some(dir) = data_dir {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            roots.push(Path::new(trimmed).join("souls"));
+        }
+    }
+
+    for root in roots {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let is_md = path
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("md"))
+                    .unwrap_or(false);
+                if !is_md {
+                    continue;
+                }
+                if let Some(name) = path.file_name().and_then(|v| v.to_str()) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn default_data_dir_for_setup() -> String {
     std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -410,6 +498,13 @@ fn default_data_dir_for_setup() -> String {
 fn default_working_dir_for_setup() -> String {
     Path::new(&default_data_dir_for_setup())
         .join("working_dir")
+        .to_string_lossy()
+        .to_string()
+}
+
+fn default_souls_dir_for_setup() -> String {
+    Path::new(&default_data_dir_for_setup())
+        .join("souls")
         .to_string_lossy()
         .to_string()
 }
@@ -636,6 +731,8 @@ fn provider_display(provider: &str) -> String {
 }
 
 const MODEL_PICKER_MANUAL_INPUT: &str = "<Manual input...>";
+const SOUL_PICKER_CLEAR: &str = "<None>";
+const SOUL_PICKER_MANUAL_INPUT: &str = "<Manual input...>";
 
 #[derive(Clone)]
 struct Field {
@@ -664,6 +761,7 @@ struct SetupApp {
     fields: Vec<Field>,
     selected: usize,
     field_scroll: usize,
+    field_window: usize,
     visible_cache_sig: Cell<u64>,
     visible_cache_indices: RefCell<Vec<usize>>,
     editing: bool,
@@ -700,6 +798,7 @@ enum PickerKind {
     Provider,
     Model,
     Channels,
+    SoulPath,
 }
 
 #[derive(Clone)]
@@ -918,11 +1017,21 @@ impl SetupApp {
                 },
                 Field {
                     key: "WORKING_DIR".into(),
-                    label: "Default working directory".into(),
+                    label: "Working directory".into(),
                     value: existing
                         .get("WORKING_DIR")
                         .cloned()
                         .unwrap_or_else(default_working_dir_for_setup),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: "SOULS_DIR".into(),
+                    label: "SOUL files directory (optional)".into(),
+                    value: existing
+                        .get("SOULS_DIR")
+                        .cloned()
+                        .unwrap_or_else(default_souls_dir_for_setup),
                     required: false,
                     secret: false,
                 },
@@ -1015,12 +1124,13 @@ impl SetupApp {
             ],
             selected: 0,
             field_scroll: 0,
+            field_window: UI_FIELD_WINDOW,
             visible_cache_sig: Cell::new(u64::MAX),
             visible_cache_indices: RefCell::new(Vec::new()),
             editing: false,
             picker: None,
             status:
-                "Use ↑/↓/j/k/Ctrl+N/Ctrl+P to move, Enter to edit or choose list, F2 validate, s save(+online), Ctrl+S save(skip online), q quit"
+                "Use ↑/↓/j/k/Ctrl+N/Ctrl+P to move, PgUp/PgDn or Ctrl+U/Ctrl+D to page, g/G to top/bottom, Enter to edit/choose, F2 validate, s save(+online), Ctrl+S save(skip online), q quit"
                     .into(),
             completed: false,
             backup_path: None,
@@ -1032,7 +1142,7 @@ impl SetupApp {
         for slot in 1..=MAX_BOT_SLOTS {
             app.fields.push(Field {
                 key: telegram_slot_id_key(slot),
-                label: format!("Telegram bot #{slot} id"),
+                label: format!("Telegram bot #{slot}: id"),
                 value: existing
                     .get(&telegram_slot_id_key(slot))
                     .cloned()
@@ -1042,7 +1152,7 @@ impl SetupApp {
             });
             app.fields.push(Field {
                 key: telegram_slot_enabled_key(slot),
-                label: format!("Telegram bot #{slot} enabled (true/false)"),
+                label: format!("Telegram bot #{slot}: enabled (true/false)"),
                 value: existing
                     .get(&telegram_slot_enabled_key(slot))
                     .cloned()
@@ -1052,7 +1162,7 @@ impl SetupApp {
             });
             app.fields.push(Field {
                 key: telegram_slot_token_key(slot),
-                label: format!("Telegram bot #{slot} token"),
+                label: format!("Telegram bot #{slot}: token"),
                 value: existing
                     .get(&telegram_slot_token_key(slot))
                     .cloned()
@@ -1062,7 +1172,7 @@ impl SetupApp {
             });
             app.fields.push(Field {
                 key: telegram_slot_username_key(slot),
-                label: format!("Telegram bot #{slot} username (no @)"),
+                label: format!("Telegram bot #{slot}: username (no @)"),
                 value: existing
                     .get(&telegram_slot_username_key(slot))
                     .cloned()
@@ -1072,7 +1182,7 @@ impl SetupApp {
             });
             app.fields.push(Field {
                 key: telegram_slot_model_key(slot),
-                label: format!("Telegram bot #{slot} model override (optional)"),
+                label: format!("Telegram bot #{slot}: model override (optional)"),
                 value: existing
                     .get(&telegram_slot_model_key(slot))
                     .cloned()
@@ -1081,8 +1191,18 @@ impl SetupApp {
                 secret: false,
             });
             app.fields.push(Field {
+                key: telegram_slot_soul_path_key(slot),
+                label: format!("Telegram bot #{slot}: SOUL.md (optional)"),
+                value: existing
+                    .get(&telegram_slot_soul_path_key(slot))
+                    .cloned()
+                    .unwrap_or_default(),
+                required: false,
+                secret: false,
+            });
+            app.fields.push(Field {
                 key: telegram_slot_allowed_user_ids_key(slot),
-                label: format!("Telegram bot #{slot} allowed user ids (csv/array, optional)"),
+                label: format!("Telegram bot #{slot}: allowed user ids (csv/array, optional)"),
                 value: existing
                     .get(&telegram_slot_allowed_user_ids_key(slot))
                     .cloned()
@@ -1133,7 +1253,7 @@ impl SetupApp {
             for slot in 1..=MAX_BOT_SLOTS {
                 app.fields.push(Field {
                     key: dynamic_slot_id_field_key(ch.name, slot),
-                    label: format!("{} bot #{slot} id", ch.name),
+                    label: format!("{} bot #{slot}: id", ch.name),
                     value: existing
                         .get(&dynamic_slot_id_field_key(ch.name, slot))
                         .cloned()
@@ -1152,7 +1272,7 @@ impl SetupApp {
                 });
                 app.fields.push(Field {
                     key: dynamic_slot_enabled_field_key(ch.name, slot),
-                    label: format!("{} bot #{slot} enabled (true/false)", ch.name),
+                    label: format!("{} bot #{slot}: enabled (true/false)", ch.name),
                     value: existing
                         .get(&dynamic_slot_enabled_field_key(ch.name, slot))
                         .cloned()
@@ -1160,10 +1280,21 @@ impl SetupApp {
                     required: false,
                     secret: false,
                 });
+                app.fields.push(Field {
+                    key: dynamic_slot_soul_path_field_key(ch.name, slot),
+                    label: format!("{} bot #{slot}: SOUL.md (optional)", ch.name),
+                    value: existing
+                        .get(&dynamic_slot_soul_path_field_key(ch.name, slot))
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                });
                 for f in ch.fields {
+                    let compact_label = trim_channel_prefix(ch.name, f.label);
                     app.fields.push(Field {
                         key: dynamic_slot_field_key(ch.name, slot, f.yaml_key),
-                        label: format!("{} bot #{slot}: {}", ch.name, f.label),
+                        label: format!("{} bot #{slot}: {}", ch.name, compact_label),
                         value: existing
                             .get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
                             .cloned()
@@ -1175,7 +1306,7 @@ impl SetupApp {
                         app.fields.push(Field {
                             key: dynamic_slot_llm_provider_key(ch.name, slot),
                             label: format!(
-                                "{} bot #{slot} LLM provider override (optional)",
+                                "{} bot #{slot}: LLM provider override (optional)",
                                 ch.name
                             ),
                             value: existing
@@ -1188,7 +1319,7 @@ impl SetupApp {
                         app.fields.push(Field {
                             key: dynamic_slot_llm_api_key_key(ch.name, slot),
                             label: format!(
-                                "{} bot #{slot} LLM API key override (optional)",
+                                "{} bot #{slot}: LLM API key override (optional)",
                                 ch.name
                             ),
                             value: existing
@@ -1201,7 +1332,7 @@ impl SetupApp {
                         app.fields.push(Field {
                             key: dynamic_slot_llm_base_url_key(ch.name, slot),
                             label: format!(
-                                "{} bot #{slot} LLM base URL override (optional)",
+                                "{} bot #{slot}: LLM base URL override (optional)",
                                 ch.name
                             ),
                             value: existing
@@ -1508,6 +1639,17 @@ impl SetupApp {
                                     {
                                         map.insert(telegram_slot_model_key(slot), v.to_string());
                                     }
+                                    if let Some(v) = account
+                                        .get("soul_path")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|v| !v.is_empty())
+                                    {
+                                        map.insert(
+                                            telegram_slot_soul_path_key(slot),
+                                            v.to_string(),
+                                        );
+                                    }
                                     if let Some(v) = account.get("allowed_user_ids") {
                                         let mut ids = Vec::new();
                                         if let Some(seq) = v.as_sequence() {
@@ -1646,6 +1788,17 @@ impl SetupApp {
                                         }
                                     }
                                     if let Some(v) = account
+                                        .and_then(|a| a.get("soul_path"))
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|v| !v.is_empty())
+                                    {
+                                        map.insert(
+                                            dynamic_slot_soul_path_field_key(ch.name, slot),
+                                            v.to_string(),
+                                        );
+                                    }
+                                    if let Some(v) = account
                                         .and_then(|a| a.get("llm_provider"))
                                         .and_then(|v| v.as_str())
                                         .map(str::trim)
@@ -1714,6 +1867,9 @@ impl SetupApp {
                     map.insert("DATA_DIR".into(), config.data_dir);
                     map.insert("TIMEZONE".into(), config.timezone);
                     map.insert("WORKING_DIR".into(), config.working_dir);
+                    if let Some(v) = config.souls_dir {
+                        map.insert("SOULS_DIR".into(), v);
+                    }
                     map.insert(
                         "SANDBOX_ENABLED".into(),
                         (config.sandbox.mode == crate::config::SandboxMode::All).to_string(),
@@ -1769,7 +1925,7 @@ impl SetupApp {
         } else {
             self.selected = visible[0];
         }
-        self.adjust_field_scroll(UI_FIELD_WINDOW);
+        self.adjust_field_scroll(self.field_window.max(1));
     }
 
     fn prev(&mut self) {
@@ -1784,7 +1940,7 @@ impl SetupApp {
         } else {
             self.selected = visible[0];
         }
-        self.adjust_field_scroll(UI_FIELD_WINDOW);
+        self.adjust_field_scroll(self.field_window.max(1));
     }
 
     fn selected_field_mut(&mut self) -> &mut Field {
@@ -1810,6 +1966,25 @@ impl SetupApp {
             .find(|f| f.key == key)
             .map(|f| f.value.trim().to_string())
             .unwrap_or_default()
+    }
+
+    fn souls_dir_value(&self) -> String {
+        let configured = self.field_value("SOULS_DIR");
+        if !configured.is_empty() {
+            return configured;
+        }
+        let data_dir = self.field_value("DATA_DIR");
+        if data_dir.is_empty() {
+            return default_souls_dir_for_setup();
+        }
+        Path::new(&data_dir)
+            .join("souls")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn normalize_soul_path_value(&self, raw: &str) -> String {
+        normalize_soul_path_input(raw, &self.souls_dir_value())
     }
 
     fn set_field_value(&mut self, key: &str, value: String) {
@@ -2085,6 +2260,8 @@ impl SetupApp {
             let token = self.field_value(&telegram_slot_token_key(slot));
             let username = self.field_value(&telegram_slot_username_key(slot));
             let model = self.field_value(&telegram_slot_model_key(slot));
+            let soul_path = self
+                .normalize_soul_path_value(&self.field_value(&telegram_slot_soul_path_key(slot)));
             let allowed_user_ids_raw = self.field_value(&telegram_slot_allowed_user_ids_key(slot));
             let allowed_user_ids = parse_i64_list_field(
                 &allowed_user_ids_raw,
@@ -2094,6 +2271,7 @@ impl SetupApp {
             let has_any = !token.is_empty()
                 || !username.is_empty()
                 || !model.is_empty()
+                || !soul_path.is_empty()
                 || !allowed_user_ids.is_empty();
             if !has_any {
                 continue;
@@ -2125,6 +2303,12 @@ impl SetupApp {
             }
             if !model.is_empty() {
                 account.insert("model".to_string(), serde_json::Value::String(model));
+            }
+            if !soul_path.is_empty() {
+                account.insert(
+                    "soul_path".to_string(),
+                    serde_json::Value::String(soul_path),
+                );
             }
             if !allowed_user_ids.is_empty() {
                 account.insert(
@@ -2161,6 +2345,7 @@ impl SetupApp {
             for slot in 1..=MAX_BOT_SLOTS {
                 if key == dynamic_slot_id_field_key(ch.name, slot)
                     || key == dynamic_slot_enabled_field_key(ch.name, slot)
+                    || key == dynamic_slot_soul_path_field_key(ch.name, slot)
                     || key == dynamic_slot_llm_provider_key(ch.name, slot)
                     || key == dynamic_slot_llm_api_key_key(ch.name, slot)
                     || key == dynamic_slot_llm_base_url_key(ch.name, slot)
@@ -2198,6 +2383,7 @@ impl SetupApp {
                         || key == telegram_slot_token_key(slot)
                         || key == telegram_slot_username_key(slot)
                         || key == telegram_slot_model_key(slot)
+                        || key == telegram_slot_soul_path_key(slot)
                         || key == telegram_slot_allowed_user_ids_key(slot)
                     {
                         return slot <= self.telegram_bot_count();
@@ -2226,6 +2412,7 @@ impl SetupApp {
                     for slot in 1..=MAX_BOT_SLOTS {
                         if key == dynamic_slot_id_field_key(ch, slot)
                             || key == dynamic_slot_enabled_field_key(ch, slot)
+                            || key == dynamic_slot_soul_path_field_key(ch, slot)
                         {
                             return slot <= self.dynamic_bot_count(ch);
                         }
@@ -2310,7 +2497,7 @@ impl SetupApp {
         if let Some(last) = visible.last().copied() {
             self.selected = last;
         }
-        self.adjust_field_scroll(UI_FIELD_WINDOW);
+        self.adjust_field_scroll(self.field_window.max(1));
     }
 
     fn adjust_field_scroll(&mut self, window: usize) {
@@ -2323,14 +2510,19 @@ impl SetupApp {
             self.field_scroll = 0;
             return;
         };
+        if self.field_scroll >= visible.len() {
+            self.field_scroll = visible.len().saturating_sub(1);
+        }
         if sel_pos < self.field_scroll {
             self.field_scroll = sel_pos;
-        } else if sel_pos >= self.field_scroll.saturating_add(window) {
-            self.field_scroll = sel_pos.saturating_sub(window.saturating_sub(1));
         }
-        let max_start = visible.len().saturating_sub(window);
-        if self.field_scroll > max_start {
-            self.field_scroll = max_start;
+        let window_lines = window.max(1);
+        while self.field_scroll < sel_pos {
+            let end = self.window_end_for_start_pos(&visible, self.field_scroll, window_lines);
+            if sel_pos < end {
+                break;
+            }
+            self.field_scroll += 1;
         }
     }
 
@@ -2339,11 +2531,15 @@ impl SetupApp {
         if visible.is_empty() {
             return;
         }
-        let step = window.max(1);
-        let max_start = visible.len().saturating_sub(step);
-        self.field_scroll = (self.field_scroll + step).min(max_start);
-        let target = (self.field_scroll + step.saturating_sub(1)).min(visible.len() - 1);
-        self.selected = visible[target];
+        let start = self.field_scroll.min(visible.len().saturating_sub(1));
+        let end = self.window_end_for_start_pos(&visible, start, window.max(1));
+        if end >= visible.len() {
+            self.selected = visible[visible.len() - 1];
+        } else {
+            self.field_scroll = end;
+            self.selected = visible[end];
+        }
+        self.adjust_field_scroll(window.max(1));
     }
 
     fn page_up(&mut self, window: usize) {
@@ -2352,8 +2548,60 @@ impl SetupApp {
             return;
         }
         let step = window.max(1);
-        self.field_scroll = self.field_scroll.saturating_sub(step);
+        self.field_scroll = self.field_scroll.saturating_sub(step).min(visible.len() - 1);
         self.selected = visible[self.field_scroll];
+        self.adjust_field_scroll(window.max(1));
+    }
+
+    fn jump_top(&mut self) {
+        let visible = self.visible_field_indices();
+        if visible.is_empty() {
+            return;
+        }
+        self.field_scroll = 0;
+        self.selected = visible[0];
+        self.adjust_field_scroll(self.field_window.max(1));
+    }
+
+    fn jump_bottom(&mut self) {
+        let visible = self.visible_field_indices();
+        if visible.is_empty() {
+            return;
+        }
+        self.selected = *visible.last().unwrap_or(&visible[0]);
+        self.adjust_field_scroll(self.field_window.max(1));
+    }
+
+    fn window_end_for_start_pos(
+        &self,
+        visible: &[usize],
+        start_pos: usize,
+        window_lines: usize,
+    ) -> usize {
+        if visible.is_empty() || start_pos >= visible.len() {
+            return visible.len();
+        }
+        let mut used_lines = 0usize;
+        let mut last_section = "";
+        let mut pos = start_pos;
+        while pos < visible.len() {
+            let section = Self::section_for_key(&self.fields[visible[pos]].key);
+            let added = if section != last_section {
+                if used_lines == 0 { 2 } else { 3 }
+            } else {
+                1
+            };
+            if used_lines + added > window_lines {
+                if pos == start_pos {
+                    return pos + 1;
+                }
+                break;
+            }
+            used_lines += added;
+            last_section = section;
+            pos += 1;
+        }
+        pos
     }
 
     fn selected_progress(&self) -> (usize, usize) {
@@ -2486,11 +2734,14 @@ impl SetupApp {
                 for slot in 1..=bot_count {
                     let id_key = dynamic_slot_id_field_key(ch.name, slot);
                     let id_raw = self.field_value(&id_key);
+                    let soul_path = self.normalize_soul_path_value(
+                        &self.field_value(&dynamic_slot_soul_path_field_key(ch.name, slot)),
+                    );
                     let has_any = ch.fields.iter().any(|f| {
                         !self
                             .field_value(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
                             .is_empty()
-                    });
+                    }) || !soul_path.is_empty();
                     if !has_any {
                         continue;
                     }
@@ -2820,8 +3071,46 @@ impl SetupApp {
         options
     }
 
+    fn is_soul_field_key(key: &str) -> bool {
+        if key.starts_with("TELEGRAM_BOT") && key.ends_with("_SOUL_PATH") {
+            return true;
+        }
+        key.starts_with("DYN_") && key.ends_with("_SOUL_PATH")
+    }
+
+    fn soul_picker_options(&self) -> Vec<String> {
+        let mut options = vec![
+            SOUL_PICKER_CLEAR.to_string(),
+            SOUL_PICKER_MANUAL_INPUT.to_string(),
+        ];
+        let data_dir = self.field_value("DATA_DIR");
+        let souls_dir = self.souls_dir_value();
+        options.extend(soul_picker_file_names(Some(&data_dir), Some(&souls_dir)));
+        options
+    }
+
     fn open_picker_for_selected(&mut self) -> bool {
-        match self.selected_field().key.as_str() {
+        let selected_key = self.selected_field().key.clone();
+        if Self::is_soul_field_key(&selected_key) {
+            let options = self.soul_picker_options();
+            let current = self.field_value(&selected_key);
+            let current_name = Path::new(current.trim())
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("");
+            let idx = if current.trim().is_empty() {
+                0
+            } else {
+                options.iter().position(|v| v == current_name).unwrap_or(1)
+            };
+            self.picker = Some(PickerState {
+                kind: PickerKind::SoulPath,
+                selected: idx,
+                selected_multi: Vec::new(),
+            });
+            return true;
+        }
+        match selected_key.as_str() {
             "LLM_PROVIDER" => {
                 let idx = self.provider_index(&self.field_value("LLM_PROVIDER"));
                 self.picker = Some(PickerState {
@@ -2879,6 +3168,7 @@ impl SetupApp {
             PickerKind::Provider => PROVIDER_PRESETS.len(),
             PickerKind::Model => self.model_picker_options().len(),
             PickerKind::Channels => Self::channel_options().len(),
+            PickerKind::SoulPath => self.soul_picker_options().len(),
         };
         if options_len == 0 {
             return;
@@ -2950,6 +3240,28 @@ impl SetupApp {
                     self.status = format!("Channels set to {}", enabled.join(","));
                 }
             }
+            PickerKind::SoulPath => {
+                let options = self.soul_picker_options();
+                let selected_key = self.selected_field().key.clone();
+                let souls_dir = self.souls_dir_value();
+                if let Some(chosen) = options.get(picker.selected) {
+                    if chosen == SOUL_PICKER_MANUAL_INPUT {
+                        self.editing = true;
+                        self.status = format!("Editing {} (manual input)", selected_key);
+                    } else if let Some(field) =
+                        self.fields.iter_mut().find(|f| f.key == selected_key)
+                    {
+                        if chosen == SOUL_PICKER_CLEAR {
+                            field.value.clear();
+                            self.status = format!("Cleared {}", field.key);
+                        } else {
+                            let normalized = normalize_soul_path_input(chosen, &souls_dir);
+                            field.value = normalized;
+                            self.status = format!("{} set to {}", field.key, field.value);
+                        }
+                    }
+                }
+            }
         }
         self.ensure_selected_visible();
     }
@@ -2986,6 +3298,7 @@ impl SetupApp {
             "DATA_DIR" => default_data_dir_for_setup(),
             "TIMEZONE" => "UTC".into(),
             "WORKING_DIR" => default_working_dir_for_setup(),
+            "SOULS_DIR" => default_souls_dir_for_setup(),
             "SANDBOX_ENABLED" => "false".into(),
             "HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED" => "true".into(),
             "REFLECTOR_ENABLED" => "true".into(),
@@ -3051,7 +3364,7 @@ impl SetupApp {
             return "Channel";
         }
         match key {
-            "DATA_DIR" | "TIMEZONE" | "WORKING_DIR" => "App",
+            "DATA_DIR" | "TIMEZONE" | "WORKING_DIR" | "SOULS_DIR" => "App",
             "SANDBOX_ENABLED" | "HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED" => "Sandbox",
             "REFLECTOR_ENABLED" | "REFLECTOR_INTERVAL_MINS" | "MEMORY_TOKEN_BUDGET" => "Memory",
             "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL" => "Model",
@@ -3101,9 +3414,12 @@ impl SetupApp {
                     if key == dynamic_slot_enabled_field_key(ch.name, slot) {
                         return slot_base + 2;
                     }
+                    if key == dynamic_slot_soul_path_field_key(ch.name, slot) {
+                        return slot_base + 3;
+                    }
                     for (field_idx, f) in ch.fields.iter().enumerate() {
                         if key == dynamic_slot_field_key(ch.name, slot, f.yaml_key) {
-                            return slot_base + 3 + field_idx;
+                            return slot_base + 4 + field_idx;
                         }
                     }
                     if key == dynamic_slot_llm_provider_key(ch.name, slot) {
@@ -3172,8 +3488,11 @@ impl SetupApp {
                     if key == telegram_slot_model_key(slot) {
                         return base + 5;
                     }
-                    if key == telegram_slot_allowed_user_ids_key(slot) {
+                    if key == telegram_slot_soul_path_key(slot) {
                         return base + 6;
+                    }
+                    if key == telegram_slot_allowed_user_ids_key(slot) {
+                        return base + 7;
                     }
                 }
                 usize::MAX
@@ -3182,6 +3501,7 @@ impl SetupApp {
             "DATA_DIR" => ORDER_APP_BASE,
             "TIMEZONE" => ORDER_APP_BASE + 1,
             "WORKING_DIR" => ORDER_APP_BASE + 2,
+            "SOULS_DIR" => ORDER_APP_BASE + 3,
             // 4) Memory
             "REFLECTOR_ENABLED" => ORDER_MEMORY_BASE,
             "REFLECTOR_INTERVAL_MINS" => ORDER_MEMORY_BASE + 1,
@@ -3482,6 +3802,25 @@ fn mask_secret(s: &str) -> String {
     format!("{}***{}", &s[..left], &s[right_start..])
 }
 
+fn truncate_single_line(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    if max_chars == 1 {
+        return "…".to_string();
+    }
+    let mut out = String::new();
+    for ch in text.chars().take(max_chars - 1) {
+        out.push(ch);
+    }
+    out.push('…');
+    out
+}
+
 fn config_backup_dir_for(path: &Path) -> PathBuf {
     path.parent()
         .unwrap_or_else(|| Path::new("."))
@@ -3538,6 +3877,20 @@ fn save_config_yaml(
     let backup = create_config_backup(path)?;
 
     let get = |key: &str| values.get(key).cloned().unwrap_or_default();
+    let data_dir = values
+        .get("DATA_DIR")
+        .cloned()
+        .unwrap_or_else(default_data_dir_for_setup);
+    let souls_dir = values
+        .get("SOULS_DIR")
+        .cloned()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| {
+            Path::new(&data_dir)
+                .join("souls")
+                .to_string_lossy()
+                .to_string()
+        });
 
     let enabled_raw = get("ENABLED_CHANNELS");
     let valid_channel_names: Vec<&str> = {
@@ -3597,6 +3950,8 @@ fn save_config_yaml(
         let token = get(&telegram_slot_token_key(slot));
         let username = get(&telegram_slot_username_key(slot));
         let model = get(&telegram_slot_model_key(slot));
+        let soul_path =
+            normalize_soul_path_input(&get(&telegram_slot_soul_path_key(slot)), &souls_dir);
         let allowed_user_ids_raw = get(&telegram_slot_allowed_user_ids_key(slot));
         let allowed_user_ids = parse_i64_list_field(
             &allowed_user_ids_raw,
@@ -3606,6 +3961,7 @@ fn save_config_yaml(
         let has_any = !token.trim().is_empty()
             || !username.trim().is_empty()
             || !model.trim().is_empty()
+            || !soul_path.is_empty()
             || !allowed_user_ids.is_empty();
         if !has_any {
             continue;
@@ -3636,6 +3992,9 @@ fn save_config_yaml(
                 "model".into(),
                 serde_json::Value::String(model.trim().to_string()),
             );
+        }
+        if !soul_path.is_empty() {
+            account.insert("soul_path".into(), serde_json::Value::String(soul_path));
         }
         if !allowed_user_ids.is_empty() {
             account.insert(
@@ -3687,6 +4046,7 @@ fn save_config_yaml(
         || !telegram_llm_api_key.trim().is_empty()
         || !telegram_llm_base_url.trim().is_empty()
         || !telegram_model.trim().is_empty()
+        || !normalize_soul_path_input(&get(&telegram_slot_soul_path_key(1)), &souls_dir).is_empty()
         || !telegram_channel_allowed_user_ids.is_empty()
         || telegram_accounts
             .as_ref()
@@ -3717,9 +4077,14 @@ fn save_config_yaml(
                     !get(&dynamic_slot_field_key(ch.name, slot, yaml_key))
                         .trim()
                         .is_empty()
-                }) || !get(&dynamic_slot_llm_provider_key(ch.name, slot))
-                    .trim()
-                    .is_empty()
+                }) || !normalize_soul_path_input(
+                    &get(&dynamic_slot_soul_path_field_key(ch.name, slot)),
+                    &souls_dir,
+                )
+                .is_empty()
+                    || !get(&dynamic_slot_llm_provider_key(ch.name, slot))
+                        .trim()
+                        .is_empty()
                     || !get(&dynamic_slot_llm_api_key_key(ch.name, slot))
                         .trim()
                         .is_empty()
@@ -3798,6 +4163,11 @@ fn save_config_yaml(
                     telegram_username
                 ));
             }
+            let slot1_soul =
+                normalize_soul_path_input(&get(&telegram_slot_soul_path_key(1)), &souls_dir);
+            if !slot1_soul.is_empty() {
+                yaml.push_str(&format!("        soul_path: \"{}\"\n", slot1_soul));
+            }
             // Per-account model is still driven by slot fields; channel-level model is emitted above.
         }
     }
@@ -3859,11 +4229,15 @@ fn save_config_yaml(
             let id = get(&dynamic_slot_id_field_key(ch.name, slot));
             let enabled =
                 parse_boolish(&get(&dynamic_slot_enabled_field_key(ch.name, slot)), true)?;
+            let soul_path = normalize_soul_path_input(
+                &get(&dynamic_slot_soul_path_field_key(ch.name, slot)),
+                &souls_dir,
+            );
             let has_any = ch.fields.iter().any(|f| {
                 !get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
                     .trim()
                     .is_empty()
-            });
+            }) || !soul_path.is_empty();
             if !has_any {
                 continue;
             }
@@ -3895,6 +4269,9 @@ fn save_config_yaml(
                         serde_json::Value::String(v.trim().to_string()),
                     );
                 }
+            }
+            if !soul_path.is_empty() {
+                account.insert("soul_path".into(), serde_json::Value::String(soul_path));
             }
             if ch.name == "feishu" {
                 let topic_mode = account
@@ -3985,10 +4362,6 @@ fn save_config_yaml(
     yaml.push_str("#   gpt-5.2: { response_format: { type: \"json_object\" } }\n");
 
     yaml.push('\n');
-    let data_dir = values
-        .get("DATA_DIR")
-        .cloned()
-        .unwrap_or_else(default_data_dir_for_setup);
     yaml.push_str(&format!("data_dir: {}\n", yaml_double_quoted(&data_dir)));
     let tz = values
         .get("TIMEZONE")
@@ -4099,8 +4472,28 @@ fn save_config_yaml(
         }
     }
 
+    yaml.push_str("\n# Optional SOUL files directory (defaults to <data_dir>/souls)\n");
+    yaml.push_str(&format!("souls_dir: {}\n", yaml_double_quoted(&souls_dir)));
+
     fs::write(path, yaml)?;
     Ok(backup)
+}
+
+fn field_window_for_area(area: Rect) -> usize {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(UI_HEADER_HEIGHT),
+            Constraint::Min(14),
+            Constraint::Length(UI_STATUS_HEIGHT),
+        ])
+        .split(area);
+    let body_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(chunks[1]);
+    let left_inner = body_chunks[0].inner(Margin::new(1, 0));
+    left_inner.height.saturating_sub(2).max(1) as usize
 }
 
 fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
@@ -4144,9 +4537,9 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(UI_HEADER_HEIGHT),
             Constraint::Min(14),
-            Constraint::Length(3),
+            Constraint::Length(UI_STATUS_HEIGHT),
         ])
         .split(frame.area());
 
@@ -4183,11 +4576,10 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
     let mut last_section = "";
     let visible_indices = app.visible_field_indices();
     let left_inner = body_chunks[0].inner(Margin::new(1, 0));
-    let window_fields = left_inner.height.saturating_sub(2) as usize;
     let start = app
         .field_scroll
-        .min(visible_indices.len().saturating_sub(window_fields.max(1)));
-    let end = (start + window_fields.max(1)).min(visible_indices.len());
+        .min(visible_indices.len().saturating_sub(1));
+    let end = app.window_end_for_start_pos(&visible_indices, start, app.field_window.max(1));
     for i in visible_indices[start..end].iter().copied() {
         let f = &app.fields[i];
         let section = SetupApp::section_for_key(&f.key);
@@ -4234,12 +4626,15 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
         } else {
             Color::White
         };
+        let label_text = format!("{} {}: ", prefix, label);
+        let line_width = left_inner.width.max(1) as usize;
+        let max_value_chars = line_width
+            .saturating_sub(label_text.chars().count())
+            .max(1);
+        let value_single_line = truncate_single_line(&value, max_value_chars);
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} {}: ", prefix, label),
-                Style::default().fg(color),
-            ),
-            Span::styled(value, Style::default().fg(Color::Green)),
+            Span::styled(label_text, Style::default().fg(color)),
+            Span::styled(value_single_line, Style::default().fg(Color::Green)),
         ]));
     }
     if end < visible_indices.len() {
@@ -4249,9 +4644,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             Style::default().fg(Color::DarkGray),
         )));
     }
-    let body = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Fields"))
-        .wrap(Wrap { trim: false });
+    let body = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Fields"));
     frame.render_widget(body, left_inner);
 
     let field = app.selected_field();
@@ -4285,7 +4678,8 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
         Line::from("• Tab / Shift+Tab: next/prev field"),
         Line::from("• ↑/↓ or j/k or Ctrl+N/Ctrl+P: move"),
         Line::from("• In selection list: Enter confirm, Esc close"),
-        Line::from("• PgUp/PgDn: scroll field list"),
+        Line::from("• PgUp/PgDn or Ctrl+U/Ctrl+D: page up/down"),
+        Line::from("• g / G: jump to top / bottom"),
         Line::from("• ←/→ on provider/model: rotate presets"),
         Line::from("• e: force manual text edit"),
         Line::from("• Ctrl+D / Del: clear field"),
@@ -4407,6 +4801,10 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                     .iter()
                     .map(|c| (*c).to_string())
                     .collect(),
+            ),
+            PickerKind::SoulPath => (
+                "Select SOUL.md (Enter=apply, choose manual to type filename)",
+                app.soul_picker_options(),
             ),
         };
         let mut list_lines = Vec::with_capacity(options.len());
@@ -4561,6 +4959,10 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
     let mut app = SetupApp::new();
 
     loop {
+        if let Ok(size) = terminal.size() {
+            let area = Rect::new(0, 0, size.width, size.height);
+            app.field_window = field_window_for_area(area);
+        }
         app.ensure_selected_visible();
         terminal.draw(|f| draw_ui(f, &app))?;
         if event::poll(Duration::from_millis(250))? {
@@ -4794,8 +5196,18 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                 KeyCode::Char('j') => app.next(),
                 KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => app.prev(),
                 KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => app.next(),
-                KeyCode::PageDown => app.page_down(UI_FIELD_WINDOW),
-                KeyCode::PageUp => app.page_up(UI_FIELD_WINDOW),
+                KeyCode::PageDown => app.page_down(app.field_window.max(1)),
+                KeyCode::PageUp => app.page_up(app.field_window.max(1)),
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.page_down(app.field_window.max(1))
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.page_up(app.field_window.max(1))
+                }
+                KeyCode::Char('g') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    app.jump_top()
+                }
+                KeyCode::Char('G') => app.jump_bottom(),
                 KeyCode::Tab => app.next(),
                 KeyCode::BackTab => app.prev(),
                 KeyCode::Enter => {
@@ -5003,9 +5415,7 @@ mod tests {
         save_config_yaml(&yaml_path, &values).unwrap();
         let s = fs::read_to_string(&yaml_path).unwrap();
         assert!(s.contains(r#"data_dir: "C:\\Users\\alice\\.microclaw""#));
-        assert!(s.contains(
-            r#"working_dir: "C:\\Users\\alice\\.microclaw\\working_dir""#
-        ));
+        assert!(s.contains(r#"working_dir: "C:\\Users\\alice\\.microclaw\\working_dir""#));
 
         let cfg: crate::config::Config = serde_yaml::from_str(&s).unwrap();
         assert_eq!(cfg.data_dir, r#"C:\Users\alice\.microclaw"#);
@@ -5026,7 +5436,10 @@ mod tests {
         values.insert("LLM_PROVIDER".into(), "anthropic".into());
         values.insert("LLM_API_KEY".into(), "key".into());
         values.insert("DATA_DIR".into(), "/home/alice/.microclaw".into());
-        values.insert("WORKING_DIR".into(), "/home/alice/.microclaw/working_dir".into());
+        values.insert(
+            "WORKING_DIR".into(),
+            "/home/alice/.microclaw/working_dir".into(),
+        );
 
         save_config_yaml(&yaml_path, &values).unwrap();
         let s = fs::read_to_string(&yaml_path).unwrap();

@@ -610,6 +610,7 @@ The `config` flow provides:
 - Provider selection + model selection (numbered choices with custom override)
 - Better Ollama UX: local model auto-detection + sensible local defaults
 - Channel credentials are written in multi-account form by default (`channels.<channel>.default_account` + `channels.<channel>.accounts.main`)
+- Per-bot `soul_path` picker for Telegram/dynamic channels (auto-discovers `souls/*.md`, also supports manual filename/path input)
 - Safe `microclaw.config.yaml` save with automatic backup in `microclaw.config.backups/` (keeps latest 50)
 - Auto-created directories for `data_dir` and `working_dir`
 
@@ -775,6 +776,7 @@ All configuration is via `microclaw.config.yaml`:
 | `channels.telegram.accounts.<id>.bot_token` | No* | unset | Telegram bot token for a specific account (recommended multi-account mode) |
 | `channels.telegram.accounts.<id>.bot_username` | No | unset | Telegram username for a specific account (without `@`) |
 | `channels.telegram.accounts.<id>.model` | No | unset | Optional per-bot model override for that Telegram account |
+| `channels.telegram.accounts.<id>.soul_path` | No | unset | Optional per-bot SOUL file path for this Telegram account |
 | `channels.telegram.allowed_user_ids` | No | `[]` | Optional Telegram private chat sender allowlist at channel scope |
 | `channels.telegram.accounts.<id>.allowed_groups` | No | `[]` | Optional Telegram group allowlist scoped to one account |
 | `channels.telegram.accounts.<id>.allowed_user_ids` | No | `[]` | Optional Telegram private chat sender allowlist scoped to one account (merged with channel scope) |
@@ -784,6 +786,7 @@ All configuration is via `microclaw.config.yaml`:
 | `channels.discord.accounts.<id>.allowed_channels` | No | `[]` | Optional Discord channel allowlist scoped to one account |
 | `channels.discord.accounts.<id>.no_mention` | No | `false` | If true, that Discord account responds in guild channels without @mention |
 | `channels.discord.accounts.<id>.model` | No | unset | Optional per-bot model override for that Discord account |
+| `channels.discord.accounts.<id>.soul_path` | No | unset | Optional per-bot SOUL file path for this Discord account |
 | `allow_group_slash_without_mention` | No | `false` | If true, allow slash commands in group/server/channel chats without @mention |
 | `discord_allowed_channels` | No | `[]` | Discord channel ID allowlist; empty means no channel restriction |
 | `api_key` | Yes* | -- | LLM API key (`ollama` can leave this empty; `openai-codex` supports OAuth or `api_key`) |
@@ -821,13 +824,17 @@ All configuration is via `microclaw.config.yaml`:
 | `channels.slack.accounts.<id>.app_token` | No* | unset | Slack app token (Socket Mode) for a specific account |
 | `channels.slack.accounts.<id>.allowed_channels` | No | `[]` | Optional Slack channel allowlist scoped to one account |
 | `channels.slack.accounts.<id>.model` | No | unset | Optional per-bot model override for that Slack account |
+| `channels.slack.accounts.<id>.soul_path` | No | unset | Optional per-bot SOUL file path for this Slack account |
 | `channels.feishu.default_account` | No | unset | Default Feishu/Lark account ID in multi-account mode |
 | `channels.feishu.accounts.<id>.app_id` | No* | unset | Feishu/Lark app ID for a specific account |
 | `channels.feishu.accounts.<id>.app_secret` | No* | unset | Feishu/Lark app secret for a specific account |
 | `channels.feishu.accounts.<id>.domain` | No | `feishu` | Feishu domain for that account (`feishu`, `lark`, or custom URL) |
 | `channels.feishu.accounts.<id>.allowed_chats` | No | `[]` | Optional Feishu chat allowlist scoped to one account |
 | `channels.feishu.accounts.<id>.model` | No | unset | Optional per-bot model override for that Feishu/Lark account |
+| `channels.feishu.accounts.<id>.soul_path` | No | unset | Optional per-bot SOUL file path for this Feishu/Lark account |
 | `channels.feishu.accounts.<id>.topic_mode` | No | `false` | Optional per-bot threaded reply mode; only supported when account domain is `feishu` or `lark` |
+| `channels.<name>.soul_path` | No | unset | Optional channel-level SOUL file path fallback (used when account-level `soul_path` is not set) |
+| `soul_path` | No | unset | Global SOUL file path fallback (used when channel/account `soul_path` is not set) |
 | `channels.irc.server` | No* | unset | IRC server host/IP |
 | `channels.irc.port` | No | `"6667"` | IRC server port |
 | `channels.irc.nick` | No* | unset | IRC bot nick |

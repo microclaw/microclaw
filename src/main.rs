@@ -205,7 +205,41 @@ fn move_path(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+fn is_legacy_runtime_entry(name: &str) -> bool {
+    matches!(name, "groups" | "logs" | "uploads" | "hooks_state.json")
+}
+
+fn cleanup_stale_runtime_working_dir(data_root: &Path, runtime_dir: &Path) {
+    let runtime_working_dir = runtime_dir.join("working_dir");
+    if !runtime_working_dir.is_dir() {
+        return;
+    }
+    let root_working_dir = data_root.join("working_dir");
+    if !root_working_dir.exists() {
+        return;
+    }
+    let is_empty = std::fs::read_dir(&runtime_working_dir)
+        .map(|mut it| it.next().is_none())
+        .unwrap_or(false);
+    if is_empty {
+        if let Err(e) = std::fs::remove_dir(&runtime_working_dir) {
+            tracing::warn!(
+                "Failed to remove stale runtime working_dir '{}': {}",
+                runtime_working_dir.display(),
+                e
+            );
+        } else {
+            tracing::info!(
+                "Removed stale empty runtime working_dir '{}'",
+                runtime_working_dir.display()
+            );
+        }
+    }
+}
+
 fn migrate_legacy_runtime_layout(data_root: &Path, runtime_dir: &Path) {
+    cleanup_stale_runtime_working_dir(data_root, runtime_dir);
+
     let entries = match std::fs::read_dir(data_root) {
         Ok(entries) => entries,
         Err(_) => return,
@@ -217,11 +251,7 @@ fn migrate_legacy_runtime_layout(data_root: &Path, runtime_dir: &Path) {
         let Some(name_str) = name.to_str() else {
             continue;
         };
-        if name_str == "skills"
-            || name_str == "runtime"
-            || name_str == "mcp.json"
-            || name_str == "working_dir"
-        {
+        if !is_legacy_runtime_entry(name_str) {
             continue;
         }
         let src = entry.path();
@@ -539,6 +569,65 @@ mod tests {
         migrate_legacy_runtime_layout(&root, Path::new(&runtime_dir));
 
         assert!(!runtime_dir.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrate_legacy_runtime_layout_keeps_souls_at_data_root() {
+        let root = unique_temp_dir();
+        let runtime_dir = root.join("runtime");
+        let souls_dir = root.join("souls");
+        std::fs::create_dir_all(&souls_dir).expect("create souls dir");
+        std::fs::write(souls_dir.join("bot.md"), "soul").expect("write soul file");
+
+        migrate_legacy_runtime_layout(&root, Path::new(&runtime_dir));
+
+        assert!(souls_dir.exists());
+        assert!(souls_dir.join("bot.md").exists());
+        assert!(!runtime_dir.join("souls").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrate_legacy_runtime_layout_only_migrates_whitelisted_entries() {
+        let root = unique_temp_dir();
+        let runtime_dir = root.join("runtime");
+        let groups_dir = root.join("groups");
+        let souls_dir = root.join("souls");
+        std::fs::create_dir_all(&groups_dir).expect("create groups dir");
+        std::fs::create_dir_all(&souls_dir).expect("create souls dir");
+        std::fs::write(groups_dir.join("AGENTS.md"), "g").expect("write groups file");
+        std::fs::write(souls_dir.join("bot.md"), "soul").expect("write soul file");
+        std::fs::write(root.join("microclaw.db"), "db").expect("write db file");
+
+        migrate_legacy_runtime_layout(&root, Path::new(&runtime_dir));
+
+        assert!(root.join("microclaw.db").exists());
+        assert!(!groups_dir.exists());
+        assert!(!runtime_dir.join("microclaw.db").exists());
+        assert!(runtime_dir.join("groups").join("AGENTS.md").exists());
+        assert!(souls_dir.exists());
+        assert!(souls_dir.join("bot.md").exists());
+        assert!(!runtime_dir.join("souls").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migrate_legacy_runtime_layout_removes_empty_runtime_working_dir() {
+        let root = unique_temp_dir();
+        let runtime_dir = root.join("runtime");
+        let runtime_working_dir = runtime_dir.join("working_dir");
+        let root_working_dir = root.join("working_dir");
+        std::fs::create_dir_all(&runtime_working_dir).expect("create runtime/working_dir");
+        std::fs::create_dir_all(&root_working_dir).expect("create root working_dir");
+
+        migrate_legacy_runtime_layout(&root, Path::new(&runtime_dir));
+
+        assert!(!runtime_working_dir.exists());
+        assert!(root_working_dir.exists());
+
         let _ = std::fs::remove_dir_all(root);
     }
 

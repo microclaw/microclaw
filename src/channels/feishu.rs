@@ -1788,8 +1788,10 @@ async fn handle_feishu_event(
 
     // Group mentions: direct @bot and @all are treated as mention signals.
     let mention_flags = if !is_dm {
-        let mut flags =
-            parse_feishu_mentions(message.get("mentions").and_then(|v| v.as_array()), bot_open_id);
+        let mut flags = parse_feishu_mentions(
+            message.get("mentions").and_then(|v| v.as_array()),
+            bot_open_id,
+        );
         if text_has_at_all_marker(&text, content_raw) {
             flags.at_all = true;
         }
@@ -2504,7 +2506,10 @@ mod mention_tests {
 
     #[test]
     fn test_text_has_at_all_marker() {
-        assert!(text_has_at_all_marker("@_all hello", r#"{"text":"@_all hello"}"#));
+        assert!(text_has_at_all_marker(
+            "@_all hello",
+            r#"{"text":"@_all hello"}"#
+        ));
         assert!(text_has_at_all_marker(
             "hello",
             r#"{"text":"<at user_id=\"all\">all</at> hello"}"#

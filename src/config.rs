@@ -138,6 +138,9 @@ fn default_reflector_interval_mins() -> u64 {
 fn default_soul_path() -> Option<String> {
     None
 }
+fn default_souls_dir() -> Option<String> {
+    None
+}
 fn default_clawhub_registry() -> String {
     "https://clawhub.ai".into()
 }
@@ -313,6 +316,9 @@ pub struct Config {
     /// If not set, looks for SOUL.md in data_dir root, then current directory.
     #[serde(default = "default_soul_path")]
     pub soul_path: Option<String>,
+    /// Directory for per-bot SOUL files. Defaults to <data_dir>/souls when unset.
+    #[serde(default = "default_souls_dir")]
+    pub souls_dir: Option<String>,
 
     // --- ClawHub ---
     #[serde(flatten)]
@@ -385,6 +391,60 @@ impl Config {
             .and_then(|v| v.get("accounts"))
             .and_then(|v| v.get(account_id))
             .and_then(|v| v.get("bot_username"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    fn channel_account_soul_path(&self, channel: &str, account_id: &str) -> Option<String> {
+        self.channels
+            .get(channel)
+            .and_then(|v| v.get("accounts"))
+            .and_then(|v| v.get(account_id))
+            .and_then(|v| v.get("soul_path"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    pub fn soul_path_for_channel(&self, channel: &str) -> Option<String> {
+        let channel_override = self
+            .channels
+            .get(channel)
+            .and_then(|v| v.get("soul_path"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
+        if channel_override.is_some() {
+            return channel_override;
+        }
+
+        if let Some((base_channel, account_id)) = channel.split_once('.') {
+            if let Some(v) = self.channel_account_soul_path(base_channel, account_id) {
+                return Some(v);
+            }
+            return self
+                .channels
+                .get(base_channel)
+                .and_then(|v| v.get("soul_path"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned);
+        }
+
+        if let Some(default_account) = self.channel_default_account_id(channel) {
+            if let Some(v) = self.channel_account_soul_path(channel, &default_account) {
+                return Some(v);
+            }
+        }
+
+        self.channels
+            .get(channel)
+            .and_then(|v| v.get("soul_path"))
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -525,6 +585,7 @@ impl Config {
             reflector_enabled: true,
             reflector_interval_mins: 15,
             soul_path: None,
+            souls_dir: None,
             clawhub: ClawHubConfig::default(),
             plugins: PluginsConfig::default(),
             voice_provider: "openai".into(),
@@ -565,6 +626,20 @@ impl Config {
         // 3. Default to <data_dir>/skills
         self.data_root_dir()
             .join("skills")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    /// Souls directory. Priority: souls_dir config > <data_dir>/souls
+    pub fn souls_data_dir(&self) -> String {
+        if let Some(configured) = &self.souls_dir {
+            let trimmed = configured.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        self.data_root_dir()
+            .join("souls")
             .to_string_lossy()
             .to_string()
     }
@@ -673,6 +748,14 @@ impl Config {
         if let Some(dir) = &self.skills_dir {
             let trimmed = dir.trim().to_string();
             self.skills_dir = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+        }
+        if let Some(dir) = &self.souls_dir {
+            let trimmed = dir.trim().to_string();
+            self.souls_dir = if trimmed.is_empty() {
                 None
             } else {
                 Some(trimmed)
