@@ -604,7 +604,7 @@ pub(crate) async fn process_with_agent_impl(
     .await;
     let memory_context = format!("{}{}", file_memory, db_memory);
     let skills_catalog = state.skills.build_skills_catalog();
-    let soul_content = load_soul_content(&state.config, chat_id);
+    let soul_content = load_soul_content(&state.config, context.caller_channel, chat_id);
     let bot_username = state
         .config
         .bot_username_for_channel(context.caller_channel);
@@ -1445,21 +1445,106 @@ pub(crate) async fn build_db_memory_context(
 }
 
 /// Load the SOUL.md content for personality customization.
-/// Checks in order: explicit soul_path from config, data_dir/SOUL.md, ./SOUL.md.
+/// Checks in order: per-channel soul_path, explicit soul_path from config, data_dir/SOUL.md, ./SOUL.md.
 /// Also supports per-chat soul files at data_dir/groups/{chat_id}/SOUL.md.
-pub(crate) fn load_soul_content(config: &crate::config::Config, chat_id: i64) -> Option<String> {
+fn configured_soul_candidate_paths(
+    path: &str,
+    data_dir: &str,
+    runtime_data_dir: &str,
+) -> Vec<std::path::PathBuf> {
+    let configured = std::path::PathBuf::from(path);
+    let mut candidates = vec![configured.clone()];
+    if configured.is_relative() {
+        let data_dir_candidate = std::path::PathBuf::from(data_dir).join(&configured);
+        let runtime_candidate = std::path::PathBuf::from(runtime_data_dir).join(&configured);
+        let has_data_dir_candidate = data_dir_candidate != configured;
+        if has_data_dir_candidate {
+            candidates.push(data_dir_candidate.clone());
+        }
+        if runtime_candidate != configured
+            && (!has_data_dir_candidate || runtime_candidate != data_dir_candidate)
+        {
+            candidates.push(runtime_candidate);
+        }
+    }
+    candidates
+}
+
+fn read_configured_soul_with_fallback(
+    configured_path: &str,
+    data_dir: &str,
+    runtime_data_dir: &str,
+) -> Result<(String, String), String> {
+    let mut errors = Vec::new();
+    for candidate in configured_soul_candidate_paths(configured_path, data_dir, runtime_data_dir) {
+        let rendered = candidate.display().to_string();
+        match std::fs::read_to_string(&candidate) {
+            Ok(content) => {
+                if content.trim().is_empty() {
+                    errors.push(format!("{rendered}: empty file"));
+                    continue;
+                }
+                return Ok((content, rendered));
+            }
+            Err(e) => errors.push(format!("{rendered}: {e}")),
+        }
+    }
+    Err(errors.join("; "))
+}
+
+pub(crate) fn load_soul_content(
+    config: &crate::config::Config,
+    caller_channel: &str,
+    chat_id: i64,
+) -> Option<String> {
     let mut global_soul: Option<String> = None;
 
-    // 1. Explicit path from config
-    if let Some(ref path) = config.soul_path {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if !content.trim().is_empty() {
+    // 1. Per-channel/account path from config (channels.<name>.soul_path or accounts.<id>.soul_path)
+    if let Some(path) = config.soul_path_for_channel(caller_channel) {
+        match read_configured_soul_with_fallback(&path, &config.data_dir, &config.runtime_data_dir())
+        {
+            Ok((content, resolved_path)) => {
+                info!(
+                    "SOUL loaded from configured channel/account path; caller_channel={}, chat_id={}, configured_path={}, resolved_path={}",
+                    caller_channel, chat_id, path, resolved_path
+                );
                 global_soul = Some(content);
+            }
+            Err(e) => {
+                warn!(
+                    "SOUL load failed: cannot read configured channel/account soul file; caller_channel={}, chat_id={}, configured_path={}, attempts={}",
+                    caller_channel, chat_id, path, e
+                );
             }
         }
     }
 
-    // 2. data_dir/SOUL.md
+    // 2. Explicit global path from config
+    if let Some(ref path) = config.soul_path {
+        if global_soul.is_none() {
+            match read_configured_soul_with_fallback(
+                path,
+                &config.data_dir,
+                &config.runtime_data_dir(),
+            ) {
+                Ok((content, resolved_path)) => {
+                    info!(
+                        "SOUL loaded from configured global path; caller_channel={}, chat_id={}, configured_path={}, resolved_path={}",
+                        caller_channel, chat_id, path, resolved_path
+                    );
+                    global_soul = Some(content);
+                }
+                Err(e) => {
+                    warn!(
+                        "SOUL load failed: cannot read configured global soul file; caller_channel={}, chat_id={}, configured_path={}, attempts={}",
+                        caller_channel, chat_id, path, e
+                    );
+                }
+            }
+        }
+    }
+
+    // 3. data_dir/SOUL.md
     if global_soul.is_none() {
         let data_soul = std::path::PathBuf::from(&config.data_dir).join("SOUL.md");
         if let Ok(content) = std::fs::read_to_string(&data_soul) {
@@ -1469,7 +1554,7 @@ pub(crate) fn load_soul_content(config: &crate::config::Config, chat_id: i64) ->
         }
     }
 
-    // 3. ./SOUL.md in current directory
+    // 4. ./SOUL.md in current directory
     if global_soul.is_none() {
         if let Ok(content) = std::fs::read_to_string("SOUL.md") {
             if !content.trim().is_empty() {
@@ -1478,7 +1563,7 @@ pub(crate) fn load_soul_content(config: &crate::config::Config, chat_id: i64) ->
         }
     }
 
-    // 4. Per-chat override: data_dir/runtime/groups/{chat_id}/SOUL.md
+    // 5. Per-chat override: data_dir/runtime/groups/{chat_id}/SOUL.md
     let chat_soul_path = std::path::PathBuf::from(config.runtime_data_dir())
         .join("groups")
         .join(chat_id.to_string())
@@ -2797,7 +2882,7 @@ mod tests {
         config.web_enabled = false;
         config.web_port = 0;
 
-        let soul = super::load_soul_content(&config, 999);
+        let soul = super::load_soul_content(&config, "web", 999);
         assert!(soul.is_some());
         assert!(soul.unwrap().contains("wise owl"));
 
@@ -2821,9 +2906,108 @@ mod tests {
         config.web_enabled = false;
         config.web_port = 0;
 
-        let soul = super::load_soul_content(&config, 999);
+        let soul = super::load_soul_content(&config, "web", 999);
         assert!(soul.is_some());
         assert!(soul.unwrap().contains("custom personality"));
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[test]
+    fn test_load_soul_content_channel_account_path() {
+        let base_dir =
+            std::env::temp_dir().join(format!("mc_soul_channel_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let global_soul_file = base_dir.join("global_soul.md");
+        let ops_soul_file = base_dir.join("ops_soul.md");
+        let default_soul_file = base_dir.join("default_soul.md");
+        std::fs::write(&global_soul_file, "global soul").unwrap();
+        std::fs::write(&ops_soul_file, "ops soul").unwrap();
+        std::fs::write(&default_soul_file, "default account soul").unwrap();
+
+        let mut config = Config::test_defaults();
+        config.data_dir = base_dir.to_string_lossy().to_string();
+        config.soul_path = Some(global_soul_file.to_string_lossy().to_string());
+        config.channels = serde_yaml::from_str(&format!(
+            r#"telegram:
+  default_account: default
+  accounts:
+    default:
+      soul_path: "{}"
+    ops:
+      soul_path: "{}"
+"#,
+            default_soul_file.display(),
+            ops_soul_file.display()
+        ))
+        .unwrap();
+
+        let ops_soul = super::load_soul_content(&config, "telegram.ops", 42);
+        assert_eq!(ops_soul.as_deref(), Some("ops soul"));
+
+        let default_soul = super::load_soul_content(&config, "telegram", 43);
+        assert_eq!(default_soul.as_deref(), Some("default account soul"));
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[test]
+    fn test_load_soul_content_channel_account_relative_path_under_data_dir() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "mc_soul_channel_relative_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let rel_name = format!("__mc_soul_{}.md", uuid::Uuid::new_v4());
+        let rel_path = format!("souls/{rel_name}");
+        std::fs::create_dir_all(base_dir.join("souls")).unwrap();
+        std::fs::write(base_dir.join(&rel_path), "relative account soul").unwrap();
+
+        let mut config = Config::test_defaults();
+        config.data_dir = base_dir.to_string_lossy().to_string();
+        config.channels = serde_yaml::from_str(&format!(
+            r#"feishu:
+  default_account: main
+  accounts:
+    main:
+      soul_path: "{}"
+"#,
+            rel_path
+        ))
+        .unwrap();
+
+        let soul = super::load_soul_content(&config, "feishu", 99);
+        assert_eq!(soul.as_deref(), Some("relative account soul"));
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[test]
+    fn test_load_soul_content_channel_account_relative_path_under_runtime_data_dir() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "mc_soul_channel_runtime_relative_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let rel_name = format!("__mc_soul_{}.md", uuid::Uuid::new_v4());
+        let rel_path = format!("souls/{rel_name}");
+        let runtime_dir = base_dir.join("runtime");
+        std::fs::create_dir_all(runtime_dir.join("souls")).unwrap();
+        std::fs::write(runtime_dir.join(&rel_path), "runtime relative account soul").unwrap();
+
+        let mut config = Config::test_defaults();
+        config.data_dir = base_dir.to_string_lossy().to_string();
+        config.channels = serde_yaml::from_str(&format!(
+            r#"feishu:
+  default_account: main
+  accounts:
+    main:
+      soul_path: "{}"
+"#,
+            rel_path
+        ))
+        .unwrap();
+
+        let soul = super::load_soul_content(&config, "feishu", 100);
+        assert_eq!(soul.as_deref(), Some("runtime relative account soul"));
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }

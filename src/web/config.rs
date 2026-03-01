@@ -1,6 +1,43 @@
 use super::*;
 use microclaw_tools::runtime::{tool_execution_policy, tool_risk};
 
+fn list_available_soul_files(config: &crate::config::Config) -> Vec<String> {
+    let mut out = Vec::new();
+
+    let mut roots = vec![std::path::PathBuf::from("souls")];
+    roots.push(std::path::PathBuf::from(&config.data_dir).join("souls"));
+    roots.push(std::path::PathBuf::from(config.runtime_data_dir()).join("souls"));
+
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let is_md = path
+                .extension()
+                .and_then(|v| v.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false);
+            if !is_md {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
+                continue;
+            };
+            if !out.iter().any(|v| v == name) {
+                out.push(name.to_string());
+            }
+        }
+    }
+
+    out.sort();
+    out
+}
+
 fn merge_yaml_value(
     target: &mut serde_yaml::Value,
     incoming: &serde_yaml::Value,
@@ -50,6 +87,7 @@ pub(super) async fn api_get_config(
         "ok": true,
         "path": path,
         "config": redact_config(&state.app_state.config),
+        "soul_files": list_available_soul_files(&state.app_state.config),
         "requires_restart": true
     })))
 }

@@ -391,6 +391,60 @@ impl Config {
             .map(ToOwned::to_owned)
     }
 
+    fn channel_account_soul_path(&self, channel: &str, account_id: &str) -> Option<String> {
+        self.channels
+            .get(channel)
+            .and_then(|v| v.get("accounts"))
+            .and_then(|v| v.get(account_id))
+            .and_then(|v| v.get("soul_path"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    pub fn soul_path_for_channel(&self, channel: &str) -> Option<String> {
+        let channel_override = self
+            .channels
+            .get(channel)
+            .and_then(|v| v.get("soul_path"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
+        if channel_override.is_some() {
+            return channel_override;
+        }
+
+        if let Some((base_channel, account_id)) = channel.split_once('.') {
+            if let Some(v) = self.channel_account_soul_path(base_channel, account_id) {
+                return Some(v);
+            }
+            return self
+                .channels
+                .get(base_channel)
+                .and_then(|v| v.get("soul_path"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned);
+        }
+
+        if let Some(default_account) = self.channel_default_account_id(channel) {
+            if let Some(v) = self.channel_account_soul_path(channel, &default_account) {
+                return Some(v);
+            }
+        }
+
+        self.channels
+            .get(channel)
+            .and_then(|v| v.get("soul_path"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
     pub fn bot_username_for_channel(&self, channel: &str) -> String {
         let channel_override = self
             .channels

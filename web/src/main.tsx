@@ -566,6 +566,29 @@ function normalizeBotCount(raw: unknown): number {
   return Math.min(BOT_SLOT_MAX, Math.max(1, Math.floor(n)))
 }
 
+function normalizeSoulPathInput(raw: unknown): string {
+  const trimmed = String(raw || '').trim()
+  if (!trimmed) return ''
+  if (trimmed.includes('/') || trimmed.includes('\\')) return trimmed
+  if (trimmed.toLowerCase().endsWith('.md')) return `souls/${trimmed}`
+  return `souls/${trimmed}.md`
+}
+
+function soulFileNameFromPath(raw: unknown): string {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  const normalized = text.replace(/\\/g, '/')
+  const parts = normalized.split('/')
+  return parts[parts.length - 1] || ''
+}
+
+function soulPickerValue(raw: unknown, options: readonly string[]): string {
+  const normalized = normalizeSoulPathInput(raw)
+  if (!normalized) return '__none__'
+  const fileName = soulFileNameFromPath(normalized)
+  return options.includes(fileName) ? fileName : '__custom__'
+}
+
 function orderedAccountsFromChannelConfig(channelCfg: unknown): Array<[string, Record<string, unknown>]> {
   if (!channelCfg || typeof channelCfg !== 'object') return []
   const cfg = channelCfg as Record<string, unknown>
@@ -1111,6 +1134,52 @@ function ConfigFieldCard({ label, description, children }: ConfigFieldCardProps)
   )
 }
 
+type SoulPathPickerFieldProps = {
+  value: unknown
+  soulFiles: string[]
+  onChange: (next: string) => void
+}
+
+function SoulPathPickerField({ value, soulFiles, onChange }: SoulPathPickerFieldProps) {
+  const pickerVal = soulPickerValue(value, soulFiles)
+  return (
+    <Flex direction="column" gap="2">
+      <Select.Root
+        value={pickerVal}
+        onValueChange={(next) => {
+          if (next === '__none__') {
+            onChange('')
+            return
+          }
+          if (next === '__custom__') return
+          onChange(normalizeSoulPathInput(next))
+        }}
+      >
+        <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select soul file" />
+        <Select.Content position="popper">
+          <Select.Item value="__none__">(None)</Select.Item>
+          <Select.Item value="__custom__">Custom filename/path</Select.Item>
+          {soulFiles.map((name) => (
+            <Select.Item key={name} value={name}>
+              {name}
+            </Select.Item>
+          ))}
+        </Select.Content>
+      </Select.Root>
+      {pickerVal === '__custom__' ? (
+        <TextField.Root
+          value={String(value || '')}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="my-bot.md or /abs/path/my-bot.md"
+        />
+      ) : null}
+      <Text size="1" color="gray">
+        Select from <code>souls/*.md</code> or use custom input (file may not exist yet).
+      </Text>
+    </Flex>
+  )
+}
+
 type ConfigToggleCardProps = {
   label: string
   description?: React.ReactNode
@@ -1172,6 +1241,7 @@ function App() {
   const [configOpen, setConfigOpen] = useState<boolean>(false)
   const [config, setConfig] = useState<ConfigPayload | null>(null)
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>({})
+  const [soulFiles, setSoulFiles] = useState<string[]>([])
   const [configSelfCheck, setConfigSelfCheck] = useState<ConfigSelfCheck | null>(null)
   const [configSelfCheckLoading, setConfigSelfCheckLoading] = useState<boolean>(false)
   const [configSelfCheckError, setConfigSelfCheckError] = useState<string>('')
@@ -1783,13 +1853,14 @@ function App() {
     setConfigSelfCheckLoading(true)
     try {
       const [data, selfCheck] = await Promise.all([
-        api<{ config?: ConfigPayload }>('/api/config'),
+        api<{ config?: ConfigPayload; soul_files?: string[] }>('/api/config'),
         api<ConfigSelfCheck>('/api/config/self_check').catch((e) => {
           setConfigSelfCheckError(e instanceof Error ? e.message : String(e))
           return null
         }),
       ])
       setConfig(data.config || null)
+      setSoulFiles(Array.isArray(data.soul_files) ? data.soul_files.map((v) => String(v)) : [])
       setConfigSelfCheck(selfCheck)
       const channelsCfg = (data.config?.channels as Record<string, Record<string, unknown>> | undefined) || {}
       const telegramCfg = channelsCfg.telegram || {}
@@ -1808,6 +1879,7 @@ function App() {
           typeof accountCfg.bot_token === 'string' && String(accountCfg.bot_token || '').trim(),
         )
         telegramBotDraft[`telegram_bot_${slot}_username`] = String(accountCfg.bot_username || '')
+        telegramBotDraft[`telegram_bot_${slot}_soul_path`] = String(accountCfg.soul_path || '')
         telegramBotDraft[`telegram_bot_${slot}_allowed_user_ids`] = Array.isArray(accountCfg.allowed_user_ids)
           ? (accountCfg.allowed_user_ids as number[]).join(',')
           : ''
@@ -1893,6 +1965,7 @@ function App() {
               const accountId = account?.[0] || defaultAccountIdForSlot(slot)
               const accountCfg = account?.[1] || {}
               pairs.push([`${ch.name}__bot_${slot}__account_id`, accountId])
+              pairs.push([`${ch.name}__bot_${slot}__soul_path`, String(accountCfg.soul_path || '')])
               for (const f of ch.fields) {
                 if (f.secret) {
                   pairs.push([`${ch.name}__bot_${slot}__has__${f.yamlKey}`, Boolean(String(accountCfg[f.yamlKey] || '').trim())])
@@ -2010,6 +2083,7 @@ function App() {
             next[`telegram_bot_${slot}_token`] = ''
             next[`telegram_bot_${slot}_has_token`] = false
             next[`telegram_bot_${slot}_username`] = ''
+            next[`telegram_bot_${slot}_soul_path`] = ''
             next[`telegram_bot_${slot}_allowed_user_ids`] = ''
           }
           break
@@ -2125,6 +2199,11 @@ function App() {
           next.irc_model = ''
           break
         default:
+          for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
+            if (field === `telegram_bot_${slot}_soul_path`) {
+              next[`telegram_bot_${slot}_soul_path`] = ''
+            }
+          }
           // Handle dynamic channel fields
           for (const ch of DYNAMIC_CHANNELS) {
             const accountKey = `${ch.name}__account_id`
@@ -2136,10 +2215,16 @@ function App() {
               next[botCountKey] = 1
               for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
                 next[`${ch.name}__bot_${slot}__account_id`] = defaultAccountIdForSlot(slot)
+                next[`${ch.name}__bot_${slot}__soul_path`] = ''
                 for (const f of ch.fields) {
                   next[`${ch.name}__bot_${slot}__${f.yamlKey}`] = ''
                   if (f.secret) next[`${ch.name}__bot_${slot}__has__${f.yamlKey}`] = false
                 }
+              }
+            }
+            for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
+              if (field === `${ch.name}__bot_${slot}__soul_path`) {
+                next[`${ch.name}__bot_${slot}__soul_path`] = ''
               }
             }
             for (const f of ch.fields) {
@@ -2225,6 +2310,7 @@ function App() {
         const token = String(configDraft[`telegram_bot_${slot}_token`] || '').trim()
         const hasToken = Boolean(configDraft[`telegram_bot_${slot}_has_token`])
         const username = String(configDraft[`telegram_bot_${slot}_username`] || '').trim()
+        const soulPath = normalizeSoulPathInput(configDraft[`telegram_bot_${slot}_soul_path`])
         const accountAllowedUserIds = parseI64ListCsvOrJsonArray(
           String(configDraft[`telegram_bot_${slot}_allowed_user_ids`] || ''),
           `telegram_bot_${slot}_allowed_user_ids`,
@@ -2233,6 +2319,7 @@ function App() {
           Boolean(token) ||
           hasToken ||
           Boolean(username) ||
+          Boolean(soulPath) ||
           accountAllowedUserIds.length > 0 ||
           accountId === telegramAccountId
         if (!hasAny) continue
@@ -2243,6 +2330,7 @@ function App() {
           enabled: true,
           ...(token ? { bot_token: token } : {}),
           ...(username ? { bot_username: username } : {}),
+          ...(soulPath ? { soul_path: soulPath } : {}),
           ...(accountAllowedUserIds.length > 0 ? { allowed_user_ids: accountAllowedUserIds } : {}),
         }
       }
@@ -2355,8 +2443,11 @@ function App() {
           const slotAccountId = normalizeAccountId(
             configDraft[`${ch.name}__bot_${slot}__account_id`] || defaultAccountIdForSlot(slot),
           )
+          const soulPath = normalizeSoulPathInput(
+            configDraft[`${ch.name}__bot_${slot}__soul_path`],
+          )
           const fields: Record<string, unknown> = {}
-          let hasAny = slotAccountId === accountId
+          let hasAny = slotAccountId === accountId || Boolean(soulPath)
           for (const f of ch.fields) {
             const key = `${ch.name}__bot_${slot}__${f.yamlKey}`
             const val = String(configDraft[key] || '').trim()
@@ -2386,6 +2477,7 @@ function App() {
           }
           accounts[slotAccountId] = {
             enabled: true,
+            ...(soulPath ? { soul_path: soulPath } : {}),
             ...fields,
           }
         }
@@ -3134,6 +3226,13 @@ function App() {
                                       placeholder={slot === 1 ? 'my_main_bot' : `my_bot_${slot}`}
                                     />
                                   </ConfigFieldCard>
+                                  <ConfigFieldCard label={`telegram_bot_${slot}_soul_path`} description={<>Per-bot soul file. Select from <code>souls/*.md</code> or input a custom filename/path.</>}>
+                                    <SoulPathPickerField
+                                      value={configDraft[`telegram_bot_${slot}_soul_path`]}
+                                      soulFiles={soulFiles}
+                                      onChange={(next) => setConfigField(`telegram_bot_${slot}_soul_path`, next)}
+                                    />
+                                  </ConfigFieldCard>
                                   <ConfigFieldCard label={`telegram_bot_${slot}_allowed_user_ids`} description={<>Optional per-bot private-chat allowlist (CSV or JSON array).</>}>
                                     <TextField.Root
                                       className="mt-2"
@@ -3401,6 +3500,17 @@ function App() {
                                         value={String(configDraft[`${ch.name}__bot_${slot}__account_id`] || defaultAccountIdForSlot(slot))}
                                         onChange={(e) => setConfigField(`${ch.name}__bot_${slot}__account_id`, e.target.value)}
                                         placeholder={defaultAccountIdForSlot(slot)}
+                                      />
+                                    </ConfigFieldCard>
+                                    <ConfigFieldCard
+                                      key={`${ch.name}__bot_${slot}__soul_path`}
+                                      label={`${ch.name}_bot_${slot}_soul_path`}
+                                      description={<>Per-bot soul file. Select from <code>souls/*.md</code> or input a custom filename/path.</>}
+                                    >
+                                      <SoulPathPickerField
+                                        value={configDraft[`${ch.name}__bot_${slot}__soul_path`]}
+                                        soulFiles={soulFiles}
+                                        onChange={(next) => setConfigField(`${ch.name}__bot_${slot}__soul_path`, next)}
                                       />
                                     </ConfigFieldCard>
                                     {ch.fields.map((f) => {
