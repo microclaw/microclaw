@@ -22,6 +22,10 @@ impl MemoryManager {
             .join("AGENTS.md")
     }
 
+    fn bot_memory_path(&self, channel: &str) -> PathBuf {
+        self.data_dir.join(channel.trim()).join("AGENTS.md")
+    }
+
     pub fn read_global_memory(&self) -> Option<String> {
         let path = self.global_memory_path();
         std::fs::read_to_string(path).ok()
@@ -29,6 +33,11 @@ impl MemoryManager {
 
     pub fn read_chat_memory(&self, channel: &str, chat_id: i64) -> Option<String> {
         let path = self.chat_memory_path(channel, chat_id);
+        std::fs::read_to_string(path).ok()
+    }
+
+    pub fn read_bot_memory(&self, channel: &str) -> Option<String> {
+        let path = self.bot_memory_path(channel);
         std::fs::read_to_string(path).ok()
     }
 
@@ -55,6 +64,15 @@ impl MemoryManager {
         std::fs::write(path, content)
     }
 
+    #[allow(dead_code)]
+    pub fn write_bot_memory(&self, channel: &str, content: &str) -> std::io::Result<()> {
+        let path = self.bot_memory_path(channel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, content)
+    }
+
     pub fn build_memory_context(&self, channel: &str, chat_id: i64) -> String {
         let mut context = String::new();
 
@@ -63,6 +81,14 @@ impl MemoryManager {
                 context.push_str("<global_memory>\n");
                 context.push_str(&global);
                 context.push_str("\n</global_memory>\n\n");
+            }
+        }
+
+        if let Some(bot) = self.read_bot_memory(channel) {
+            if !bot.trim().is_empty() {
+                context.push_str("<bot_memory>\n");
+                context.push_str(&bot);
+                context.push_str("\n</bot_memory>\n\n");
             }
         }
 
@@ -119,6 +145,18 @@ mod tests {
     }
 
     #[test]
+    fn test_bot_memory_path() {
+        let (mm, dir) = test_memory_manager();
+        let path = mm.bot_memory_path("feishu.ops");
+        assert!(path.ends_with(
+            std::path::Path::new("groups")
+                .join("feishu.ops")
+                .join("AGENTS.md")
+        ));
+        cleanup(&dir);
+    }
+
+    #[test]
     fn test_read_nonexistent_memory() {
         let (mm, dir) = test_memory_manager();
         assert!(mm.read_global_memory().is_none());
@@ -149,6 +187,15 @@ mod tests {
     }
 
     #[test]
+    fn test_write_and_read_bot_memory() {
+        let (mm, dir) = test_memory_manager();
+        mm.write_bot_memory("feishu", "bot notes").unwrap();
+        let content = mm.read_bot_memory("feishu").unwrap();
+        assert_eq!(content, "bot notes");
+        cleanup(&dir);
+    }
+
+    #[test]
     fn test_build_memory_context_empty() {
         let (mm, dir) = test_memory_manager();
         let ctx = mm.build_memory_context("telegram", 100);
@@ -172,10 +219,13 @@ mod tests {
     fn test_build_memory_context_with_both() {
         let (mm, dir) = test_memory_manager();
         mm.write_global_memory("global stuff").unwrap();
+        mm.write_bot_memory("telegram", "bot stuff").unwrap();
         mm.write_chat_memory("telegram", 100, "chat stuff").unwrap();
         let ctx = mm.build_memory_context("telegram", 100);
         assert!(ctx.contains("<global_memory>"));
         assert!(ctx.contains("global stuff"));
+        assert!(ctx.contains("<bot_memory>"));
+        assert!(ctx.contains("bot stuff"));
         assert!(ctx.contains("<chat_memory>"));
         assert!(ctx.contains("chat stuff"));
         cleanup(&dir);

@@ -56,6 +56,67 @@ fn memory_channel_for_chat(
     }
 }
 
+fn latest_sender_for_chat(db: &Database, chat_id: i64) -> Option<String> {
+    db.get_recent_messages(chat_id, 20)
+        .ok()?
+        .into_iter()
+        .rev()
+        .find(|m| !m.is_from_bot && !m.content.trim_start().starts_with('/'))
+        .map(|m| m.sender_name.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn find_person_section_range(lines: &[&str], header: &str) -> Option<(usize, usize)> {
+    let start = lines.iter().position(|line| line.trim() == header)?;
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| line.trim_start().starts_with("## Person:"))
+        .map(|(idx, _)| idx)
+        .unwrap_or(lines.len());
+    Some((start, end))
+}
+
+fn upsert_chat_person_memory(existing: &str, sender: &str, content: &str) -> String {
+    let sender = sender.trim();
+    let content = content.trim();
+    if sender.is_empty() || content.is_empty() {
+        return content.to_string();
+    }
+
+    let section_header = format!("## Person: {sender}");
+    let section_block = format!("{section_header}\n{content}\n");
+    let existing_trimmed = existing.trim();
+    if existing_trimmed.is_empty() {
+        return section_block;
+    }
+
+    let lines: Vec<&str> = existing_trimmed.lines().collect();
+    if let Some((start, end)) = find_person_section_range(&lines, &section_header) {
+        let mut out = String::new();
+        for line in &lines[..start] {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str(&section_block);
+        for line in &lines[end..] {
+            out.push_str(line);
+            out.push('\n');
+        }
+        return out;
+    }
+
+    let mut out = String::new();
+    out.push_str(existing_trimmed);
+    if !existing_trimmed.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(&section_block);
+    out
+}
+
 #[async_trait]
 impl Tool for ReadMemoryTool {
     fn name(&self) -> &str {
@@ -65,13 +126,13 @@ impl Tool for ReadMemoryTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read_memory".into(),
-            description: "Read the AGENTS.md memory file. Use scope 'global' for memories shared across all chats, or 'chat' for chat-specific memories.".into(),
+            description: "Read the AGENTS.md memory file. Use scope 'global' for memories shared across all chats, 'bot' for the current bot/account, or 'chat' for chat-specific memories.".into(),
             input_schema: schema_object(
                 json!({
                     "scope": {
                         "type": "string",
-                        "description": "Memory scope: 'global' or 'chat'",
-                        "enum": ["global", "chat"]
+                        "description": "Memory scope: 'global', 'bot', or 'chat'",
+                        "enum": ["global", "bot", "chat"]
                     },
                     "chat_id": {
                         "type": "integer",
@@ -91,6 +152,10 @@ impl Tool for ReadMemoryTool {
 
         let path = match scope {
             "global" => self.groups_dir.join("AGENTS.md"),
+            "bot" => {
+                let channel = memory_channel_from_auth(&input);
+                self.groups_dir.join(channel).join("AGENTS.md")
+            }
             "chat" => {
                 let chat_id = match chat_id_from_input_or_auth(&input) {
                     Some(id) => id,
@@ -108,7 +173,7 @@ impl Tool for ReadMemoryTool {
                     .join(chat_id.to_string())
                     .join("AGENTS.md")
             }
-            _ => return ToolResult::error("scope must be 'global' or 'chat'".into()),
+            _ => return ToolResult::error("scope must be 'global', 'bot', or 'chat'".into()),
         };
 
         info!("Reading memory: {}", path.display());
@@ -151,13 +216,13 @@ impl Tool for WriteMemoryTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "write_memory".into(),
-            description: "Write to the AGENTS.md memory file. Use this to remember important information about the user or conversation. Use scope 'global' for memories shared across all chats, or 'chat' for chat-specific memories.".into(),
+            description: "Write to the AGENTS.md memory file. Use this to remember important information about the user or conversation. Use scope 'global' for memories shared across all chats, 'bot' for the current bot/account, or 'chat' for chat-specific memories. In chat scope, memory is stored per person when sender identity is available.".into(),
             input_schema: schema_object(
                 json!({
                     "scope": {
                         "type": "string",
-                        "description": "Memory scope: 'global' or 'chat'",
-                        "enum": ["global", "chat"]
+                        "description": "Memory scope: 'global', 'bot', or 'chat'",
+                        "enum": ["global", "bot", "chat"]
                     },
                     "chat_id": {
                         "type": "integer",
@@ -165,7 +230,7 @@ impl Tool for WriteMemoryTool {
                     },
                     "content": {
                         "type": "string",
-                        "description": "The content to write to the memory file (replaces existing content)"
+                        "description": "The content to write to the memory file (global/bot replace full file; chat updates the latest sender section when sender identity is available)"
                     }
                 }),
                 &["scope", "content"],
@@ -195,6 +260,10 @@ impl Tool for WriteMemoryTool {
                 }
                 (self.groups_dir.join("AGENTS.md"), None)
             }
+            "bot" => {
+                let channel = memory_channel_from_auth(&input);
+                (self.groups_dir.join(channel).join("AGENTS.md"), None)
+            }
             "chat" => {
                 let chat_id = match chat_id_from_input_or_auth(&input) {
                     Some(id) => id,
@@ -215,7 +284,7 @@ impl Tool for WriteMemoryTool {
                     Some(chat_id),
                 )
             }
-            _ => return ToolResult::error("scope must be 'global' or 'chat'".into()),
+            _ => return ToolResult::error("scope must be 'global', 'bot', or 'chat'".into()),
         };
 
         info!("Writing memory: {}", path.display());
@@ -226,7 +295,20 @@ impl Tool for WriteMemoryTool {
             }
         }
 
-        match std::fs::write(&path, content) {
+        let write_content = if scope == "chat" {
+            let chat_id = memory_chat_id.unwrap_or_default();
+            let sender = latest_sender_for_chat(&self.db, chat_id);
+            let existing = std::fs::read_to_string(&path).unwrap_or_default();
+            if let Some(sender) = sender {
+                upsert_chat_person_memory(&existing, &sender, content)
+            } else {
+                content.to_string()
+            }
+        } else {
+            content.to_string()
+        };
+
+        match std::fs::write(&path, &write_content) {
             Ok(()) => {
                 let memory_content = content.trim().to_string();
                 if !memory_content.is_empty() {
@@ -262,7 +344,7 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
-    use microclaw_storage::db::Database;
+    use microclaw_storage::db::{Database, StoredMessage};
 
     fn test_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("microclaw_memtool_{}", uuid::Uuid::new_v4()))
@@ -276,6 +358,18 @@ mod tests {
 
     fn test_backend(db: Arc<Database>) -> Arc<MemoryBackend> {
         Arc::new(MemoryBackend::local_only(db))
+    }
+
+    fn store_user_message(db: &Database, chat_id: i64, sender_name: &str, content: &str) {
+        let msg = StoredMessage {
+            id: format!("{}-{}", sender_name, uuid::Uuid::new_v4()),
+            chat_id,
+            sender_name: sender_name.to_string(),
+            content: content.to_string(),
+            is_from_bot: false,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        db.store_message(&msg).unwrap();
     }
 
     #[tokio::test]
@@ -379,6 +473,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_memory_chat_upserts_per_sender() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        db.resolve_or_create_chat_id("web", "42", Some("web-42"), "web")
+            .unwrap();
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+
+        store_user_message(&db, 42, "alice", "remember profile");
+        let r1 = tool
+            .execute(json!({"scope": "chat", "chat_id": 42, "content": "昵称: 老板"}))
+            .await;
+        assert!(!r1.is_error, "{}", r1.content);
+
+        store_user_message(&db, 42, "bob", "remember profile");
+        let r2 = tool
+            .execute(json!({"scope": "chat", "chat_id": 42, "content": "昵称: Bob哥"}))
+            .await;
+        assert!(!r2.is_error, "{}", r2.content);
+
+        store_user_message(&db, 42, "alice", "update profile");
+        let r3 = tool
+            .execute(json!({"scope": "chat", "chat_id": 42, "content": "昵称: 大老板"}))
+            .await;
+        assert!(!r3.is_error, "{}", r3.content);
+
+        let content =
+            std::fs::read_to_string(dir.join("groups").join("web").join("42").join("AGENTS.md"))
+                .unwrap();
+        assert!(content.contains("## Person: alice"));
+        assert!(content.contains("## Person: bob"));
+        assert!(content.contains("昵称: 大老板"));
+        assert!(content.contains("昵称: Bob哥"));
+        assert!(!content.contains("昵称: 老板"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn test_write_memory_missing_scope() {
         let dir = test_dir();
         let db = test_db(&dir);
@@ -396,7 +529,45 @@ mod tests {
         let tool = ReadMemoryTool::new(dir.to_str().unwrap(), db);
         let result = tool.execute(json!({"scope": "invalid"})).await;
         assert!(result.is_error);
-        assert!(result.content.contains("must be 'global' or 'chat'"));
+        assert!(result
+            .content
+            .contains("must be 'global', 'bot', or 'chat'"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_write_and_read_memory_bot_scope() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        let write_tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+        let read_tool = ReadMemoryTool::new(dir.to_str().unwrap(), db);
+
+        let write = write_tool
+            .execute(json!({
+                "scope": "bot",
+                "content": "bot identity",
+                "__microclaw_auth": {
+                    "caller_channel": "feishu.ops",
+                    "caller_chat_id": 42,
+                    "control_chat_ids": []
+                }
+            }))
+            .await;
+        assert!(!write.is_error, "{}", write.content);
+
+        let read = read_tool
+            .execute(json!({
+                "scope": "bot",
+                "__microclaw_auth": {
+                    "caller_channel": "feishu.ops",
+                    "caller_chat_id": 42,
+                    "control_chat_ids": []
+                }
+            }))
+            .await;
+        assert!(!read.is_error, "{}", read.content);
+        assert_eq!(read.content, "bot identity");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

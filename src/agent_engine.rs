@@ -1696,7 +1696,10 @@ Current runtime time context:
 
 For complex, multi-step tasks: use todo_write to create a plan first, then execute each step and update the todo list as you go. This helps you stay organized and lets the user see progress.
 
-When using memory tools, use 'chat' scope for chat-specific memories and 'global' scope for information relevant across all chats.
+When using memory tools:
+- Use 'chat' scope for chat-specific memories
+- Use 'bot' scope for bot/account-specific memories
+- Use 'global' scope for information relevant across all chats
 
 For scheduling:
 - Use 6-field cron format: sec min hour dom month dow (e.g., "0 */5 * * * *" for every 5 minutes)
@@ -2965,6 +2968,10 @@ mod tests {
         std::fs::write(&ops_soul_file, "ops soul").unwrap();
         std::fs::write(&default_soul_file, "default account soul").unwrap();
 
+        fn yaml_single_quote(s: &str) -> String {
+            s.replace('\'', "''")
+        }
+
         let mut config = Config::test_defaults();
         config.data_dir = base_dir.to_string_lossy().to_string();
         config.soul_path = Some(global_soul_file.to_string_lossy().to_string());
@@ -2973,12 +2980,12 @@ mod tests {
   default_account: default
   accounts:
     default:
-      soul_path: "{}"
+      soul_path: '{}'
     ops:
-      soul_path: "{}"
+      soul_path: '{}'
 "#,
-            default_soul_file.display(),
-            ops_soul_file.display()
+            yaml_single_quote(&default_soul_file.to_string_lossy()),
+            yaml_single_quote(&ops_soul_file.to_string_lossy())
         ))
         .unwrap();
 
