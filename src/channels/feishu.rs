@@ -1186,6 +1186,53 @@ fn parse_message_content(content: &str, message_type: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MentionFlags {
+    bot_mentioned: bool,
+    at_all: bool,
+}
+
+fn parse_feishu_mentions(
+    mentions: Option<&Vec<serde_json::Value>>,
+    bot_open_id: &str,
+) -> MentionFlags {
+    let Some(mentions) = mentions else {
+        return MentionFlags {
+            bot_mentioned: false,
+            at_all: false,
+        };
+    };
+
+    let mut flags = MentionFlags {
+        bot_mentioned: false,
+        at_all: false,
+    };
+
+    for mention in mentions {
+        let key = mention.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        let open_id = mention
+            .pointer("/id/open_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if !bot_open_id.is_empty() && open_id == bot_open_id {
+            flags.bot_mentioned = true;
+        }
+        if key == "@_all" || open_id == "all" {
+            flags.at_all = true;
+        }
+    }
+
+    flags
+}
+
+fn text_has_at_all_marker(text: &str, content_raw: &str) -> bool {
+    text.contains("@_all")
+        || content_raw.contains("@_all")
+        || content_raw.contains("user_id\":\"all\"")
+        || content_raw.contains("user_id=\\\"all\\\"")
+}
+
 /// Download a resource (image or file) from Feishu via GET /open-apis/im/v1/messages/{message_id}/resources/{key}?type={type}
 async fn download_feishu_resource(
     http_client: &reqwest::Client,
@@ -1739,20 +1786,19 @@ async fn handle_feishu_event(
         return;
     }
 
-    // Check if bot is mentioned in group messages
-    let is_mentioned = if !is_dm {
-        if let Some(mentions) = message.get("mentions").and_then(|v| v.as_array()) {
-            mentions.iter().any(|m| {
-                m.pointer("/id/open_id")
-                    .and_then(|v| v.as_str())
-                    .map(|id| id == bot_open_id)
-                    .unwrap_or(false)
-            })
-        } else {
-            false
+    // Group mentions: direct @bot and @all are treated as mention signals.
+    let mention_flags = if !is_dm {
+        let mut flags =
+            parse_feishu_mentions(message.get("mentions").and_then(|v| v.as_array()), bot_open_id);
+        if text_has_at_all_marker(&text, content_raw) {
+            flags.at_all = true;
         }
+        flags
     } else {
-        false
+        MentionFlags {
+            bot_mentioned: false,
+            at_all: false,
+        }
     };
 
     handle_feishu_message(
@@ -1766,7 +1812,8 @@ async fn handle_feishu_event(
         sender_open_id,
         &text,
         is_dm,
-        is_mentioned,
+        mention_flags.bot_mentioned,
+        mention_flags.at_all,
         message_id,
         message_type,
         content_raw,
@@ -1787,6 +1834,7 @@ async fn handle_feishu_message(
     text: &str,
     is_dm: bool,
     is_mentioned: bool,
+    is_at_all: bool,
     message_id: &str,
     message_type: &str,
     content_raw: &str,
@@ -1974,8 +2022,13 @@ async fn handle_feishu_message(
         _ => {}
     }
 
-    let trimmed = text.trim();
-    let should_respond = is_dm || is_mentioned;
+    let inbound_text = if !is_dm && is_at_all {
+        format!("[Feishu metadata] This group message included @all.\n{text}")
+    } else {
+        text.to_string()
+    };
+    let trimmed = inbound_text.trim();
+    let should_respond = is_dm || is_mentioned || is_at_all;
     let topic_mode = feishu_cfg.topic_mode;
     let show_progress = feishu_cfg.show_progress;
     let inbound_message_id = if message_id.is_empty() {
@@ -1987,7 +2040,7 @@ async fn handle_feishu_message(
         id: inbound_message_id.clone(),
         chat_id,
         sender_name: user.to_string(),
-        content: text.to_string(),
+        content: inbound_text.clone(),
         is_from_bot: false,
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
@@ -2063,6 +2116,10 @@ async fn handle_feishu_message(
 
     // Determine if we should respond
     if !should_respond {
+        info!(
+            "Feishu: skip reply chat_id={} reason=not_addressed is_dm={} is_mentioned={} is_at_all={}",
+            chat_id, is_dm, is_mentioned, is_at_all
+        );
         return;
     }
 
@@ -2070,7 +2127,7 @@ async fn handle_feishu_message(
         "Feishu message from {} in {}: {}",
         user,
         external_chat_id,
-        text.chars().take(100).collect::<String>()
+        inbound_text.chars().take(100).collect::<String>()
     );
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
@@ -2229,6 +2286,11 @@ async fn handle_feishu_message(
                             "Feishu: suppressing final response for chat {} because send_message already delivered output",
                             chat_id
                         );
+                    } else {
+                        info!(
+                            "Feishu: no final response for chat {} because send_message tool handled output",
+                            chat_id
+                        );
                     }
                 } else if !response.is_empty() {
                     if let Err(e) = send_feishu_response(
@@ -2257,6 +2319,10 @@ async fn handle_feishu_message(
                         call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg))
                             .await;
                 } else {
+                    info!(
+                        "Feishu: agent returned empty response for chat {}, sending fallback",
+                        chat_id
+                    );
                     let fallback =
                         "I couldn't produce a visible reply after an automatic retry. Please try again.";
                     let _ = send_feishu_response(
@@ -2332,6 +2398,11 @@ async fn handle_feishu_message(
                             "Feishu: suppressing final response for chat {} because send_message already delivered output",
                             chat_id
                         );
+                    } else {
+                        info!(
+                            "Feishu: no final response for chat {} because send_message tool handled output",
+                            chat_id
+                        );
                     }
                 } else if !response.is_empty() {
                     if let Err(e) = send_feishu_response(
@@ -2360,6 +2431,10 @@ async fn handle_feishu_message(
                         call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg))
                             .await;
                 } else {
+                    info!(
+                        "Feishu: agent returned empty response for chat {}, sending fallback",
+                        chat_id
+                    );
                     let fallback =
                         "I couldn't produce a visible reply after an automatic retry. Please try again.";
                     let _ = send_feishu_response(
@@ -2402,6 +2477,39 @@ async fn handle_feishu_message(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::{parse_feishu_mentions, text_has_at_all_marker};
+
+    #[test]
+    fn test_parse_feishu_mentions_detects_bot_and_all() {
+        let mentions = vec![
+            serde_json::json!({"key":"@_all"}),
+            serde_json::json!({"id":{"open_id":"ou_bot_1"}}),
+        ];
+        let flags = parse_feishu_mentions(Some(&mentions), "ou_bot_1");
+        assert!(flags.at_all);
+        assert!(flags.bot_mentioned);
+    }
+
+    #[test]
+    fn test_parse_feishu_mentions_handles_missing_mentions() {
+        let flags = parse_feishu_mentions(None, "ou_bot_1");
+        assert!(!flags.at_all);
+        assert!(!flags.bot_mentioned);
+    }
+
+    #[test]
+    fn test_text_has_at_all_marker() {
+        assert!(text_has_at_all_marker("@_all hello", r#"{"text":"@_all hello"}"#));
+        assert!(text_has_at_all_marker(
+            "hello",
+            r#"{"text":"<at user_id=\"all\">all</at> hello"}"#
+        ));
+        assert!(!text_has_at_all_marker("hello", r#"{"text":"hello"}"#));
     }
 }
 
