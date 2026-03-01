@@ -138,6 +138,9 @@ fn default_reflector_interval_mins() -> u64 {
 fn default_soul_path() -> Option<String> {
     None
 }
+fn default_souls_dir() -> Option<String> {
+    None
+}
 fn default_clawhub_registry() -> String {
     "https://clawhub.ai".into()
 }
@@ -313,6 +316,9 @@ pub struct Config {
     /// If not set, looks for SOUL.md in data_dir root, then current directory.
     #[serde(default = "default_soul_path")]
     pub soul_path: Option<String>,
+    /// Directory for per-bot SOUL files. Defaults to <data_dir>/souls when unset.
+    #[serde(default = "default_souls_dir")]
+    pub souls_dir: Option<String>,
 
     // --- ClawHub ---
     #[serde(flatten)]
@@ -579,6 +585,7 @@ impl Config {
             reflector_enabled: true,
             reflector_interval_mins: 15,
             soul_path: None,
+            souls_dir: None,
             clawhub: ClawHubConfig::default(),
             plugins: PluginsConfig::default(),
             voice_provider: "openai".into(),
@@ -619,6 +626,20 @@ impl Config {
         // 3. Default to <data_dir>/skills
         self.data_root_dir()
             .join("skills")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    /// Souls directory. Priority: souls_dir config > <data_dir>/souls
+    pub fn souls_data_dir(&self) -> String {
+        if let Some(configured) = &self.souls_dir {
+            let trimmed = configured.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        self.data_root_dir()
+            .join("souls")
             .to_string_lossy()
             .to_string()
     }
@@ -727,6 +748,14 @@ impl Config {
         if let Some(dir) = &self.skills_dir {
             let trimmed = dir.trim().to_string();
             self.skills_dir = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+        }
+        if let Some(dir) = &self.souls_dir {
+            let trimmed = dir.trim().to_string();
+            self.souls_dir = if trimmed.is_empty() {
                 None
             } else {
                 Some(trimmed)

@@ -206,10 +206,7 @@ fn move_path(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 fn is_legacy_runtime_entry(name: &str) -> bool {
-    matches!(
-        name,
-        "microclaw.db" | "groups" | "logs" | "uploads" | "hooks_state.json"
-    )
+    matches!(name, "groups" | "logs" | "uploads" | "hooks_state.json")
 }
 
 fn cleanup_stale_runtime_working_dir(data_root: &Path, runtime_dir: &Path) {
@@ -606,9 +603,9 @@ mod tests {
 
         migrate_legacy_runtime_layout(&root, Path::new(&runtime_dir));
 
-        assert!(!root.join("microclaw.db").exists());
+        assert!(root.join("microclaw.db").exists());
         assert!(!groups_dir.exists());
-        assert!(runtime_dir.join("microclaw.db").exists());
+        assert!(!runtime_dir.join("microclaw.db").exists());
         assert!(runtime_dir.join("groups").join("AGENTS.md").exists());
         assert!(souls_dir.exists());
         assert!(souls_dir.join("bot.md").exists());

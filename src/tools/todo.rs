@@ -6,7 +6,7 @@ use tracing::info;
 use microclaw_core::llm_types::ToolDefinition;
 use microclaw_tools::todo_store::{format_todos, read_todos, write_todos, TodoItem};
 
-use super::{authorize_chat_access, schema_object, Tool, ToolResult};
+use super::{auth_context_from_input, authorize_chat_access, schema_object, Tool, ToolResult};
 
 // --- TodoReadTool ---
 
@@ -20,6 +20,13 @@ impl TodoReadTool {
             groups_dir: PathBuf::from(data_dir).join("groups"),
         }
     }
+}
+
+fn todo_channel_from_input(input: &serde_json::Value) -> String {
+    auth_context_from_input(input)
+        .map(|a| a.caller_channel)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "web".to_string())
 }
 
 #[async_trait]
@@ -53,8 +60,9 @@ impl Tool for TodoReadTool {
             return ToolResult::error(e);
         }
 
+        let channel = todo_channel_from_input(&input);
         info!("Reading todo list for chat {}", chat_id);
-        let todos = read_todos(&self.groups_dir, chat_id);
+        let todos = read_todos(&self.groups_dir, &channel, chat_id);
         ToolResult::success(format_todos(&todos))
     }
 }
@@ -133,9 +141,10 @@ impl Tool for TodoWriteTool {
             Err(e) => return ToolResult::error(format!("Invalid todos format: {e}")),
         };
 
+        let channel = todo_channel_from_input(&input);
         info!("Writing {} todo items for chat {}", todos.len(), chat_id);
 
-        match write_todos(&self.groups_dir, chat_id, &todos) {
+        match write_todos(&self.groups_dir, &channel, chat_id, &todos) {
             Ok(()) => ToolResult::success(format!(
                 "Todo list updated ({} tasks).\n\n{}",
                 todos.len(),
@@ -202,7 +211,7 @@ mod tests {
     fn test_read_todos_empty() {
         let dir = test_dir();
         let groups_dir = dir.join("groups");
-        let todos = read_todos(&groups_dir, 123);
+        let todos = read_todos(&groups_dir, "web", 123);
         assert!(todos.is_empty());
         cleanup(&dir);
     }
@@ -221,8 +230,8 @@ mod tests {
                 status: "pending".into(),
             },
         ];
-        write_todos(&groups_dir, 42, &todos).unwrap();
-        let loaded = read_todos(&groups_dir, 42);
+        write_todos(&groups_dir, "web", 42, &todos).unwrap();
+        let loaded = read_todos(&groups_dir, "web", 42);
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].task, "Step 1");
         assert_eq!(loaded[1].task, "Step 2");

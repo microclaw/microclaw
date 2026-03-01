@@ -808,6 +808,7 @@ struct UpdateConfigRequest {
     embedding_base_url: Option<Option<String>>,
     embedding_model: Option<Option<String>>,
     embedding_dim: Option<Option<usize>>,
+    souls_dir: Option<Option<String>>,
     working_dir_isolation: Option<WorkingDirIsolation>,
     high_risk_tool_user_confirmation_required: Option<bool>,
 
@@ -1504,7 +1505,7 @@ async fn handle_web_slash_command(state: &WebState, text: &str, chat_id: i64) ->
         })
         .await;
         let groups_dir = PathBuf::from(&state.app_state.config.data_dir).join("groups");
-        if let Err(e) = clear_todos(&groups_dir, chat_id) {
+        if let Err(e) = clear_todos(&groups_dir, "web", chat_id) {
             warn!("Failed to clear TODO.json for chat {}: {}", chat_id, e);
         }
         return Some("Context cleared (session + chat history).".to_string());

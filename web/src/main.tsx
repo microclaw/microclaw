@@ -264,6 +264,7 @@ const DEFAULT_CONFIG_VALUES = {
   embedding_base_url: '',
   embedding_model: '',
   embedding_dim: '',
+  souls_dir: '',
 }
 
 // ---------------------------------------------------------------------------
@@ -566,12 +567,13 @@ function normalizeBotCount(raw: unknown): number {
   return Math.min(BOT_SLOT_MAX, Math.max(1, Math.floor(n)))
 }
 
-function normalizeSoulPathInput(raw: unknown): string {
+function normalizeSoulPathInput(raw: unknown, soulsDir?: unknown): string {
   const trimmed = String(raw || '').trim()
   if (!trimmed) return ''
   if (trimmed.includes('/') || trimmed.includes('\\')) return trimmed
-  if (trimmed.toLowerCase().endsWith('.md')) return `souls/${trimmed}`
-  return `souls/${trimmed}.md`
+  const base = String(soulsDir || '').trim().replace(/[\\/]+$/, '') || 'souls'
+  if (trimmed.toLowerCase().endsWith('.md')) return `${base}/${trimmed}`
+  return `${base}/${trimmed}.md`
 }
 
 function soulFileNameFromPath(raw: unknown): string {
@@ -582,8 +584,8 @@ function soulFileNameFromPath(raw: unknown): string {
   return parts[parts.length - 1] || ''
 }
 
-function soulPickerValue(raw: unknown, options: readonly string[]): string {
-  const normalized = normalizeSoulPathInput(raw)
+function soulPickerValue(raw: unknown, options: readonly string[], soulsDir?: unknown): string {
+  const normalized = normalizeSoulPathInput(raw, soulsDir)
   if (!normalized) return '__none__'
   const fileName = soulFileNameFromPath(normalized)
   return options.includes(fileName) ? fileName : '__custom__'
@@ -1136,12 +1138,14 @@ function ConfigFieldCard({ label, description, children }: ConfigFieldCardProps)
 
 type SoulPathPickerFieldProps = {
   value: unknown
+  soulsDir?: unknown
   soulFiles: string[]
   onChange: (next: string) => void
 }
 
-function SoulPathPickerField({ value, soulFiles, onChange }: SoulPathPickerFieldProps) {
-  const pickerVal = soulPickerValue(value, soulFiles)
+function SoulPathPickerField({ value, soulsDir, soulFiles, onChange }: SoulPathPickerFieldProps) {
+  const pickerVal = soulPickerValue(value, soulFiles, soulsDir)
+  const soulsDirText = String(soulsDir || '').trim() || 'souls'
   return (
     <Flex direction="column" gap="2">
       <Select.Root
@@ -1152,7 +1156,7 @@ function SoulPathPickerField({ value, soulFiles, onChange }: SoulPathPickerField
             return
           }
           if (next === '__custom__') return
-          onChange(normalizeSoulPathInput(next))
+          onChange(normalizeSoulPathInput(next, soulsDir))
         }}
       >
         <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select soul file" />
@@ -1174,7 +1178,7 @@ function SoulPathPickerField({ value, soulFiles, onChange }: SoulPathPickerField
         />
       ) : null}
       <Text size="1" color="gray">
-        Select from <code>souls/*.md</code> or use custom input (file may not exist yet).
+        Select from <code>{soulsDirText}/*.md</code> or use custom input (file may not exist yet).
       </Text>
     </Flex>
   )
@@ -1953,6 +1957,12 @@ function App() {
         embedding_base_url: String(data.config?.embedding_base_url || ''),
         embedding_model: String(data.config?.embedding_model || ''),
         embedding_dim: String(data.config?.embedding_dim || ''),
+        souls_dir: String(
+          data.config?.souls_dir ||
+            (String(data.config?.data_dir || '').trim()
+              ? `${String(data.config?.data_dir).trim()}/souls`
+              : ''),
+        ),
         // Dynamic channel fields — initialize from server config
         ...Object.fromEntries(
           DYNAMIC_CHANNELS.flatMap((ch) => {
@@ -2282,6 +2292,7 @@ function App() {
         embedding_dim: String(configDraft.embedding_dim || '').trim()
           ? Number(configDraft.embedding_dim)
           : null,
+        souls_dir: String(configDraft.souls_dir || '').trim() || null,
       }
       if (String(configDraft.llm_provider || '').trim().toLowerCase() === 'custom') {
         payload.llm_base_url = String(configDraft.llm_base_url || '').trim() || null
@@ -2310,7 +2321,10 @@ function App() {
         const token = String(configDraft[`telegram_bot_${slot}_token`] || '').trim()
         const hasToken = Boolean(configDraft[`telegram_bot_${slot}_has_token`])
         const username = String(configDraft[`telegram_bot_${slot}_username`] || '').trim()
-        const soulPath = normalizeSoulPathInput(configDraft[`telegram_bot_${slot}_soul_path`])
+        const soulPath = normalizeSoulPathInput(
+          configDraft[`telegram_bot_${slot}_soul_path`],
+          configDraft.souls_dir,
+        )
         const accountAllowedUserIds = parseI64ListCsvOrJsonArray(
           String(configDraft[`telegram_bot_${slot}_allowed_user_ids`] || ''),
           `telegram_bot_${slot}_allowed_user_ids`,
@@ -2445,6 +2459,7 @@ function App() {
           )
           const soulPath = normalizeSoulPathInput(
             configDraft[`${ch.name}__bot_${slot}__soul_path`],
+            configDraft.souls_dir,
           )
           const fields: Record<string, unknown> = {}
           let hasAny = slotAccountId === accountId || Boolean(soulPath)
@@ -2944,6 +2959,14 @@ function App() {
                               <option value="shared">shared (single shared workspace)</option>
                             </select>
                           </ConfigFieldCard>
+                          <ConfigFieldCard label="souls_dir" description={<>Directory used by SOUL picker and default SOUL path normalization.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.souls_dir || '')}
+                              onChange={(e) => setConfigField('souls_dir', e.target.value)}
+                              placeholder="~/.microclaw/souls"
+                            />
+                          </ConfigFieldCard>
                           <ConfigFieldCard label="max_tokens" description={<>Maximum output tokens for one model response.</>}>
                             <TextField.Root
                               className="mt-2"
@@ -3226,9 +3249,10 @@ function App() {
                                       placeholder={slot === 1 ? 'my_main_bot' : `my_bot_${slot}`}
                                     />
                                   </ConfigFieldCard>
-                                  <ConfigFieldCard label={`telegram_bot_${slot}_soul_path`} description={<>Per-bot soul file. Select from <code>souls/*.md</code> or input a custom filename/path.</>}>
+                                  <ConfigFieldCard label={`telegram_bot_${slot}_soul_path`} description={<>Per-bot soul file. Select from <code>{String(configDraft.souls_dir || '').trim() || 'souls'}/*.md</code> or input a custom filename/path.</>}>
                                     <SoulPathPickerField
                                       value={configDraft[`telegram_bot_${slot}_soul_path`]}
+                                      soulsDir={configDraft.souls_dir}
                                       soulFiles={soulFiles}
                                       onChange={(next) => setConfigField(`telegram_bot_${slot}_soul_path`, next)}
                                     />
@@ -3505,10 +3529,11 @@ function App() {
                                     <ConfigFieldCard
                                       key={`${ch.name}__bot_${slot}__soul_path`}
                                       label={`${ch.name}_bot_${slot}_soul_path`}
-                                      description={<>Per-bot soul file. Select from <code>souls/*.md</code> or input a custom filename/path.</>}
+                                      description={<>Per-bot soul file. Select from <code>{String(configDraft.souls_dir || '').trim() || 'souls'}/*.md</code> or input a custom filename/path.</>}
                                     >
                                       <SoulPathPickerField
                                         value={configDraft[`${ch.name}__bot_${slot}__soul_path`]}
+                                        soulsDir={configDraft.souls_dir}
                                         soulFiles={soulFiles}
                                         onChange={(next) => setConfigField(`${ch.name}__bot_${slot}__soul_path`, next)}
                                       />

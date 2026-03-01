@@ -44,6 +44,35 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    fn should_inject_default_chat_id(tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "write_memory" | "read_memory" | "todo_read" | "todo_write"
+        )
+    }
+
+    fn inject_default_chat_id_if_missing(
+        tool_name: &str,
+        input: serde_json::Value,
+        auth: &ToolAuthContext,
+    ) -> serde_json::Value {
+        if !Self::should_inject_default_chat_id(tool_name) {
+            return input;
+        }
+        let mut obj = match input {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        let missing_chat_id = obj.get("chat_id").and_then(|v| v.as_i64()).is_none();
+        if missing_chat_id {
+            obj.insert(
+                "chat_id".to_string(),
+                serde_json::Value::Number(auth.caller_chat_id.into()),
+            );
+        }
+        serde_json::Value::Object(obj)
+    }
+
     pub fn new(
         config: &Config,
         channel_registry: Arc<ChannelRegistry>,
@@ -102,7 +131,7 @@ impl ToolRegistry {
                 &config.working_dir,
                 config.working_dir_isolation,
             )),
-            Box::new(memory::ReadMemoryTool::new(&config.data_dir)),
+            Box::new(memory::ReadMemoryTool::new(&config.data_dir, db.clone())),
             Box::new(memory::WriteMemoryTool::new(
                 &config.data_dir,
                 db.clone(),
@@ -254,7 +283,7 @@ impl ToolRegistry {
                 &config.working_dir,
                 config.working_dir_isolation,
             )),
-            Box::new(memory::ReadMemoryTool::new(&config.data_dir)),
+            Box::new(memory::ReadMemoryTool::new(&config.data_dir, db.clone())),
             Box::new(web_fetch::WebFetchTool::new(
                 config.tool_timeout_secs("web_fetch", 15),
                 config.web_fetch_validation,
@@ -361,6 +390,7 @@ impl ToolRegistry {
             sandbox_runtime_available = self.sandbox_runtime_available,
             "tool execution policy evaluated"
         );
+        let input = Self::inject_default_chat_id_if_missing(name, input, auth);
         let input = inject_auth_context(input, auth);
         let result = self.execute(name, input.clone()).await;
         if result.error_type.as_deref() == Some("unknown_tool") {
@@ -503,6 +533,29 @@ mod tests {
 
         async fn execute(&self, _input: serde_json::Value) -> ToolResult {
             ToolResult::success("ok".into())
+        }
+    }
+
+    struct CaptureInputTool {
+        tool_name: String,
+    }
+
+    #[async_trait]
+    impl Tool for CaptureInputTool {
+        fn name(&self) -> &str {
+            &self.tool_name
+        }
+
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.tool_name.clone(),
+                description: "capture".into(),
+                input_schema: schema_object(json!({}), &[]),
+            }
+        }
+
+        async fn execute(&self, input: serde_json::Value) -> ToolResult {
+            ToolResult::success(input.to_string())
         }
     }
 
@@ -660,5 +713,63 @@ tools:
         assert!(result.content.contains("plugin-ok"));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_injects_default_chat_id_for_memory_tools() {
+        let registry = ToolRegistry {
+            config: crate::config::Config::test_defaults(),
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            tools: vec![Box::new(CaptureInputTool {
+                tool_name: "write_memory".into(),
+            })],
+        };
+        let auth = ToolAuthContext {
+            caller_channel: "feishu".into(),
+            caller_chat_id: 8009499081,
+            control_chat_ids: vec![],
+        };
+
+        let result = registry
+            .execute_with_auth(
+                "write_memory",
+                json!({"scope":"chat","content":"hello"}),
+                &auth,
+            )
+            .await;
+        assert!(!result.is_error);
+        let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(payload["chat_id"].as_i64(), Some(8009499081));
+    }
+
+    #[tokio::test]
+    async fn test_does_not_override_existing_chat_id() {
+        let registry = ToolRegistry {
+            config: crate::config::Config::test_defaults(),
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            tools: vec![Box::new(CaptureInputTool {
+                tool_name: "write_memory".into(),
+            })],
+        };
+        let auth = ToolAuthContext {
+            caller_channel: "feishu".into(),
+            caller_chat_id: 8009499081,
+            control_chat_ids: vec![],
+        };
+
+        let result = registry
+            .execute_with_auth(
+                "write_memory",
+                json!({"scope":"chat","chat_id":42,"content":"hello"}),
+                &auth,
+            )
+            .await;
+        assert!(!result.is_error);
+        let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(payload["chat_id"].as_i64(), Some(42));
     }
 }

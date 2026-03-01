@@ -1,11 +1,33 @@
 use super::*;
 use microclaw_tools::runtime::{tool_execution_policy, tool_risk};
 
+fn effective_data_root_dir(config: &crate::config::Config) -> std::path::PathBuf {
+    let data_dir = std::path::PathBuf::from(&config.data_dir);
+    let is_runtime_dir = data_dir
+        .file_name()
+        .and_then(|v| v.to_str())
+        .map(|v| v == "runtime")
+        .unwrap_or(false);
+    if is_runtime_dir {
+        data_dir.parent().unwrap_or(&data_dir).to_path_buf()
+    } else {
+        data_dir
+    }
+}
+
 fn list_available_soul_files(config: &crate::config::Config) -> Vec<String> {
     let mut out = Vec::new();
+    let data_root_dir = effective_data_root_dir(config);
 
-    let mut roots = vec![std::path::PathBuf::from("souls")];
-    roots.push(std::path::PathBuf::from(&config.data_dir).join("souls"));
+    let configured = std::path::PathBuf::from(config.souls_data_dir());
+    let mut roots = vec![
+        configured.clone(),
+        std::path::PathBuf::from("souls"),
+        data_root_dir.join("souls"),
+    ];
+    if configured.is_relative() {
+        roots.push(data_root_dir.join(configured));
+    }
 
     for root in roots {
         let Ok(entries) = std::fs::read_dir(&root) else {
@@ -532,6 +554,16 @@ pub(super) async fn api_update_config(
     }
     if let Some(v) = body.embedding_dim {
         cfg.embedding_dim = v;
+    }
+    if let Some(v) = body.souls_dir {
+        cfg.souls_dir = v.and_then(|s| {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
     }
     if let Some(v) = body.working_dir_isolation {
         cfg.working_dir_isolation = v;

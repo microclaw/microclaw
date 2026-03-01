@@ -592,7 +592,9 @@ pub(crate) async fn process_with_agent_impl(
     let explicit_user_approval = is_explicit_user_approval(&latest_user_text_for_approval);
 
     // Build system prompt
-    let file_memory = state.memory.build_memory_context(chat_id);
+    let file_memory = state
+        .memory
+        .build_memory_context(context.caller_channel, chat_id);
     let db_memory = build_db_memory_context(
         &state.memory_backend,
         &state.db,
@@ -1449,14 +1451,21 @@ pub(crate) async fn build_db_memory_context(
 /// Also supports per-chat soul files at data_dir/groups/{chat_id}/SOUL.md.
 fn configured_soul_candidate_paths(
     path: &str,
-    data_dir: &str,
+    data_root_dir: &str,
+    souls_dir: &str,
 ) -> Vec<std::path::PathBuf> {
     let configured = std::path::PathBuf::from(path);
     let mut candidates = vec![configured.clone()];
+    if !configured.is_absolute() && configured.parent().is_none() {
+        let souls_candidate = std::path::PathBuf::from(souls_dir).join(&configured);
+        if souls_candidate != configured {
+            candidates.push(souls_candidate);
+        }
+    }
     if configured.is_relative() {
-        let data_dir_candidate = std::path::PathBuf::from(data_dir).join(&configured);
-        if data_dir_candidate != configured {
-            candidates.push(data_dir_candidate);
+        let data_root_candidate = std::path::PathBuf::from(data_root_dir).join(&configured);
+        if data_root_candidate != configured {
+            candidates.push(data_root_candidate);
         }
     }
     candidates
@@ -1464,10 +1473,11 @@ fn configured_soul_candidate_paths(
 
 fn read_configured_soul_with_fallback(
     configured_path: &str,
-    data_dir: &str,
+    data_root_dir: &str,
+    souls_dir: &str,
 ) -> Result<(String, String), String> {
     let mut errors = Vec::new();
-    for candidate in configured_soul_candidate_paths(configured_path, data_dir) {
+    for candidate in configured_soul_candidate_paths(configured_path, data_root_dir, souls_dir) {
         let rendered = candidate.display().to_string();
         match std::fs::read_to_string(&candidate) {
             Ok(content) => {
@@ -1483,16 +1493,51 @@ fn read_configured_soul_with_fallback(
     Err(errors.join("; "))
 }
 
+fn effective_data_root_dir(config: &crate::config::Config) -> std::path::PathBuf {
+    let data_dir = std::path::PathBuf::from(&config.data_dir);
+    let is_runtime_dir = data_dir
+        .file_name()
+        .and_then(|v| v.to_str())
+        .map(|v| v == "runtime")
+        .unwrap_or(false);
+    if is_runtime_dir {
+        data_dir.parent().unwrap_or(&data_dir).to_path_buf()
+    } else {
+        data_dir
+    }
+}
+
+fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::PathBuf {
+    let data_dir = std::path::PathBuf::from(&config.data_dir);
+    let is_runtime_dir = data_dir
+        .file_name()
+        .and_then(|v| v.to_str())
+        .map(|v| v == "runtime")
+        .unwrap_or(false);
+    if is_runtime_dir {
+        data_dir
+    } else {
+        data_dir.join("runtime")
+    }
+}
+
 pub(crate) fn load_soul_content(
     config: &crate::config::Config,
     caller_channel: &str,
     chat_id: i64,
 ) -> Option<String> {
+    let data_root_dir = effective_data_root_dir(config);
+    let runtime_data_dir = effective_runtime_data_dir(config);
+    let souls_dir = config.souls_data_dir();
     let mut global_soul: Option<String> = None;
 
     // 1. Per-channel/account path from config (channels.<name>.soul_path or accounts.<id>.soul_path)
     if let Some(path) = config.soul_path_for_channel(caller_channel) {
-        match read_configured_soul_with_fallback(&path, &config.data_dir) {
+        match read_configured_soul_with_fallback(
+            &path,
+            &data_root_dir.to_string_lossy(),
+            &souls_dir,
+        ) {
             Ok((content, resolved_path)) => {
                 info!(
                     "SOUL loaded from configured channel/account path; caller_channel={}, chat_id={}, configured_path={}, resolved_path={}",
@@ -1512,7 +1557,11 @@ pub(crate) fn load_soul_content(
     // 2. Explicit global path from config
     if let Some(ref path) = config.soul_path {
         if global_soul.is_none() {
-            match read_configured_soul_with_fallback(path, &config.data_dir) {
+            match read_configured_soul_with_fallback(
+                path,
+                &data_root_dir.to_string_lossy(),
+                &souls_dir,
+            ) {
                 Ok((content, resolved_path)) => {
                     info!(
                         "SOUL loaded from configured global path; caller_channel={}, chat_id={}, configured_path={}, resolved_path={}",
@@ -1532,7 +1581,7 @@ pub(crate) fn load_soul_content(
 
     // 3. data_dir/SOUL.md
     if global_soul.is_none() {
-        let data_soul = std::path::PathBuf::from(&config.data_dir).join("SOUL.md");
+        let data_soul = data_root_dir.join("SOUL.md");
         if let Ok(content) = std::fs::read_to_string(&data_soul) {
             if !content.trim().is_empty() {
                 global_soul = Some(content);
@@ -1550,7 +1599,7 @@ pub(crate) fn load_soul_content(
     }
 
     // 5. Per-chat override: data_dir/runtime/groups/{chat_id}/SOUL.md
-    let chat_soul_path = std::path::PathBuf::from(config.runtime_data_dir())
+    let chat_soul_path = runtime_data_dir
         .join("groups")
         .join(chat_id.to_string())
         .join("SOUL.md");
@@ -2944,10 +2993,8 @@ mod tests {
 
     #[test]
     fn test_load_soul_content_channel_account_relative_path_under_data_dir() {
-        let base_dir = std::env::temp_dir().join(format!(
-            "mc_soul_channel_relative_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let base_dir =
+            std::env::temp_dir().join(format!("mc_soul_channel_relative_{}", uuid::Uuid::new_v4()));
         let rel_name = format!("__mc_soul_{}.md", uuid::Uuid::new_v4());
         let rel_path = format!("souls/{rel_name}");
         std::fs::create_dir_all(base_dir.join("souls")).unwrap();

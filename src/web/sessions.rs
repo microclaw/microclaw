@@ -104,8 +104,15 @@ pub(super) async fn api_reset(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     };
+    let todo_channel = call_blocking(state.app_state.db.clone(), move |db| {
+        db.get_chat_channel(chat_id)
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "web".to_string());
     let groups_dir = std::path::PathBuf::from(&state.app_state.config.data_dir).join("groups");
-    if let Err(e) = clear_todos(&groups_dir, chat_id) {
+    if let Err(e) = clear_todos(&groups_dir, &todo_channel, chat_id) {
         warn!("Failed to clear TODO.json for chat {}: {}", chat_id, e);
     }
 
@@ -132,6 +139,13 @@ pub(super) async fn api_delete_session(
 
     let session_key = normalize_session_key(body.session_key.as_deref());
     let chat_id = resolve_chat_id_for_session_key(&state, &session_key).await?;
+    let todo_channel = call_blocking(state.app_state.db.clone(), move |db| {
+        db.get_chat_channel(chat_id)
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "web".to_string());
 
     let deleted = call_blocking(state.app_state.db.clone(), move |db| {
         db.delete_chat_data(chat_id)
@@ -139,7 +153,7 @@ pub(super) async fn api_delete_session(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let groups_dir = std::path::PathBuf::from(&state.app_state.config.data_dir).join("groups");
-    if let Err(e) = clear_todos(&groups_dir, chat_id) {
+    if let Err(e) = clear_todos(&groups_dir, &todo_channel, chat_id) {
         warn!("Failed to clear TODO.json for chat {}: {}", chat_id, e);
     }
 
