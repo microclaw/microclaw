@@ -158,6 +158,7 @@ pub struct ToolAuthContext {
     pub caller_channel: String,
     pub caller_chat_id: i64,
     pub control_chat_ids: Vec<i64>,
+    pub env_files: Vec<String>,
 }
 
 impl ToolAuthContext {
@@ -185,10 +186,20 @@ pub fn auth_context_from_input(input: &serde_json::Value) -> Option<ToolAuthCont
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
         .unwrap_or_default();
+    let env_files = ctx
+        .get("env_files")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
     Some(ToolAuthContext {
         caller_channel,
         caller_chat_id,
         control_chat_ids,
+        env_files,
     })
 }
 
@@ -209,14 +220,15 @@ pub fn inject_auth_context(input: serde_json::Value, auth: &ToolAuthContext) -> 
         serde_json::Value::Object(map) => map,
         _ => serde_json::Map::new(),
     };
-    obj.insert(
-        AUTH_CONTEXT_KEY.to_string(),
-        json!({
-            "caller_channel": auth.caller_channel,
-            "caller_chat_id": auth.caller_chat_id,
-            "control_chat_ids": auth.control_chat_ids,
-        }),
-    );
+    let mut auth_val = json!({
+        "caller_channel": auth.caller_channel,
+        "caller_chat_id": auth.caller_chat_id,
+        "control_chat_ids": auth.control_chat_ids,
+    });
+    if !auth.env_files.is_empty() {
+        auth_val["env_files"] = json!(auth.env_files);
+    }
+    obj.insert(AUTH_CONTEXT_KEY.to_string(), auth_val);
     serde_json::Value::Object(obj)
 }
 

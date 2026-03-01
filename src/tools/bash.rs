@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use serde_json::json;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
@@ -47,16 +46,34 @@ impl BashTool {
     }
 }
 
-fn extract_envs(input: &serde_json::Value) -> HashMap<String, String> {
-    input
-        .get("__microclaw_envs")
-        .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
+fn extract_env_files(input: &serde_json::Value) -> Vec<PathBuf> {
+    super::auth_context_from_input(input)
+        .map(|auth| auth.env_files.iter().map(PathBuf::from).collect())
         .unwrap_or_default()
+}
+
+const REDACT_MIN_VALUE_LEN: usize = 8;
+
+fn redact_env_secrets(output: &str, env_files: &[PathBuf]) -> String {
+    let mut secrets: Vec<(String, String)> = Vec::new();
+    for env_file in env_files {
+        if let Ok(content) = std::fs::read_to_string(env_file) {
+            for (key, value) in microclaw_tools::env_file::parse_dotenv(&content) {
+                if value.len() >= REDACT_MIN_VALUE_LEN {
+                    secrets.push((key, value));
+                }
+            }
+        }
+    }
+    if secrets.is_empty() {
+        return output.to_string();
+    }
+    secrets.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    let mut redacted = output.to_string();
+    for (key, value) in &secrets {
+        redacted = redacted.replace(value, &format!("[REDACTED:{key}]"));
+    }
+    redacted
 }
 
 fn contains_explicit_tmp_absolute_path(command: &str) -> bool {
@@ -79,6 +96,12 @@ fn contains_explicit_tmp_absolute_path(command: &str) -> bool {
         start = idx + 5;
     }
     false
+}
+
+fn command_accesses_dotenv(command: &str) -> bool {
+    let patterns = [".env", "dotenv", "env_file"];
+    let lower = command.to_ascii_lowercase();
+    patterns.iter().any(|p| lower.contains(p))
 }
 
 #[async_trait]
@@ -135,16 +158,25 @@ impl Tool for BashTool {
             .with_error_type("path_policy_blocked");
         }
 
+        let env_files = extract_env_files(&input);
+        if !env_files.is_empty() && command_accesses_dotenv(command) {
+            return ToolResult::error(
+                "Command appears to access .env files, which is blocked for security. Skill environment variables are already injected automatically.".into(),
+            )
+            .with_error_type("env_access_blocked");
+        }
+
         info!("Executing bash in {}: {}", working_dir.display(), command);
 
         let session_key = super::auth_context_from_input(&input)
             .map(|auth| format!("{}-{}", auth.caller_channel, auth.caller_chat_id))
             .unwrap_or_else(|| "shared".to_string());
-        let envs = extract_envs(&input);
+        let env_files_for_redact = env_files.clone();
         let exec_opts = SandboxExecOptions {
             timeout: std::time::Duration::from_secs(timeout_secs),
             working_dir: Some(working_dir.clone()),
-            envs,
+            envs: std::collections::HashMap::new(),
+            env_files,
         };
         let result = if let Some(router) = &self.sandbox_router {
             router.exec(&session_key, command, &exec_opts).await
@@ -172,6 +204,8 @@ impl Tool for BashTool {
                 if result_text.is_empty() {
                     result_text = format!("Command completed with exit code {exit_code}");
                 }
+
+                result_text = redact_env_secrets(&result_text, &env_files_for_redact);
 
                 // Truncate very long output
                 if result_text.len() > 30000 {
@@ -361,45 +395,127 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_envs_from_input() {
+    fn test_extract_env_files_from_input() {
         let input = json!({
             "command": "echo hi",
-            "__microclaw_envs": {
-                "API_KEY": "secret",
-                "BASE_URL": "https://example.com"
+            "__microclaw_auth": {
+                "caller_channel": "telegram",
+                "caller_chat_id": 1,
+                "control_chat_ids": [],
+                "env_files": [
+                    "/home/user/.microclaw/skills/outline/.env",
+                    "/home/user/.microclaw/skills/weather/.env"
+                ]
             }
         });
-        let envs = extract_envs(&input);
-        assert_eq!(envs.get("API_KEY").unwrap(), "secret");
-        assert_eq!(envs.get("BASE_URL").unwrap(), "https://example.com");
+        let files = extract_env_files(&input);
+        assert_eq!(files.len(), 2);
+        assert_eq!(
+            files[0],
+            PathBuf::from("/home/user/.microclaw/skills/outline/.env")
+        );
     }
 
     #[test]
-    fn test_extract_envs_empty_when_absent() {
+    fn test_extract_env_files_empty_when_absent() {
         let input = json!({"command": "echo hi"});
-        let envs = extract_envs(&input);
-        assert!(envs.is_empty());
+        let files = extract_env_files(&input);
+        assert!(files.is_empty());
     }
 
     #[tokio::test]
-    async fn test_bash_injects_envs_into_execution() {
+    async fn test_bash_injects_env_files_into_execution() {
         let root =
             std::env::temp_dir().join(format!("microclaw_bash_env_{}", uuid::Uuid::new_v4()));
         let work = root.join("workspace");
         std::fs::create_dir_all(&work).unwrap();
 
+        let env_dir = root.join("skill_env");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        let env_file = env_dir.join(".env");
+        std::fs::write(&env_file, "TEST_SKILL_VAR=skill_value_42\n").unwrap();
+
         let tool = BashTool::new(work.to_str().unwrap());
         let result = tool
             .execute(json!({
                 "command": echo_env_command("TEST_SKILL_VAR"),
-                "__microclaw_envs": {
-                    "TEST_SKILL_VAR": "skill_value_42"
+                "__microclaw_auth": {
+                    "caller_channel": "telegram",
+                    "caller_chat_id": 1,
+                    "control_chat_ids": [],
+                    "env_files": [env_file.to_string_lossy()]
                 }
             }))
             .await;
         assert!(!result.is_error);
-        assert!(result.content.contains("skill_value_42"));
+        assert!(
+            result.content.contains("[REDACTED:TEST_SKILL_VAR]"),
+            "expected redacted output, got: {}",
+            result.content
+        );
+        assert!(!result.content.contains("skill_value_42"));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_redact_env_secrets_replaces_values() {
+        let dir = std::env::temp_dir().join(format!("microclaw_redact_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_file = dir.join(".env");
+        std::fs::write(&env_file, "API_KEY=supersecretkey123\nSHORT=ab\n").unwrap();
+
+        let output = "Response: supersecretkey123 is the key";
+        let redacted = redact_env_secrets(output, &[env_file]);
+        assert!(redacted.contains("[REDACTED:API_KEY]"));
+        assert!(!redacted.contains("supersecretkey123"));
+        assert!(!redacted.contains("[REDACTED:SHORT]"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_redact_env_secrets_no_env_files() {
+        let output = "some output text";
+        let redacted = redact_env_secrets(output, &[]);
+        assert_eq!(redacted, output);
+    }
+
+    #[test]
+    fn test_command_accesses_dotenv_detection() {
+        assert!(command_accesses_dotenv("cat .env"));
+        assert!(command_accesses_dotenv("cat /path/to/.env.local"));
+        assert!(command_accesses_dotenv("source dotenv"));
+        assert!(!command_accesses_dotenv("echo hello"));
+        assert!(!command_accesses_dotenv("ls -la"));
+    }
+
+    #[tokio::test]
+    async fn test_bash_blocks_dotenv_access_when_env_files_active() {
+        let tool = BashTool::new(".");
+        let result = tool
+            .execute(json!({
+                "command": "cat .env",
+                "__microclaw_auth": {
+                    "caller_channel": "telegram",
+                    "caller_chat_id": 1,
+                    "control_chat_ids": [],
+                    "env_files": ["/some/skill/.env"]
+                }
+            }))
+            .await;
+        assert!(result.is_error);
+        assert_eq!(result.error_type.as_deref(), Some("env_access_blocked"));
+    }
+
+    #[tokio::test]
+    async fn test_bash_allows_dotenv_mention_without_env_files() {
+        let tool = BashTool::new(".");
+        let result = tool
+            .execute(json!({
+                "command": "echo .env is a file"
+            }))
+            .await;
+        assert!(!result.is_error);
     }
 }

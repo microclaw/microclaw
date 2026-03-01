@@ -136,6 +136,7 @@ pub struct SandboxExecOptions {
     pub working_dir: Option<PathBuf>,
     #[allow(clippy::zero_sized_map_values)]
     pub envs: HashMap<String, String>,
+    pub env_files: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -321,6 +322,9 @@ impl Sandbox for DockerSandbox {
         if let Some(dir) = &opts.working_dir {
             args.extend(["-w".to_string(), dir.display().to_string()]);
         }
+        for env_file in &opts.env_files {
+            args.extend(["--env-file".to_string(), env_file.display().to_string()]);
+        }
         for (k, v) in &opts.envs {
             args.extend(["-e".to_string(), format!("{k}={v}")]);
         }
@@ -423,6 +427,13 @@ pub async fn exec_host_command(
 ) -> Result<SandboxExecResult> {
     let spec = shell_command(command);
     let mut cmd = build_command(&spec, opts.working_dir.as_deref());
+    for env_file in &opts.env_files {
+        if let Ok(content) = std::fs::read_to_string(env_file) {
+            for (k, v) in crate::env_file::parse_dotenv(&content) {
+                cmd.env(k, v);
+            }
+        }
+    }
     for (k, v) in &opts.envs {
         cmd.env(k, v);
     }
@@ -624,6 +635,7 @@ mod tests {
             timeout: Duration::from_secs(2),
             working_dir: None,
             envs: HashMap::new(),
+            env_files: Vec::new(),
         };
         let out = router.exec("chat-1", "printf microclaw-smoke", &opts).await;
         let out = out.expect("expected host fallback execution");
@@ -644,6 +656,7 @@ mod tests {
             timeout: Duration::from_secs(2),
             working_dir: None,
             envs: HashMap::new(),
+            env_files: Vec::new(),
         };
         let err = router.exec("chat-1", "echo hi", &opts).await.unwrap_err();
         assert!(err

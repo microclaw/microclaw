@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::HashMap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
 
@@ -274,23 +273,23 @@ fn is_slash_command_text(text: &str) -> bool {
     text.trim_start().starts_with('/')
 }
 
-async fn persist_session_with_skill_envs(
+async fn persist_session_with_skill_env_files(
     state: &AppState,
     chat_id: i64,
     messages: &mut Vec<Message>,
-    skill_envs: &HashMap<String, String>,
+    skill_env_files: &[String],
 ) {
     strip_images_for_session(messages);
     let Ok(json) = serde_json::to_string(messages) else {
         return;
     };
-    let skill_envs_json = if skill_envs.is_empty() {
+    let skill_env_files_json = if skill_env_files.is_empty() {
         None
     } else {
-        serde_json::to_string(skill_envs).ok()
+        serde_json::to_string(skill_env_files).ok()
     };
     let _ = call_blocking(state.db.clone(), move |db| {
-        db.save_session_with_meta(chat_id, &json, None, None, skill_envs_json.as_deref())
+        db.save_session_with_meta(chat_id, &json, None, None, skill_env_files_json.as_deref())
     })
     .await;
 }
@@ -691,10 +690,18 @@ pub(crate) async fn process_with_agent_impl(
     }
 
     let tool_defs = state.tools.definitions().to_vec();
-    let tool_auth = ToolAuthContext {
+    let mut skill_env_files: Vec<String> = {
+        let db = state.db.clone();
+        call_blocking(db, move |db| db.load_session_skill_envs(chat_id))
+            .await?
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default()
+    };
+    let mut tool_auth = ToolAuthContext {
         caller_channel: context.caller_channel.to_string(),
         caller_chat_id: chat_id,
         control_chat_ids: state.config.control_chat_ids.clone(),
+        env_files: skill_env_files.clone(),
     };
 
     // Agentic tool-use loop
@@ -703,13 +710,6 @@ pub(crate) async fn process_with_agent_impl(
     let mut seen_failed_tool_details: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     let mut empty_visible_reply_retry_attempted = false;
-    let mut skill_envs: HashMap<String, String> = {
-        let db = state.db.clone();
-        call_blocking(db, move |db| db.load_session_skill_envs(chat_id))
-            .await?
-            .and_then(|json| serde_json::from_str(&json).ok())
-            .unwrap_or_default()
-    };
     let effective_model = state
         .llm_model_overrides
         .get(context.caller_channel)
@@ -875,7 +875,8 @@ pub(crate) async fn process_with_agent_impl(
                 role: "assistant".into(),
                 content: MessageContent::Text(text.clone()),
             });
-            persist_session_with_skill_envs(state, chat_id, &mut messages, &skill_envs).await;
+            persist_session_with_skill_env_files(state, chat_id, &mut messages, &skill_env_files)
+                .await;
 
             let final_text = if display_text.trim().is_empty() {
                 if stop_reason == "max_tokens" {
@@ -998,14 +999,6 @@ pub(crate) async fn process_with_agent_impl(
                             }
                         }
                     }
-                    if !skill_envs.is_empty() {
-                        if let Value::Object(ref mut map) = effective_input {
-                            map.insert(
-                                "__microclaw_envs".to_string(),
-                                serde_json::to_value(&skill_envs).unwrap_or_default(),
-                            );
-                        }
-                    }
                     if let Some(tx) = event_tx {
                         let _ = tx.send(AgentEvent::ToolStart {
                             name: name.clone(),
@@ -1051,16 +1044,17 @@ pub(crate) async fn process_with_agent_impl(
                     }
                     if name == "activate_skill" && !result.is_error {
                         if let Some(meta) = &result.metadata {
-                            if let Some(envs) = meta.get("skill_envs").and_then(|v| v.as_object()) {
-                                for (k, v) in envs {
-                                    if let Some(s) = v.as_str() {
-                                        skill_envs.insert(k.clone(), s.to_string());
-                                    }
+                            if let Some(path) = meta.get("skill_env_file").and_then(|v| v.as_str())
+                            {
+                                let path_str = path.to_string();
+                                if !skill_env_files.contains(&path_str) {
+                                    skill_env_files.push(path_str);
+                                    tool_auth.env_files = skill_env_files.clone();
                                 }
-                                if let Ok(envs_json) = serde_json::to_string(&skill_envs) {
+                                if let Ok(files_json) = serde_json::to_string(&skill_env_files) {
                                     let db = state.db.clone();
                                     let _ = call_blocking(db, move |db| {
-                                        db.save_session_skill_envs(chat_id, &envs_json)
+                                        db.save_session_skill_envs(chat_id, &files_json)
                                     })
                                     .await;
                                 }
@@ -1171,7 +1165,13 @@ pub(crate) async fn process_with_agent_impl(
                 content: MessageContent::Blocks(tool_results),
             });
             if waiting_for_user_approval {
-                persist_session_with_skill_envs(state, chat_id, &mut messages, &skill_envs).await;
+                persist_session_with_skill_env_files(
+                    state,
+                    chat_id,
+                    &mut messages,
+                    &skill_env_files,
+                )
+                .await;
                 let tool_name = waiting_approval_tool.unwrap_or_else(|| "this tool".to_string());
                 let text = format!(
                     "High-risk tool '{tool_name}' is waiting for your confirmation. Reply with \"批准\" or \"approve\" to continue."
@@ -1201,7 +1201,7 @@ pub(crate) async fn process_with_agent_impl(
             role: "assistant".into(),
             content: MessageContent::Text(text.clone()),
         });
-        persist_session_with_skill_envs(state, chat_id, &mut messages, &skill_envs).await;
+        persist_session_with_skill_env_files(state, chat_id, &mut messages, &skill_env_files).await;
 
         return Ok(if text.is_empty() {
             "(no response)".into()
@@ -1221,7 +1221,7 @@ pub(crate) async fn process_with_agent_impl(
         role: "assistant".into(),
         content: MessageContent::Text(max_iter_msg.clone()),
     });
-    persist_session_with_skill_envs(state, chat_id, &mut messages, &skill_envs).await;
+    persist_session_with_skill_env_files(state, chat_id, &mut messages, &skill_env_files).await;
 
     if let Some(tx) = event_tx {
         let _ = tx.send(AgentEvent::FinalResponse {

@@ -1,6 +1,5 @@
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct SkillMetadata {
@@ -327,67 +326,6 @@ impl SkillManager {
     pub fn skills_dir(&self) -> &PathBuf {
         &self.skills_dir
     }
-}
-
-pub fn load_skill_env_vars(meta: &SkillMetadata) -> HashMap<String, String> {
-    let env_file_name = match &meta.env_file {
-        Some(f) => f.as_str(),
-        None => return HashMap::new(),
-    };
-    if !is_safe_env_file_path(env_file_name) {
-        return HashMap::new();
-    }
-    let env_path = meta.dir_path.join(env_file_name);
-    let content = match std::fs::read_to_string(&env_path) {
-        Ok(c) => c,
-        Err(_) => return HashMap::new(),
-    };
-    parse_dotenv(&content)
-}
-
-fn is_safe_env_file_path(env_file_name: &str) -> bool {
-    let path = Path::new(env_file_name);
-    if path.is_absolute() {
-        return false;
-    }
-    !path.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    })
-}
-
-fn parse_dotenv(content: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some(eq_pos) = trimmed.find('=') {
-            let key = trimmed[..eq_pos].trim();
-            if key.is_empty() {
-                continue;
-            }
-            let actual_key = key.strip_prefix("export ").map(str::trim).unwrap_or(key);
-            if actual_key.is_empty() {
-                continue;
-            }
-            let val = unquote_env_value(trimmed[eq_pos + 1..].trim());
-            map.insert(actual_key.to_string(), val);
-        }
-    }
-    map
-}
-
-fn unquote_env_value(s: &str) -> String {
-    if s.len() >= 2
-        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
-    {
-        return s[1..s.len() - 1].to_string();
-    }
-    s.to_string()
 }
 
 fn current_platform() -> &'static str {
@@ -863,100 +801,6 @@ nope
         let err = sm.load_skill_checked("bad").unwrap_err();
         assert!(err.contains("currently unavailable"));
         assert!(err.contains("available --all"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_parse_dotenv_basic() {
-        let content = "KEY1=value1\nKEY2=value2\n# comment\n\nKEY3=\"quoted value\"";
-        let map = parse_dotenv(content);
-        assert_eq!(map.get("KEY1").unwrap(), "value1");
-        assert_eq!(map.get("KEY2").unwrap(), "value2");
-        assert_eq!(map.get("KEY3").unwrap(), "quoted value");
-        assert_eq!(map.len(), 3);
-    }
-
-    #[test]
-    fn test_parse_dotenv_export_prefix() {
-        let content = "export API_KEY=secret123\nexport BASE_URL='https://example.com'";
-        let map = parse_dotenv(content);
-        assert_eq!(map.get("API_KEY").unwrap(), "secret123");
-        assert_eq!(map.get("BASE_URL").unwrap(), "https://example.com");
-    }
-
-    #[test]
-    fn test_parse_dotenv_empty_and_comments() {
-        let content = "# full comment\n\n  \n";
-        let map = parse_dotenv(content);
-        assert!(map.is_empty());
-    }
-
-    #[test]
-    fn test_load_skill_env_vars_with_env_file() {
-        let dir =
-            std::env::temp_dir().join(format!("microclaw_skill_env_test_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(".env"),
-            "OUTLINE_API_KEY=test123\nOUTLINE_URL=https://outline.example.com\n",
-        )
-        .unwrap();
-        let meta = SkillMetadata {
-            name: "outline".to_string(),
-            description: "test".to_string(),
-            dir_path: dir.clone(),
-            platforms: vec![],
-            deps: vec![],
-            source: "local".to_string(),
-            version: None,
-            updated_at: None,
-            env_file: Some(".env".to_string()),
-        };
-        let envs = load_skill_env_vars(&meta);
-        assert_eq!(envs.get("OUTLINE_API_KEY").unwrap(), "test123");
-        assert_eq!(
-            envs.get("OUTLINE_URL").unwrap(),
-            "https://outline.example.com"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_load_skill_env_vars_no_env_file() {
-        let meta = SkillMetadata {
-            name: "test".to_string(),
-            description: "test".to_string(),
-            dir_path: PathBuf::from("/nonexistent"),
-            platforms: vec![],
-            deps: vec![],
-            source: "local".to_string(),
-            version: None,
-            updated_at: None,
-            env_file: None,
-        };
-        let envs = load_skill_env_vars(&meta);
-        assert!(envs.is_empty());
-    }
-
-    #[test]
-    fn test_load_skill_env_vars_rejects_parent_path() {
-        let dir =
-            std::env::temp_dir().join(format!("microclaw_skill_env_test_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(".env"), "KEY=VALUE\n").unwrap();
-        let meta = SkillMetadata {
-            name: "test".to_string(),
-            description: "test".to_string(),
-            dir_path: dir.clone(),
-            platforms: vec![],
-            deps: vec![],
-            source: "local".to_string(),
-            version: None,
-            updated_at: None,
-            env_file: Some("../.env".to_string()),
-        };
-        let envs = load_skill_env_vars(&meta);
-        assert!(envs.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

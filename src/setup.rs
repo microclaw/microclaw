@@ -2548,7 +2548,10 @@ impl SetupApp {
             return;
         }
         let step = window.max(1);
-        self.field_scroll = self.field_scroll.saturating_sub(step).min(visible.len() - 1);
+        self.field_scroll = self
+            .field_scroll
+            .saturating_sub(step)
+            .min(visible.len() - 1);
         self.selected = visible[self.field_scroll];
         self.adjust_field_scroll(window.max(1));
     }
@@ -2587,7 +2590,11 @@ impl SetupApp {
         while pos < visible.len() {
             let section = Self::section_for_key(&self.fields[visible[pos]].key);
             let added = if section != last_section {
-                if used_lines == 0 { 2 } else { 3 }
+                if used_lines == 0 {
+                    2
+                } else {
+                    3
+                }
             } else {
                 1
             };
@@ -4628,9 +4635,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
         };
         let label_text = format!("{} {}: ", prefix, label);
         let line_width = left_inner.width.max(1) as usize;
-        let max_value_chars = line_width
-            .saturating_sub(label_text.chars().count())
-            .max(1);
+        let max_value_chars = line_width.saturating_sub(label_text.chars().count()).max(1);
         let value_single_line = truncate_single_line(&value, max_value_chars);
         lines.push(Line::from(vec![
             Span::styled(label_text, Style::default().fg(color)),

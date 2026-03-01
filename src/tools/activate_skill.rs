@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use tracing::info;
 
-use crate::skills::{load_skill_env_vars, SkillManager};
+use crate::skills::SkillManager;
 use microclaw_core::llm_types::ToolDefinition;
 
 use super::{schema_object, Tool, ToolResult};
@@ -69,12 +69,14 @@ impl Tool for ActivateSkillTool {
                 }
                 result.push_str("\n## Instructions\n\n");
                 result.push_str(&body);
-                let env_vars = load_skill_env_vars(&meta);
                 let mut tool_result = ToolResult::success(result);
-                if !env_vars.is_empty() {
-                    tool_result = tool_result.with_metadata(json!({
-                        "skill_envs": env_vars,
-                    }));
+                if let Some(env_file_name) = &meta.env_file {
+                    let env_path = meta.dir_path.join(env_file_name);
+                    if env_path.exists() {
+                        tool_result = tool_result.with_metadata(json!({
+                            "skill_env_file": env_path.to_string_lossy(),
+                        }));
+                    }
                 }
                 tool_result
             }

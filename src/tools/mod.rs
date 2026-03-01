@@ -583,6 +583,7 @@ mod tests {
             caller_channel: "web".into(),
             caller_chat_id: 1,
             control_chat_ids: vec![],
+            env_files: vec![],
         };
 
         let first = registry.execute_with_auth("bash", json!({}), &auth).await;
@@ -619,6 +620,7 @@ mod tests {
             caller_channel: "telegram".into(),
             caller_chat_id: 123,
             control_chat_ids: vec![123],
+            env_files: vec![],
         };
 
         let first = registry.execute_with_auth("bash", json!({}), &auth).await;
@@ -651,6 +653,7 @@ mod tests {
             caller_channel: "web".into(),
             caller_chat_id: 1,
             control_chat_ids: vec![],
+            env_files: vec![],
         };
 
         let result = registry
@@ -701,6 +704,7 @@ tools:
             caller_channel: "web".into(),
             caller_chat_id: 7,
             control_chat_ids: vec![],
+            env_files: vec![],
         };
 
         let defs = registry.definitions();
@@ -730,6 +734,7 @@ tools:
             caller_channel: "feishu".into(),
             caller_chat_id: 8009499081,
             control_chat_ids: vec![],
+            env_files: vec![],
         };
 
         let result = registry
@@ -759,6 +764,7 @@ tools:
             caller_channel: "feishu".into(),
             caller_chat_id: 8009499081,
             control_chat_ids: vec![],
+            env_files: vec![],
         };
 
         let result = registry

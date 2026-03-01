@@ -926,6 +926,7 @@ async fn execute_command_with_policy(
         timeout: std::time::Duration::from_secs(timeout_secs.max(1)),
         working_dir: Some(working_dir),
         envs: std::collections::HashMap::new(),
+        env_files: Vec::new(),
     };
 
     if !execution_policy.is_allowed(router.mode(), router.runtime_available()) {
