@@ -2017,7 +2017,7 @@ async fn send_matrix_streaming_response(
                     }
                 }
             }
-            AgentEvent::ToolStart { name } => {
+            AgentEvent::ToolStart { name, .. } => {
                 // Add tool usage indicator
                 let tool_indicator = format!("\n\n🛠️ Using tool: {}", name);
                 accumulated_text.push_str(&tool_indicator);

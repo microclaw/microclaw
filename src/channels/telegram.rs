@@ -1033,7 +1033,7 @@ async fn handle_message(
             if !used_streaming {
                 let mut used_send_message_tool = false;
                 while let Some(event) = event_rx.recv().await {
-                    if let AgentEvent::ToolStart { name } = event {
+                    if let AgentEvent::ToolStart { name, .. } = event {
                         if name == "send_message" {
                             used_send_message_tool = true;
                         }
@@ -1498,7 +1498,7 @@ async fn send_streaming_response(
                     last_edit_time = Instant::now();
                 }
             }
-            AgentEvent::ToolStart { name } => {
+            AgentEvent::ToolStart { name, .. } => {
                 // Show tool usage
                 if streaming_state.edit_count < config.max_edits_per_message {
                     let tool_text =
