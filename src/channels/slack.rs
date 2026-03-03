@@ -1134,6 +1134,35 @@ commands:
     }
 
     #[test]
+    fn test_should_skip_slack_message_subtype_allows_file_share() {
+        assert!(!should_skip_slack_message_subtype(Some("file_share")));
+    }
+
+    #[test]
+    fn test_guess_slack_image_media_type_from_magic_bytes() {
+        // PNG magic bytes
+        assert_eq!(
+            guess_slack_image_media_type(&[0x89, 0x50, 0x4E, 0x47, 0x0D], "image/png"),
+            "image/png"
+        );
+        // JPEG magic bytes
+        assert_eq!(
+            guess_slack_image_media_type(&[0xFF, 0xD8, 0x00], "image/jpeg"),
+            "image/jpeg"
+        );
+        // Falls back to mimetype for unknown bytes
+        assert_eq!(
+            guess_slack_image_media_type(&[0x00, 0x01, 0x02], "image/webp"),
+            "image/webp"
+        );
+        // Falls back to jpeg for truly unknown
+        assert_eq!(
+            guess_slack_image_media_type(&[0x00, 0x01, 0x02], ""),
+            "image/jpeg"
+        );
+    }
+
+    #[test]
     fn test_extract_slack_thread_ts_prefers_top_level_then_assistant() {
         let event = serde_json::json!({
             "thread_ts": "111.222",
