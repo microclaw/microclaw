@@ -134,6 +134,7 @@ pub async fn handle_chat_command(
             return Some(format!("Hello MicroClaw :) Your ID: {id}"));
         }
         return Some("Hello MicroClaw :)".to_string());
+    }
 
     if trimmed == "/providers" {
         return Some(
@@ -693,12 +694,11 @@ pub async fn maybe_handle_plugin_command(
     chat_id: i64,
     caller_channel: &str,
 ) -> Option<String> {
-    if let Some(admin) = crate::plugins::handle_plugins_admin_command(config, chat_id, command_text)
-    {
+    let normalized = normalized_slash_command(command_text)?;
+    if let Some(admin) = crate::plugins::handle_plugins_admin_command(config, chat_id, normalized) {
         return Some(admin);
     }
-    crate::plugins::execute_plugin_slash_command(config, caller_channel, chat_id, command_text)
-        .await
+    crate::plugins::execute_plugin_slash_command(config, caller_channel, chat_id, normalized).await
 }
 
 #[cfg(test)]
@@ -1036,19 +1036,6 @@ mod tests {
             "https://llm.chutes.ai/v1/models"
         );
     }
-}
-
-pub async fn maybe_handle_plugin_command(
-    config: &Config,
-    command_text: &str,
-    chat_id: i64,
-    caller_channel: &str,
-) -> Option<String> {
-    let normalized = normalized_slash_command(command_text)?;
-    if let Some(admin) = crate::plugins::handle_plugins_admin_command(config, chat_id, normalized) {
-        return Some(admin);
-    }
-    crate::plugins::execute_plugin_slash_command(config, caller_channel, chat_id, normalized).await
 }
 
 #[cfg(test)]

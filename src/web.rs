@@ -25,10 +25,8 @@ use microclaw_channels::channel::{
     deliver_and_store_bot_message, get_chat_routing, session_source_for_chat,
 };
 use microclaw_channels::channel_adapter::{ChannelAdapter, ChannelRegistry};
-use microclaw_core::llm_types::Message;
 use microclaw_storage::db::{call_blocking, ChatSummary, MetricsHistoryPoint, StoredMessage};
 use microclaw_storage::usage::build_usage_report;
-use microclaw_tools::todo_store::clear_todos;
 
 mod auth;
 mod config;
@@ -1402,7 +1400,8 @@ async fn send_and_store_response_with_events(
         }
     }
 
-    if let Some(command_reply) = handle_chat_command(&state.app_state, chat_id, "web", &text).await
+    if let Some(command_reply) =
+        handle_chat_command(&state.app_state, chat_id, "web", &text, None).await
     {
         if let Some(tx) = event_tx {
             let _ = tx.send(AgentEvent::FinalResponse {
