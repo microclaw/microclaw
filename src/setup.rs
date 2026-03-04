@@ -5356,7 +5356,7 @@ pub fn enable_sandbox_in_config() -> Result<String, MicroClawError> {
     cfg.sandbox.mode = SandboxMode::All;
     cfg.sandbox.backend = SandboxBackend::Auto;
     cfg.sandbox.no_network = true;
-    cfg.sandbox.require_runtime = false;
+    cfg.sandbox.require_runtime = true;
     cfg.save_yaml(&path.to_string_lossy())?;
     Ok(path.to_string_lossy().to_string())
 }
@@ -5585,6 +5585,7 @@ sandbox:
         assert!(out.contains(path.to_string_lossy().as_ref()));
         let cfg = Config::load().unwrap();
         assert!(matches!(cfg.sandbox.mode, SandboxMode::All));
+        assert!(cfg.sandbox.require_runtime);
         std::env::remove_var("MICROCLAW_CONFIG");
         let _ = std::fs::remove_file(path);
     }

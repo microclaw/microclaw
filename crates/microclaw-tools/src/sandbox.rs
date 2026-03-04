@@ -31,7 +31,7 @@ fn default_sandbox_no_network() -> bool {
 }
 
 fn default_sandbox_require_runtime() -> bool {
-    false
+    true
 }
 
 fn default_sandbox_mount_allowlist_path() -> Option<String> {

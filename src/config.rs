@@ -1481,6 +1481,7 @@ voice_transcription_command: "whisper-mlx --file {file}"
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(matches!(config.sandbox.mode, SandboxMode::Off));
         assert!(matches!(config.sandbox.backend, SandboxBackend::Auto));
+        assert!(config.sandbox.require_runtime);
         assert_eq!(config.sandbox.image, "ubuntu:25.10");
     }
 
