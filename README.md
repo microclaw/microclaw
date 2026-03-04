@@ -67,6 +67,12 @@ This installer only does one thing:
 - Download and install the matching prebuilt binary from the latest GitHub release
 - It does not fallback to Homebrew/Cargo inside `install.sh` (use separate methods below)
 
+Upgrade in place later:
+
+```sh
+microclaw upgrade
+```
+
 ### Preflight diagnostics
 
 Run cross-platform diagnostics before first start (or when troubleshooting):

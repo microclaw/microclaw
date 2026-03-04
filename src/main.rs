@@ -7,6 +7,7 @@ use microclaw::{
     builtin_skills, db, doctor, gateway, hooks, logging, mcp, memory, runtime, setup, skills,
 };
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use tracing::info;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -65,6 +66,8 @@ enum MainCommand {
     Web(WebCommand),
     /// Re-embed active memories (requires `sqlite-vec` feature)
     Reembed,
+    /// Upgrade MicroClaw to latest release
+    Upgrade,
     /// Show version
     Version,
 }
@@ -100,6 +103,49 @@ enum WebAction {
 
 fn print_version() {
     println!("microclaw {VERSION}");
+}
+
+fn handle_upgrade_cli() -> anyhow::Result<()> {
+    let repo = std::env::var("MICROCLAW_REPO").unwrap_or_else(|_| "microclaw/microclaw".into());
+    println!("Current version: {VERSION}");
+    println!("Upgrading from latest release of {repo}...");
+
+    let status = match std::env::consts::OS {
+        "windows" => {
+            let script_url = format!("https://raw.githubusercontent.com/{repo}/main/install.ps1");
+            ProcessCommand::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    &format!("iwr '{}' -UseBasicParsing | iex", script_url),
+                ])
+                .status()
+                .map_err(|e| anyhow::anyhow!("failed to run powershell installer: {e}"))?
+        }
+        _ => {
+            let script_url = format!("https://raw.githubusercontent.com/{repo}/main/install.sh");
+            let cmd = format!(
+                "(curl -fsSL '{url}' || wget -qO- '{url}') | bash",
+                url = script_url
+            );
+            ProcessCommand::new("sh")
+                .args(["-c", &cmd])
+                .status()
+                .map_err(|e| anyhow::anyhow!("failed to run shell installer: {e}"))?
+        }
+    };
+
+    if !status.success() {
+        anyhow::bail!(
+            "upgrade failed (exit code {:?}). You can retry with install script:\n  macOS/Linux: curl -fsSL https://microclaw.ai/install.sh | bash\n  Windows: iwr https://microclaw.ai/install.ps1 -UseBasicParsing | iex",
+            status.code()
+        );
+    }
+
+    println!("Upgrade completed. Re-run `microclaw version` to verify.");
+    Ok(())
 }
 
 fn print_web_help() {
@@ -448,6 +494,10 @@ async fn main() -> anyhow::Result<()> {
         Some(MainCommand::Reembed) => {
             return reembed_memories().await;
         }
+        Some(MainCommand::Upgrade) => {
+            handle_upgrade_cli()?;
+            return Ok(());
+        }
         Some(MainCommand::Version) => {
             print_version();
             return Ok(());
@@ -535,7 +585,8 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::migrate_legacy_runtime_layout;
+    use super::{migrate_legacy_runtime_layout, Cli, MainCommand};
+    use clap::Parser;
     use microclaw::config::Config;
     use std::path::Path;
 
@@ -647,5 +698,11 @@ mod tests {
 
         assert_eq!(runtime_config.skills_data_dir(), resolved_skills_dir);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cli_parses_upgrade_command() {
+        let cli = Cli::parse_from(["microclaw", "upgrade"]);
+        assert!(matches!(cli.command, Some(MainCommand::Upgrade)));
     }
 }

@@ -64,6 +64,12 @@ iwr https://microclaw.ai/install.ps1 -UseBasicParsing | iex
 - 从最新 GitHub Release 下载匹配平台的预编译二进制
 - 不在 `install.sh` 内回退到 Homebrew/Cargo（请使用下面的独立方式）
 
+后续可直接原地升级：
+
+```sh
+microclaw upgrade
+```
+
 ### 预检诊断（doctor）
 
 在首次启动或排障时，先运行跨平台诊断：
