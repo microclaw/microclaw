@@ -551,9 +551,24 @@ fn resolve_openai_models_url(profile: &ResolvedLlmProviderProfile) -> String {
     let backend = profile.provider.trim().to_ascii_lowercase();
     let default_base = match backend.as_str() {
         "openai" => "https://api.openai.com/v1",
+        "openrouter" => "https://openrouter.ai/api/v1",
+        "ollama" => "http://127.0.0.1:11434/v1",
+        "google" => "https://generativelanguage.googleapis.com/v1beta/openai",
+        "alibaba" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "deepseek" => "https://api.deepseek.com/v1",
         "synthetic" => "https://api.synthetic.new/openai/v1",
         "chutes" => "https://llm.chutes.ai/v1",
+        "moonshot" => "https://api.moonshot.cn/v1",
+        "mistral" => "https://api.mistral.ai/v1",
+        "azure" => "https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT",
+        "bedrock" => "https://bedrock-runtime.YOUR-REGION.amazonaws.com/openai/v1",
+        "zhipu" => "https://open.bigmodel.cn/api/paas/v4",
+        "minimax" => "https://api.minimax.io/v1",
+        "cohere" => "https://api.cohere.ai/compatibility/v1",
+        "tencent" => "https://api.hunyuan.cloud.tencent.com/v1",
+        "xai" => "https://api.x.ai/v1",
+        "huggingface" => "https://router.huggingface.co/v1",
+        "together" => "https://api.together.xyz/v1",
         _ => "https://api.openai.com/v1",
     };
     let base = profile
@@ -1024,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_openai_models_url_supports_synthetic_and_chutes_defaults() {
+    fn resolve_openai_models_url_supports_provider_defaults() {
         let mk = |provider: &str| ResolvedLlmProviderProfile {
             alias: provider.to_string(),
             provider: provider.to_string(),
@@ -1040,6 +1055,10 @@ mod tests {
         assert_eq!(
             resolve_openai_models_url(&mk("chutes")),
             "https://llm.chutes.ai/v1/models"
+        );
+        assert_eq!(
+            resolve_openai_models_url(&mk("google")),
+            "https://generativelanguage.googleapis.com/v1beta/openai/models"
         );
     }
 }

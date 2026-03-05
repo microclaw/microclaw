@@ -795,6 +795,31 @@ pub struct OpenAiProvider {
     responses_url: String,
 }
 
+fn openai_compat_default_base(provider: &str) -> &'static str {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "openai" => "https://api.openai.com/v1",
+        "openrouter" => "https://openrouter.ai/api/v1",
+        "ollama" => "http://127.0.0.1:11434/v1",
+        "google" => "https://generativelanguage.googleapis.com/v1beta/openai",
+        "alibaba" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "deepseek" => "https://api.deepseek.com/v1",
+        "synthetic" => "https://api.synthetic.new/openai/v1",
+        "chutes" => "https://llm.chutes.ai/v1",
+        "moonshot" => "https://api.moonshot.cn/v1",
+        "mistral" => "https://api.mistral.ai/v1",
+        "azure" => "https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT",
+        "bedrock" => "https://bedrock-runtime.YOUR-REGION.amazonaws.com/openai/v1",
+        "zhipu" => "https://open.bigmodel.cn/api/paas/v4",
+        "minimax" => "https://api.minimax.io/v1",
+        "cohere" => "https://api.cohere.ai/compatibility/v1",
+        "tencent" => "https://api.hunyuan.cloud.tencent.com/v1",
+        "xai" => "https://api.x.ai/v1",
+        "huggingface" => "https://router.huggingface.co/v1",
+        "together" => "https://api.together.xyz/v1",
+        _ => "https://api.openai.com/v1",
+    }
+}
+
 fn resolve_openai_compat_base(provider: &str, configured_base: &str) -> String {
     let trimmed = configured_base.trim().trim_end_matches('/').to_string();
     if is_openai_codex_provider(provider) {
@@ -805,7 +830,7 @@ fn resolve_openai_compat_base(provider: &str, configured_base: &str) -> String {
     }
 
     if trimmed.is_empty() {
-        "https://api.openai.com/v1".to_string()
+        openai_compat_default_base(provider).to_string()
     } else {
         trimmed
     }
@@ -3011,6 +3036,21 @@ mod tests {
     fn test_resolve_openai_compat_base_defaults_openai() {
         let base = resolve_openai_compat_base("openai", "");
         assert_eq!(base, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_resolve_openai_compat_base_defaults_google_provider() {
+        let base = resolve_openai_compat_base("google", "");
+        assert_eq!(
+            base,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+    }
+
+    #[test]
+    fn test_resolve_openai_compat_base_keeps_configured_custom_base_with_path() {
+        let base = resolve_openai_compat_base("openai", "https://integrate.api.nvidia.com/v1/");
+        assert_eq!(base, "https://integrate.api.nvidia.com/v1");
     }
 
     #[test]
