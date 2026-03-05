@@ -1006,7 +1006,7 @@ fn check_docker_runtime(report: &mut DoctorReport) {
         .map(|c| c.sandbox.backend)
         .unwrap_or(SandboxBackend::Auto);
     let expected_clis: &[&str] = match backend {
-        SandboxBackend::Auto => &["docker", "podman"],
+        SandboxBackend::Auto => &["docker"],
         SandboxBackend::Docker => &["docker"],
         SandboxBackend::Podman => &["podman"],
     };

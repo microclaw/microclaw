@@ -223,15 +223,7 @@ fn pick_runtime(
     podman_available: bool,
 ) -> Option<ContainerRuntime> {
     match backend {
-        SandboxBackend::Auto => {
-            if docker_available {
-                Some(ContainerRuntime::Docker)
-            } else if podman_available {
-                Some(ContainerRuntime::Podman)
-            } else {
-                None
-            }
-        }
+        SandboxBackend::Auto => docker_available.then_some(ContainerRuntime::Docker),
         SandboxBackend::Docker => docker_available.then_some(ContainerRuntime::Docker),
         SandboxBackend::Podman => podman_available.then_some(ContainerRuntime::Podman),
     }
@@ -739,10 +731,7 @@ mod tests {
             pick_runtime(SandboxBackend::Auto, true, true),
             Some(ContainerRuntime::Docker)
         );
-        assert_eq!(
-            pick_runtime(SandboxBackend::Auto, false, true),
-            Some(ContainerRuntime::Podman)
-        );
+        assert_eq!(pick_runtime(SandboxBackend::Auto, false, true), None);
         assert_eq!(pick_runtime(SandboxBackend::Auto, false, false), None);
         assert_eq!(
             pick_runtime(SandboxBackend::Docker, true, false),

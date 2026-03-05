@@ -37,7 +37,8 @@ This branch already changes `require_runtime` default to `true`, aligning behavi
 
 1. Added Podman support in sandbox runtime resolution:
 - `SandboxBackend` now supports `podman`.
-- `auto` now resolves runtime in order: `docker` then `podman`.
+- Podman is used only when explicitly configured (`backend: podman`).
+- `auto` remains Docker-first and Docker-only for backward compatibility.
 
 2. Unified runtime checks:
 - Added backend-aware runtime selection/availability helpers in `microclaw-tools::sandbox`.
