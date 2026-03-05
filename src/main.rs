@@ -464,7 +464,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("Sandbox enabled in {path}");
                 if !setup_args.yes && !setup_args.quiet {
                     println!(
-                        "Tip: run `microclaw doctor sandbox` to verify docker runtime and image readiness."
+                        "Tip: run `microclaw doctor sandbox` to verify container runtime and image readiness."
                     );
                 }
             } else {

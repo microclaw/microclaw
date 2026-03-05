@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
-use crate::config::Config;
-use crate::config::SandboxMode;
+use crate::config::{Config, SandboxBackend, SandboxMode};
 use crate::mcp::McpConfig;
+use microclaw_tools::sandbox::{runtime_available_for_backend, selected_runtime_cli};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1002,63 +1002,85 @@ fn check_sandbox_config(report: &mut DoctorReport) {
 }
 
 fn check_docker_runtime(report: &mut DoctorReport) {
-    if !command_exists("docker") {
+    let backend = Config::load()
+        .map(|c| c.sandbox.backend)
+        .unwrap_or(SandboxBackend::Auto);
+    let expected_clis: &[&str] = match backend {
+        SandboxBackend::Auto => &["docker", "podman"],
+        SandboxBackend::Docker => &["docker"],
+        SandboxBackend::Podman => &["podman"],
+    };
+    let found_clis = expected_clis
+        .iter()
+        .copied()
+        .filter(|cli| command_exists(cli))
+        .collect::<Vec<_>>();
+    if found_clis.is_empty() {
         report.push(
-            "sandbox.docker_cli",
-            "Docker CLI",
+            "sandbox.container_cli",
+            "Container runtime CLI",
             CheckStatus::Fail,
-            "docker command not found".to_string(),
-            Some(
-                "Install Docker Desktop or docker engine and ensure `docker` is in PATH."
-                    .to_string(),
+            format!(
+                "no supported runtime CLI found in PATH (tried: {})",
+                expected_clis.join(", ")
             ),
+            Some("Install Docker or Podman, and ensure the CLI is in PATH.".to_string()),
         );
         return;
     }
     report.push(
-        "sandbox.docker_cli",
-        "Docker CLI",
+        "sandbox.container_cli",
+        "Container runtime CLI",
         CheckStatus::Pass,
-        "docker command found".to_string(),
+        format!("found: {}", found_clis.join(", ")),
         None,
     );
-    let output = std::process::Command::new("docker")
+    if !runtime_available_for_backend(backend) {
+        report.push(
+            "sandbox.container_runtime",
+            "Container runtime",
+            CheckStatus::Fail,
+            format!(
+                "runtime unavailable for backend {:?} (found cli: {})",
+                backend,
+                found_clis.join(", ")
+            ),
+            Some(
+                "Start container runtime daemon/service and verify local permissions.".to_string(),
+            ),
+        );
+        return;
+    }
+
+    let cli = selected_runtime_cli(backend).unwrap_or(found_clis[0]);
+    let output = std::process::Command::new(cli)
         .args(["info", "--format", "{{.ServerVersion}}"])
         .output();
     match output {
         Ok(out) if out.status.success() => {
             let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
             report.push(
-                "sandbox.docker_runtime",
-                "Docker runtime",
+                "sandbox.container_runtime",
+                "Container runtime",
                 CheckStatus::Pass,
-                format!("running (server={version})"),
+                format!("running via {cli} (server={version})"),
                 None,
             );
         }
-        Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            report.push(
-                "sandbox.docker_runtime",
-                "Docker runtime",
-                CheckStatus::Fail,
-                if err.is_empty() {
-                    "docker info failed".to_string()
-                } else {
-                    format!("docker info failed: {err}")
-                },
-                Some("Start Docker runtime and verify local permissions.".to_string()),
-            );
-        }
-        Err(err) => {
-            report.push(
-                "sandbox.docker_runtime",
-                "Docker runtime",
-                CheckStatus::Fail,
-                format!("docker info failed: {err}"),
-                Some("Start Docker runtime and verify local permissions.".to_string()),
-            );
-        }
+        Ok(_) => report.push(
+            "sandbox.container_runtime",
+            "Container runtime",
+            CheckStatus::Pass,
+            format!("running via {cli}"),
+            None,
+        ),
+        Err(err) => report.push(
+            "sandbox.container_runtime",
+            "Container runtime",
+            CheckStatus::Pass,
+            format!("running via {cli} (version probe skipped: {err})"),
+            None,
+        ),
     }
 }
 
@@ -1078,17 +1100,18 @@ fn check_sandbox_image(report: &mut DoctorReport) {
         );
         return;
     }
-    if !command_exists("docker") {
+    let backend = config.sandbox.backend;
+    let Some(cli) = selected_runtime_cli(backend) else {
         report.push(
             "sandbox.image",
             "Sandbox image",
             CheckStatus::Warn,
-            format!("image={image} (docker unavailable, skipped image check)"),
-            Some("Install/start Docker, then run `docker pull {image}`.".to_string()),
+            format!("image={image} (container runtime unavailable, skipped image check)"),
+            Some("Install/start Docker or Podman, then pull the configured image.".to_string()),
         );
         return;
-    }
-    let output = std::process::Command::new("docker")
+    };
+    let output = std::process::Command::new(cli)
         .args(["image", "inspect", image])
         .output();
     match output {
@@ -1104,14 +1127,14 @@ fn check_sandbox_image(report: &mut DoctorReport) {
             "Sandbox image",
             CheckStatus::Warn,
             format!("{image} is not present locally"),
-            Some(format!("Pull image: `docker pull {image}`")),
+            Some(format!("Pull image: `{cli} pull {image}`")),
         ),
         Err(err) => report.push(
             "sandbox.image",
             "Sandbox image",
             CheckStatus::Warn,
             format!("failed to check image '{image}': {err}"),
-            Some(format!("Pull image manually: `docker pull {image}`")),
+            Some(format!("Pull image manually: `{cli} pull {image}`")),
         ),
     }
 }

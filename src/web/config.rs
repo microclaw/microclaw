@@ -1,5 +1,6 @@
 use super::*;
 use microclaw_tools::runtime::{tool_execution_policy, tool_risk};
+use microclaw_tools::sandbox::{runtime_available_for_backend, selected_runtime_cli};
 
 fn effective_data_root_dir(config: &crate::config::Config) -> std::path::PathBuf {
     let data_dir = std::path::PathBuf::from(&config.data_dir);
@@ -139,7 +140,9 @@ pub(super) async fn api_config_self_check(
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let sandbox_runtime_available = docker_runtime_available();
+    let sandbox_runtime_available =
+        runtime_available_for_backend(state.app_state.config.sandbox.backend);
+    let sandbox_runtime_cli = selected_runtime_cli(state.app_state.config.sandbox.backend);
     let sandbox_mode = match state.app_state.config.sandbox.mode {
         crate::config::SandboxMode::All => "all",
         crate::config::SandboxMode::Off => "off",
@@ -223,7 +226,7 @@ pub(super) async fn api_config_self_check(
                 "medium"
             },
             message:
-                "Sandbox is enabled but docker runtime is unavailable; execution may fall back to host."
+                "Sandbox is enabled but container runtime is unavailable; execution may fall back to host."
                     .to_string(),
         });
     }
@@ -460,6 +463,7 @@ pub(super) async fn api_config_self_check(
         "security_posture": {
             "sandbox_mode": sandbox_mode,
             "sandbox_runtime_available": sandbox_runtime_available,
+            "sandbox_runtime_cli": sandbox_runtime_cli,
             "sandbox_backend": format!("{:?}", state.app_state.config.sandbox.backend).to_lowercase(),
             "sandbox_require_runtime": state.app_state.config.sandbox.require_runtime,
             "execution_policies": execution_policy_items,
@@ -469,15 +473,6 @@ pub(super) async fn api_config_self_check(
         "warning_count": warnings.len(),
         "warnings": warnings
     })))
-}
-
-fn docker_runtime_available() -> bool {
-    std::process::Command::new("docker")
-        .args(["info", "--format", "{{.ServerVersion}}"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
 }
 
 fn default_mount_allowlist_path() -> Option<std::path::PathBuf> {

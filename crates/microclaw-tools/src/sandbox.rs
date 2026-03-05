@@ -58,6 +58,7 @@ pub enum SandboxMode {
 pub enum SandboxBackend {
     Auto,
     Docker,
+    Podman,
 }
 
 /// Container security profile controlling Linux capabilities and privilege escalation.
@@ -194,15 +195,80 @@ pub struct ExtraMount {
     pub read_only: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContainerRuntime {
+    Docker,
+    Podman,
+}
+
+impl ContainerRuntime {
+    fn cli(self) -> &'static str {
+        match self {
+            ContainerRuntime::Docker => "docker",
+            ContainerRuntime::Podman => "podman",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            ContainerRuntime::Docker => "docker",
+            ContainerRuntime::Podman => "podman",
+        }
+    }
+}
+
+fn pick_runtime(
+    backend: SandboxBackend,
+    docker_available: bool,
+    podman_available: bool,
+) -> Option<ContainerRuntime> {
+    match backend {
+        SandboxBackend::Auto => {
+            if docker_available {
+                Some(ContainerRuntime::Docker)
+            } else if podman_available {
+                Some(ContainerRuntime::Podman)
+            } else {
+                None
+            }
+        }
+        SandboxBackend::Docker => docker_available.then_some(ContainerRuntime::Docker),
+        SandboxBackend::Podman => podman_available.then_some(ContainerRuntime::Podman),
+    }
+}
+
+fn resolve_runtime(backend: SandboxBackend) -> Option<ContainerRuntime> {
+    pick_runtime(
+        backend,
+        runtime_available("docker"),
+        runtime_available("podman"),
+    )
+}
+
+pub fn runtime_available_for_backend(backend: SandboxBackend) -> bool {
+    resolve_runtime(backend).is_some()
+}
+
+pub fn selected_runtime_cli(backend: SandboxBackend) -> Option<&'static str> {
+    resolve_runtime(backend).map(ContainerRuntime::cli)
+}
+
 pub struct DockerSandbox {
+    runtime: ContainerRuntime,
     config: SandboxConfig,
     mount_dir: PathBuf,
     extra_mounts: Vec<ExtraMount>,
 }
 
 impl DockerSandbox {
-    pub fn new(config: SandboxConfig, mount_dir: PathBuf, extra_mounts: Vec<ExtraMount>) -> Self {
+    fn new(
+        runtime: ContainerRuntime,
+        config: SandboxConfig,
+        mount_dir: PathBuf,
+        extra_mounts: Vec<ExtraMount>,
+    ) -> Self {
         Self {
+            runtime,
             config,
             mount_dir,
             extra_mounts,
@@ -261,12 +327,12 @@ impl DockerSandbox {
 #[async_trait]
 impl Sandbox for DockerSandbox {
     fn backend_name(&self) -> &'static str {
-        "docker"
+        self.runtime.label()
     }
 
     async fn ensure_ready(&self, session_key: &str) -> Result<()> {
         let name = self.container_name(session_key);
-        let inspect = tokio::process::Command::new("docker")
+        let inspect = tokio::process::Command::new(self.runtime.cli())
             .args(["inspect", "--format", "{{.State.Running}}", &name])
             .output()
             .await;
@@ -298,14 +364,14 @@ impl Sandbox for DockerSandbox {
         args.push(self.config.image.clone());
         args.extend(["sleep".to_string(), "infinity".to_string()]);
 
-        let out = tokio::process::Command::new("docker")
+        let out = tokio::process::Command::new(self.runtime.cli())
             .args(&args)
             .output()
             .await
-            .context("failed to run docker")?;
+            .with_context(|| format!("failed to run {}", self.runtime.cli()))?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            bail!("docker run failed: {}", stderr.trim());
+            bail!("{} run failed: {}", self.runtime.cli(), stderr.trim());
         }
         Ok(())
     }
@@ -330,22 +396,23 @@ impl Sandbox for DockerSandbox {
         }
         args.push(name);
         args.extend(["sh".to_string(), "-c".to_string(), command.to_string()]);
-        let child = tokio::process::Command::new("docker")
+        let child = tokio::process::Command::new(self.runtime.cli())
             .args(&args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::null())
             .spawn()
-            .context("failed to spawn docker exec")?;
+            .with_context(|| format!("failed to spawn {} exec", self.runtime.cli()))?;
         match tokio::time::timeout(opts.timeout, child.wait_with_output()).await {
             Ok(Ok(output)) => Ok(SandboxExecResult {
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                 exit_code: output.status.code().unwrap_or(-1),
             }),
-            Ok(Err(e)) => bail!("docker exec failed: {e}"),
+            Ok(Err(e)) => bail!("{} exec failed: {e}", self.runtime.cli()),
             Err(_) => bail!(
-                "docker exec timed out after {} seconds",
+                "{} exec timed out after {} seconds",
+                self.runtime.cli(),
                 opts.timeout.as_secs()
             ),
         }
@@ -361,14 +428,14 @@ pub struct SandboxRouter {
 impl SandboxRouter {
     pub fn new(config: SandboxConfig, working_dir: &Path, extra_mounts: Vec<ExtraMount>) -> Self {
         let mount_dir = resolve_mount_dir(working_dir, &config);
-        let backend: Arc<dyn Sandbox> = match config.backend {
-            SandboxBackend::Auto | SandboxBackend::Docker => {
-                if docker_available() {
-                    Arc::new(DockerSandbox::new(config.clone(), mount_dir, extra_mounts))
-                } else {
-                    Arc::new(NoSandbox)
-                }
-            }
+        let backend: Arc<dyn Sandbox> = match resolve_runtime(config.backend) {
+            Some(runtime) => Arc::new(DockerSandbox::new(
+                runtime,
+                config.clone(),
+                mount_dir,
+                extra_mounts,
+            )),
+            None => Arc::new(NoSandbox),
         };
         Self {
             config,
@@ -409,10 +476,12 @@ impl SandboxRouter {
         }
         if !self.backend.is_real() {
             if self.config.require_runtime {
-                bail!("sandbox is enabled but no docker runtime is available");
+                bail!("sandbox is enabled but no container runtime is available");
             }
             if !self.warned_missing_runtime.swap(true, Ordering::Relaxed) {
-                tracing::warn!("sandbox enabled but docker unavailable, falling back to host");
+                tracing::warn!(
+                    "sandbox enabled but no container runtime available, falling back to host"
+                );
             }
             return exec_host_command(command, opts).await;
         }
@@ -452,9 +521,9 @@ pub async fn exec_host_command(
     }
 }
 
-fn docker_available() -> bool {
-    std::process::Command::new("docker")
-        .args(["info", "--format", "{{.ServerVersion}}"])
+fn runtime_available(cli: &str) -> bool {
+    std::process::Command::new(cli)
+        .arg("info")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -619,7 +688,7 @@ mod tests {
     fn test_router_default_backend_name() {
         let router = SandboxRouter::new(SandboxConfig::default(), Path::new("./tmp"), vec![]);
         let name = router.backend_name();
-        assert!(name == "docker" || name == "none");
+        assert!(name == "docker" || name == "podman" || name == "none");
     }
 
     #[tokio::test]
@@ -661,6 +730,29 @@ mod tests {
         let err = router.exec("chat-1", "echo hi", &opts).await.unwrap_err();
         assert!(err
             .to_string()
-            .contains("sandbox is enabled but no docker runtime is available"));
+            .contains("sandbox is enabled but no container runtime is available"));
+    }
+
+    #[test]
+    fn test_pick_runtime_matrix() {
+        assert_eq!(
+            pick_runtime(SandboxBackend::Auto, true, true),
+            Some(ContainerRuntime::Docker)
+        );
+        assert_eq!(
+            pick_runtime(SandboxBackend::Auto, false, true),
+            Some(ContainerRuntime::Podman)
+        );
+        assert_eq!(pick_runtime(SandboxBackend::Auto, false, false), None);
+        assert_eq!(
+            pick_runtime(SandboxBackend::Docker, true, false),
+            Some(ContainerRuntime::Docker)
+        );
+        assert_eq!(pick_runtime(SandboxBackend::Docker, false, true), None);
+        assert_eq!(
+            pick_runtime(SandboxBackend::Podman, false, true),
+            Some(ContainerRuntime::Podman)
+        );
+        assert_eq!(pick_runtime(SandboxBackend::Podman, true, false), None);
     }
 }
