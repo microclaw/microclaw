@@ -1017,8 +1017,8 @@ fn check_docker_runtime(report: &mut DoctorReport) {
         .collect::<Vec<_>>();
     if found_clis.is_empty() {
         report.push(
-            "sandbox.container_cli",
-            "Container runtime CLI",
+            "sandbox.docker_cli",
+            "Docker CLI",
             CheckStatus::Fail,
             format!(
                 "no supported runtime CLI found in PATH (tried: {})",
@@ -1029,16 +1029,16 @@ fn check_docker_runtime(report: &mut DoctorReport) {
         return;
     }
     report.push(
-        "sandbox.container_cli",
-        "Container runtime CLI",
+        "sandbox.docker_cli",
+        "Docker CLI",
         CheckStatus::Pass,
         format!("found: {}", found_clis.join(", ")),
         None,
     );
     if !runtime_available_for_backend(backend) {
         report.push(
-            "sandbox.container_runtime",
-            "Container runtime",
+            "sandbox.docker_runtime",
+            "Docker runtime",
             CheckStatus::Fail,
             format!(
                 "runtime unavailable for backend {:?} (found cli: {})",
@@ -1060,23 +1060,23 @@ fn check_docker_runtime(report: &mut DoctorReport) {
         Ok(out) if out.status.success() => {
             let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
             report.push(
-                "sandbox.container_runtime",
-                "Container runtime",
+                "sandbox.docker_runtime",
+                "Docker runtime",
                 CheckStatus::Pass,
                 format!("running via {cli} (server={version})"),
                 None,
             );
         }
         Ok(_) => report.push(
-            "sandbox.container_runtime",
-            "Container runtime",
+            "sandbox.docker_runtime",
+            "Docker runtime",
             CheckStatus::Pass,
             format!("running via {cli}"),
             None,
         ),
         Err(err) => report.push(
-            "sandbox.container_runtime",
-            "Container runtime",
+            "sandbox.docker_runtime",
+            "Docker runtime",
             CheckStatus::Pass,
             format!("running via {cli} (version probe skipped: {err})"),
             None,
