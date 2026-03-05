@@ -9,7 +9,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{error, info, warn};
 
-const DEFAULT_PROTOCOL_VERSION: &str = "2025-11-05";
+const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
 const DEFAULT_MAX_RETRIES: u32 = 2;
 const DEFAULT_HEALTH_INTERVAL_SECS: u64 = 60;
 const TOOLS_CACHE_TTL_SECS: u64 = 300;
@@ -137,6 +137,7 @@ struct McpHttpInner {
     endpoint: String,
     headers: HashMap<String, String>,
     next_id: u64,
+    session_id: Option<String>,
 }
 
 enum McpTransport {
@@ -386,6 +387,7 @@ impl McpServer {
                         endpoint: config.endpoint.clone(),
                         headers: config.headers.clone(),
                         next_id: 1,
+                        session_id: None,
                     }))),
                     None,
                 )
@@ -722,6 +724,9 @@ impl McpServer {
             .json(&request)
             .header("accept", "application/json, text/event-stream")
             .header("mcp-protocol-version", self.protocol_version());
+        if let Some(ref sid) = inner.session_id {
+            req = req.header("mcp-session-id", sid);
+        }
         for (k, v) in &inner.headers {
             req = req.header(k, v);
         }
@@ -731,9 +736,25 @@ impl McpServer {
             .await
             .map_err(|e| format!("HTTP request failed: {e}"))?;
         let status = response.status();
-        let body: serde_json::Value = response
-            .json()
+        if let Some(sid) = response.headers().get("mcp-session-id") {
+            if let Ok(sid_str) = sid.to_str() {
+                inner.session_id = Some(sid_str.to_string());
+            }
+        }
+        let text = response
+            .text()
             .await
+            .map_err(|e| format!("Failed to read HTTP MCP response body: {e}"))?;
+        tracing::debug!("HTTP MCP raw response ({}): {}", status, text);
+        let json_str = if text.starts_with("data:") || text.contains("\ndata:") {
+            text.lines()
+                .find(|l| l.starts_with("data:"))
+                .map(|l| l["data:".len()..].trim().to_string())
+                .unwrap_or(text)
+        } else {
+            text
+        };
+        let body: serde_json::Value = serde_json::from_str(&json_str)
             .map_err(|e| format!("Failed to parse HTTP MCP response: {e}"))?;
 
         if !status.is_success() {
@@ -843,6 +864,9 @@ impl McpServer {
                     .json(&request)
                     .header("accept", "application/json, text/event-stream")
                     .header("mcp-protocol-version", self.protocol_version());
+                if let Some(ref sid) = inner.session_id {
+                    req = req.header("mcp-session-id", sid);
+                }
                 for (k, v) in &inner.headers {
                     req = req.header(k, v);
                 }
@@ -851,12 +875,15 @@ impl McpServer {
                     .send()
                     .await
                     .map_err(|e| format!("HTTP notification failed: {e}"))?;
-                if response.status().is_success() {
+                let notif_status = response.status();
+                let notif_body = response.text().await.unwrap_or_default();
+                tracing::debug!("HTTP MCP notification response ({}): {}", notif_status, notif_body);
+                if notif_status.is_success() {
                     Ok(())
                 } else {
                     Err(format!(
-                        "HTTP notification failed with status {}",
-                        response.status()
+                        "HTTP notification failed with status {}: {}",
+                        notif_status, notif_body
                     ))
                 }
             }
@@ -1197,7 +1224,7 @@ mod tests {
     #[test]
     fn test_mcp_http_config_parse() {
         let json = r#"{
-          "default_protocol_version": "2025-11-05",
+          "default_protocol_version": "2024-11-05",
           "mcpServers": {
             "remote": {
               "transport": "streamable_http",
@@ -1210,7 +1237,7 @@ mod tests {
         }"#;
 
         let cfg: McpConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.default_protocol_version.unwrap(), "2025-11-05");
+        assert_eq!(cfg.default_protocol_version.unwrap(), "2024-11-05");
         let remote = cfg.mcp_servers.get("remote").unwrap();
         assert_eq!(remote.transport, "streamable_http");
         assert_eq!(remote.endpoint, "http://127.0.0.1:8080/mcp");
@@ -1257,7 +1284,7 @@ mod tests {
         std::fs::write(
             &base,
             r#"{
-              "defaultProtocolVersion": "2025-11-05",
+              "defaultProtocolVersion": "2024-11-05",
               "mcpServers": {
                 "shared": {
                   "transport": "streamable_http",
