@@ -3,14 +3,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use rmcp::ServiceExt;
+use http::{HeaderName, HeaderValue};
 use rmcp::model::{CallToolRequestParams, ClientInfo, ProtocolVersion, RawContent};
-use rmcp::transport::TokioChildProcess;
 use rmcp::transport::child_process::ConfigureCommandExt;
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
 };
-use http::{HeaderName, HeaderValue};
+use rmcp::transport::TokioChildProcess;
+use rmcp::ServiceExt;
 use serde::Deserialize;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
@@ -256,13 +256,11 @@ impl McpServer {
                     ));
                 }
                 let resolved = resolve_command(&config.command);
-                let transport = TokioChildProcess::new(
-                    Command::new(&resolved).configure(|cmd| {
-                        cmd.args(&config.args);
-                        cmd.envs(&config.env);
-                        cmd.stderr(std::process::Stdio::null());
-                    }),
-                )
+                let transport = TokioChildProcess::new(Command::new(&resolved).configure(|cmd| {
+                    cmd.args(&config.args);
+                    cmd.envs(&config.env);
+                    cmd.stderr(std::process::Stdio::null());
+                }))
                 .map_err(|e| format!("Failed to spawn MCP server '{name}': {e}"))?;
 
                 let running = client_info.clone().serve(transport).await.map_err(|e| {
@@ -280,16 +278,19 @@ impl McpServer {
                 for (k, v) in &config.headers {
                     let header_name = HeaderName::from_bytes(k.as_bytes())
                         .map_err(|e| format!("Invalid header name '{k}' for MCP '{name}': {e}"))?;
-                    let header_value = HeaderValue::from_str(v)
-                        .map_err(|e| format!("Invalid header value for '{k}' in MCP '{name}': {e}"))?;
+                    let header_value = HeaderValue::from_str(v).map_err(|e| {
+                        format!("Invalid header value for '{k}' in MCP '{name}': {e}")
+                    })?;
                     custom_headers.insert(header_name, header_value);
                 }
-                let http_config = StreamableHttpClientTransportConfig::with_uri(config.endpoint.as_str())
-                    .custom_headers(custom_headers);
+                let http_config =
+                    StreamableHttpClientTransportConfig::with_uri(config.endpoint.as_str())
+                        .custom_headers(custom_headers);
                 let transport = StreamableHttpClientTransport::from_config(http_config);
-                let running = client_info.clone().serve(transport).await.map_err(|e| {
-                    format!("Failed to initialize MCP server '{name}' (http): {e}")
-                })?;
+                let running =
+                    client_info.clone().serve(transport).await.map_err(|e| {
+                        format!("Failed to initialize MCP server '{name}' (http): {e}")
+                    })?;
                 McpPeer::Http(running)
             }
             other => {
@@ -382,10 +383,7 @@ impl McpServer {
     }
 
     async fn list_tools_uncached(&self) -> Result<Vec<McpToolInfo>, String> {
-        let rmcp_tools = self
-            .peer
-            .peer()
-            .list_all_tools();
+        let rmcp_tools = self.peer.peer().list_all_tools();
         let rmcp_tools = tokio::time::timeout(self.request_timeout, rmcp_tools)
             .await
             .map_err(|_| {
@@ -399,17 +397,12 @@ impl McpServer {
         let tools = rmcp_tools
             .into_iter()
             .map(|t| {
-                let input_schema =
-                    serde_json::to_value(&*t.input_schema).unwrap_or_else(|_| {
-                        serde_json::json!({"type": "object", "properties": {}})
-                    });
+                let input_schema = serde_json::to_value(&*t.input_schema)
+                    .unwrap_or_else(|_| serde_json::json!({"type": "object", "properties": {}}));
                 McpToolInfo {
                     server_name: self.name.clone(),
                     name: t.name.into_owned(),
-                    description: t
-                        .description
-                        .map(|d| d.into_owned())
-                        .unwrap_or_default(),
+                    description: t.description.map(|d| d.into_owned()).unwrap_or_default(),
                     input_schema,
                 }
             })
@@ -453,17 +446,11 @@ impl McpServer {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<String, String> {
-        let args_map = arguments
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let args_map = arguments.as_object().cloned().unwrap_or_default();
 
         let params = CallToolRequestParams::new(tool_name.to_string()).with_arguments(args_map);
 
-        let result = self
-            .peer
-            .peer()
-            .call_tool(params);
+        let result = self.peer.peer().call_tool(params);
         let result = tokio::time::timeout(self.request_timeout, result)
             .await
             .map_err(|_| {

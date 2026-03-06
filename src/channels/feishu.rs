@@ -1030,6 +1030,113 @@ async fn reply_feishu_thread(
         .ok_or_else(|| "Feishu reply_thread: missing message_id".into())
 }
 
+fn looks_like_feishu_reaction_token(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+    if trimmed.len() > 24 {
+        return None;
+    }
+    if trimmed.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn map_feishu_reaction_emoji_type(token: &str) -> Option<&'static str> {
+    match token.trim() {
+        "👍" | ":+1:" | "点赞" | "like" | "thumbsup" => Some("THUMBSUP"),
+        "👎" | ":-1:" | "点踩" | "thumbsdown" => Some("THUMBSDOWN"),
+        "👏" | ":clap:" => Some("CLAP"),
+        "🙏" | ":pray:" => Some("THANKS"),
+        "❤️" | "❤" | ":heart:" => Some("HEART"),
+        "🔥" | ":fire:" => Some("FIRE"),
+        "🎉" | ":tada:" => Some("PARTY"),
+        "😄" | "😀" | "🙂" | "😊" | ":smile:" => Some("SMILE"),
+        "😂" | "🤣" | ":joy:" => Some("LAUGH"),
+        "😭" | "😢" | ":sob:" => Some("SOB"),
+        "😡" | "😠" | ":rage:" => Some("RAGE"),
+        _ => None,
+    }
+}
+
+async fn send_feishu_reaction(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    message_id: &str,
+    emoji_type: &str,
+) -> Result<(), String> {
+    let url = format!("{base_url}/open-apis/im/v1/messages/{message_id}/reactions");
+    let body = serde_json::json!({
+        "reaction_type": {
+            "emoji_type": emoji_type,
+        }
+    });
+
+    let resp = http_client
+        .post(&url)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Feishu send_reaction failed: {e}"))?;
+
+    let resp_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Feishu send_reaction parse failed: {e}"))?;
+    let code = resp_json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+    if code != 0 {
+        let msg = resp_json
+            .get("msg")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("Feishu send_reaction error: code={code} msg={msg}"));
+    }
+    Ok(())
+}
+
+async fn maybe_send_feishu_reaction_from_response(
+    app_state: &Arc<AppState>,
+    http_client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    response: &str,
+    message_id: &str,
+    chat_id: i64,
+    bot_username: &str,
+) -> bool {
+    let Some(reaction_token) = looks_like_feishu_reaction_token(response) else {
+        return false;
+    };
+    if message_id.trim().is_empty() {
+        return false;
+    }
+    let Some(emoji_type) = map_feishu_reaction_emoji_type(&reaction_token) else {
+        return false;
+    };
+
+    if let Err(e) = send_feishu_reaction(http_client, base_url, token, message_id, emoji_type).await
+    {
+        warn!("Feishu: failed to send reaction '{reaction_token}': {e}");
+        return false;
+    }
+
+    let bot_msg = StoredMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id,
+        sender_name: bot_username.to_string(),
+        content: format!("[reaction] {}", reaction_token),
+        is_from_bot: true,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+    true
+}
+
 async fn update_feishu_message(
     http_client: &reqwest::Client,
     base_url: &str,
@@ -2295,6 +2402,21 @@ async fn handle_feishu_message(
                         );
                     }
                 } else if !response.is_empty() {
+                    if maybe_send_feishu_reaction_from_response(
+                        &app_state,
+                        &http_client,
+                        base_url,
+                        &token,
+                        &response,
+                        message_id,
+                        chat_id,
+                        &runtime.bot_username,
+                    )
+                    .await
+                    {
+                        return;
+                    }
+
                     if let Err(e) = send_feishu_response(
                         &http_client,
                         base_url,
@@ -2407,6 +2529,21 @@ async fn handle_feishu_message(
                         );
                     }
                 } else if !response.is_empty() {
+                    if maybe_send_feishu_reaction_from_response(
+                        &app_state,
+                        &http_client,
+                        base_url,
+                        &token,
+                        &response,
+                        message_id,
+                        chat_id,
+                        &runtime.bot_username,
+                    )
+                    .await
+                    {
+                        return;
+                    }
+
                     if let Err(e) = send_feishu_response(
                         &http_client,
                         base_url,
@@ -2484,7 +2621,10 @@ async fn handle_feishu_message(
 
 #[cfg(test)]
 mod mention_tests {
-    use super::{parse_feishu_mentions, text_has_at_all_marker};
+    use super::{
+        looks_like_feishu_reaction_token, map_feishu_reaction_emoji_type, parse_feishu_mentions,
+        text_has_at_all_marker,
+    };
 
     #[test]
     fn test_parse_feishu_mentions_detects_bot_and_all() {
@@ -2515,6 +2655,24 @@ mod mention_tests {
             r#"{"text":"<at user_id=\"all\">all</at> hello"}"#
         ));
         assert!(!text_has_at_all_marker("hello", r#"{"text":"hello"}"#));
+    }
+
+    #[test]
+    fn test_looks_like_feishu_reaction_token() {
+        assert_eq!(
+            looks_like_feishu_reaction_token("👍"),
+            Some("👍".to_string())
+        );
+        assert_eq!(looks_like_feishu_reaction_token("ok"), None);
+        assert_eq!(looks_like_feishu_reaction_token("hello world"), None);
+    }
+
+    #[test]
+    fn test_map_feishu_reaction_emoji_type() {
+        assert_eq!(map_feishu_reaction_emoji_type("👍"), Some("THUMBSUP"));
+        assert_eq!(map_feishu_reaction_emoji_type("点赞"), Some("THUMBSUP"));
+        assert_eq!(map_feishu_reaction_emoji_type("😂"), Some("LAUGH"));
+        assert_eq!(map_feishu_reaction_emoji_type("unknown"), None);
     }
 }
 
