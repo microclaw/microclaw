@@ -605,6 +605,13 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         models: &["qwen3-max", "qwen3-plus", "qwen-max-latest"],
     },
     ProviderPreset {
+        id: "qwen-code",
+        label: "Qwen Code (DashScope)",
+        protocol: ProviderProtocol::OpenAiCompat,
+        default_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        models: &["qwen3-coder-plus", "qwen3-coder-flash", "qwen3-coder-plus-latest"],
+    },
+    ProviderPreset {
         id: "deepseek",
         label: "DeepSeek",
         protocol: ProviderProtocol::OpenAiCompat,
@@ -6526,8 +6533,9 @@ sandbox:
     }
 
     #[test]
-    fn test_provider_presets_include_synthetic_and_chutes() {
+    fn test_provider_presets_include_synthetic_chutes_and_qwen_code() {
         assert!(find_provider_preset("synthetic").is_some());
         assert!(find_provider_preset("chutes").is_some());
+        assert!(find_provider_preset("qwen-code").is_some());
     }
 }
