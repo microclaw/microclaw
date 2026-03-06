@@ -249,13 +249,15 @@ impl Tool for ScheduleTaskTool {
         let prompt_owned = prompt.to_string();
         let schedule_type_owned = schedule_type.to_string();
         let schedule_value_owned = schedule_value.to_string();
+        let tz_name_owned = tz_name.to_string();
         let next_run_owned = next_run.clone();
         match call_blocking(self.db.clone(), move |db| {
-            db.create_scheduled_task(
+            db.create_scheduled_task_with_timezone(
                 chat_id,
                 &prompt_owned,
                 &schedule_type_owned,
                 &schedule_value_owned,
+                &tz_name_owned,
                 &next_run_owned,
             )
         })
@@ -335,6 +337,11 @@ impl Tool for ListTasksTool {
                 }
                 let mut output = String::new();
                 for t in &tasks {
+                    let tz_label = if t.timezone.trim().is_empty() {
+                        "(default)".to_string()
+                    } else {
+                        t.timezone.clone()
+                    };
                     let cadence = if t.schedule_type == "cron" {
                         cron_human_hint(&t.schedule_value)
                             .map(|s| format!(" | cadence: {s}"))
@@ -343,13 +350,14 @@ impl Tool for ListTasksTool {
                         String::new()
                     };
                     output.push_str(&format!(
-                        "#{} [{}] {} | {} '{}'{} | next: {}\n",
+                        "#{} [{}] {} | {} '{}'{} | tz: {} | next: {}\n",
                         t.id,
                         t.status,
                         t.prompt,
                         t.schedule_type,
                         t.schedule_value,
                         cadence,
+                        tz_label,
                         t.next_run
                     ));
                 }

@@ -53,6 +53,15 @@ pub fn spawn_scheduler(state: Arc<AppState>) {
     });
 }
 
+fn resolve_task_timezone(task_timezone: &str, default_timezone: &str) -> chrono_tz::Tz {
+    if !task_timezone.trim().is_empty() {
+        if let Ok(tz) = task_timezone.parse() {
+            return tz;
+        }
+    }
+    default_timezone.parse().unwrap_or(chrono_tz::Tz::UTC)
+}
+
 async fn run_due_tasks(state: &Arc<AppState>) {
     let now = Utc::now().to_rfc3339();
     let tasks = match call_blocking(state.db.clone(), move |db| db.claim_due_tasks(&now, 200)).await
@@ -184,8 +193,8 @@ async fn run_due_tasks(state: &Arc<AppState>) {
             }
         }
 
-        // Compute next run
-        let tz: chrono_tz::Tz = state.config.timezone.parse().unwrap_or(chrono_tz::Tz::UTC);
+        // Compute next run (prefer task-specific timezone; fallback to app timezone).
+        let tz = resolve_task_timezone(&task.timezone, &state.config.timezone);
         let next_run = if task.schedule_type == "cron" {
             match cron::Schedule::from_str(&task.schedule_value) {
                 Ok(schedule) => schedule
@@ -837,5 +846,17 @@ mod tests {
         assert!(!should_skip_memory_poisoning_risk(
             "Ensure TOOLS.md rules are followed for every tool call"
         ));
+    }
+
+    #[test]
+    fn test_resolve_task_timezone_prefers_task_timezone() {
+        let tz = resolve_task_timezone("Asia/Shanghai", "UTC");
+        assert_eq!(tz, chrono_tz::Tz::Asia__Shanghai);
+    }
+
+    #[test]
+    fn test_resolve_task_timezone_falls_back_to_default_on_invalid_task_timezone() {
+        let tz = resolve_task_timezone("Not/AZone", "US/Eastern");
+        assert_eq!(tz, chrono_tz::Tz::US__Eastern);
     }
 }

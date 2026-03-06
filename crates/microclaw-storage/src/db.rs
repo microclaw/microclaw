@@ -183,7 +183,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 11;
+const SCHEMA_VERSION_CURRENT: i64 = 12;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -193,6 +193,7 @@ pub struct ScheduledTask {
     pub prompt: String,
     pub schedule_type: String,  // "cron" or "once"
     pub schedule_value: String, // cron expression or ISO timestamp
+    pub timezone: String,       // IANA timezone; empty means "use app default"
     pub next_run: String,       // ISO timestamp
     pub last_run: Option<String>,
     pub status: String, // "active", "paused", "completed", "cancelled"
@@ -615,6 +616,16 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         set_schema_version(conn, 11)?;
         version = 11;
     }
+    if version < 12 {
+        if !table_has_column(conn, "scheduled_tasks", "timezone")? {
+            conn.execute(
+                "ALTER TABLE scheduled_tasks ADD COLUMN timezone TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+        set_schema_version(conn, 12)?;
+        version = 12;
+    }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
     }
@@ -672,6 +683,7 @@ impl Database {
                 prompt TEXT NOT NULL,
                 schedule_type TEXT NOT NULL DEFAULT 'cron',
                 schedule_value TEXT NOT NULL,
+                timezone TEXT NOT NULL DEFAULT '',
                 next_run TEXT NOT NULL,
                 last_run TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
@@ -1282,12 +1294,39 @@ impl Database {
         schedule_value: &str,
         next_run: &str,
     ) -> Result<i64, MicroClawError> {
+        self.create_scheduled_task_with_timezone(
+            chat_id,
+            prompt,
+            schedule_type,
+            schedule_value,
+            "",
+            next_run,
+        )
+    }
+
+    pub fn create_scheduled_task_with_timezone(
+        &self,
+        chat_id: i64,
+        prompt: &str,
+        schedule_type: &str,
+        schedule_value: &str,
+        timezone: &str,
+        next_run: &str,
+    ) -> Result<i64, MicroClawError> {
         let conn = self.lock_conn();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO scheduled_tasks (chat_id, prompt, schedule_type, schedule_value, next_run, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6)",
-            params![chat_id, prompt, schedule_type, schedule_value, next_run, now],
+            "INSERT INTO scheduled_tasks (chat_id, prompt, schedule_type, schedule_value, timezone, next_run, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)",
+            params![
+                chat_id,
+                prompt,
+                schedule_type,
+                schedule_value,
+                timezone,
+                next_run,
+                now
+            ],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -1295,7 +1334,7 @@ impl Database {
     pub fn get_due_tasks(&self, now: &str) -> Result<Vec<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at
              FROM scheduled_tasks
              WHERE status = 'active' AND next_run <= ?1",
         )?;
@@ -1307,10 +1346,11 @@ impl Database {
                     prompt: row.get(2)?,
                     schedule_type: row.get(3)?,
                     schedule_value: row.get(4)?,
-                    next_run: row.get(5)?,
-                    last_run: row.get(6)?,
-                    status: row.get(7)?,
-                    created_at: row.get(8)?,
+                    timezone: row.get(5)?,
+                    next_run: row.get(6)?,
+                    last_run: row.get(7)?,
+                    status: row.get(8)?,
+                    created_at: row.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1326,7 +1366,7 @@ impl Database {
         let tx = conn.unchecked_transaction()?;
 
         let mut stmt = tx.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at
              FROM scheduled_tasks
              WHERE status = 'active' AND next_run <= ?1
              ORDER BY next_run ASC, id ASC
@@ -1340,10 +1380,11 @@ impl Database {
                     prompt: row.get(2)?,
                     schedule_type: row.get(3)?,
                     schedule_value: row.get(4)?,
-                    next_run: row.get(5)?,
-                    last_run: row.get(6)?,
-                    status: row.get(7)?,
-                    created_at: row.get(8)?,
+                    timezone: row.get(5)?,
+                    next_run: row.get(6)?,
+                    last_run: row.get(7)?,
+                    status: row.get(8)?,
+                    created_at: row.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1371,7 +1412,7 @@ impl Database {
     pub fn get_tasks_for_chat(&self, chat_id: i64) -> Result<Vec<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND status IN ('active', 'paused')
              ORDER BY id",
@@ -1384,10 +1425,11 @@ impl Database {
                     prompt: row.get(2)?,
                     schedule_type: row.get(3)?,
                     schedule_value: row.get(4)?,
-                    next_run: row.get(5)?,
-                    last_run: row.get(6)?,
-                    status: row.get(7)?,
-                    created_at: row.get(8)?,
+                    timezone: row.get(5)?,
+                    next_run: row.get(6)?,
+                    last_run: row.get(7)?,
+                    status: row.get(8)?,
+                    created_at: row.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1397,7 +1439,7 @@ impl Database {
     pub fn get_task_by_id(&self, task_id: i64) -> Result<Option<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let result = conn.query_row(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at
              FROM scheduled_tasks
              WHERE id = ?1",
             params![task_id],
@@ -1408,10 +1450,11 @@ impl Database {
                     prompt: row.get(2)?,
                     schedule_type: row.get(3)?,
                     schedule_value: row.get(4)?,
-                    next_run: row.get(5)?,
-                    last_run: row.get(6)?,
-                    status: row.get(7)?,
-                    created_at: row.get(8)?,
+                    timezone: row.get(5)?,
+                    next_run: row.get(6)?,
+                    last_run: row.get(7)?,
+                    status: row.get(8)?,
+                    created_at: row.get(9)?,
                 })
             },
         );
@@ -3552,6 +3595,7 @@ mod tests {
         assert!(has_confidence && has_source && has_last_seen && has_archived);
         assert!(table_has_column(&conn, "sessions", "parent_session_key").unwrap());
         assert!(table_has_column(&conn, "sessions", "fork_point").unwrap());
+        assert!(table_has_column(&conn, "scheduled_tasks", "timezone").unwrap());
 
         let session_parent_index_exists: i64 = conn
             .query_row(
@@ -3666,6 +3710,13 @@ mod tests {
                 )
                 .unwrap();
             }
+            if version >= 8 {
+                conn.execute_batch(
+                    "ALTER TABLE api_keys ADD COLUMN expires_at TEXT;
+                     ALTER TABLE api_keys ADD COLUMN rotated_from_key_id INTEGER;",
+                )
+                .unwrap();
+            }
             drop(conn);
         }
 
@@ -3695,6 +3746,7 @@ mod tests {
             );
             assert!(table_has_column(&conn, "sessions", "parent_session_key").unwrap());
             assert!(table_has_column(&conn, "sessions", "fork_point").unwrap());
+            assert!(table_has_column(&conn, "scheduled_tasks", "timezone").unwrap());
             assert!(table_has_column(&conn, "api_keys", "expires_at").unwrap());
             assert!(table_has_column(&conn, "api_keys", "rotated_from_key_id").unwrap());
             assert!(
