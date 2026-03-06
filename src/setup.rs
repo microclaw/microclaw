@@ -768,6 +768,7 @@ fn provider_display(provider: &str) -> String {
 const MODEL_PICKER_MANUAL_INPUT: &str = "<Manual input...>";
 const SOUL_PICKER_CLEAR: &str = "<None>";
 const SOUL_PICKER_MANUAL_INPUT: &str = "<Manual input...>";
+const TIMEZONE_PICKER_SYSTEM_DEFAULT: &str = "<Use system timezone (default)>";
 const TIMEZONE_PICKER_MANUAL_INPUT: &str = "<Custom timezone (type IANA)...>";
 
 #[derive(Clone)]
@@ -1049,12 +1050,12 @@ impl SetupApp {
                     secret: false,
                 },
                 Field {
-                    key: "TIMEZONE".into(),
-                    label: "Timezone (IANA or auto)".into(),
+                    key: "OVERRIDE_TIMEZONE".into(),
+                    label: "Override timezone (optional, IANA)".into(),
                     value: existing
-                        .get("TIMEZONE")
+                        .get("OVERRIDE_TIMEZONE")
                         .cloned()
-                        .unwrap_or_else(|| "auto".into()),
+                        .unwrap_or_default(),
                     required: false,
                     secret: false,
                 },
@@ -1919,7 +1920,10 @@ impl SetupApp {
                         map.insert("LLM_BASE_URL".into(), url);
                     }
                     map.insert("DATA_DIR".into(), config.data_dir);
-                    map.insert("TIMEZONE".into(), config.timezone);
+                    map.insert(
+                        "OVERRIDE_TIMEZONE".into(),
+                        config.override_timezone.clone().unwrap_or_default(),
+                    );
                     map.insert("WORKING_DIR".into(), config.working_dir);
                     if let Some(v) = config.souls_dir {
                         map.insert("SOULS_DIR".into(), v);
@@ -2895,15 +2899,11 @@ impl SetupApp {
             }
         }
 
-        let timezone = self.field_value("TIMEZONE");
-        let tz = if timezone.is_empty() {
-            "auto".to_string()
-        } else {
-            timezone
-        };
-        if !tz.eq_ignore_ascii_case("auto") {
+        let override_timezone = self.field_value("OVERRIDE_TIMEZONE");
+        let tz = override_timezone.trim();
+        if !tz.is_empty() && !tz.eq_ignore_ascii_case("auto") {
             tz.parse::<chrono_tz::Tz>()
-                .map_err(|_| MicroClawError::Config(format!("Invalid TIMEZONE: {tz}")))?;
+                .map_err(|_| MicroClawError::Config(format!("Invalid OVERRIDE_TIMEZONE: {tz}")))?;
         }
 
         let data_dir = self.field_value("DATA_DIR");
@@ -3154,17 +3154,36 @@ impl SetupApp {
 
     fn timezone_picker_options(&self) -> Vec<String> {
         vec![
-            "auto".to_string(),
+            TIMEZONE_PICKER_SYSTEM_DEFAULT.to_string(),
             "UTC".to_string(),
             "America/Los_Angeles".to_string(),
             "America/New_York".to_string(),
+            "America/Chicago".to_string(),
+            "America/Denver".to_string(),
+            "America/Phoenix".to_string(),
+            "America/Toronto".to_string(),
+            "America/Vancouver".to_string(),
+            "America/Sao_Paulo".to_string(),
             "Europe/London".to_string(),
             "Europe/Berlin".to_string(),
+            "Europe/Paris".to_string(),
+            "Europe/Madrid".to_string(),
+            "Europe/Rome".to_string(),
+            "Europe/Amsterdam".to_string(),
+            "Europe/Moscow".to_string(),
             "Asia/Shanghai".to_string(),
             "Asia/Tokyo".to_string(),
             "Asia/Singapore".to_string(),
             "Asia/Kolkata".to_string(),
+            "Asia/Hong_Kong".to_string(),
+            "Asia/Seoul".to_string(),
+            "Asia/Dubai".to_string(),
+            "Asia/Bangkok".to_string(),
+            "Asia/Jakarta".to_string(),
             "Australia/Sydney".to_string(),
+            "Australia/Melbourne".to_string(),
+            "Pacific/Auckland".to_string(),
+            "Africa/Johannesburg".to_string(),
             TIMEZONE_PICKER_MANUAL_INPUT.to_string(),
         ]
     }
@@ -3234,12 +3253,12 @@ impl SetupApp {
                 });
                 true
             }
-            "TIMEZONE" => {
+            "OVERRIDE_TIMEZONE" => {
                 let options = self.timezone_picker_options();
                 let current = {
-                    let tz = self.field_value("TIMEZONE");
+                    let tz = self.field_value("OVERRIDE_TIMEZONE");
                     if tz.trim().is_empty() {
-                        "auto".to_string()
+                        TIMEZONE_PICKER_SYSTEM_DEFAULT.to_string()
                     } else {
                         tz
                     }
@@ -3369,11 +3388,20 @@ impl SetupApp {
                 if let Some(chosen) = options.get(picker.selected) {
                     if chosen == TIMEZONE_PICKER_MANUAL_INPUT {
                         self.editing = true;
-                        self.status = "Editing TIMEZONE (manual input)".to_string();
-                    } else if let Some(field) = self.fields.iter_mut().find(|f| f.key == "TIMEZONE")
+                        self.status = "Editing OVERRIDE_TIMEZONE (manual input)".to_string();
+                    } else if let Some(field) = self
+                        .fields
+                        .iter_mut()
+                        .find(|f| f.key == "OVERRIDE_TIMEZONE")
                     {
-                        field.value = chosen.clone();
-                        self.status = format!("Timezone set to {chosen}");
+                        if chosen == TIMEZONE_PICKER_SYSTEM_DEFAULT {
+                            field.value.clear();
+                            self.status =
+                                "Timezone override cleared (using system timezone)".to_string();
+                        } else {
+                            field.value = chosen.clone();
+                            self.status = format!("Override timezone set to {chosen}");
+                        }
                     }
                 }
             }
@@ -3411,7 +3439,7 @@ impl SetupApp {
                 .map(|p| p.default_base_url.to_string())
                 .unwrap_or_default(),
             "DATA_DIR" => default_data_dir_for_setup(),
-            "TIMEZONE" => "auto".into(),
+            "OVERRIDE_TIMEZONE" => String::new(),
             "WORKING_DIR" => default_working_dir_for_setup(),
             "SOULS_DIR" => default_souls_dir_for_setup(),
             "SANDBOX_ENABLED" => "false".into(),
@@ -3479,7 +3507,7 @@ impl SetupApp {
             return "Channel";
         }
         match key {
-            "DATA_DIR" | "TIMEZONE" | "WORKING_DIR" | "SOULS_DIR" => "App",
+            "DATA_DIR" | "OVERRIDE_TIMEZONE" | "WORKING_DIR" | "SOULS_DIR" => "App",
             "SANDBOX_ENABLED" | "HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED" => "Sandbox",
             "REFLECTOR_ENABLED" | "REFLECTOR_INTERVAL_MINS" | "MEMORY_TOKEN_BUDGET" => "Memory",
             "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL" => "Model",
@@ -3614,7 +3642,7 @@ impl SetupApp {
             }
             // 3) App
             "DATA_DIR" => ORDER_APP_BASE,
-            "TIMEZONE" => ORDER_APP_BASE + 1,
+            "OVERRIDE_TIMEZONE" => ORDER_APP_BASE + 1,
             "WORKING_DIR" => ORDER_APP_BASE + 2,
             "SOULS_DIR" => ORDER_APP_BASE + 3,
             // 4) Memory
@@ -4485,14 +4513,13 @@ fn save_config_yaml(
 
     yaml.push('\n');
     yaml.push_str(&format!("data_dir: {}\n", yaml_double_quoted(&data_dir)));
-    let tz = values
-        .get("TIMEZONE")
-        .cloned()
-        .unwrap_or_else(|| "auto".into());
+    let override_tz = values.get("OVERRIDE_TIMEZONE").cloned().unwrap_or_default();
     yaml.push_str(
-        "# Timezone: use IANA name (e.g. Asia/Shanghai) or \"auto\" for system timezone\n",
+        "# Optional timezone override (IANA), e.g. Asia/Shanghai. Leave empty to use system timezone.\n",
     );
-    yaml.push_str(&format!("timezone: \"{}\"\n", tz));
+    if !override_tz.trim().is_empty() && !override_tz.eq_ignore_ascii_case("auto") {
+        yaml.push_str(&format!("override_timezone: \"{}\"\n", override_tz));
+    }
     let working_dir = values
         .get("WORKING_DIR")
         .cloned()
@@ -6422,10 +6449,13 @@ sandbox:
     }
 
     #[test]
-    fn test_timezone_picker_options_include_auto_and_manual_input() {
+    fn test_timezone_picker_options_include_system_default_and_manual_input() {
         let app = SetupApp::new();
         let options = app.timezone_picker_options();
-        assert_eq!(options.first().map(String::as_str), Some("auto"));
+        assert_eq!(
+            options.first().map(String::as_str),
+            Some(TIMEZONE_PICKER_SYSTEM_DEFAULT)
+        );
         assert_eq!(
             options.last().map(String::as_str),
             Some(TIMEZONE_PICKER_MANUAL_INPUT)
@@ -6438,8 +6468,8 @@ sandbox:
         let timezone_idx = app
             .fields
             .iter()
-            .position(|f| f.key == "TIMEZONE")
-            .expect("TIMEZONE field missing");
+            .position(|f| f.key == "OVERRIDE_TIMEZONE")
+            .expect("OVERRIDE_TIMEZONE field missing");
         app.selected = timezone_idx;
         assert!(app.open_picker_for_selected());
         let manual_idx = app.timezone_picker_options().len().saturating_sub(1);

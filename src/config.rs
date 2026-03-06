@@ -283,7 +283,9 @@ pub struct Config {
     pub high_risk_tool_user_confirmation_required: bool,
     #[serde(default)]
     pub sandbox: SandboxConfig,
-    #[serde(default = "default_timezone")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_timezone: Option<String>,
+    #[serde(default = "default_timezone", skip_serializing)]
     pub timezone: String,
     #[serde(default = "default_control_chat_ids")]
     pub control_chat_ids: Vec<i64>,
@@ -581,6 +583,7 @@ impl Config {
             high_risk_tool_user_confirmation_required: true,
             sandbox: SandboxConfig::default(),
             openai_api_key: None,
+            override_timezone: None,
             timezone: "UTC".into(),
             allowed_groups: vec![],
             control_chat_ids: vec![],
@@ -836,9 +839,27 @@ impl Config {
             })
             .collect();
 
-        // Normalize and validate timezone. "auto" resolves to machine timezone.
-        let tz_raw = self.timezone.trim().to_string();
-        if tz_raw.is_empty() || tz_raw.eq_ignore_ascii_case("auto") {
+        self.override_timezone = self
+            .override_timezone
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        if self
+            .override_timezone
+            .as_deref()
+            .is_some_and(|v| v.eq_ignore_ascii_case("auto"))
+        {
+            self.override_timezone = None;
+        }
+
+        // Normalize and validate timezone.
+        // Priority: override_timezone > system auto-detect.
+        let tz_raw = self
+            .override_timezone
+            .clone()
+            .unwrap_or_else(|| "auto".to_string());
+
+        if tz_raw.eq_ignore_ascii_case("auto") {
             let detected = detect_system_timezone();
             if detected.parse::<chrono_tz::Tz>().is_ok() {
                 self.timezone = detected;
@@ -850,9 +871,9 @@ impl Config {
                 self.timezone = "UTC".into();
             }
         } else {
-            tz_raw.parse::<chrono_tz::Tz>().map_err(|_| {
-                MicroClawError::Config(format!("Invalid timezone: {}", self.timezone))
-            })?;
+            tz_raw
+                .parse::<chrono_tz::Tz>()
+                .map_err(|_| MicroClawError::Config(format!("Invalid timezone: {tz_raw}")))?;
             self.timezone = tz_raw;
         }
 
@@ -1626,8 +1647,7 @@ voice_transcription_command: "whisper-mlx --file {file}"
 
     #[test]
     fn test_post_deserialize_invalid_timezone() {
-        let yaml =
-            "telegram_bot_token: tok\nbot_username: bot\napi_key: key\ntimezone: Mars/Olympus\n";
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\noverride_timezone: Mars/Olympus\n";
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         let err = config.post_deserialize().unwrap_err();
         let msg = err.to_string();
@@ -1636,7 +1656,8 @@ voice_transcription_command: "whisper-mlx --file {file}"
 
     #[test]
     fn test_post_deserialize_auto_timezone_resolves_to_valid_tz() {
-        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\ntimezone: auto\n";
+        let yaml =
+            "telegram_bot_token: tok\nbot_username: bot\napi_key: key\noverride_timezone: auto\n";
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
         assert!(config.timezone.parse::<chrono_tz::Tz>().is_ok());
@@ -2055,7 +2076,7 @@ telegram_bot_token: tok
 bot_username: bot
 api_key: key
 openai_api_key: sk-test
-timezone: US/Eastern
+override_timezone: US/Eastern
 allowed_groups: [123, 456]
 control_chat_ids: [999]
 max_session_messages: 60

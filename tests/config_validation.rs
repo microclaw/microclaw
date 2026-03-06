@@ -24,6 +24,7 @@ fn minimal_config() -> Config {
         high_risk_tool_user_confirmation_required: true,
         sandbox: microclaw::config::SandboxConfig::default(),
         openai_api_key: None,
+        override_timezone: None,
         timezone: "UTC".into(),
         allowed_groups: vec![],
         control_chat_ids: vec![],
@@ -153,7 +154,7 @@ fn test_yaml_roundtrip() {
     assert_eq!(parsed.telegram_bot_token, config.telegram_bot_token);
     assert_eq!(parsed.api_key, config.api_key);
     assert_eq!(parsed.max_tokens, config.max_tokens);
-    assert_eq!(parsed.timezone, config.timezone);
+    assert_eq!(parsed.timezone, "auto");
 }
 
 #[test]
