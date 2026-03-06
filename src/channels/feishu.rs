@@ -1035,8 +1035,11 @@ fn looks_like_feishu_reaction_token(text: &str) -> Option<String> {
     if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
         return None;
     }
-    if trimmed.len() > 24 {
+    if trimmed.len() > 64 {
         return None;
+    }
+    if map_feishu_reaction_emoji_type(trimmed).is_some() {
+        return Some(trimmed.to_string());
     }
     if trimmed.chars().all(|c| c.is_ascii_alphanumeric()) {
         return None;
@@ -1044,19 +1047,345 @@ fn looks_like_feishu_reaction_token(text: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+const FEISHU_EMOJI_TYPES: &[&str] = &[
+    "SMILE",
+    "DROOL",
+    "SCOWL",
+    "COOL",
+    "SOB",
+    "SHY",
+    "SILENT",
+    "SLEEPY",
+    "CRY",
+    "AWKWARD",
+    "ANGRY",
+    "SPEECHLESS",
+    "LAUGH_WITH_TEARS",
+    "WICKED",
+    "FACE_WITH_ROLLING_EYES",
+    "SULK",
+    "SMIRK",
+    "THUMBSUP",
+    "SLAP",
+    "OK",
+    "HEY",
+    "FACEPALM",
+    "TEARS",
+    "FEARFUL",
+    "LOVE",
+    "WINK",
+    "HAPPY",
+    "DIZZY",
+    "SHRUG",
+    "SHAKING_HEAD",
+    "PETRIFIED",
+    "HEARTBROKEN",
+    "LIKED",
+    "AWESOME",
+    "BORGHEAD",
+    "ROSE",
+    "WiltedRose",
+    "HEART",
+    "BROKENHEART",
+    "BIRTHDAYCAKE",
+    "COFFEE",
+    "Candle",
+    "GIFT",
+    "BOMB",
+    "COLLISION",
+    "THUMBSDOWN",
+    "CLAP",
+    "TREMPLE",
+    "FREEZE",
+    "NO",
+    "SHOCK",
+    "BEER",
+    "FOOTBALL",
+    "YEAH",
+    "Fire",
+    "LUCK",
+    "STRONG",
+    "WEAK",
+    "TOP",
+    "18X",
+    "NO1",
+    "BASKETBALL",
+    "PINGPONG",
+    "Badminton",
+    "REDPACKET",
+    "PISSED",
+    "YEAHOK",
+    "LOOKDOWN",
+    "Cheers",
+    "Aaagh",
+    "Speechless",
+    "Byebye",
+    "Wrath",
+    "Puke",
+    "Yummy",
+    "Salute",
+    "NOD",
+    "Clap",
+    "Hug",
+    "Sticky",
+    "Think",
+    "SMART",
+    "Tears",
+    "Sweat",
+    "Celebrate",
+    "Worry",
+    "Loveyou",
+    "LOL",
+    "Frown",
+    "Wow",
+    "Joyful",
+    "Blush",
+    "Inlove",
+    "SHRUG_GESTURE",
+    "SICK",
+    "Concerned",
+    "Laugh",
+    "Anguished",
+    "CoolGuy",
+    "Whimper",
+    "Delighted",
+    "Disappoint",
+    "Rage",
+    "Scare",
+    "CryWithEyesClosed",
+    "Scream",
+    "BrokenHeart",
+    "Heart",
+    "PurpleHeart",
+    "HeartShapedEyes",
+    "Skull",
+    "TurnDown",
+    "SlightSmile",
+    "Tension",
+    "Grin",
+    "DroolingFace",
+    "Yawn",
+    "CheerUp",
+    "ClapHands",
+    "Contempt",
+    "StrokeFace",
+    "Smug",
+    "ThinkingFace",
+    "JoyWithTears",
+    "BlushFace",
+    "Invisible",
+    "Delicious",
+    "AngryFace",
+    "CoolFace",
+    "Distressed",
+    "AngryToDeath",
+    "Slobber",
+    "Struggle",
+    "QuestionMark",
+    "YawnFace",
+    "Sigh",
+    "Drowsy",
+    "Sleeping",
+    "Relieved",
+    "ShyFace",
+    "SkullFace",
+    "AwkwardSmile",
+    "Greedy",
+    "WowFace",
+    "Trick",
+    "JoyfulFace",
+    "SlapFace",
+    "SlightFrown",
+    "FrownFace",
+    "Fear",
+    "SpeechlessFace",
+    "ColdSweat",
+    "SlightDizzy",
+    "SmirkFace",
+    "Pride",
+    "Flash",
+    "Titter",
+    "WinkFace",
+    "ScreamFace",
+    "Vomit",
+    "ShrugFace",
+    "Happy",
+    "Disdain",
+    "Celebration",
+    "Panic",
+    "SmilingFaceWithHearts",
+    "SmilingFaceWithHeartEyes",
+    "LaughingWithTears",
+    "ROCKET",
+    "100",
+    "SKULL",
+    "EYES",
+    "FISTBUMP",
+    "THANKS",
+    "PARTY",
+    "JawDrop",
+    "TearsofJoy",
+    "666",
+    "BrokenHeart2",
+    "LetMeSee",
+    "Great",
+    "NoProb",
+    "Emm",
+    "Huh",
+    "Happyface",
+    "Dulling",
+    "OMG",
+    "Awsl",
+    "Boring",
+    "Sleep",
+    "Cold",
+    "Delight",
+    "Hahaha",
+    "NuhUh",
+    "Haha",
+    "Tears2",
+    "Oops",
+    "Speechless2",
+    "Wronged",
+    "Panic2",
+    "Rage2",
+    "Cry2",
+    "Chuckle",
+    "Joy",
+    "Slight",
+    "Smug2",
+    "Hug2",
+    "Scowl2",
+    "Shocked",
+    "Complacent",
+    "Thinking2",
+    "Lovely",
+    "Greedy2",
+    "WOW2",
+    "Envy",
+    "Ok",
+    "Shh",
+    "Drowsy2",
+    "Puke2",
+    "Hammer",
+    "Eat",
+    "Coffee2",
+    "Basketball2",
+    "Football2",
+    "Cue",
+    "Pingpong2",
+    "Badminton2",
+    "Triathlon",
+    "Trophy",
+    "RedPacket",
+    "BubbleTea",
+    "Popcorn",
+    "Heart2",
+    "Rose2",
+    "WiltedRose2",
+    "Lipstick",
+    "MoonCake",
+    "Gift2",
+    "Fireworks",
+    "Pumpkin",
+    "BirthdayCake2",
+    "ConfettiBall",
+    "Candle2",
+    "Beers",
+    "Coffee3",
+    "Cake",
+    "SaltedFish",
+    "Watermelon",
+    "Bomb2",
+    "Poop",
+    "Pig",
+    "Rose3",
+    "Fade",
+    "Status_PrivateMessage",
+];
+
+fn normalize_reaction_alias(input: &str) -> String {
+    input
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 fn map_feishu_reaction_emoji_type(token: &str) -> Option<&'static str> {
-    match token.trim() {
-        "👍" | ":+1:" | "点赞" | "like" | "thumbsup" => Some("THUMBSUP"),
-        "👎" | ":-1:" | "点踩" | "thumbsdown" => Some("THUMBSDOWN"),
-        "👏" | ":clap:" => Some("CLAP"),
-        "🙏" | ":pray:" => Some("THANKS"),
-        "❤️" | "❤" | ":heart:" => Some("HEART"),
-        "🔥" | ":fire:" => Some("FIRE"),
-        "🎉" | ":tada:" => Some("PARTY"),
-        "😄" | "😀" | "🙂" | "😊" | ":smile:" => Some("SMILE"),
-        "😂" | "🤣" | ":joy:" => Some("LAUGH"),
-        "😭" | "😢" | ":sob:" => Some("SOB"),
-        "😡" | "😠" | ":rage:" => Some("RAGE"),
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    match trimmed {
+        "👍" | ":+1:" | "+1" | "点赞" | "赞" => return Some("THUMBSUP"),
+        "👎" | ":-1:" | "-1" | "点踩" | "踩" => return Some("THUMBSDOWN"),
+        "👏" | ":clap:" | "鼓掌" => return Some("CLAP"),
+        "🙏" | ":pray:" | "感谢" | "谢谢" => return Some("THANKS"),
+        "❤️" | "❤" | ":heart:" | "爱心" | "红心" => return Some("HEART"),
+        "💔" | ":broken_heart:" => return Some("BROKENHEART"),
+        "🔥" | ":fire:" => return Some("Fire"),
+        "🎉" | ":tada:" | "庆祝" => return Some("PARTY"),
+        "😄" | "😀" | "🙂" | "😊" | ":smile:" | "微笑" => return Some("SMILE"),
+        "😂" | "🤣" | ":joy:" | "笑哭" => return Some("TearsofJoy"),
+        "😭" | "😢" | ":sob:" | "大哭" => return Some("SOB"),
+        "😡" | "😠" | ":rage:" | "生气" => return Some("RAGE"),
+        "🤝" => return Some("FISTBUMP"),
+        "🚀" => return Some("ROCKET"),
+        "💯" => return Some("100"),
+        "🙈" => return Some("LetMeSee"),
+        "👌" => return Some("OK"),
+        _ => {}
+    }
+
+    if let Some(exact) = FEISHU_EMOJI_TYPES.iter().copied().find(|t| *t == trimmed) {
+        return Some(exact);
+    }
+
+    let stripped_colons = trimmed
+        .strip_prefix(':')
+        .and_then(|s| s.strip_suffix(':'))
+        .unwrap_or(trimmed);
+    if let Some(ignore_case) = FEISHU_EMOJI_TYPES
+        .iter()
+        .copied()
+        .find(|t| t.eq_ignore_ascii_case(stripped_colons))
+    {
+        return Some(ignore_case);
+    }
+
+    let normalized = normalize_reaction_alias(stripped_colons);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if let Some(by_shape) = FEISHU_EMOJI_TYPES
+        .iter()
+        .copied()
+        .find(|t| normalize_reaction_alias(t) == normalized)
+    {
+        return Some(by_shape);
+    }
+
+    match normalized.as_str() {
+        "thumbsup" | "like" => Some("THUMBSUP"),
+        "thumbsdown" | "dislike" => Some("THUMBSDOWN"),
+        "clap" => Some("CLAP"),
+        "pray" | "thanks" | "thankyou" => Some("THANKS"),
+        "heart" => Some("HEART"),
+        "brokenheart" => Some("BROKENHEART"),
+        "fire" => Some("Fire"),
+        "tada" | "party" => Some("PARTY"),
+        "smile" => Some("SMILE"),
+        "joy" | "tearsofjoy" => Some("TearsofJoy"),
+        "sob" | "cry" => Some("SOB"),
+        "rage" | "angry" => Some("RAGE"),
+        "fistbump" => Some("FISTBUMP"),
+        "rocket" => Some("ROCKET"),
+        "letmesee" => Some("LetMeSee"),
+        "speechless" => Some("SPEECHLESS"),
+        "ok" => Some("OK"),
         _ => None,
     }
 }
@@ -1099,27 +1428,38 @@ async fn send_feishu_reaction(
     Ok(())
 }
 
-async fn maybe_send_feishu_reaction_from_response(
-    app_state: &Arc<AppState>,
-    http_client: &reqwest::Client,
-    base_url: &str,
-    token: &str,
-    response: &str,
-    message_id: &str,
+struct FeishuReactionReplyContext<'a> {
+    app_state: &'a Arc<AppState>,
+    http_client: &'a reqwest::Client,
+    base_url: &'a str,
+    token: &'a str,
+    message_id: &'a str,
     chat_id: i64,
-    bot_username: &str,
+    bot_username: &'a str,
+}
+
+async fn maybe_send_feishu_reaction_from_response(
+    response: &str,
+    ctx: FeishuReactionReplyContext<'_>,
 ) -> bool {
     let Some(reaction_token) = looks_like_feishu_reaction_token(response) else {
         return false;
     };
-    if message_id.trim().is_empty() {
+    if ctx.message_id.trim().is_empty() {
         return false;
     }
     let Some(emoji_type) = map_feishu_reaction_emoji_type(&reaction_token) else {
         return false;
     };
 
-    if let Err(e) = send_feishu_reaction(http_client, base_url, token, message_id, emoji_type).await
+    if let Err(e) = send_feishu_reaction(
+        ctx.http_client,
+        ctx.base_url,
+        ctx.token,
+        ctx.message_id,
+        emoji_type,
+    )
+    .await
     {
         warn!("Feishu: failed to send reaction '{reaction_token}': {e}");
         return false;
@@ -1127,13 +1467,16 @@ async fn maybe_send_feishu_reaction_from_response(
 
     let bot_msg = StoredMessage {
         id: uuid::Uuid::new_v4().to_string(),
-        chat_id,
-        sender_name: bot_username.to_string(),
+        chat_id: ctx.chat_id,
+        sender_name: ctx.bot_username.to_string(),
         content: format!("[reaction] {}", reaction_token),
         is_from_bot: true,
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
-    let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+    let _ = call_blocking(ctx.app_state.db.clone(), move |db| {
+        db.store_message(&bot_msg)
+    })
+    .await;
     true
 }
 
@@ -2403,14 +2746,16 @@ async fn handle_feishu_message(
                     }
                 } else if !response.is_empty() {
                     if maybe_send_feishu_reaction_from_response(
-                        &app_state,
-                        &http_client,
-                        base_url,
-                        &token,
                         &response,
-                        message_id,
-                        chat_id,
-                        &runtime.bot_username,
+                        FeishuReactionReplyContext {
+                            app_state: &app_state,
+                            http_client: &http_client,
+                            base_url,
+                            token: &token,
+                            message_id,
+                            chat_id,
+                            bot_username: &runtime.bot_username,
+                        },
                     )
                     .await
                     {
@@ -2530,14 +2875,16 @@ async fn handle_feishu_message(
                     }
                 } else if !response.is_empty() {
                     if maybe_send_feishu_reaction_from_response(
-                        &app_state,
-                        &http_client,
-                        base_url,
-                        &token,
                         &response,
-                        message_id,
-                        chat_id,
-                        &runtime.bot_username,
+                        FeishuReactionReplyContext {
+                            app_state: &app_state,
+                            http_client: &http_client,
+                            base_url,
+                            token: &token,
+                            message_id,
+                            chat_id,
+                            bot_username: &runtime.bot_username,
+                        },
                     )
                     .await
                     {
@@ -2663,7 +3010,10 @@ mod mention_tests {
             looks_like_feishu_reaction_token("👍"),
             Some("👍".to_string())
         );
-        assert_eq!(looks_like_feishu_reaction_token("ok"), None);
+        assert_eq!(
+            looks_like_feishu_reaction_token("ok"),
+            Some("ok".to_string())
+        );
         assert_eq!(looks_like_feishu_reaction_token("hello world"), None);
     }
 
@@ -2671,7 +3021,15 @@ mod mention_tests {
     fn test_map_feishu_reaction_emoji_type() {
         assert_eq!(map_feishu_reaction_emoji_type("👍"), Some("THUMBSUP"));
         assert_eq!(map_feishu_reaction_emoji_type("点赞"), Some("THUMBSUP"));
-        assert_eq!(map_feishu_reaction_emoji_type("😂"), Some("LAUGH"));
+        assert_eq!(map_feishu_reaction_emoji_type("😂"), Some("TearsofJoy"));
+        assert_eq!(
+            map_feishu_reaction_emoji_type("Status_PrivateMessage"),
+            Some("Status_PrivateMessage")
+        );
+        assert_eq!(
+            map_feishu_reaction_emoji_type(":thumbsdown:"),
+            Some("THUMBSDOWN")
+        );
         assert_eq!(map_feishu_reaction_emoji_type("unknown"), None);
     }
 }
