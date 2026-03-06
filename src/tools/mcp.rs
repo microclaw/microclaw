@@ -49,6 +49,12 @@ impl McpTool {
             "mcp_error"
         }
     }
+
+    fn sanitize_input_for_mcp(input: serde_json::Value) -> serde_json::Value {
+        let mut map = input.as_object().cloned().unwrap_or_default();
+        map.retain(|k, _| !k.starts_with("__microclaw_"));
+        serde_json::Value::Object(map)
+    }
 }
 
 #[async_trait]
@@ -69,7 +75,12 @@ impl Tool for McpTool {
     }
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult {
-        match self.server.call_tool(&self.tool_info.name, input).await {
+        let sanitized_input = Self::sanitize_input_for_mcp(input);
+        match self
+            .server
+            .call_tool(&self.tool_info.name, sanitized_input)
+            .await
+        {
             Ok(output) => ToolResult::success(output),
             Err(e) => ToolResult::error(format!("MCP tool error: {e}"))
                 .with_error_type(Self::classify_mcp_error_type(&e)),
@@ -80,6 +91,7 @@ impl Tool for McpTool {
 #[cfg(test)]
 mod tests {
     use super::McpTool;
+    use serde_json::json;
 
     #[test]
     fn test_classify_mcp_error_type() {
@@ -99,5 +111,17 @@ mod tests {
             McpTool::classify_mcp_error_type("transport disconnected"),
             "mcp_error"
         );
+    }
+
+    #[test]
+    fn test_sanitize_input_for_mcp_strips_internal_keys() {
+        let input = json!({
+            "query": "status",
+            "__microclaw_auth": {"caller_chat_id": 1},
+            "__microclaw_async": true,
+            "__microclaw_other": "x"
+        });
+        let out = McpTool::sanitize_input_for_mcp(input);
+        assert_eq!(out, json!({"query": "status"}));
     }
 }
