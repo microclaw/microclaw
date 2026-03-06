@@ -2,41 +2,30 @@
 
 ## Summary
 
-This release adds:
-
-- cookie + API key auth model with scoped permissions
-- hook runtime and `microclaw hooks` CLI
-- session fork metadata and APIs
-- metrics APIs/history
-- slash-command behavior change: `/stop` now aborts the active run for the current chat (it no longer clears chat history/session data)
+Use this guide for rolling upgrades that may include schema/auth/hooks/session/metrics changes.
 
 ## Pre-Upgrade Checklist
 
 1. Backup SQLite database (`microclaw.db`).
 2. Record current config (`microclaw.config.yaml`).
 3. Ensure shell runtime for hooks (`sh`) is available if hooks are used.
+4. Record current binary/image version and commit SHA.
 
 ## Database Migration
 
-On first start, schema migrates to include:
+On first start, schema migrations are applied automatically.
 
-- auth tables (`auth_passwords`, `auth_sessions`, `api_keys`, `api_key_scopes`)
-- session fork columns (`sessions.parent_session_key`, `sessions.fork_point`)
-- metrics history table (`metrics_history`)
+- Review pending migration files and compatibility assumptions before rollout.
+- No manual SQL steps are required in normal upgrades.
+- For rollback, restore the DB backup instead of manually reversing SQL.
 
-No manual SQL steps are required.
+## Auth and API Migration
 
-## Auth Migration
-
-1. Keep existing web auth token for transition.
-2. Set operator password through `POST /api/auth/password`.
-3. Create scoped API keys as needed.
-4. Roll client automation from legacy token to API keys.
-
-For cookie-authenticated write/admin APIs, include CSRF header:
-
-- Header: `x-csrf-token: <token>`
-- Token is returned by `POST /api/auth/login` and mirrored in `mc_csrf` cookie.
+1. Verify operator login and session cookie flow.
+2. Verify API key scopes for automation clients.
+3. For cookie-authenticated write/admin APIs, include CSRF header:
+   - Header: `x-csrf-token: <token>`
+   - Token is returned by `POST /api/auth/login` and mirrored in `mc_csrf` cookie.
 
 ## Hooks Rollout
 
@@ -54,20 +43,17 @@ For cookie-authenticated write/admin APIs, include CSRF header:
 6. In any chat, start a long-running request and send `/stop`; verify the in-flight run is aborted.
 7. Verify `/reset` still clears chat context (session + chat history) as before.
 
-## Merge Notes (PR #40)
+## Recent PR References
 
-Scope in this release:
+As of 2026-03-05 (local `main` HEAD), recent merged PRs include:
 
-- web runtime modularization (`web/auth.rs`, `web/sessions.rs`, `web/metrics.rs`, `web/config.rs`, `web/stream.rs`)
-- config self-check API + Web UI warning surfacing
-- OTLP exporter queue/bounded retry behavior hardening
-- release/process docs updates
+- #195 `mcp: strip internal microclaw keys from forwarded args`
+- #192 `Journald`
+- #191 `add flake.nix`
+- #190 `fix(mcp): fix streamable HTTP transport protocol compliance`
+- #188 `add podman sandbox runtime support and runtime-aware diagnostics`
 
-Operational risk notes:
-
-- startup self-check warnings should be reviewed before production rollout
-- cookie-authenticated write/admin calls require CSRF token header
-- OTLP is optional; when enabled, validate endpoint reachability and retry settings
+Update this list when preparing a release note.
 
 ## Rollback Procedure
 

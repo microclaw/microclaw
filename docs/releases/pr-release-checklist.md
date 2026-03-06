@@ -1,8 +1,12 @@
 # PR and Release Checklist
 
+Last reviewed: 2026-03-05
+
 ## PR Readiness
 
 - [ ] Scope is clear and limited to intended feature set.
+- [ ] PR description includes motivation, behavior changes, and rollback notes.
+- [ ] Linked issue/PR references are present (`Fixes #...` or related PR IDs).
 - [ ] Migration impact reviewed (`schema_migrations`, compatibility paths).
 - [ ] API contract changes documented (new/changed endpoints, request/response fields).
 - [ ] Security-sensitive paths reviewed (auth scope, CSRF, audit events).
