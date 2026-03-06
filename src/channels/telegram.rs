@@ -1393,7 +1393,6 @@ async fn send_streaming_response(
 
     let initial_msg = initial_req.await?;
     let mut streaming_state = StreamingState::new(initial_msg.id);
-    let mut reasoning_message_id: Option<MessageId> = None;
 
     // Set up edit interval
     let edit_interval = Duration::from_millis(config.edit_interval_ms);
@@ -1410,27 +1409,7 @@ async fn send_streaming_response(
                 }
                 if delta.contains("</thinking>") || delta.contains("</reasoning>") {
                     streaming_state.in_reasoning = false;
-
-                    // Handle separate reasoning message
-                    if config.reasoning_display == ReasoningDisplayMode::SeparateMessage
-                        && !streaming_state.reasoning_buffer.is_empty()
-                    {
-                        let reasoning_text = format!(
-                            "🧠 *Reasoning:*\n```\n{}\n```",
-                            streaming_state
-                                .reasoning_buffer
-                                .chars()
-                                .take(3800)
-                                .collect::<String>()
-                        );
-                        let mut reasoning_req = bot.send_message(chat_id, reasoning_text);
-                        if let Some(tid) = message_thread_id {
-                            reasoning_req = reasoning_req.message_thread_id(tid);
-                        }
-                        if let Ok(msg) = reasoning_req.parse_mode(ParseMode::MarkdownV2).await {
-                            reasoning_message_id = Some(msg.id);
-                        }
-                    }
+                    // Reasoning will be sent at the end to ensure correct order
                     continue;
                 }
 
@@ -1440,12 +1419,17 @@ async fn send_streaming_response(
                     streaming_state.buffer.push_str(&delta);
                 }
 
+                // For separate_message mode: don't edit at all during streaming
+                // Wait until the end to show the complete answer
+                // This ensures reasoning appears BEFORE answer in the final order
+                let should_skip_edit = config.reasoning_display == ReasoningDisplayMode::SeparateMessage;
+
                 // Check if we should edit now
                 let should_edit = last_edit_time.elapsed() >= edit_interval
                     || streaming_state.edit_count < 3 // Edit more frequently at start
                     || streaming_state.buffer.len().is_multiple_of(100); // Edit every 100 chars
 
-                if should_edit && streaming_state.edit_count < config.max_edits_per_message {
+                if should_edit && streaming_state.edit_count < config.max_edits_per_message && !should_skip_edit {
                     let display_text = if streaming_state.in_reasoning
                         && config.reasoning_display == ReasoningDisplayMode::Inline
                     {
@@ -1492,13 +1476,16 @@ async fn send_streaming_response(
                 }
             }
             AgentEvent::ToolStart { name, .. } => {
-                // Show tool usage
+                // Show tool usage (but skip in separate_message mode to preserve order)
                 if streaming_state.edit_count < config.max_edits_per_message {
-                    let tool_text =
-                        format!("{}\n\n🔧 Using tool: {}", streaming_state.buffer, name);
-                    let _ = bot
-                        .edit_message_text(chat_id, streaming_state.message_id, &tool_text)
-                        .await;
+                    let should_skip_edit = config.reasoning_display == ReasoningDisplayMode::SeparateMessage;
+                    if !should_skip_edit {
+                        let tool_text =
+                            format!("{}\n\n🔧 Using tool: {}", streaming_state.buffer, name);
+                        let _ = bot
+                            .edit_message_text(chat_id, streaming_state.message_id, &tool_text)
+                            .await;
+                    }
                 }
             }
             _ => {} // Ignore other events
@@ -1508,10 +1495,13 @@ async fn send_streaming_response(
     // Final edit with complete response
     let (reasoning, answer) = parse_reasoning_blocks(final_response);
 
-    // Send reasoning if not already sent and mode is separate
+    // For separate_message mode: FIRST send reasoning message, THEN edit answer
+    // This ensures reasoning appears BEFORE answer (Telegram shows older messages at top)
+    
+    // Step 1: Send reasoning as a NEW message FIRST (appears above/before answer)
     if config.reasoning_display == ReasoningDisplayMode::SeparateMessage {
         if let Some(reasoning_text) = reasoning {
-            if reasoning_message_id.is_none() && !reasoning_text.is_empty() {
+            if !reasoning_text.is_empty() {
                 let formatted_reasoning = format!(
                     "🧠 *Reasoning:*\n```\n{}\n```",
                     reasoning_text.chars().take(3800).collect::<String>()
@@ -1525,7 +1515,7 @@ async fn send_streaming_response(
         }
     }
 
-    // Final message edit - note: edit_message_text doesn't need message_thread_id
+    // Step 2: Edit the answer message SECOND (appears below reasoning)
     let final_text = if answer.is_empty() {
         final_response
     } else {
