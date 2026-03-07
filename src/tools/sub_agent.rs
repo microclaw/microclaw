@@ -1,9 +1,12 @@
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 use tracing::info;
 
-use super::{auth_context_from_input, schema_object, Tool, ToolRegistry, ToolResult};
+use super::{
+    auth_context_from_input, schema_object, Tool, ToolAuthContext, ToolRegistry, ToolResult,
+};
 use crate::config::Config;
 #[cfg(test)]
 use crate::config::WorkingDirIsolation;
@@ -13,6 +16,7 @@ use microclaw_core::llm_types::{
 use microclaw_storage::db::{call_blocking, Database};
 
 const MAX_SUB_AGENT_ITERATIONS: usize = 10;
+const MAX_SUB_AGENT_TASKS: usize = 5;
 
 pub struct SubAgentTool {
     config: Config,
@@ -26,47 +30,18 @@ impl SubAgentTool {
             db,
         }
     }
-}
 
-#[async_trait]
-impl Tool for SubAgentTool {
-    fn name(&self) -> &str {
-        "sub_agent"
-    }
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "sub_agent".into(),
-            description: "Delegate a self-contained sub-task to a parallel agent. The sub-agent has access to bash, file operations, glob, grep, web search, web fetch, and read_memory tools but cannot send messages, write memory, or manage scheduled tasks. Use this for independent research, file analysis, or coding tasks that don't need to interact with the user directly.".into(),
-            input_schema: schema_object(
-                json!({
-                    "task": {
-                        "type": "string",
-                        "description": "A clear description of the task for the sub-agent to complete"
-                    },
-                    "context": {
-                        "type": "string",
-                        "description": "Optional additional context to provide to the sub-agent"
-                    }
-                }),
-                &["task"],
-            ),
-        }
-    }
-
-    async fn execute(&self, input: serde_json::Value) -> ToolResult {
-        let auth_context = auth_context_from_input(&input);
-        let task = match input.get("task").and_then(|v| v.as_str()) {
-            Some(t) => t,
-            None => return ToolResult::error("Missing required parameter: task".into()),
-        };
-
-        let context = input.get("context").and_then(|v| v.as_str()).unwrap_or("");
-
+    async fn run_sub_agent_task(
+        config: Config,
+        db: Arc<Database>,
+        auth_context: Option<ToolAuthContext>,
+        task: String,
+        context: String,
+    ) -> ToolResult {
         info!("Sub-agent starting task: {}", task);
 
-        let llm = crate::llm::create_provider(&self.config);
-        let tools = ToolRegistry::new_sub_agent(&self.config, self.db.clone());
+        let llm = crate::llm::create_provider(&config);
+        let tools = ToolRegistry::new_sub_agent(&config, db.clone());
         let tool_defs = tools.definitions().to_vec();
 
         let system_prompt = "You are a sub-agent assistant. Complete the given task thoroughly and return a clear, concise result. You have access to tools for file operations, search, and web access. Focus on the task and provide actionable output.".to_string();
@@ -99,11 +74,11 @@ impl Tool for SubAgentTool {
                     .as_ref()
                     .map(|a| a.caller_channel.clone())
                     .unwrap_or_else(|| "sub_agent".to_string());
-                let provider = self.config.llm_provider.clone();
-                let model = self.config.model.clone();
+                let provider = config.llm_provider.clone();
+                let model = config.model.clone();
                 let input_tokens = i64::from(usage.input_tokens);
                 let output_tokens = i64::from(usage.output_tokens);
-                let _ = call_blocking(self.db.clone(), move |db| {
+                let _ = call_blocking(db.clone(), move |db| {
                     db.log_llm_usage(
                         chat_id,
                         &caller_channel,
@@ -214,6 +189,157 @@ impl Tool for SubAgentTool {
     }
 }
 
+#[async_trait]
+impl Tool for SubAgentTool {
+    fn name(&self) -> &str {
+        "sub_agent"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "sub_agent".into(),
+            description: "Delegate a self-contained sub-task to a parallel agent. The sub-agent has access to bash, file operations, glob, grep, web search, web fetch, and read_memory tools but cannot send messages, write memory, or manage scheduled tasks. Use this for independent research, file analysis, or coding tasks that don't need to interact with the user directly.".into(),
+            input_schema: schema_object(
+                json!({
+                    "task": {
+                        "type": "string",
+                        "description": "A clear description of the task for the sub-agent to complete"
+                    },
+                    "tasks": {
+                        "type": "array",
+                        "description": "Optional multi-task mode (subagents). Each item is a task string.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "maxItems": MAX_SUB_AGENT_TASKS
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional additional context to provide to the sub-agent"
+                    },
+                    "parallel": {
+                        "type": "boolean",
+                        "description": "When tasks is provided, run them in parallel (default true)."
+                    }
+                }),
+                &[],
+            ),
+        }
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> ToolResult {
+        let auth_context = auth_context_from_input(&input);
+        let mut tasks: Vec<String> = Vec::new();
+        if let Some(task) = input.get("task").and_then(|v| v.as_str()) {
+            let task = task.trim();
+            if !task.is_empty() {
+                tasks.push(task.to_string());
+            }
+        }
+        if let Some(items) = input.get("tasks").and_then(|v| v.as_array()) {
+            for item in items {
+                if let Some(task) = item.as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                    tasks.push(task.to_string());
+                }
+            }
+        }
+
+        if tasks.is_empty() {
+            return ToolResult::error("Missing required parameter: task or tasks".into());
+        }
+        if tasks.len() > MAX_SUB_AGENT_TASKS {
+            return ToolResult::error(format!(
+                "Too many tasks for subagents mode: got {}, max {}",
+                tasks.len(),
+                MAX_SUB_AGENT_TASKS
+            ));
+        }
+
+        let context = input
+            .get("context")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if tasks.len() == 1 {
+            return Self::run_sub_agent_task(
+                self.config.clone(),
+                self.db.clone(),
+                auth_context,
+                tasks[0].clone(),
+                context,
+            )
+            .await;
+        }
+
+        let parallel = input
+            .get("parallel")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let mut results = Vec::new();
+
+        if parallel {
+            let mut join_set = JoinSet::new();
+            for (index, task) in tasks.into_iter().enumerate() {
+                let config = self.config.clone();
+                let db = self.db.clone();
+                let auth = auth_context.clone();
+                let context = context.clone();
+                join_set.spawn(async move {
+                    let result =
+                        Self::run_sub_agent_task(config, db, auth, task.clone(), context).await;
+                    (index, task, result)
+                });
+            }
+            while let Some(joined) = join_set.join_next().await {
+                match joined {
+                    Ok(tuple) => results.push(tuple),
+                    Err(err) => {
+                        return ToolResult::error(format!("subagents task join failure: {err}"));
+                    }
+                }
+            }
+            results.sort_by_key(|(index, _, _)| *index);
+        } else {
+            for (index, task) in tasks.into_iter().enumerate() {
+                let result = Self::run_sub_agent_task(
+                    self.config.clone(),
+                    self.db.clone(),
+                    auth_context.clone(),
+                    task.clone(),
+                    context.clone(),
+                )
+                .await;
+                results.push((index, task, result));
+            }
+        }
+
+        let mut had_error = false;
+        let details: Vec<serde_json::Value> = results
+            .into_iter()
+            .map(|(_, task, result)| {
+                if result.is_error {
+                    had_error = true;
+                }
+                json!({
+                    "task": task,
+                    "ok": !result.is_error,
+                    "output": result.content
+                })
+            })
+            .collect();
+        let summary = json!({
+            "mode": if parallel { "parallel" } else { "sequential" },
+            "results": details
+        });
+        if had_error {
+            ToolResult::error(summary.to_string())
+        } else {
+            ToolResult::success(summary.to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,10 +372,11 @@ mod tests {
         assert_eq!(def.name, "sub_agent");
         assert!(!def.description.is_empty());
         assert!(def.input_schema["properties"]["task"].is_object());
+        assert!(def.input_schema["properties"]["tasks"].is_object());
+        assert!(def.input_schema["properties"]["parallel"].is_object());
         assert!(def.input_schema["properties"]["context"].is_object());
         let required = def.input_schema["required"].as_array().unwrap();
-        assert_eq!(required.len(), 1);
-        assert_eq!(required[0], "task");
+        assert!(required.is_empty());
     }
 
     #[tokio::test]
@@ -257,7 +384,21 @@ mod tests {
         let tool = SubAgentTool::new(&test_config(), test_db());
         let result = tool.execute(json!({})).await;
         assert!(result.is_error);
-        assert!(result.content.contains("Missing required parameter: task"));
+        assert!(result
+            .content
+            .contains("Missing required parameter: task or tasks"));
+    }
+
+    #[tokio::test]
+    async fn test_sub_agent_rejects_too_many_tasks() {
+        let tool = SubAgentTool::new(&test_config(), test_db());
+        let result = tool
+            .execute(json!({
+                "tasks": ["t1", "t2", "t3", "t4", "t5", "t6"]
+            }))
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("Too many tasks for subagents mode"));
     }
 
     #[test]

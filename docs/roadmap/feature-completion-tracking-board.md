@@ -2,6 +2,9 @@
 
 Last Updated: 2026-02-19
 
+Related:
+- `docs/roadmap/future-roadmap-2026.md` (forward-looking roadmap, including sub-agent evolution)
+
 ## Board Legend
 
 - Status: `todo` | `in_progress` | `blocked` | `done`
