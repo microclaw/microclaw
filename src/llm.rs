@@ -556,6 +556,19 @@ fn process_openai_stream_event(
         }
     }
 
+    if let Some(piece) = delta
+        .get("thought")
+        .and_then(|t| t.as_str())
+        .or_else(|| delta.get("thinking").and_then(|t| t.as_str()))
+    {
+        if !piece.is_empty() {
+            if reasoning_text.is_empty() {
+                debug!("AI started generating thinking/thought");
+            }
+            reasoning_text.push_str(piece);
+        }
+    }
+
     if let Some(piece) = delta.get("reasoning_content").and_then(|t| t.as_str()) {
         if !piece.is_empty() {
             if reasoning_text.is_empty() {
@@ -815,8 +828,10 @@ impl OpenAiProvider {
     pub fn new(config: &Config) -> Self {
         let is_openai_codex = is_openai_codex_provider(&config.llm_provider);
         let is_deepseek_provider = config.llm_provider.eq_ignore_ascii_case("deepseek");
-        let enable_reasoning_content_bridge = is_deepseek_provider;
-        let enable_thinking_param = is_deepseek_provider && config.show_thinking;
+        let is_google_provider = config.llm_provider.eq_ignore_ascii_case("google");
+        let enable_reasoning_content_bridge = is_deepseek_provider || is_google_provider;
+        let enable_thinking_param =
+            (is_deepseek_provider || is_google_provider) && config.show_thinking;
         let configured_base = config.llm_base_url.as_deref().unwrap_or("");
         let base = resolve_openai_compat_base(&config.llm_provider, configured_base);
 
@@ -2444,6 +2459,32 @@ mod tests {
     }
 
     #[test]
+    fn test_process_openai_stream_event_collects_thinking_aliases() {
+        let data = r#"{"choices":[{"delta":{"thought":"alpha","thinking":"beta"}}]}"#;
+        let mut text = String::new();
+        let mut reasoning_text = String::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+        let mut tool_calls = std::collections::BTreeMap::new();
+
+        process_openai_stream_event(
+            data,
+            None,
+            &mut text,
+            &mut reasoning_text,
+            &mut stop_reason,
+            &mut usage,
+            &mut tool_calls,
+        );
+
+        assert!(text.is_empty());
+        assert_eq!(reasoning_text, "alpha");
+        assert_eq!(stop_reason, None);
+        assert!(usage.is_none());
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
     fn test_should_retry_with_max_completion_tokens() {
         let err = r#"{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","param":"max_tokens"}}"#;
         assert!(should_retry_with_max_completion_tokens(err));
@@ -2539,6 +2580,23 @@ mod tests {
         let mut config = Config::test_defaults();
         config.llm_provider = "deepseek".into();
         config.model = "test-model".into();
+        config.show_thinking = true;
+        config.data_dir = "/tmp".into();
+        config.working_dir = "/tmp".into();
+        config.working_dir_isolation = WorkingDirIsolation::Shared;
+        config.web_enabled = false;
+        config.web_port = 3900;
+
+        let provider = OpenAiProvider::new(&config);
+        assert!(provider.enable_thinking_param);
+        assert!(provider.enable_reasoning_content_bridge);
+    }
+
+    #[test]
+    fn test_openai_provider_capability_flags_for_google() {
+        let mut config = Config::test_defaults();
+        config.llm_provider = "google".into();
+        config.model = "gemini-3-flash-preview".into();
         config.show_thinking = true;
         config.data_dir = "/tmp".into();
         config.working_dir = "/tmp".into();
