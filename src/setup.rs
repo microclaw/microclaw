@@ -21,7 +21,7 @@ use ratatui::DefaultTerminal;
 
 use crate::codex_auth::{
     codex_config_default_openai_base_url, is_openai_codex_provider, provider_allows_empty_api_key,
-    resolve_openai_codex_auth,
+    qwen_oauth_file_has_access_token, resolve_openai_codex_auth, resolve_qwen_code_auth,
 };
 use crate::config::{Config, SandboxBackend, SandboxMode};
 use microclaw_core::error::MicroClawError;
@@ -2909,6 +2909,13 @@ impl SetupApp {
                     "openai-codex ignores LLM_BASE_URL here. Configure ~/.codex/config.toml instead.".into(),
                 ));
             }
+        } else if provider.eq_ignore_ascii_case("qwen-code")
+            && self.field_value("LLM_API_KEY").trim().is_empty()
+            && !qwen_oauth_file_has_access_token()?
+        {
+            return Err(MicroClawError::Config(
+                "qwen-code requires LLM_API_KEY, or ~/.qwen/oauth_creds.json (access_token), or QWEN_CODE_ACCESS_TOKEN.".into(),
+            ));
         }
 
         let override_timezone = self.field_value("OVERRIDE_TIMEZONE");
@@ -3027,6 +3034,11 @@ impl SetupApp {
         let (api_key, codex_account_id) = if is_openai_codex_provider(&provider) {
             let auth = resolve_openai_codex_auth("")?;
             (auth.bearer_token, auth.account_id)
+        } else if provider.eq_ignore_ascii_case("qwen-code")
+            && self.field_value("LLM_API_KEY").trim().is_empty()
+        {
+            let auth = resolve_qwen_code_auth("")?;
+            (auth.bearer_token, None)
         } else {
             (self.field_value("LLM_API_KEY"), None)
         };
