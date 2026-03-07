@@ -48,7 +48,10 @@ parse_args() {
 }
 
 should_skip_run() {
-  case "${SKIP_RUN,,}" in
+  # Bash 3.2 (default on macOS) does not support `${var,,}`.
+  local skip_run_normalized
+  skip_run_normalized="$(printf '%s' "$SKIP_RUN" | tr '[:upper:]' '[:lower:]')"
+  case "$skip_run_normalized" in
     1|true|yes)
       return 0
       ;;
