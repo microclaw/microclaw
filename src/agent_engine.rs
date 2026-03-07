@@ -1037,6 +1037,20 @@ pub(crate) async fn process_with_agent_impl(
             let mut waiting_approval_tool: Option<String> = None;
             for block in &response.content {
                 if let ResponseContentBlock::ToolUse { id, name, input } = block {
+                    if name.trim().is_empty() {
+                        warn!(
+                            chat_id,
+                            iteration = iteration + 1,
+                            tool_use_id = %id,
+                            "Skipping malformed tool call with empty tool name"
+                        );
+                        tool_results.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: "Malformed tool call: missing tool name. Retry with a valid registered tool.".to_string(),
+                            is_error: Some(true),
+                        });
+                        continue;
+                    }
                     if name != "send_message" {
                         consecutive_send_message_calls = 0;
                     } else if consecutive_send_message_calls >= 3 {
@@ -2792,6 +2806,10 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct EmptyToolThenAnswerLlm {
+        calls: Arc<AtomicUsize>,
+    }
+
     #[async_trait::async_trait]
     impl LlmProvider for HighRiskNeedsUserConfirmLlm {
         async fn send_message(
@@ -2880,6 +2898,62 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl LlmProvider for EmptyToolThenAnswerLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            let idx = self.calls.fetch_add(1, Ordering::SeqCst);
+            if idx == 0 {
+                return Ok(MessagesResponse {
+                    content: vec![ResponseContentBlock::ToolUse {
+                        id: "tool-empty".to_string(),
+                        name: String::new(),
+                        input: json!({"query": "latest news"}),
+                    }],
+                    stop_reason: Some("tool_use".to_string()),
+                    usage: None,
+                });
+            }
+
+            let mut saw_malformed_result = false;
+            for msg in messages.iter().rev() {
+                if msg.role != "user" {
+                    continue;
+                }
+                if let microclaw_core::llm_types::MessageContent::Blocks(blocks) = &msg.content {
+                    for block in blocks {
+                        if let microclaw_core::llm_types::ContentBlock::ToolResult {
+                            content,
+                            is_error,
+                            ..
+                        } = block
+                        {
+                            if is_error.unwrap_or(false) && content.contains("missing tool name") {
+                                saw_malformed_result = true;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            let text = if saw_malformed_result {
+                "recovered after malformed tool call".to_string()
+            } else {
+                "unexpected".to_string()
+            };
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text { text }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: None,
+            })
+        }
+    }
+
     #[tokio::test]
     async fn test_high_risk_tool_waits_for_user_confirmation_when_enabled() {
         let base_dir =
@@ -2954,6 +3028,43 @@ mod tests {
             reply.contains("bash `git clone https://github.com/naamfung/zua.git /tmp/zua` failed:")
         );
         assert!(reply.contains("Command contains absolute /tmp path"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_empty_tool_name_is_not_reported_as_unknown_tool_failure() {
+        let base_dir =
+            std::env::temp_dir().join(format!("mc_agent_empty_tool_name_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let llm = EmptyToolThenAnswerLlm {
+            calls: calls.clone(),
+        };
+        let state = test_state_with_llm(&base_dir, Box::new(llm));
+        let chat_id = state
+            .db
+            .resolve_or_create_chat_id("web", "empty-tool-name-chat", Some("empty-tool"), "web")
+            .unwrap();
+        store_user_message(&state.db, chat_id, "search latest news");
+
+        let reply = process_with_agent(
+            &state,
+            AgentRequestContext {
+                caller_channel: "web",
+                chat_id,
+                chat_type: "web",
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reply, "recovered after malformed tool call");
+        assert!(!reply.contains("Execution note: some tool actions failed"));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
 
         drop(state);
