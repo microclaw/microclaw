@@ -986,6 +986,25 @@ fn apply_openai_compat_body_overrides(
     apply_body_override_map(body, by_model.get(model));
 }
 
+fn has_visible_reply_runtime_guard(messages: &[Message]) -> bool {
+    messages.iter().rev().any(|m| {
+        if m.role != "user" {
+            return false;
+        }
+        match &m.content {
+            MessageContent::Text(t) => {
+                t.contains("[runtime_guard]: Your previous reply had no user-visible text.")
+            }
+            MessageContent::Blocks(blocks) => blocks.iter().any(|b| match b {
+                ContentBlock::Text { text } => {
+                    text.contains("[runtime_guard]: Your previous reply had no user-visible text.")
+                }
+                _ => false,
+            }),
+        }
+    })
+}
+
 // --- OpenAI response types ---
 
 #[derive(Debug, Deserialize)]
@@ -1177,7 +1196,8 @@ impl LlmProvider for OpenAiProvider {
             self.max_tokens,
             self.prefer_max_completion_tokens,
         );
-        maybe_enable_thinking_param(&mut body, &self.provider, self.enable_thinking_param);
+        let thinking_enabled = self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
+        maybe_enable_thinking_param(&mut body, &self.provider, thinking_enabled);
         apply_openai_compat_body_overrides(
             &mut body,
             &self.provider,
@@ -1309,7 +1329,8 @@ impl LlmProvider for OpenAiProvider {
             self.max_tokens,
             self.prefer_max_completion_tokens,
         );
-        maybe_enable_thinking_param(&mut body, &self.provider, self.enable_thinking_param);
+        let thinking_enabled = self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
+        maybe_enable_thinking_param(&mut body, &self.provider, thinking_enabled);
         apply_openai_compat_body_overrides(
             &mut body,
             &self.provider,
@@ -2700,6 +2721,18 @@ mod tests {
         assert!(body.get("enable_thinking").is_none());
         assert!(body.get("reasoning_split").is_none());
         assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn test_has_visible_reply_runtime_guard_detects_guard_message() {
+        let msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Text(
+                "[runtime_guard]: Your previous reply had no user-visible text. Reply again now."
+                    .into(),
+            ),
+        }];
+        assert!(has_visible_reply_runtime_guard(&msgs));
     }
 
     #[test]

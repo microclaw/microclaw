@@ -170,6 +170,16 @@ fn summarize_for_user_note(text: &str, max_chars: usize) -> String {
     }
 }
 
+fn truncate_for_log(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        text.to_string()
+    } else {
+        let clipped = text.chars().take(max_chars).collect::<String>();
+        format!("{clipped}...")
+    }
+}
+
 fn format_failed_action_for_user(tool_name: &str, input: &Value, result_content: &str) -> String {
     let error_summary = summarize_for_user_note(result_content, 140);
     if tool_name == "bash" {
@@ -895,6 +905,25 @@ pub(crate) async fn process_with_agent_impl(
             output_tokens = out_tok,
             "Agent iteration completed"
         );
+
+        if iteration == 0 {
+            let raw_first_reply = response
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ResponseContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            info!(
+                chat_id,
+                iteration = 1,
+                preview_chars = raw_first_reply.chars().count(),
+                preview = truncate_for_log(&raw_first_reply, 1000),
+                "Initial model reply (raw text blocks)"
+            );
+        }
 
         if stop_reason == "end_turn" || stop_reason == "max_tokens" {
             let text = response
