@@ -39,7 +39,7 @@
             version = "0.0.156";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
-            buildFeatures = pkgs.lib.optionals pkgs.stdenv.isLinux [ "journald" ];
+            buildFeatures = pkgs.lib.optionals pkgs.stdenv.isLinux [ "journald" "sqlite-vec" ];
             nativeBuildInputs = with pkgs; [
               pkg-config
             ];
