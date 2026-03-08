@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::codex_auth::{
-    codex_config_default_openai_base_url, is_openai_codex_provider,
-    refresh_openai_codex_auth_if_needed, resolve_openai_codex_auth,
+    codex_config_default_openai_base_url, is_openai_codex_provider, is_qwen_portal_provider,
+    refresh_openai_codex_auth_if_needed, resolve_openai_codex_auth, resolve_qwen_portal_auth,
 };
 use crate::config::Config;
 #[cfg(test)]
@@ -845,6 +845,15 @@ impl OpenAiProvider {
             let _ = refresh_openai_codex_auth_if_needed();
             match resolve_openai_codex_auth("") {
                 Ok(auth) => (auth.bearer_token, auth.account_id),
+                Err(e) => {
+                    warn!("{}", e);
+                    (String::new(), None)
+                }
+            }
+        } else if is_qwen_portal_provider(&config.llm_provider) && config.api_key.trim().is_empty()
+        {
+            match resolve_qwen_portal_auth("") {
+                Ok(auth) => (auth.bearer_token, None),
                 Err(e) => {
                     warn!("{}", e);
                     (String::new(), None)
