@@ -1307,6 +1307,29 @@ const FEISHU_EMOJI_TYPES: &[&str] = &[
     "Status_PrivateMessage",
 ];
 
+const FEISHU_REACTION_PROTOCOL_PROMPT: &str = r#"
+Feishu reaction output protocol (optional, use only when appropriate):
+- For every Feishu or Lark message, choose exactly one of these 3 output modes:
+  1) Text only: return normal text.
+  2) Emoji only: output `reaction-only: <emoji-or-token>`.
+  3) Text + emoji: output:
+     `reaction: <emoji-or-token>`
+     `<reply text>`
+- You may also use `[reaction: <emoji-or-token>] <reply text>` for mode (3).
+- When you choose a reaction, pick only from this supported set:
+  `THUMBSUP`, `THUMBSDOWN`, `CLAP`, `THANKS`, `HEART`, `BROKENHEART`, `Fire`, `PARTY`, `SMILE`, `TearsofJoy`, `SOB`, `RAGE`, `FISTBUMP`, `ROCKET`, `100`, `LetMeSee`, `OK`, `LOVE`, `HAPPY`, `WINK`, `YEAH`, `STRONG`, `TOP`, `NO1`, `SPEECHLESS`.
+- For normal Feishu replies/reactions, do NOT call `send_message`; return the final assistant text directly so channel reaction parsing can run.
+- Never output raw protocol text through `send_message` (for example `reaction-only: ...`, `reaction: ...`, `[reaction: ...]`, or lone tokens like `THUMBSUP`).
+"#;
+
+pub(crate) fn system_prompt_extension(caller_channel: &str) -> Option<&'static str> {
+    if caller_channel.starts_with("feishu") || caller_channel.starts_with("lark") {
+        Some(FEISHU_REACTION_PROTOCOL_PROMPT)
+    } else {
+        None
+    }
+}
+
 fn normalize_reaction_alias(input: &str) -> String {
     input
         .chars()
