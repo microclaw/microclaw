@@ -1540,6 +1540,21 @@ fn split_feishu_visible_and_thinking(response: &str) -> (String, String) {
     (v2.trim().to_string(), thinking)
 }
 
+fn compose_feishu_outbound(show_thinking: bool, thinking_text: &str, visible_text: &str) -> String {
+    let visible = visible_text.trim();
+    if !show_thinking {
+        return visible.to_string();
+    }
+    let thinking = thinking_text.trim();
+    if thinking.is_empty() {
+        return visible.to_string();
+    }
+    if visible.is_empty() {
+        return format!("<thought>\n{}\n</thought>", thinking);
+    }
+    format!("<thought>\n{}\n</thought>\n\n{}", thinking, visible)
+}
+
 async fn send_feishu_reaction(
     http_client: &reqwest::Client,
     base_url: &str,
@@ -2921,12 +2936,14 @@ async fn handle_feishu_message(
                             return;
                         }
                         if reaction_plan.allow_text_fallback_on_reaction_failure {
+                            let outbound =
+                                compose_feishu_outbound(app_state.config.show_thinking, &thinking_text, &visible_response);
                             if let Err(e) = send_feishu_response(
                                 &http_client,
                                 base_url,
                                 &token,
                                 external_chat_id,
-                                &visible_response,
+                                &outbound,
                                 message_id,
                                 topic_mode,
                             )
@@ -2939,7 +2956,7 @@ async fn handle_feishu_message(
                                 id: uuid::Uuid::new_v4().to_string(),
                                 chat_id,
                                 sender_name: runtime.bot_username.clone(),
-                                content: visible_response,
+                                content: outbound,
                                 is_from_bot: true,
                                 timestamp: chrono::Utc::now().to_rfc3339(),
                             };
@@ -2956,11 +2973,16 @@ async fn handle_feishu_message(
                         return;
                     }
 
-                    let outbound = if reaction_plan.token.is_some() {
+                    let outbound_visible = if reaction_plan.token.is_some() {
                         reaction_plan.text.clone()
                     } else {
                         visible_response.clone()
                     };
+                    let outbound = compose_feishu_outbound(
+                        app_state.config.show_thinking,
+                        &thinking_text,
+                        &outbound_visible,
+                    );
                     if outbound.is_empty() {
                         return;
                     }
@@ -3105,12 +3127,14 @@ async fn handle_feishu_message(
                             return;
                         }
                         if reaction_plan.allow_text_fallback_on_reaction_failure {
+                            let outbound =
+                                compose_feishu_outbound(app_state.config.show_thinking, &thinking_text, &visible_response);
                             if let Err(e) = send_feishu_response(
                                 &http_client,
                                 base_url,
                                 &token,
                                 external_chat_id,
-                                &visible_response,
+                                &outbound,
                                 message_id,
                                 topic_mode,
                             )
@@ -3123,7 +3147,7 @@ async fn handle_feishu_message(
                                 id: uuid::Uuid::new_v4().to_string(),
                                 chat_id,
                                 sender_name: runtime.bot_username.clone(),
-                                content: visible_response,
+                                content: outbound,
                                 is_from_bot: true,
                                 timestamp: chrono::Utc::now().to_rfc3339(),
                             };
@@ -3140,11 +3164,16 @@ async fn handle_feishu_message(
                         return;
                     }
 
-                    let outbound = if reaction_plan.token.is_some() {
+                    let outbound_visible = if reaction_plan.token.is_some() {
                         reaction_plan.text.clone()
                     } else {
                         visible_response.clone()
                     };
+                    let outbound = compose_feishu_outbound(
+                        app_state.config.show_thinking,
+                        &thinking_text,
+                        &outbound_visible,
+                    );
                     if outbound.is_empty() {
                         return;
                     }
@@ -3226,8 +3255,9 @@ async fn handle_feishu_message(
 #[cfg(test)]
 mod mention_tests {
     use super::{
-        looks_like_feishu_reaction_token, map_feishu_reaction_emoji_type, parse_feishu_mentions,
-        parse_feishu_reaction_plan, split_feishu_visible_and_thinking, text_has_at_all_marker,
+        compose_feishu_outbound, looks_like_feishu_reaction_token, map_feishu_reaction_emoji_type,
+        parse_feishu_mentions, parse_feishu_reaction_plan, split_feishu_visible_and_thinking,
+        text_has_at_all_marker,
     };
 
     #[test]
@@ -3334,6 +3364,18 @@ mod mention_tests {
         let (visible, thinking) = split_feishu_visible_and_thinking(raw);
         assert_eq!(visible, "[reaction: SMILE] 你好");
         assert_eq!(thinking, "internal");
+    }
+
+    #[test]
+    fn test_compose_feishu_outbound_show_thinking_enabled() {
+        let out = compose_feishu_outbound(true, "internal", "你好");
+        assert_eq!(out, "<thought>\ninternal\n</thought>\n\n你好");
+    }
+
+    #[test]
+    fn test_compose_feishu_outbound_show_thinking_disabled() {
+        let out = compose_feishu_outbound(false, "internal", "你好");
+        assert_eq!(out, "你好");
     }
 }
 
