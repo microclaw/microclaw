@@ -31,6 +31,9 @@ fn default_api_key() -> String {
 fn default_model() -> String {
     String::new()
 }
+fn default_llm_user_agent() -> String {
+    crate::http_client::default_llm_user_agent()
+}
 fn default_max_tokens() -> u32 {
     8192
 }
@@ -234,6 +237,8 @@ pub struct Config {
     pub llm_providers: HashMap<String, LlmProviderProfile>,
     #[serde(default)]
     pub llm_base_url: Option<String>,
+    #[serde(default = "default_llm_user_agent")]
+    pub llm_user_agent: String,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
     #[serde(default = "default_max_tool_iterations")]
@@ -571,6 +576,7 @@ impl Config {
             model: "claude-sonnet-4-5-20250929".into(),
             llm_providers: HashMap::new(),
             llm_base_url: None,
+            llm_user_agent: default_llm_user_agent(),
             max_tokens: 8192,
             max_tool_iterations: 100,
             compaction_timeout_secs: 180,
@@ -883,6 +889,10 @@ impl Config {
             if url.trim().is_empty() {
                 self.llm_base_url = None;
             }
+        }
+        self.llm_user_agent = self.llm_user_agent.trim().to_string();
+        if self.llm_user_agent.is_empty() {
+            self.llm_user_agent = default_llm_user_agent();
         }
         if let Some(dir) = &self.skills_dir {
             let trimmed = dir.trim().to_string();
@@ -2037,6 +2047,18 @@ channels:
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
         assert!(config.llm_base_url.is_none());
+    }
+
+    #[test]
+    fn test_post_deserialize_empty_llm_user_agent_uses_default() {
+        let yaml =
+            "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nllm_user_agent: '  '\n";
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+        assert_eq!(
+            config.llm_user_agent,
+            crate::http_client::default_llm_user_agent()
+        );
     }
 
     #[test]

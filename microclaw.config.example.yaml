@@ -18,6 +18,8 @@ model: ""
 #     output_per_million_usd: 0.0
 # Custom base URL (optional, null to use provider default)
 # llm_base_url: null
+# LLM HTTP User-Agent (optional)
+# llm_user_agent: "MicroClaw/0.0.0"
 
 # Max tokens per response
 max_tokens: 8192

@@ -12,6 +12,7 @@ fn minimal_config() -> Config {
         model: String::new(),
         llm_providers: std::collections::HashMap::new(),
         llm_base_url: None,
+        llm_user_agent: microclaw::http_client::default_llm_user_agent(),
         max_tokens: 8192,
         max_tool_iterations: 25,
         max_history_messages: 50,

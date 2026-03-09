@@ -891,7 +891,7 @@ impl OpenAiProvider {
 
         OpenAiProvider {
             http: reqwest::Client::builder()
-                .user_agent(llm_user_agent())
+                .user_agent(llm_user_agent(&config.llm_user_agent))
                 .build()
                 .unwrap_or_else(|e| {
                     warn!("Failed to build LLM HTTP client with user-agent: {e}");

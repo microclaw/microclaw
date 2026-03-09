@@ -304,7 +304,7 @@ pub async fn build_model_response(
 
     let mut allowed_models = profile.models.clone();
     if is_placeholder_model_list(&allowed_models) {
-        if let Ok(live) = fetch_models_from_provider_api(&profile).await {
+        if let Ok(live) = fetch_models_from_provider_api(&profile, &config.llm_user_agent).await {
             if !live.is_empty() {
                 allowed_models = live;
             }
@@ -466,7 +466,7 @@ pub async fn build_models_response(
         }
     };
     if api_mode {
-        return match fetch_models_from_provider_api(&profile).await {
+        return match fetch_models_from_provider_api(&profile, &config.llm_user_agent).await {
             Ok(models) => {
                 let listed = models
                     .iter()
@@ -490,7 +490,7 @@ pub async fn build_models_response(
         };
     }
     if is_placeholder_model_list(&profile.models) {
-        return match fetch_models_from_provider_api(&profile).await {
+        return match fetch_models_from_provider_api(&profile, &config.llm_user_agent).await {
             Ok(models) if !models.is_empty() => format!(
                 "Live models for provider '{}': {}",
                 profile.alias,
@@ -599,6 +599,7 @@ fn resolve_anthropic_models_url(profile: &ResolvedLlmProviderProfile) -> String 
 
 async fn fetch_models_from_provider_api(
     profile: &ResolvedLlmProviderProfile,
+    configured_user_agent: &str,
 ) -> Result<Vec<String>, String> {
     let backend = profile.provider.trim().to_ascii_lowercase();
     if backend == "openai-codex" && profile.api_key.trim().is_empty() {
@@ -613,7 +614,7 @@ async fn fetch_models_from_provider_api(
         }
         let url = resolve_anthropic_models_url(profile);
         let client = reqwest::Client::builder()
-            .user_agent(llm_user_agent())
+            .user_agent(llm_user_agent(configured_user_agent))
             .build()
             .map_err(|e| e.to_string())?;
         let response = client
@@ -636,7 +637,7 @@ async fn fetch_models_from_provider_api(
 
     let url = resolve_openai_models_url(profile);
     let client = reqwest::Client::builder()
-        .user_agent(llm_user_agent())
+        .user_agent(llm_user_agent(configured_user_agent))
         .build()
         .map_err(|e| e.to_string())?;
     let mut request = client.get(&url);

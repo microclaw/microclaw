@@ -1048,6 +1048,16 @@ impl SetupApp {
                     secret: false,
                 },
                 Field {
+                    key: "LLM_USER_AGENT".into(),
+                    label: "LLM user-agent (optional)".into(),
+                    value: existing
+                        .get("LLM_USER_AGENT")
+                        .cloned()
+                        .unwrap_or_else(crate::http_client::default_llm_user_agent),
+                    required: false,
+                    secret: false,
+                },
+                Field {
                     key: "SHOW_THINKING".into(),
                     label: "Show thinking/reasoning text (true/false)".into(),
                     value: existing
@@ -1938,6 +1948,7 @@ impl SetupApp {
                     if let Some(url) = config.llm_base_url {
                         map.insert("LLM_BASE_URL".into(), url);
                     }
+                    map.insert("LLM_USER_AGENT".into(), config.llm_user_agent);
                     map.insert("SHOW_THINKING".into(), config.show_thinking.to_string());
                     map.insert("DATA_DIR".into(), config.data_dir);
                     map.insert(
@@ -3061,6 +3072,7 @@ impl SetupApp {
             (self.field_value("LLM_API_KEY"), None)
         };
         let base_url = self.field_value("LLM_BASE_URL");
+        let user_agent = self.field_value("LLM_USER_AGENT");
         let model = self.field_value("LLM_MODEL");
         std::thread::spawn(move || {
             perform_online_validation(
@@ -3070,6 +3082,7 @@ impl SetupApp {
                 &provider,
                 &api_key,
                 &base_url,
+                &user_agent,
                 &model,
                 codex_account_id.as_deref(),
             )
@@ -3480,6 +3493,7 @@ impl SetupApp {
             "LLM_BASE_URL" => find_provider_preset(&provider)
                 .map(|p| p.default_base_url.to_string())
                 .unwrap_or_default(),
+            "LLM_USER_AGENT" => crate::http_client::default_llm_user_agent(),
             "SHOW_THINKING" => "false".into(),
             "DATA_DIR" => default_data_dir_for_setup(),
             "OVERRIDE_TIMEZONE" => String::new(),
@@ -3553,9 +3567,8 @@ impl SetupApp {
             "DATA_DIR" | "OVERRIDE_TIMEZONE" | "WORKING_DIR" | "SOULS_DIR" => "App",
             "SANDBOX_ENABLED" | "HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED" => "Sandbox",
             "REFLECTOR_ENABLED" | "REFLECTOR_INTERVAL_MINS" | "MEMORY_TOKEN_BUDGET" => "Memory",
-            "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL" | "SHOW_THINKING" => {
-                "Model"
-            }
+            "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL" | "LLM_USER_AGENT"
+            | "SHOW_THINKING" => "Model",
             "EMBEDDING_PROVIDER" | "EMBEDDING_API_KEY" | "EMBEDDING_BASE_URL"
             | "EMBEDDING_MODEL" | "EMBEDDING_DIM" => "Embedding",
             "ENABLED_CHANNELS"
@@ -3640,7 +3653,8 @@ impl SetupApp {
             "LLM_API_KEY" => ORDER_MODEL_BASE + 1,
             "LLM_MODEL" => ORDER_MODEL_BASE + 2,
             "LLM_BASE_URL" => ORDER_MODEL_BASE + 3,
-            "SHOW_THINKING" => ORDER_MODEL_BASE + 4,
+            "LLM_USER_AGENT" => ORDER_MODEL_BASE + 4,
+            "SHOW_THINKING" => ORDER_MODEL_BASE + 5,
             // 2) Channel (dynamic channel fields are placed in the branch above)
             "ENABLED_CHANNELS" => ORDER_CHANNEL_BASE,
             "TELEGRAM_BOT_TOKEN" => ORDER_CHANNEL_BASE + 1,
@@ -3735,6 +3749,7 @@ fn perform_online_validation(
     provider: &str,
     api_key: &str,
     base_url: &str,
+    configured_user_agent: &str,
     model: &str,
     codex_account_id: Option<&str>,
 ) -> Result<Vec<String>, MicroClawError> {
@@ -3742,7 +3757,7 @@ fn perform_online_validation(
     let mut checks = Vec::new();
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent(llm_user_agent())
+        .user_agent(llm_user_agent(configured_user_agent))
         .build()?;
 
     // --- Telegram validation (optional) ---
@@ -4549,6 +4564,11 @@ fn save_config_yaml(
     if !base_url.is_empty() {
         yaml.push_str("# Custom base URL (optional)\n");
         yaml.push_str(&format!("llm_base_url: \"{}\"\n", base_url));
+    }
+    let llm_user_agent = get("LLM_USER_AGENT");
+    if !llm_user_agent.is_empty() {
+        yaml.push_str("# LLM HTTP User-Agent (optional)\n");
+        yaml.push_str(&format!("llm_user_agent: \"{}\"\n", llm_user_agent));
     }
     let show_thinking = values
         .get("SHOW_THINKING")
