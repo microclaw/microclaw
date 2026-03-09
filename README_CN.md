@@ -420,6 +420,8 @@ Todo 列表存储在 `<data_dir>/runtime/groups/{chat_id}/TODO.json`，跨会话
 如果要让外部系统（Webhook、CI、脚本）主动触发 agent，可使用 Web API，并配置带
 `operator.write` scope 的 API key。
 
+详细说明见：[`docs/operations/http-hook-trigger.md`](docs/operations/http-hook-trigger.md)
+
 可用端点：
 - `POST /api/send`（主端点）
 - `POST /api/chat`（聊天客户端风格别名）

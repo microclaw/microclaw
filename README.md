@@ -539,6 +539,8 @@ When `web_enabled: true`, MicroClaw serves a local Web UI (default `http://127.0
 For external automation (webhooks, CI, scripts), use the Web API with an API key that has
 `operator.write` scope.
 
+Detailed guide: [`docs/operations/http-hook-trigger.md`](docs/operations/http-hook-trigger.md)
+
 Endpoints:
 - `POST /api/send` (canonical)
 - `POST /api/chat` (alias for chatbot-style clients)
