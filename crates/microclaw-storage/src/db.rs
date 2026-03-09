@@ -906,7 +906,7 @@ impl Database {
                 chat_title = COALESCE(?2, chat_title),
                 chat_type = ?3,
                 last_message_time = ?4,
-                channel = COALESCE(?5, channel),
+                channel = COALESCE(channel, ?5),
                 external_chat_id = COALESCE(external_chat_id, ?6)",
             params![
                 chat_id,
@@ -4700,6 +4700,90 @@ mod tests {
             db.get_chat_external_id(discord).unwrap().as_deref(),
             Some("12345")
         );
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_upsert_chat_preserves_existing_channel_identity() {
+        let (db, dir) = test_db();
+
+        let scoped_chat_id = db
+            .resolve_or_create_chat_id(
+                "telegram.btcpos",
+                "12345",
+                Some("telegram-12345"),
+                "telegram_private",
+            )
+            .unwrap();
+
+        db.upsert_chat(scoped_chat_id, Some("Updated title"), "telegram_private")
+            .unwrap();
+
+        assert_eq!(
+            db.get_chat_channel(scoped_chat_id).unwrap().as_deref(),
+            Some("telegram.btcpos")
+        );
+        assert_eq!(
+            db.get_chat_external_id(scoped_chat_id).unwrap().as_deref(),
+            Some("12345")
+        );
+
+        let scoped_again = db
+            .resolve_or_create_chat_id(
+                "telegram.btcpos",
+                "12345",
+                Some("telegram-12345"),
+                "telegram_private",
+            )
+            .unwrap();
+        assert_eq!(scoped_chat_id, scoped_again);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_resolve_or_create_chat_id_scopes_same_external_id_by_channel() {
+        let (db, dir) = test_db();
+
+        let default_tg = db
+            .resolve_or_create_chat_id(
+                "telegram",
+                "12345",
+                Some("telegram-12345"),
+                "telegram_private",
+            )
+            .unwrap();
+        let scoped_tg = db
+            .resolve_or_create_chat_id(
+                "telegram.btcpos",
+                "12345",
+                Some("telegram-12345"),
+                "telegram_private",
+            )
+            .unwrap();
+
+        assert_ne!(default_tg, scoped_tg);
+
+        let default_tg_again = db
+            .resolve_or_create_chat_id(
+                "telegram",
+                "12345",
+                Some("telegram-12345"),
+                "telegram_private",
+            )
+            .unwrap();
+        let scoped_tg_again = db
+            .resolve_or_create_chat_id(
+                "telegram.btcpos",
+                "12345",
+                Some("telegram-12345"),
+                "telegram_private",
+            )
+            .unwrap();
+
+        assert_eq!(default_tg, default_tg_again);
+        assert_eq!(scoped_tg, scoped_tg_again);
 
         cleanup(&dir);
     }
