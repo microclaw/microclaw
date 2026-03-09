@@ -3,14 +3,14 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::codex_auth::{
-    codex_config_default_openai_base_url, is_openai_codex_provider,
-    refresh_openai_codex_auth_if_needed, resolve_openai_codex_auth,
+    codex_config_default_openai_base_url, is_openai_codex_provider, is_qwen_portal_provider,
+    refresh_openai_codex_auth_if_needed, resolve_openai_codex_auth, resolve_qwen_portal_auth,
 };
 use crate::config::Config;
 #[cfg(test)]
@@ -371,6 +371,7 @@ struct StreamToolUseBlock {
     id: String,
     name: String,
     input_json: String,
+    thought_signature: Option<String>,
 }
 
 fn usage_from_json(v: &serde_json::Value) -> Option<Usage> {
@@ -445,6 +446,7 @@ fn process_anthropic_stream_event(
                                     id,
                                     name,
                                     input_json,
+                                    thought_signature: None,
                                 },
                             );
                         }
@@ -556,6 +558,19 @@ fn process_openai_stream_event(
         }
     }
 
+    if let Some(piece) = delta
+        .get("thought")
+        .and_then(|t| t.as_str())
+        .or_else(|| delta.get("thinking").and_then(|t| t.as_str()))
+    {
+        if !piece.is_empty() {
+            if reasoning_text.is_empty() {
+                debug!("AI started generating thinking/thought");
+            }
+            reasoning_text.push_str(piece);
+        }
+    }
+
     if let Some(piece) = delta.get("reasoning_content").and_then(|t| t.as_str()) {
         if !piece.is_empty() {
             if reasoning_text.is_empty() {
@@ -566,14 +581,12 @@ fn process_openai_stream_event(
     }
 
     if let Some(tc_arr) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-        for tc in tc_arr {
-            let Some(index) = tc
+        for (arr_pos, tc) in tc_arr.iter().enumerate() {
+            let index = tc
                 .get("index")
                 .and_then(|i| i.as_u64())
                 .and_then(|i| usize::try_from(i).ok())
-            else {
-                continue;
-            };
+                .unwrap_or(arr_pos);
             let entry = tool_calls.entry(index).or_default();
             if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
                 entry.id = id.to_string();
@@ -582,8 +595,14 @@ fn process_openai_stream_event(
                 if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
                     entry.name = name.to_string();
                 }
-                if let Some(args) = function.get("arguments").and_then(|v| v.as_str()) {
-                    entry.input_json.push_str(args);
+                if let Some(args) = function.get("arguments") {
+                    match args {
+                        serde_json::Value::String(s) => entry.input_json.push_str(s),
+                        other => entry.input_json.push_str(&other.to_string()),
+                    }
+                }
+                if let Some(sig) = function.get("thought_signature").and_then(|v| v.as_str()) {
+                    entry.thought_signature = Some(sig.to_string());
                 }
             }
         }
@@ -607,6 +626,24 @@ fn parse_tool_input(input_json: &str) -> serde_json::Value {
     serde_json::from_str(trimmed).unwrap_or_else(|_| json!({}))
 }
 
+fn has_tool_use_block(content: &[ResponseContentBlock]) -> bool {
+    content
+        .iter()
+        .any(|b| matches!(b, ResponseContentBlock::ToolUse { .. }))
+}
+
+fn combine_visible_and_reasoning_text(visible: &str, reasoning: &str) -> String {
+    let visible = visible.trim();
+    let reasoning = reasoning.trim();
+    if reasoning.is_empty() {
+        return visible.to_string();
+    }
+    if visible.is_empty() {
+        return format!("<thought>\n{}\n</thought>", reasoning);
+    }
+    format!("<thought>\n{}\n</thought>\n\n{}", reasoning, visible)
+}
+
 fn build_stream_response(
     ordered_indexes: Vec<usize>,
     text_blocks: std::collections::HashMap<usize, String>,
@@ -626,6 +663,7 @@ fn build_stream_response(
                 id: tool.id.clone(),
                 name: tool.name.clone(),
                 input: parse_tool_input(&tool.input_json),
+                thought_signature: tool.thought_signature.clone(),
             });
         }
     }
@@ -636,9 +674,15 @@ fn build_stream_response(
         });
     }
 
+    let mut normalized_stop_reason = normalize_stop_reason(stop_reason);
+    if normalized_stop_reason.as_deref() == Some("tool_use") && !has_tool_use_block(&content) {
+        warn!("Downgrading stop_reason=tool_use to end_turn because no tool_calls were parsed");
+        normalized_stop_reason = Some("end_turn".into());
+    }
+
     MessagesResponse {
         content,
-        stop_reason: normalize_stop_reason(stop_reason),
+        stop_reason: normalized_stop_reason,
         usage,
     }
 }
@@ -815,8 +859,10 @@ impl OpenAiProvider {
     pub fn new(config: &Config) -> Self {
         let is_openai_codex = is_openai_codex_provider(&config.llm_provider);
         let is_deepseek_provider = config.llm_provider.eq_ignore_ascii_case("deepseek");
-        let enable_reasoning_content_bridge = is_deepseek_provider;
-        let enable_thinking_param = is_deepseek_provider && config.show_thinking;
+        let is_google_provider = config.llm_provider.eq_ignore_ascii_case("google");
+        let enable_reasoning_content_bridge = is_deepseek_provider || is_google_provider;
+        let enable_thinking_param =
+            (is_deepseek_provider || is_google_provider) && config.show_thinking;
         let configured_base = config.llm_base_url.as_deref().unwrap_or("");
         let base = resolve_openai_compat_base(&config.llm_provider, configured_base);
 
@@ -824,6 +870,15 @@ impl OpenAiProvider {
             let _ = refresh_openai_codex_auth_if_needed();
             match resolve_openai_codex_auth("") {
                 Ok(auth) => (auth.bearer_token, auth.account_id),
+                Err(e) => {
+                    warn!("{}", e);
+                    (String::new(), None)
+                }
+            }
+        } else if is_qwen_portal_provider(&config.llm_provider) && config.api_key.trim().is_empty()
+        {
+            match resolve_qwen_portal_auth("") {
+                Ok(auth) => (auth.bearer_token, None),
                 Err(e) => {
                     warn!("{}", e);
                     (String::new(), None)
@@ -857,12 +912,58 @@ impl OpenAiProvider {
     }
 }
 
-fn maybe_enable_thinking_param(body: &mut serde_json::Value, enabled: bool) {
+fn maybe_enable_thinking_param(body: &mut serde_json::Value, provider: &str, enabled: bool) {
     if !enabled {
         return;
     }
     if let Some(obj) = body.as_object_mut() {
-        obj.insert("thinking".to_string(), json!({"type": "enabled"}));
+        match provider.to_ascii_lowercase().as_str() {
+            "google" => {
+                obj.remove("thinking");
+                obj.remove("thinking_config");
+                let extra_body = obj
+                    .entry("extra_body".to_string())
+                    .or_insert_with(|| json!({}));
+                if !extra_body.is_object() {
+                    *extra_body = json!({});
+                }
+                if let Some(extra_obj) = extra_body.as_object_mut() {
+                    let google = extra_obj
+                        .entry("google".to_string())
+                        .or_insert_with(|| json!({}));
+                    if !google.is_object() {
+                        *google = json!({});
+                    }
+                    if let Some(google_obj) = google.as_object_mut() {
+                        google_obj.insert(
+                            "thinking_config".to_string(),
+                            json!({"include_thoughts": true}),
+                        );
+                    }
+                }
+            }
+            "deepseek" => {
+                obj.insert("thinking".to_string(), json!({"type": "enabled"}));
+            }
+            // Alibaba DashScope (Qwen OpenAI-compatible): enable_thinking controls mixed thinking mode.
+            "alibaba" => {
+                obj.insert("enable_thinking".to_string(), json!(true));
+            }
+            // MiniMax OpenAI-compatible: reasoning_split separates thinking into reasoning_details.
+            "minimax" => {
+                obj.insert("reasoning_split".to_string(), json!(true));
+            }
+            // OpenRouter unified reasoning config.
+            "openrouter" => {
+                obj.insert("reasoning".to_string(), json!({}));
+            }
+            _ => {
+                error!(
+                    provider = provider,
+                    "show_thinking is enabled, but no supported thinking parameter mapping is configured for this provider"
+                );
+            }
+        }
     }
 }
 
@@ -896,6 +997,25 @@ fn apply_openai_compat_body_overrides(
     apply_body_override_map(body, Some(global));
     apply_body_override_map(body, by_provider.get(&provider.to_ascii_lowercase()));
     apply_body_override_map(body, by_model.get(model));
+}
+
+fn has_visible_reply_runtime_guard(messages: &[Message]) -> bool {
+    messages.iter().rev().any(|m| {
+        if m.role != "user" {
+            return false;
+        }
+        match &m.content {
+            MessageContent::Text(t) => {
+                t.contains("[runtime_guard]: Your previous reply had no user-visible text.")
+            }
+            MessageContent::Blocks(blocks) => blocks.iter().any(|b| match b {
+                ContentBlock::Text { text } => {
+                    text.contains("[runtime_guard]: Your previous reply had no user-visible text.")
+                }
+                _ => false,
+            }),
+        }
+    })
 }
 
 // --- OpenAI response types ---
@@ -937,6 +1057,8 @@ struct OaiToolCall {
 struct OaiFunction {
     name: String,
     arguments: String,
+    #[serde(default)]
+    thought_signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1087,7 +1209,8 @@ impl LlmProvider for OpenAiProvider {
             self.max_tokens,
             self.prefer_max_completion_tokens,
         );
-        maybe_enable_thinking_param(&mut body, self.enable_thinking_param);
+        let thinking_enabled = self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
+        maybe_enable_thinking_param(&mut body, &self.provider, thinking_enabled);
         apply_openai_compat_body_overrides(
             &mut body,
             &self.provider,
@@ -1219,7 +1342,8 @@ impl LlmProvider for OpenAiProvider {
             self.max_tokens,
             self.prefer_max_completion_tokens,
         );
-        maybe_enable_thinking_param(&mut body, self.enable_thinking_param);
+        let thinking_enabled = self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
+        maybe_enable_thinking_param(&mut body, &self.provider, thinking_enabled);
         apply_openai_compat_body_overrides(
             &mut body,
             &self.provider,
@@ -1319,11 +1443,10 @@ impl LlmProvider for OpenAiProvider {
         }
 
         let mut content = Vec::new();
-        if !text.is_empty() {
-            content.push(ResponseContentBlock::Text { text });
-        } else if !reasoning_text.is_empty() && !tool_calls.is_empty() {
+        let combined_text = combine_visible_and_reasoning_text(&text, &reasoning_text);
+        if !combined_text.is_empty() {
             content.push(ResponseContentBlock::Text {
-                text: reasoning_text,
+                text: combined_text,
             });
         }
         for (_index, tool) in tool_calls {
@@ -1331,6 +1454,7 @@ impl LlmProvider for OpenAiProvider {
                 id: tool.id,
                 name: tool.name,
                 input: parse_tool_input(&tool.input_json),
+                thought_signature: tool.thought_signature,
             });
         }
         if content.is_empty() {
@@ -1526,14 +1650,25 @@ fn translate_messages_to_oai_with_reasoning(
                     let tool_calls: Vec<serde_json::Value> = blocks
                         .iter()
                         .filter_map(|b| match b {
-                            ContentBlock::ToolUse { id, name, input } => Some(json!({
-                                "id": id,
-                                "type": "function",
-                                "function": {
+                            ContentBlock::ToolUse {
+                                id,
+                                name,
+                                input,
+                                thought_signature,
+                            } => {
+                                let mut function_obj = json!({
                                     "name": name,
                                     "arguments": serde_json::to_string(input).unwrap_or_default()
+                                });
+                                if let Some(sig) = thought_signature {
+                                    function_obj["thought_signature"] = json!(sig);
                                 }
-                            })),
+                                Some(json!({
+                                    "id": id,
+                                    "type": "function",
+                                    "function": function_obj
+                                }))
+                            }
                             _ => None,
                         })
                         .collect();
@@ -1704,7 +1839,10 @@ fn translate_messages_to_oai_responses_input(messages: &[Message]) -> Vec<serde_
                     }
 
                     for block in blocks {
-                        if let ContentBlock::ToolUse { id, name, input } = block {
+                        if let ContentBlock::ToolUse {
+                            id, name, input, ..
+                        } = block
+                        {
                             out.push(json!({
                                 "type": "function_call",
                                 "call_id": id,
@@ -1836,6 +1974,7 @@ fn translate_oai_responses_response(resp: OaiResponsesResponse) -> MessagesRespo
                     id: call_id,
                     name,
                     input: parsed_args,
+                    thought_signature: None,
                 });
                 saw_tool_use = true;
             }
@@ -1878,21 +2017,21 @@ fn translate_oai_response(oai: OaiResponse) -> MessagesResponse {
     };
 
     let mut content = Vec::new();
-    let mut has_visible_text = false;
     let OaiMessage {
         content: message_content,
         reasoning_content,
         tool_calls,
     } = choice.message;
 
-    if let Some(text) = message_content {
-        if !text.is_empty() {
-            has_visible_text = true;
-            content.push(ResponseContentBlock::Text { text });
-        }
+    let visible = message_content.unwrap_or_default();
+    let reasoning = reasoning_content.unwrap_or_default();
+    let combined_text = combine_visible_and_reasoning_text(&visible, &reasoning);
+    if !combined_text.is_empty() {
+        content.push(ResponseContentBlock::Text {
+            text: combined_text,
+        });
     }
 
-    let has_tool_calls = tool_calls.is_some();
     if let Some(tool_calls) = tool_calls {
         for tc in tool_calls {
             let input: serde_json::Value =
@@ -1901,15 +2040,8 @@ fn translate_oai_response(oai: OaiResponse) -> MessagesResponse {
                 id: tc.id,
                 name: tc.function.name,
                 input,
+                thought_signature: tc.function.thought_signature,
             });
-        }
-    }
-
-    if has_tool_calls && !has_visible_text {
-        if let Some(reasoning) = reasoning_content {
-            if !reasoning.is_empty() {
-                content.insert(0, ResponseContentBlock::Text { text: reasoning });
-            }
         }
     }
 
@@ -1919,11 +2051,15 @@ fn translate_oai_response(oai: OaiResponse) -> MessagesResponse {
         });
     }
 
-    let stop_reason = match choice.finish_reason.as_deref() {
+    let mut stop_reason = match choice.finish_reason.as_deref() {
         Some("tool_calls") => Some("tool_use".into()),
         Some("length") => Some("max_tokens".into()),
         _ => Some("end_turn".into()),
     };
+    if stop_reason.as_deref() == Some("tool_use") && !has_tool_use_block(&content) {
+        warn!("Downgrading stop_reason=tool_use to end_turn because response had no tool_calls");
+        stop_reason = Some("end_turn".into());
+    }
 
     let usage = oai.usage.map(|u| Usage {
         input_tokens: u.prompt_tokens,
@@ -2002,6 +2138,7 @@ mod tests {
                     id: "t1".into(),
                     name: "bash".into(),
                     input: json!({"command": "ls"}),
+                    thought_signature: None,
                 },
             ]),
         }];
@@ -2016,6 +2153,22 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_messages_assistant_tool_use_includes_thought_signature() {
+        let msgs = vec![Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "bash".into(),
+                input: json!({"command": "ls"}),
+                thought_signature: Some("sig_abc".into()),
+            }]),
+        }];
+        let out = translate_messages_to_oai("", &msgs);
+        let tc = out[0]["tool_calls"].as_array().unwrap();
+        assert_eq!(tc[0]["function"]["thought_signature"], "sig_abc");
+    }
+
+    #[test]
     fn test_translate_messages_assistant_tool_use_deepseek_reasoning() {
         let msgs = vec![Message {
             role: "assistant".into(),
@@ -2027,6 +2180,7 @@ mod tests {
                     id: "t1".into(),
                     name: "bash".into(),
                     input: json!({"command": "ls"}),
+                    thought_signature: None,
                 },
             ]),
         }];
@@ -2049,6 +2203,7 @@ mod tests {
                     id: "t1".into(),
                     name: "glob".into(),
                     input: json!({}),
+                    thought_signature: None,
                 }]),
             },
             Message {
@@ -2077,6 +2232,7 @@ mod tests {
                     id: "t1".into(),
                     name: "glob".into(),
                     input: json!({}),
+                    thought_signature: None,
                 }]),
             },
             Message {
@@ -2118,6 +2274,7 @@ mod tests {
                     id: "t1".into(),
                     name: "glob".into(),
                     input: json!({}),
+                    thought_signature: None,
                 }]),
             },
             Message {
@@ -2180,6 +2337,7 @@ mod tests {
                     id: "t1".into(),
                     name: "glob".into(),
                     input: json!({}),
+                    thought_signature: None,
                 }]),
             },
             Message {
@@ -2280,6 +2438,7 @@ mod tests {
                         function: OaiFunction {
                             name: "bash".into(),
                             arguments: r#"{"command":"ls"}"#.into(),
+                            thought_signature: None,
                         },
                     }]),
                 },
@@ -2290,13 +2449,43 @@ mod tests {
         let resp = translate_oai_response(oai);
         assert_eq!(resp.stop_reason.as_deref(), Some("tool_use"));
         match &resp.content[0] {
-            ResponseContentBlock::ToolUse { id, name, input } => {
+            ResponseContentBlock::ToolUse {
+                id,
+                name,
+                input,
+                thought_signature,
+            } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "bash");
                 assert_eq!(input["command"], "ls");
+                assert!(thought_signature.is_none());
             }
             _ => panic!("Expected ToolUse"),
         }
+    }
+
+    #[test]
+    fn test_translate_oai_response_tool_calls_without_calls_downgrades_to_end_turn() {
+        let oai = OaiResponse {
+            choices: vec![OaiChoice {
+                message: OaiMessage {
+                    content: None,
+                    reasoning_content: None,
+                    tool_calls: None,
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+
+        let resp = translate_oai_response(oai);
+        assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
+        assert!(
+            !resp
+                .content
+                .iter()
+                .any(|b| matches!(b, ResponseContentBlock::ToolUse { .. }))
+        );
     }
 
     #[test]
@@ -2349,6 +2538,7 @@ mod tests {
                         function: OaiFunction {
                             name: "read_file".into(),
                             arguments: r#"{"path":"/tmp/x"}"#.into(),
+                            thought_signature: None,
                         },
                     }]),
                 },
@@ -2380,6 +2570,7 @@ mod tests {
                         function: OaiFunction {
                             name: "bash".into(),
                             arguments: r#"{"command":"ls"}"#.into(),
+                            thought_signature: None,
                         },
                     }]),
                 },
@@ -2390,12 +2581,36 @@ mod tests {
         let resp = translate_oai_response(oai);
         assert_eq!(resp.content.len(), 2);
         match &resp.content[0] {
-            ResponseContentBlock::Text { text } => assert_eq!(text, "plan"),
+            ResponseContentBlock::Text { text } => {
+                assert_eq!(text, "<thought>\nplan\n</thought>")
+            }
             _ => panic!("Expected Text"),
         }
         match &resp.content[1] {
             ResponseContentBlock::ToolUse { name, .. } => assert_eq!(name, "bash"),
             _ => panic!("Expected ToolUse"),
+        }
+    }
+
+    #[test]
+    fn test_translate_oai_response_reasoning_only() {
+        let oai = OaiResponse {
+            choices: vec![OaiChoice {
+                message: OaiMessage {
+                    content: None,
+                    reasoning_content: Some("internal".into()),
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: None,
+        };
+        let resp = translate_oai_response(oai);
+        match &resp.content[0] {
+            ResponseContentBlock::Text { text } => {
+                assert_eq!(text, "<thought>\ninternal\n</thought>")
+            }
+            _ => panic!("Expected Text"),
         }
     }
 
@@ -2416,8 +2631,26 @@ mod tests {
     }
 
     #[test]
+    fn test_build_stream_response_tool_calls_without_blocks_downgrades_to_end_turn() {
+        let resp = build_stream_response(
+            vec![],
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            Some("tool_calls".into()),
+            None,
+        );
+        assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
+        assert!(
+            !resp
+                .content
+                .iter()
+                .any(|b| matches!(b, ResponseContentBlock::ToolUse { .. }))
+        );
+    }
+
+    #[test]
     fn test_process_openai_stream_event_collects_reasoning_content() {
-        let data = r#"{"choices":[{"delta":{"reasoning_content":"think","tool_calls":[{"index":0,"id":"c1","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]},"finish_reason":null}],"usage":null}"#;
+        let data = r#"{"choices":[{"delta":{"reasoning_content":"think","tool_calls":[{"index":0,"id":"c1","function":{"name":"bash","arguments":"{\"command\":\"ls\"}","thought_signature":"sig_123"}}]},"finish_reason":null}],"usage":null}"#;
         let mut text = String::new();
         let mut reasoning_text = String::new();
         let mut stop_reason = None;
@@ -2441,6 +2674,61 @@ mod tests {
         assert_eq!(call.id, "c1");
         assert_eq!(call.name, "bash");
         assert_eq!(call.input_json, r#"{"command":"ls"}"#);
+        assert_eq!(call.thought_signature.as_deref(), Some("sig_123"));
+    }
+
+    #[test]
+    fn test_process_openai_stream_event_collects_thinking_aliases() {
+        let data = r#"{"choices":[{"delta":{"thought":"alpha","thinking":"beta"}}]}"#;
+        let mut text = String::new();
+        let mut reasoning_text = String::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+        let mut tool_calls = std::collections::BTreeMap::new();
+
+        process_openai_stream_event(
+            data,
+            None,
+            &mut text,
+            &mut reasoning_text,
+            &mut stop_reason,
+            &mut usage,
+            &mut tool_calls,
+        );
+
+        assert!(text.is_empty());
+        assert_eq!(reasoning_text, "alpha");
+        assert_eq!(stop_reason, None);
+        assert!(usage.is_none());
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn test_process_openai_stream_event_tool_calls_without_index_and_object_args() {
+        let data = r#"{"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"weather","arguments":{"location":"Shanghai"}}}]}}]}"#;
+        let mut text = String::new();
+        let mut reasoning_text = String::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+        let mut tool_calls = std::collections::BTreeMap::new();
+
+        process_openai_stream_event(
+            data,
+            None,
+            &mut text,
+            &mut reasoning_text,
+            &mut stop_reason,
+            &mut usage,
+            &mut tool_calls,
+        );
+
+        assert!(text.is_empty());
+        assert!(reasoning_text.is_empty());
+        assert_eq!(stop_reason, None);
+        let call = tool_calls.get(&0).unwrap();
+        assert_eq!(call.id, "call_1");
+        assert_eq!(call.name, "weather");
+        assert_eq!(call.input_json, r#"{"location":"Shanghai"}"#);
     }
 
     #[test]
@@ -2464,15 +2752,74 @@ mod tests {
     #[test]
     fn test_maybe_enable_thinking_param_enabled() {
         let mut body = json!({"model":"test-model","messages":[]});
-        maybe_enable_thinking_param(&mut body, true);
+        maybe_enable_thinking_param(&mut body, "deepseek", true);
         assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body.get("thinking_config").is_none());
     }
 
     #[test]
     fn test_maybe_enable_thinking_param_disabled() {
         let mut body = json!({"model":"test-model","messages":[]});
-        maybe_enable_thinking_param(&mut body, false);
+        maybe_enable_thinking_param(&mut body, "deepseek", false);
         assert!(body.get("thinking").is_none());
+        assert!(body.get("thinking_config").is_none());
+    }
+
+    #[test]
+    fn test_maybe_enable_thinking_param_google_uses_thinking_config() {
+        let mut body = json!({"model":"gemini-2.5-flash","messages":[]});
+        maybe_enable_thinking_param(&mut body, "google", true);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("thinking_config").is_none());
+        assert_eq!(
+            body["extra_body"]["google"]["thinking_config"]["include_thoughts"],
+            true
+        );
+    }
+
+    #[test]
+    fn test_maybe_enable_thinking_param_unknown_provider_does_not_set_fields() {
+        let mut body = json!({"model":"unknown","messages":[]});
+        maybe_enable_thinking_param(&mut body, "openrouter", true);
+        assert!(body.get("reasoning").is_some());
+    }
+
+    #[test]
+    fn test_maybe_enable_thinking_param_alibaba_uses_enable_thinking() {
+        let mut body = json!({"model":"qwen-plus","messages":[]});
+        maybe_enable_thinking_param(&mut body, "alibaba", true);
+        assert_eq!(body["enable_thinking"], true);
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn test_maybe_enable_thinking_param_minimax_uses_reasoning_split() {
+        let mut body = json!({"model":"MiniMax-M2.5","messages":[]});
+        maybe_enable_thinking_param(&mut body, "minimax", true);
+        assert_eq!(body["reasoning_split"], true);
+    }
+
+    #[test]
+    fn test_maybe_enable_thinking_param_unsupported_provider_does_not_set_fields() {
+        let mut body = json!({"model":"unknown","messages":[]});
+        maybe_enable_thinking_param(&mut body, "qwen-portal", true);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("thinking_config").is_none());
+        assert!(body.get("enable_thinking").is_none());
+        assert!(body.get("reasoning_split").is_none());
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn test_has_visible_reply_runtime_guard_detects_guard_message() {
+        let msgs = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Text(
+                "[runtime_guard]: Your previous reply had no user-visible text. Reply again now."
+                    .into(),
+            ),
+        }];
+        assert!(has_visible_reply_runtime_guard(&msgs));
     }
 
     #[test]
@@ -2552,6 +2899,23 @@ mod tests {
     }
 
     #[test]
+    fn test_openai_provider_capability_flags_for_google() {
+        let mut config = Config::test_defaults();
+        config.llm_provider = "google".into();
+        config.model = "gemini-3-flash-preview".into();
+        config.show_thinking = true;
+        config.data_dir = "/tmp".into();
+        config.working_dir = "/tmp".into();
+        config.working_dir_isolation = WorkingDirIsolation::Shared;
+        config.web_enabled = false;
+        config.web_port = 3900;
+
+        let provider = OpenAiProvider::new(&config);
+        assert!(provider.enable_thinking_param);
+        assert!(provider.enable_reasoning_content_bridge);
+    }
+
+    #[test]
     fn test_set_output_token_limit_prefers_max_completion_tokens() {
         let mut body = json!({"model":"gpt-5.2","messages":[],"max_tokens":1});
         set_output_token_limit(&mut body, 256, true);
@@ -2576,6 +2940,7 @@ mod tests {
                 id: "call_1".into(),
                 name: "bash".into(),
                 input_json: r#"{"command":"ls","cwd":"/tmp"}"#.into(),
+                thought_signature: None,
             },
         );
         let resp = build_stream_response(
@@ -2587,11 +2952,17 @@ mod tests {
         );
         assert_eq!(resp.stop_reason.as_deref(), Some("tool_use"));
         match &resp.content[0] {
-            ResponseContentBlock::ToolUse { id, name, input } => {
+            ResponseContentBlock::ToolUse {
+                id,
+                name,
+                input,
+                thought_signature,
+            } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "bash");
                 assert_eq!(input["command"], "ls");
                 assert_eq!(input["cwd"], "/tmp");
+                assert!(thought_signature.is_none());
             }
             _ => panic!("Expected ToolUse"),
         }
@@ -2894,6 +3265,7 @@ mod tests {
                     id: "t1".into(),
                     name: "bash".into(),
                     input: json!({}),
+                    thought_signature: None,
                 }]),
             },
             Message {
@@ -2951,6 +3323,7 @@ mod tests {
                     id: "t1".into(),
                     name: "bash".into(),
                     input: json!({}),
+                    thought_signature: None,
                 }]),
             },
             Message {

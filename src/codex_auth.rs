@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use microclaw_core::error::MicroClawError;
 
 pub const OPENAI_CODEX_PROVIDER: &str = "openai-codex";
+pub const QWEN_PORTAL_PROVIDER: &str = "qwen-portal";
 
 #[derive(Debug, Deserialize)]
 struct CodexAuthFile {
@@ -21,6 +22,11 @@ struct CodexAuthTokens {
     account_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct QwenOauthCredsFile {
+    access_token: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexAuthResolved {
     pub bearer_token: String,
@@ -28,11 +34,17 @@ pub struct CodexAuthResolved {
 }
 
 pub fn provider_allows_empty_api_key(provider: &str) -> bool {
-    provider.eq_ignore_ascii_case("ollama") || provider.eq_ignore_ascii_case(OPENAI_CODEX_PROVIDER)
+    provider.eq_ignore_ascii_case("ollama")
+        || provider.eq_ignore_ascii_case(OPENAI_CODEX_PROVIDER)
+        || provider.eq_ignore_ascii_case(QWEN_PORTAL_PROVIDER)
 }
 
 pub fn is_openai_codex_provider(provider: &str) -> bool {
     provider.eq_ignore_ascii_case(OPENAI_CODEX_PROVIDER)
+}
+
+pub fn is_qwen_portal_provider(provider: &str) -> bool {
+    provider.eq_ignore_ascii_case(QWEN_PORTAL_PROVIDER)
 }
 
 pub fn default_codex_auth_path() -> PathBuf {
@@ -53,6 +65,16 @@ pub fn default_codex_config_path() -> PathBuf {
         .map(expand_tilde)
         .unwrap_or_else(|| expand_tilde("~/.codex"));
     Path::new(&base).join("config.toml")
+}
+
+pub fn default_qwen_oauth_creds_path() -> PathBuf {
+    let base = std::env::var("QWEN_HOME")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .as_deref()
+        .map(expand_tilde)
+        .unwrap_or_else(|| expand_tilde("~/.qwen"));
+    Path::new(&base).join("oauth_creds.json")
 }
 
 pub fn codex_auth_file_has_access_token() -> Result<bool, MicroClawError> {
@@ -154,6 +176,99 @@ pub fn resolve_openai_codex_auth(
         "OpenAI Codex provider requires ~/.codex/auth.json (access token or OPENAI_API_KEY), or OPENAI_CODEX_ACCESS_TOKEN. Run `codex login` or update Codex config files (expected auth file: {}).",
         auth_path.display()
     )))
+}
+
+pub fn qwen_oauth_file_has_access_token() -> Result<bool, MicroClawError> {
+    if let Ok(token) = std::env::var("QWEN_PORTAL_ACCESS_TOKEN") {
+        if !token.trim().is_empty() {
+            return Ok(true);
+        }
+    }
+    if let Ok(token) = std::env::var("QWEN_CODE_ACCESS_TOKEN") {
+        if !token.trim().is_empty() {
+            return Ok(true);
+        }
+    }
+    let path = default_qwen_oauth_creds_path();
+    if !path.exists() {
+        return Ok(false);
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| {
+        MicroClawError::Config(format!(
+            "Failed to read Qwen oauth creds file {}: {e}",
+            path.display()
+        ))
+    })?;
+    let parsed: QwenOauthCredsFile = serde_json::from_str(&content).map_err(|e| {
+        MicroClawError::Config(format!(
+            "Failed to parse Qwen oauth creds file {}: {e}",
+            path.display()
+        ))
+    })?;
+    Ok(parsed
+        .access_token
+        .as_ref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false))
+}
+
+pub fn resolve_qwen_portal_auth(
+    fallback_api_key: &str,
+) -> Result<CodexAuthResolved, MicroClawError> {
+    if let Ok(token) = std::env::var("QWEN_PORTAL_ACCESS_TOKEN") {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            return Ok(CodexAuthResolved {
+                bearer_token: trimmed.to_string(),
+                account_id: None,
+            });
+        }
+    }
+    if let Ok(token) = std::env::var("QWEN_CODE_ACCESS_TOKEN") {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            return Ok(CodexAuthResolved {
+                bearer_token: trimmed.to_string(),
+                account_id: None,
+            });
+        }
+    }
+    let path = default_qwen_oauth_creds_path();
+    if path.exists() {
+        let content = std::fs::read_to_string(&path).map_err(|e| {
+            MicroClawError::Config(format!(
+                "Failed to read Qwen oauth creds file {}: {e}",
+                path.display()
+            ))
+        })?;
+        let parsed: QwenOauthCredsFile = serde_json::from_str(&content).map_err(|e| {
+            MicroClawError::Config(format!(
+                "Failed to parse Qwen oauth creds file {}: {e}",
+                path.display()
+            ))
+        })?;
+        if let Some(token) = parsed
+            .access_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            return Ok(CodexAuthResolved {
+                bearer_token: token.to_string(),
+                account_id: None,
+            });
+        }
+    }
+    let fallback = fallback_api_key.trim();
+    if !fallback.is_empty() {
+        return Ok(CodexAuthResolved {
+            bearer_token: fallback.to_string(),
+            account_id: None,
+        });
+    }
+    Err(MicroClawError::Config(
+        "qwen-portal requires ~/.qwen/oauth_creds.json (access_token), or QWEN_PORTAL_ACCESS_TOKEN, or api_key.".into(),
+    ))
 }
 
 pub fn codex_config_default_openai_base_url() -> Option<String> {
@@ -370,6 +485,7 @@ mod tests {
     fn test_provider_allows_empty_api_key() {
         assert!(provider_allows_empty_api_key("ollama"));
         assert!(provider_allows_empty_api_key("openai-codex"));
+        assert!(provider_allows_empty_api_key("qwen-portal"));
         assert!(!provider_allows_empty_api_key("openai"));
     }
 
@@ -378,6 +494,13 @@ mod tests {
         assert!(is_openai_codex_provider("openai-codex"));
         assert!(is_openai_codex_provider("OPENAI-CODEX"));
         assert!(!is_openai_codex_provider("openai"));
+    }
+
+    #[test]
+    fn test_is_qwen_portal_provider() {
+        assert!(is_qwen_portal_provider("qwen-portal"));
+        assert!(is_qwen_portal_provider("QWEN-PORTAL"));
+        assert!(!is_qwen_portal_provider("qwen"));
     }
 
     #[test]
@@ -490,5 +613,85 @@ wire_api = "responses"
 "#;
         let base = parse_codex_config_default_openai_base_url(content).unwrap();
         assert_eq!(base, "https://api.tabcode.cc/openai");
+    }
+
+    #[test]
+    fn test_qwen_oauth_file_has_access_token() {
+        let _guard = env_lock();
+        let prev_qwen_home = std::env::var("QWEN_HOME").ok();
+        let prev_qwen_access = std::env::var("QWEN_PORTAL_ACCESS_TOKEN").ok();
+        std::env::remove_var("QWEN_PORTAL_ACCESS_TOKEN");
+        let qwen_dir = std::env::temp_dir().join(format!(
+            "microclaw-qwen-oauth-creds-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&qwen_dir).unwrap();
+        std::fs::write(
+            qwen_dir.join("oauth_creds.json"),
+            r#"{"access_token":"qwen-oauth-token"}"#,
+        )
+        .unwrap();
+        std::env::set_var("QWEN_HOME", &qwen_dir);
+
+        let has = qwen_oauth_file_has_access_token().unwrap();
+
+        if let Some(prev) = prev_qwen_home {
+            std::env::set_var("QWEN_HOME", prev);
+        } else {
+            std::env::remove_var("QWEN_HOME");
+        }
+        if let Some(prev) = prev_qwen_access {
+            std::env::set_var("QWEN_PORTAL_ACCESS_TOKEN", prev);
+        } else {
+            std::env::remove_var("QWEN_PORTAL_ACCESS_TOKEN");
+        }
+        let _ = std::fs::remove_file(qwen_dir.join("oauth_creds.json"));
+        let _ = std::fs::remove_dir(qwen_dir);
+
+        assert!(has);
+    }
+
+    #[test]
+    fn test_resolve_qwen_portal_auth_reads_oauth_creds_file() {
+        let _guard = env_lock();
+        let prev_qwen_home = std::env::var("QWEN_HOME").ok();
+        let prev_qwen_access = std::env::var("QWEN_PORTAL_ACCESS_TOKEN").ok();
+        std::env::remove_var("QWEN_PORTAL_ACCESS_TOKEN");
+
+        let qwen_dir = std::env::temp_dir().join(format!(
+            "microclaw-qwen-oauth-resolve-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&qwen_dir).unwrap();
+        std::fs::write(
+            qwen_dir.join("oauth_creds.json"),
+            r#"{"access_token":"qwen-oauth-token"}"#,
+        )
+        .unwrap();
+        std::env::set_var("QWEN_HOME", &qwen_dir);
+
+        let auth = resolve_qwen_portal_auth("").unwrap();
+
+        if let Some(prev) = prev_qwen_home {
+            std::env::set_var("QWEN_HOME", prev);
+        } else {
+            std::env::remove_var("QWEN_HOME");
+        }
+        if let Some(prev) = prev_qwen_access {
+            std::env::set_var("QWEN_PORTAL_ACCESS_TOKEN", prev);
+        } else {
+            std::env::remove_var("QWEN_PORTAL_ACCESS_TOKEN");
+        }
+        let _ = std::fs::remove_file(qwen_dir.join("oauth_creds.json"));
+        let _ = std::fs::remove_dir(qwen_dir);
+
+        assert_eq!(auth.bearer_token, "qwen-oauth-token");
+        assert!(auth.account_id.is_none());
     }
 }

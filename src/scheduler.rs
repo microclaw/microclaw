@@ -362,6 +362,63 @@ pub fn spawn_reflector(state: Arc<AppState>) {
     });
 }
 
+fn strip_reflector_thinking_tags(input: &str) -> String {
+    fn strip_tag(text: &str, open: &str, close: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(start) = rest.find(open) {
+            out.push_str(&rest[..start]);
+            let after_open = &rest[start + open.len()..];
+            if let Some(end_rel) = after_open.find(close) {
+                rest = &after_open[end_rel + close.len()..];
+            } else {
+                rest = "";
+                break;
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    let no_think = strip_tag(input, "<think>", "</think>");
+    strip_tag(&no_think, "<thought>", "</thought>")
+}
+
+fn parse_reflector_json_array(text: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {
+    let cleaned = strip_reflector_thinking_tags(text);
+    let trimmed = cleaned.trim();
+    if let Ok(v) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed) {
+        return Ok(v);
+    }
+
+    let bytes = trimmed.as_bytes();
+    let mut starts = Vec::new();
+    let mut ends = Vec::new();
+    for (i, b) in bytes.iter().enumerate() {
+        if *b == b'[' {
+            starts.push(i);
+        } else if *b == b']' {
+            ends.push(i);
+        }
+    }
+
+    let mut last_err: Option<serde_json::Error> = None;
+    for &start in &starts {
+        for &end in ends.iter().rev() {
+            if end <= start {
+                continue;
+            }
+            let candidate = &trimmed[start..=end];
+            match serde_json::from_str::<Vec<serde_json::Value>>(candidate) {
+                Ok(v) => return Ok(v),
+                Err(e) => last_err = Some(e),
+            }
+        }
+    }
+
+    serde_json::from_str::<Vec<serde_json::Value>>(trimmed).map_err(|e| last_err.unwrap_or(e))
+}
+
 async fn run_reflector(state: &Arc<AppState>) {
     #[cfg(feature = "sqlite-vec")]
     backfill_embeddings(state).await;
@@ -503,11 +560,12 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         .join("");
 
     // 7. Parse JSON array
-    let extracted: Vec<serde_json::Value> = match serde_json::from_str(text.trim()) {
+    let extracted: Vec<serde_json::Value> = match parse_reflector_json_array(text.trim()) {
         Ok(v) => v,
         Err(_) => {
-            let start = text.find('[').unwrap_or(0);
-            let end = text.rfind(']').map(|i| i + 1).unwrap_or(text.len());
+            let cleaned = strip_reflector_thinking_tags(&text);
+            let start = cleaned.find('[').unwrap_or(0);
+            let end = cleaned.rfind(']').map(|i| i + 1).unwrap_or(cleaned.len());
             if start >= end {
                 error!("Reflector: parse failed for chat {chat_id}: no JSON array found");
                 let finished_at = Utc::now().to_rfc3339();
@@ -529,7 +587,7 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
                 .await;
                 return;
             }
-            match serde_json::from_str(&text[start..end]) {
+            match parse_reflector_json_array(&cleaned[start..end]) {
                 Ok(v) => v,
                 Err(e) => {
                     error!("Reflector: parse failed for chat {chat_id}: {e}");
@@ -858,5 +916,21 @@ mod tests {
     fn test_resolve_task_timezone_falls_back_to_default_on_invalid_task_timezone() {
         let tz = resolve_task_timezone("Not/AZone", "US/Eastern");
         assert_eq!(tz, chrono_tz::Tz::US__Eastern);
+    }
+
+    #[test]
+    fn test_parse_reflector_json_array_strips_thinking_tags() {
+        let raw = "<thought>internal</thought>[{\"content\":\"x\",\"category\":\"KNOWLEDGE\"}]";
+        let arr = parse_reflector_json_array(raw).expect("should parse");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["content"], "x");
+    }
+
+    #[test]
+    fn test_parse_reflector_json_array_finds_array_inside_noise() {
+        let raw = "notes...\n```json\n[{\"content\":\"y\",\"category\":\"PROFILE\"}]\n```\nthanks";
+        let arr = parse_reflector_json_array(raw).expect("should parse");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["content"], "y");
     }
 }

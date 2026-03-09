@@ -1897,6 +1897,7 @@ mod tests {
                     id: "t1".into(),
                     name: "bash".into(),
                     input: serde_json::json!({"command": "ls"}),
+                    thought_signature: None,
                 },
             ]),
         };

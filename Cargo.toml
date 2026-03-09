@@ -12,7 +12,7 @@ resolver = "2"
 
 [package]
 name = "microclaw"
-version = "0.0.161"
+version = "0.0.163"
 edition = "2021"
 license = "MIT"
 default-run = "microclaw"

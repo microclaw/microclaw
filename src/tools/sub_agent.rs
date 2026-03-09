@@ -121,11 +121,17 @@ impl SubAgentTool {
                         ResponseContentBlock::Text { text } => {
                             Some(ContentBlock::Text { text: text.clone() })
                         }
-                        ResponseContentBlock::ToolUse { id, name, input } => {
+                        ResponseContentBlock::ToolUse {
+                            id,
+                            name,
+                            input,
+                            thought_signature,
+                        } => {
                             Some(ContentBlock::ToolUse {
                                 id: id.clone(),
                                 name: name.clone(),
                                 input: input.clone(),
+                                thought_signature: thought_signature.clone(),
                             })
                         }
                         ResponseContentBlock::Other => None,
@@ -139,7 +145,10 @@ impl SubAgentTool {
 
                 let mut tool_results = Vec::new();
                 for block in &response.content {
-                    if let ResponseContentBlock::ToolUse { id, name, input } = block {
+                    if let ResponseContentBlock::ToolUse {
+                        id, name, input, ..
+                    } = block
+                    {
                         info!(
                             "Sub-agent executing tool: {} (iteration {})",
                             name,

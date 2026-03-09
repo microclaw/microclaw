@@ -170,6 +170,59 @@ fn summarize_for_user_note(text: &str, max_chars: usize) -> String {
     }
 }
 
+fn truncate_for_log(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        text.to_string()
+    } else {
+        let clipped = text.chars().take(max_chars).collect::<String>();
+        format!("{clipped}...")
+    }
+}
+
+fn summarize_tool_uses_for_log(
+    blocks: &[ResponseContentBlock],
+    max_calls: usize,
+    max_input_chars: usize,
+    max_total_chars: usize,
+) -> String {
+    let tool_uses: Vec<(&str, &Value)> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            ResponseContentBlock::ToolUse { name, input, .. } => Some((name.as_str(), input)),
+            _ => None,
+        })
+        .collect();
+    if tool_uses.is_empty() {
+        return String::new();
+    }
+
+    let total = tool_uses.len();
+    let mut parts = Vec::new();
+    for (name, input) in tool_uses.iter().take(max_calls) {
+        let input_preview = truncate_for_log(&input.to_string(), max_input_chars);
+        parts.push(format!("{name}({input_preview})"));
+    }
+    if total > max_calls {
+        parts.push(format!("... +{} more", total - max_calls));
+    }
+    truncate_for_log(&parts.join("; "), max_total_chars)
+}
+
+fn tool_use_fingerprint(blocks: &[ResponseContentBlock]) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for block in blocks {
+        if let ResponseContentBlock::ToolUse { name, input, .. } = block {
+            parts.push(format!("{name}:{input}"));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("|"))
+    }
+}
+
 fn format_failed_action_for_user(tool_name: &str, input: &Value, result_content: &str) -> String {
     let error_summary = summarize_for_user_note(result_content, 140);
     if tool_name == "bash" {
@@ -766,6 +819,9 @@ pub(crate) async fn process_with_agent_impl(
         None
     };
     let mut consecutive_send_message_calls: usize = 0;
+    let mut last_tool_use_fingerprint: Option<String> = None;
+    let mut repeated_tool_use_streak: usize = 0;
+    const MAX_IDENTICAL_TOOL_USE_STREAK: usize = 6;
     for iteration in 0..state.config.max_tool_iterations {
         if let Some(tx) = event_tx {
             let _ = tx.send(AgentEvent::Iteration {
@@ -886,15 +942,90 @@ pub(crate) async fn process_with_agent_impl(
             .as_ref()
             .map(|u| (u.input_tokens, u.output_tokens))
             .unwrap_or((0, 0));
+        if stop_reason == "tool_use" {
+            let current_fingerprint = tool_use_fingerprint(&response.content);
+            if current_fingerprint.is_some() && current_fingerprint == last_tool_use_fingerprint {
+                repeated_tool_use_streak += 1;
+            } else {
+                repeated_tool_use_streak = usize::from(current_fingerprint.is_some());
+            }
+            last_tool_use_fingerprint = current_fingerprint;
 
+            if repeated_tool_use_streak >= MAX_IDENTICAL_TOOL_USE_STREAK {
+                let repeated_calls = summarize_tool_uses_for_log(&response.content, 3, 200, 1200);
+                warn!(
+                    chat_id,
+                    iteration = iteration + 1,
+                    repeated_tool_use_streak,
+                    tool_calls = %repeated_calls,
+                    "Detected repeated identical tool_use turns; aborting loop"
+                );
+                let text = format!(
+                    "I stopped because the model repeated the same tool calls {repeated_tool_use_streak} times in a row. Please rephrase your request or ask me to continue with a specific next step."
+                );
+                messages.push(Message {
+                    role: "assistant".into(),
+                    content: MessageContent::Text(text.clone()),
+                });
+                persist_session_with_skill_env_files(
+                    state,
+                    chat_id,
+                    &mut messages,
+                    &skill_env_files,
+                )
+                .await;
+                if let Some(tx) = event_tx {
+                    let _ = tx.send(AgentEvent::FinalResponse { text: text.clone() });
+                }
+                return Ok(text);
+            }
+        } else {
+            last_tool_use_fingerprint = None;
+            repeated_tool_use_streak = 0;
+        }
+        let tool_calls = if stop_reason == "tool_use" {
+            summarize_tool_uses_for_log(&response.content, 3, 200, 1200)
+        } else {
+            String::new()
+        };
+        let tool_calls_for_log = if stop_reason == "tool_use" {
+            if tool_calls.is_empty() {
+                "<none>".to_string()
+            } else {
+                tool_calls
+            }
+        } else {
+            String::new()
+        };
         info!(
             chat_id,
             iteration = iteration + 1,
             stop_reason,
             input_tokens = in_tok,
             output_tokens = out_tok,
+            repeated_tool_use_streak,
+            tool_calls = %tool_calls_for_log,
             "Agent iteration completed"
         );
+
+        if iteration == 0 {
+            let raw_first_reply = response
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ResponseContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            info!(
+                chat_id,
+                iteration = 1,
+                preview_chars = raw_first_reply.chars().count(),
+                preview = truncate_for_log(&raw_first_reply, 1000),
+                "Initial model reply (raw text blocks)"
+            );
+        }
 
         if stop_reason == "end_turn" || stop_reason == "max_tokens" {
             let text = response
@@ -907,7 +1038,7 @@ pub(crate) async fn process_with_agent_impl(
                 .collect::<Vec<_>>()
                 .join("");
 
-            if text.contains("<think>") {
+            if text.contains("<think>") || text.contains("<thought>") {
                 let stripped_len = strip_thinking(&text).len();
                 let thinking_chars = text.len().saturating_sub(stripped_len);
                 debug!(
@@ -916,13 +1047,16 @@ pub(crate) async fn process_with_agent_impl(
                 );
             }
 
-            // Strip <think> blocks unless show_thinking is enabled
+            // Always compute visible text without thinking tags for retry/fallback decisions.
+            let visible_text = strip_thinking(&text);
+            // Keep raw thinking text only when show_thinking is enabled.
             let display_text = if state.config.show_thinking {
                 text.clone()
             } else {
-                strip_thinking(&text)
+                visible_text.clone()
             };
-            if display_text.trim().is_empty() && !empty_visible_reply_retry_attempted {
+            let has_displayable_output = !display_text.trim().is_empty();
+            if !has_displayable_output && !empty_visible_reply_retry_attempted {
                 empty_visible_reply_retry_attempted = true;
                 warn!(
                     "Empty visible model reply; injecting runtime guard and retrying once (chat_id={})",
@@ -1001,12 +1135,57 @@ pub(crate) async fn process_with_agent_impl(
         }
 
         if stop_reason == "tool_use" {
+            let tool_use_count = response
+                .content
+                .iter()
+                .filter(|block| matches!(block, ResponseContentBlock::ToolUse { .. }))
+                .count();
+            if tool_use_count == 0 {
+                let text = response
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ResponseContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                let final_text = if text.trim().is_empty() {
+                    "I stopped because the model returned stop_reason=tool_use without any executable tool calls. Please try again."
+                        .to_string()
+                } else {
+                    text.clone()
+                };
+                warn!(
+                    chat_id,
+                    iteration = iteration + 1,
+                    preview = truncate_for_log(&text, 300),
+                    "Invalid model response: stop_reason=tool_use but no tool calls; ending turn"
+                );
+                messages.push(Message {
+                    role: "assistant".into(),
+                    content: MessageContent::Text(final_text.clone()),
+                });
+                persist_session_with_skill_env_files(
+                    state,
+                    chat_id,
+                    &mut messages,
+                    &skill_env_files,
+                )
+                .await;
+                if let Some(tx) = event_tx {
+                    let _ = tx.send(AgentEvent::FinalResponse {
+                        text: final_text.clone(),
+                    });
+                }
+                return Ok(final_text);
+            }
             let assistant_content: Vec<ContentBlock> = response
                 .content
                 .iter()
                 .filter_map(|block| match block {
                     ResponseContentBlock::Text { text } => {
-                        if text.contains("<think>") {
+                        if text.contains("<think>") || text.contains("<thought>") {
                             let stripped_len = strip_thinking(text).len();
                             let thinking_chars = text.len().saturating_sub(stripped_len);
                             debug!(
@@ -1016,11 +1195,17 @@ pub(crate) async fn process_with_agent_impl(
                         }
                         Some(ContentBlock::Text { text: text.clone() })
                     }
-                    ResponseContentBlock::ToolUse { id, name, input } => {
+                    ResponseContentBlock::ToolUse {
+                        id,
+                        name,
+                        input,
+                        thought_signature,
+                    } => {
                         Some(ContentBlock::ToolUse {
                             id: id.clone(),
                             name: name.clone(),
                             input: input.clone(),
+                            thought_signature: thought_signature.clone(),
                         })
                     }
                     ResponseContentBlock::Other => None,
@@ -1036,7 +1221,24 @@ pub(crate) async fn process_with_agent_impl(
             let mut waiting_for_user_approval = false;
             let mut waiting_approval_tool: Option<String> = None;
             for block in &response.content {
-                if let ResponseContentBlock::ToolUse { id, name, input } = block {
+                if let ResponseContentBlock::ToolUse {
+                    id, name, input, ..
+                } = block
+                {
+                    if name.trim().is_empty() {
+                        warn!(
+                            chat_id,
+                            iteration = iteration + 1,
+                            tool_use_id = %id,
+                            "Skipping malformed tool call with empty tool name"
+                        );
+                        tool_results.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: "Malformed tool call: missing tool name. Retry with a valid registered tool.".to_string(),
+                            is_error: Some(true),
+                        });
+                        continue;
+                    }
                     if name != "send_message" {
                         consecutive_send_message_calls = 0;
                     } else if consecutive_send_message_calls >= 3 {
@@ -1868,23 +2070,8 @@ Built-in execution playbook:
 "#
     );
 
-    if caller_channel.starts_with("feishu") || caller_channel.starts_with("lark") {
-        prompt.push_str(
-            r#"
-Feishu reaction output protocol (optional, use only when appropriate):
-- For every Feishu or Lark message, choose exactly one of these 3 output modes:
-  1) Text only: return normal text.
-  2) Emoji only: output `reaction-only: <emoji-or-token>`.
-  3) Text + emoji: output:
-     `reaction: <emoji-or-token>`
-     `<reply text>`
-- You may also use `[reaction: <emoji-or-token>] <reply text>` for mode (3).
-- When you choose a reaction, pick only from this supported set:
-  `THUMBSUP`, `THUMBSDOWN`, `CLAP`, `THANKS`, `HEART`, `BROKENHEART`, `Fire`, `PARTY`, `SMILE`, `TearsofJoy`, `SOB`, `RAGE`, `FISTBUMP`, `ROCKET`, `100`, `LetMeSee`, `OK`, `LOVE`, `HAPPY`, `WINK`, `YEAH`, `STRONG`, `TOP`, `NO1`.
-- For normal Feishu replies/reactions, do NOT call `send_message`; return the final assistant text directly so channel reaction parsing can run.
-- Never output raw protocol text through `send_message` (for example `reaction-only: ...`, `reaction: ...`, `[reaction: ...]`, or lone tokens like `THUMBSUP`).
-"#,
-        );
+    if let Some(channel_prompt) = crate::channels::system_prompt_extension(caller_channel) {
+        prompt.push_str(channel_prompt);
     }
 
     if !memory_context.is_empty() {
@@ -1989,23 +2176,29 @@ pub(crate) fn history_to_claude_messages(
 /// Split long text for Telegram's 4096-char limit.
 /// Exposed for testing.
 #[allow(dead_code)]
-/// Strip `<think>...</think>` blocks from model output.
-/// Handles multiline content and multiple think blocks.
+/// Strip `<think>...</think>` and `<thought>...</thought>` blocks from model output.
+/// Handles multiline content and multiple blocks.
 pub(crate) fn strip_thinking(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find("<think>") {
-        result.push_str(&rest[..start]);
-        if let Some(end) = rest[start..].find("</think>") {
-            rest = &rest[start + end + "</think>".len()..];
-        } else {
-            // Unclosed <think> — strip everything after it
-            rest = "";
-            break;
+    fn strip_tag_blocks(input: &str, open: &str, close: &str) -> String {
+        let mut result = String::with_capacity(input.len());
+        let mut rest = input;
+        while let Some(start) = rest.find(open) {
+            result.push_str(&rest[..start]);
+            if let Some(end) = rest[start..].find(close) {
+                rest = &rest[start + end + close.len()..];
+            } else {
+                // Unclosed tag — strip everything after it
+                rest = "";
+                break;
+            }
         }
+        result.push_str(rest);
+        result
     }
-    result.push_str(rest);
-    result.trim().to_string()
+
+    let no_think = strip_tag_blocks(text, "<think>", "</think>");
+    let no_thought = strip_tag_blocks(&no_think, "<thought>", "</thought>");
+    no_thought.trim().to_string()
 }
 
 /// Extract text content from a Message for summarization/display.
@@ -2265,7 +2458,7 @@ async fn compact_messages(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_db_memory_context, history_to_claude_messages, process_with_agent,
+        build_db_memory_context, history_to_claude_messages, process_with_agent, strip_thinking,
         AgentRequestContext,
     };
     use crate::config::{Config, WorkingDirIsolation};
@@ -2366,6 +2559,7 @@ mod tests {
                         id: "tool-bash-1".to_string(),
                         name: "bash".to_string(),
                         input: json!({"command": "printf approved"}),
+                        thought_signature: None,
                     }],
                     stop_reason: Some("tool_use".to_string()),
                     usage: None,
@@ -2417,6 +2611,7 @@ mod tests {
                         id: format!("tool-bash-retry-{idx}"),
                         name: "bash".to_string(),
                         input: json!({"command": "printf approved"}),
+                        thought_signature: None,
                     }],
                     stop_reason: Some("tool_use".to_string()),
                     usage: None,
@@ -2745,6 +2940,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base_dir);
     }
 
+    #[test]
+    fn test_strip_thinking_removes_thought_and_think_tags() {
+        let text = "<thought>plan</thought>\n<think>private</think>\nVisible";
+        assert_eq!(strip_thinking(text), "Visible");
+    }
+
     #[tokio::test]
     async fn test_high_risk_tool_auto_retry_injects_approval_marker() {
         let base_dir =
@@ -2792,6 +2993,14 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct EmptyToolThenAnswerLlm {
+        calls: Arc<AtomicUsize>,
+    }
+
+    struct ToolUseWithoutCallThenLoopLlm {
+        calls: Arc<AtomicUsize>,
+    }
+
     #[async_trait::async_trait]
     impl LlmProvider for HighRiskNeedsUserConfirmLlm {
         async fn send_message(
@@ -2807,6 +3016,7 @@ mod tests {
                         id: "tool-bash-confirm".to_string(),
                         name: "bash".to_string(),
                         input: json!({"command": "printf approved"}),
+                        thought_signature: None,
                     }],
                     stop_reason: Some("tool_use".to_string()),
                     usage: None,
@@ -2865,6 +3075,7 @@ mod tests {
                         id: "tool-bash-fail".to_string(),
                         name: "bash".to_string(),
                         input: json!({"command": "git clone https://github.com/naamfung/zua.git /tmp/zua"}),
+                        thought_signature: None,
                     }],
                     stop_reason: Some("tool_use".to_string()),
                     usage: None,
@@ -2875,6 +3086,82 @@ mod tests {
                     text: "build step completed".to_string(),
                 }],
                 stop_reason: Some("end_turn".to_string()),
+                usage: None,
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for EmptyToolThenAnswerLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            let idx = self.calls.fetch_add(1, Ordering::SeqCst);
+            if idx == 0 {
+                return Ok(MessagesResponse {
+                    content: vec![ResponseContentBlock::ToolUse {
+                        id: "tool-empty".to_string(),
+                        name: String::new(),
+                        input: json!({"query": "latest news"}),
+                        thought_signature: None,
+                    }],
+                    stop_reason: Some("tool_use".to_string()),
+                    usage: None,
+                });
+            }
+
+            let mut saw_malformed_result = false;
+            for msg in messages.iter().rev() {
+                if msg.role != "user" {
+                    continue;
+                }
+                if let microclaw_core::llm_types::MessageContent::Blocks(blocks) = &msg.content {
+                    for block in blocks {
+                        if let microclaw_core::llm_types::ContentBlock::ToolResult {
+                            content,
+                            is_error,
+                            ..
+                        } = block
+                        {
+                            if is_error.unwrap_or(false) && content.contains("missing tool name") {
+                                saw_malformed_result = true;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            let text = if saw_malformed_result {
+                "recovered after malformed tool call".to_string()
+            } else {
+                "unexpected".to_string()
+            };
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text { text }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: None,
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ToolUseWithoutCallThenLoopLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            _messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text {
+                    text: "tool_use without calls".to_string(),
+                }],
+                stop_reason: Some("tool_use".to_string()),
                 usage: None,
             })
         }
@@ -2955,6 +3242,81 @@ mod tests {
         );
         assert!(reply.contains("Command contains absolute /tmp path"));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_empty_tool_name_is_not_reported_as_unknown_tool_failure() {
+        let base_dir =
+            std::env::temp_dir().join(format!("mc_agent_empty_tool_name_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let llm = EmptyToolThenAnswerLlm {
+            calls: calls.clone(),
+        };
+        let state = test_state_with_llm(&base_dir, Box::new(llm));
+        let chat_id = state
+            .db
+            .resolve_or_create_chat_id("web", "empty-tool-name-chat", Some("empty-tool"), "web")
+            .unwrap();
+        store_user_message(&state.db, chat_id, "search latest news");
+
+        let reply = process_with_agent(
+            &state,
+            AgentRequestContext {
+                caller_channel: "web",
+                chat_id,
+                chat_type: "web",
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reply, "recovered after malformed tool call");
+        assert!(!reply.contains("Execution note: some tool actions failed"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_stop_reason_tool_use_without_tool_calls_finishes_immediately() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "mc_agent_tool_use_without_calls_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let llm = ToolUseWithoutCallThenLoopLlm {
+            calls: calls.clone(),
+        };
+        let state = test_state_with_llm(&base_dir, Box::new(llm));
+        let chat_id = state
+            .db
+            .resolve_or_create_chat_id("web", "tool-use-without-calls-chat", Some("tool"), "web")
+            .unwrap();
+        store_user_message(&state.db, chat_id, "weather?");
+
+        let reply = process_with_agent(
+            &state,
+            AgentRequestContext {
+                caller_channel: "web",
+                chat_id,
+                chat_type: "web",
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reply, "tool_use without calls");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         drop(state);
         let _ = std::fs::remove_dir_all(&base_dir);

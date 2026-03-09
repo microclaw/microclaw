@@ -1808,6 +1808,7 @@ mod tests {
                         id: "tool_1".into(),
                         name: "glob".into(),
                         input: json!({"pattern": "*.rs", "path": "."}),
+                        thought_signature: None,
                     }],
                     stop_reason: Some("tool_use".into()),
                     usage: None,

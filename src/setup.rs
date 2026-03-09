@@ -21,7 +21,7 @@ use ratatui::DefaultTerminal;
 
 use crate::codex_auth::{
     codex_config_default_openai_base_url, is_openai_codex_provider, provider_allows_empty_api_key,
-    resolve_openai_codex_auth,
+    qwen_oauth_file_has_access_token, resolve_openai_codex_auth, resolve_qwen_portal_auth,
 };
 use crate::config::{Config, SandboxBackend, SandboxMode};
 use microclaw_core::error::MicroClawError;
@@ -605,15 +605,11 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         models: &["qwen3-max", "qwen3-plus", "qwen-max-latest"],
     },
     ProviderPreset {
-        id: "qwen-code",
-        label: "Qwen Code (DashScope)",
+        id: "qwen-portal",
+        label: "Qwen Portal (OAuth)",
         protocol: ProviderProtocol::OpenAiCompat,
-        default_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        models: &[
-            "qwen3-coder-plus",
-            "qwen3-coder-flash",
-            "qwen3-coder-plus-latest",
-        ],
+        default_base_url: "https://portal.qwen.ai/v1",
+        models: &["coder-model", "vision-model", "qwen3.5-plus"],
     },
     ProviderPreset {
         id: "deepseek",
@@ -1047,6 +1043,16 @@ impl SetupApp {
                         .get("LLM_BASE_URL")
                         .cloned()
                         .unwrap_or_else(|| default_base_url.to_string()),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: "SHOW_THINKING".into(),
+                    label: "Show thinking/reasoning text (true/false)".into(),
+                    value: existing
+                        .get("SHOW_THINKING")
+                        .cloned()
+                        .unwrap_or_else(|| "false".into()),
                     required: false,
                     secret: false,
                 },
@@ -1931,6 +1937,7 @@ impl SetupApp {
                     if let Some(url) = config.llm_base_url {
                         map.insert("LLM_BASE_URL".into(), url);
                     }
+                    map.insert("SHOW_THINKING".into(), config.show_thinking.to_string());
                     map.insert("DATA_DIR".into(), config.data_dir);
                     map.insert(
                         "OVERRIDE_TIMEZONE".into(),
@@ -2909,6 +2916,13 @@ impl SetupApp {
                     "openai-codex ignores LLM_BASE_URL here. Configure ~/.codex/config.toml instead.".into(),
                 ));
             }
+        } else if provider.eq_ignore_ascii_case("qwen-portal")
+            && self.field_value("LLM_API_KEY").trim().is_empty()
+            && !qwen_oauth_file_has_access_token()?
+        {
+            return Err(MicroClawError::Config(
+                "qwen-portal requires LLM_API_KEY, or ~/.qwen/oauth_creds.json (access_token), or QWEN_PORTAL_ACCESS_TOKEN.".into(),
+            ));
         }
 
         let override_timezone = self.field_value("OVERRIDE_TIMEZONE");
@@ -2954,6 +2968,16 @@ impl SetupApp {
             if !valid {
                 return Err(MicroClawError::Config(
                     "HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED must be true/false (or 1/0)".into(),
+                ));
+            }
+        }
+        let show_thinking = self.field_value("SHOW_THINKING");
+        if !show_thinking.is_empty() {
+            let lower = show_thinking.to_ascii_lowercase();
+            let valid = matches!(lower.as_str(), "true" | "false" | "1" | "0" | "yes" | "no");
+            if !valid {
+                return Err(MicroClawError::Config(
+                    "SHOW_THINKING must be true/false (or 1/0)".into(),
                 ));
             }
         }
@@ -3027,6 +3051,11 @@ impl SetupApp {
         let (api_key, codex_account_id) = if is_openai_codex_provider(&provider) {
             let auth = resolve_openai_codex_auth("")?;
             (auth.bearer_token, auth.account_id)
+        } else if provider.eq_ignore_ascii_case("qwen-portal")
+            && self.field_value("LLM_API_KEY").trim().is_empty()
+        {
+            let auth = resolve_qwen_portal_auth("")?;
+            (auth.bearer_token, None)
         } else {
             (self.field_value("LLM_API_KEY"), None)
         };
@@ -3450,6 +3479,7 @@ impl SetupApp {
             "LLM_BASE_URL" => find_provider_preset(&provider)
                 .map(|p| p.default_base_url.to_string())
                 .unwrap_or_default(),
+            "SHOW_THINKING" => "false".into(),
             "DATA_DIR" => default_data_dir_for_setup(),
             "OVERRIDE_TIMEZONE" => String::new(),
             "WORKING_DIR" => default_working_dir_for_setup(),
@@ -3522,7 +3552,8 @@ impl SetupApp {
             "DATA_DIR" | "OVERRIDE_TIMEZONE" | "WORKING_DIR" | "SOULS_DIR" => "App",
             "SANDBOX_ENABLED" | "HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED" => "Sandbox",
             "REFLECTOR_ENABLED" | "REFLECTOR_INTERVAL_MINS" | "MEMORY_TOKEN_BUDGET" => "Memory",
-            "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL" => "Model",
+            "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL"
+            | "SHOW_THINKING" => "Model",
             "EMBEDDING_PROVIDER" | "EMBEDDING_API_KEY" | "EMBEDDING_BASE_URL"
             | "EMBEDDING_MODEL" | "EMBEDDING_DIM" => "Embedding",
             "ENABLED_CHANNELS"
@@ -3607,6 +3638,7 @@ impl SetupApp {
             "LLM_API_KEY" => ORDER_MODEL_BASE + 1,
             "LLM_MODEL" => ORDER_MODEL_BASE + 2,
             "LLM_BASE_URL" => ORDER_MODEL_BASE + 3,
+            "SHOW_THINKING" => ORDER_MODEL_BASE + 4,
             // 2) Channel (dynamic channel fields are placed in the branch above)
             "ENABLED_CHANNELS" => ORDER_CHANNEL_BASE,
             "TELEGRAM_BOT_TOKEN" => ORDER_CHANNEL_BASE + 1,
@@ -4515,6 +4547,15 @@ fn save_config_yaml(
         yaml.push_str("# Custom base URL (optional)\n");
         yaml.push_str(&format!("llm_base_url: \"{}\"\n", base_url));
     }
+    let show_thinking = values
+        .get("SHOW_THINKING")
+        .map(|v| {
+            let lower = v.trim().to_ascii_lowercase();
+            lower == "true" || lower == "1" || lower == "yes"
+        })
+        .unwrap_or(false);
+    yaml.push_str("# Show model thinking/reasoning text when available\n");
+    yaml.push_str(&format!("show_thinking: {}\n", show_thinking));
     yaml.push_str("# OpenAI-compatible request body overrides (optional)\n");
     yaml.push_str("# Use null to unset a default key for selected provider/model.\n");
     yaml.push_str("# openai_compat_body_overrides: { temperature: 0.2 }\n");
@@ -6541,6 +6582,6 @@ sandbox:
     fn test_provider_presets_include_synthetic_chutes_and_qwen_code() {
         assert!(find_provider_preset("synthetic").is_some());
         assert!(find_provider_preset("chutes").is_some());
-        assert!(find_provider_preset("qwen-code").is_some());
+        assert!(find_provider_preset("qwen-portal").is_some());
     }
 }

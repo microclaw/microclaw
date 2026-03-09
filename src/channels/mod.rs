@@ -27,3 +27,7 @@ pub use signal::SignalAdapter;
 pub use slack::SlackAdapter;
 pub use telegram::TelegramAdapter;
 pub use whatsapp::WhatsAppAdapter;
+
+pub fn system_prompt_extension(caller_channel: &str) -> Option<&'static str> {
+    feishu::system_prompt_extension(caller_channel)
+}
