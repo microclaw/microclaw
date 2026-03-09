@@ -24,6 +24,7 @@ use crate::codex_auth::{
     qwen_oauth_file_has_access_token, resolve_openai_codex_auth, resolve_qwen_portal_auth,
 };
 use crate::config::{Config, SandboxBackend, SandboxMode};
+use crate::http_client::llm_user_agent;
 use microclaw_core::error::MicroClawError;
 use microclaw_core::text::floor_char_boundary;
 
@@ -3552,8 +3553,9 @@ impl SetupApp {
             "DATA_DIR" | "OVERRIDE_TIMEZONE" | "WORKING_DIR" | "SOULS_DIR" => "App",
             "SANDBOX_ENABLED" | "HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED" => "Sandbox",
             "REFLECTOR_ENABLED" | "REFLECTOR_INTERVAL_MINS" | "MEMORY_TOKEN_BUDGET" => "Memory",
-            "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL"
-            | "SHOW_THINKING" => "Model",
+            "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL" | "SHOW_THINKING" => {
+                "Model"
+            }
             "EMBEDDING_PROVIDER" | "EMBEDDING_API_KEY" | "EMBEDDING_BASE_URL"
             | "EMBEDDING_MODEL" | "EMBEDDING_DIM" => "Embedding",
             "ENABLED_CHANNELS"
@@ -3740,6 +3742,7 @@ fn perform_online_validation(
     let mut checks = Vec::new();
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
+        .user_agent(llm_user_agent())
         .build()?;
 
     // --- Telegram validation (optional) ---

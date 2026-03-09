@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod embedding;
 pub mod gateway;
 pub mod hooks;
+pub mod http_client;
 pub mod llm;
 pub mod mcp;
 pub mod memory_backend;

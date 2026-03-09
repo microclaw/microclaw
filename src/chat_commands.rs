@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::agent_engine::archive_conversation;
 use crate::config::{Config, ResolvedLlmProviderProfile};
+use crate::http_client::llm_user_agent;
 use crate::run_control;
 use crate::runtime::AppState;
 use microclaw_core::llm_types::Message;
@@ -611,7 +612,10 @@ async fn fetch_models_from_provider_api(
             return Err("missing api_key for anthropic profile".to_string());
         }
         let url = resolve_anthropic_models_url(profile);
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .user_agent(llm_user_agent())
+            .build()
+            .map_err(|e| e.to_string())?;
         let response = client
             .get(&url)
             .header("x-api-key", profile.api_key.as_str())
@@ -631,7 +635,10 @@ async fn fetch_models_from_provider_api(
     }
 
     let url = resolve_openai_models_url(profile);
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent(llm_user_agent())
+        .build()
+        .map_err(|e| e.to_string())?;
     let mut request = client.get(&url);
     if !profile.api_key.trim().is_empty() {
         request = request.bearer_auth(profile.api_key.as_str());

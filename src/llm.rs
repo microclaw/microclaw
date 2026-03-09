@@ -15,6 +15,7 @@ use crate::codex_auth::{
 use crate::config::Config;
 #[cfg(test)]
 use crate::config::WorkingDirIsolation;
+use crate::http_client::llm_user_agent;
 use microclaw_core::error::MicroClawError;
 use microclaw_core::llm_types::{
     ContentBlock, ImageSource, Message, MessageContent, MessagesRequest, MessagesResponse,
@@ -889,7 +890,13 @@ impl OpenAiProvider {
         };
 
         OpenAiProvider {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .user_agent(llm_user_agent())
+                .build()
+                .unwrap_or_else(|e| {
+                    warn!("Failed to build LLM HTTP client with user-agent: {e}");
+                    reqwest::Client::new()
+                }),
             api_key,
             codex_account_id,
             provider: config.llm_provider.clone(),
@@ -1209,7 +1216,8 @@ impl LlmProvider for OpenAiProvider {
             self.max_tokens,
             self.prefer_max_completion_tokens,
         );
-        let thinking_enabled = self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
+        let thinking_enabled =
+            self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
         maybe_enable_thinking_param(&mut body, &self.provider, thinking_enabled);
         apply_openai_compat_body_overrides(
             &mut body,
@@ -1342,7 +1350,8 @@ impl LlmProvider for OpenAiProvider {
             self.max_tokens,
             self.prefer_max_completion_tokens,
         );
-        let thinking_enabled = self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
+        let thinking_enabled =
+            self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
         maybe_enable_thinking_param(&mut body, &self.provider, thinking_enabled);
         apply_openai_compat_body_overrides(
             &mut body,
@@ -2480,12 +2489,10 @@ mod tests {
 
         let resp = translate_oai_response(oai);
         assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
-        assert!(
-            !resp
-                .content
-                .iter()
-                .any(|b| matches!(b, ResponseContentBlock::ToolUse { .. }))
-        );
+        assert!(!resp
+            .content
+            .iter()
+            .any(|b| matches!(b, ResponseContentBlock::ToolUse { .. })));
     }
 
     #[test]
@@ -2640,12 +2647,10 @@ mod tests {
             None,
         );
         assert_eq!(resp.stop_reason.as_deref(), Some("end_turn"));
-        assert!(
-            !resp
-                .content
-                .iter()
-                .any(|b| matches!(b, ResponseContentBlock::ToolUse { .. }))
-        );
+        assert!(!resp
+            .content
+            .iter()
+            .any(|b| matches!(b, ResponseContentBlock::ToolUse { .. })));
     }
 
     #[test]
