@@ -415,6 +415,44 @@ Todo 列表存储在 `<data_dir>/runtime/groups/{chat_id}/TODO.json`，跨会话
 - 如果当前没有会话，Web UI 会自动生成一个 `session-YYYYMMDDHHmmss` 格式的会话键
 - 在该会话发送第一条消息后，会自动持久化到 SQLite
 
+### HTTP 请求触发（自动化 / 无头调用）
+
+如果要让外部系统（Webhook、CI、脚本）主动触发 agent，可使用 Web API，并配置带
+`operator.write` scope 的 API key。
+
+可用端点：
+- `POST /api/send`（主端点）
+- `POST /api/chat`（聊天客户端风格别名）
+- `POST /api/send_stream`（异步运行 + SSE 回放）
+- `POST /api/chat_stream`（聊天客户端风格别名）
+
+请求体：
+```json
+{
+  "session_key": "ops-bot",
+  "sender_name": "automation",
+  "message": "检查最近 1 小时错误预算并汇总事故。"
+}
+```
+
+同步返回（`/api/send` 或 `/api/chat`）：
+```json
+{
+  "ok": true,
+  "session_key": "ops-bot",
+  "chat_id": 123,
+  "response": "..."
+}
+```
+
+调用示例：
+```sh
+curl -sS http://127.0.0.1:10961/api/chat \
+  -H "Authorization: Bearer $MICROCLAW_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"session_key":"ops-bot","sender_name":"automation","message":"请给出状态摘要"}'
+```
+
 ## 发布
 
 一条命令同时发布安装脚本模式（GitHub Release 资产）和 Homebrew 模式：

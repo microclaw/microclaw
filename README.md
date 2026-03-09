@@ -534,6 +534,44 @@ When `web_enabled: true`, MicroClaw serves a local Web UI (default `http://127.0
   - `microclaw web password-generate`
   - `microclaw web password-clear`
 
+### HTTP Request Trigger (headless automation)
+
+For external automation (webhooks, CI, scripts), use the Web API with an API key that has
+`operator.write` scope.
+
+Endpoints:
+- `POST /api/send` (canonical)
+- `POST /api/chat` (alias for chatbot-style clients)
+- `POST /api/send_stream` (async run + SSE replay)
+- `POST /api/chat_stream` (alias for chatbot-style clients)
+
+Request body:
+```json
+{
+  "session_key": "ops-bot",
+  "sender_name": "automation",
+  "message": "Check error budget and summarize incidents in the last hour."
+}
+```
+
+Synchronous response (`/api/send` or `/api/chat`):
+```json
+{
+  "ok": true,
+  "session_key": "ops-bot",
+  "chat_id": 123,
+  "response": "..."
+}
+```
+
+Example:
+```sh
+curl -sS http://127.0.0.1:10961/api/chat \
+  -H "Authorization: Bearer $MICROCLAW_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"session_key":"ops-bot","sender_name":"automation","message":"status summary"}'
+```
+
 ## Release
 
 Publish both installer mode (GitHub Release asset used by `install.sh`) and Homebrew mode with one command:

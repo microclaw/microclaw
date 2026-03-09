@@ -1679,7 +1679,9 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/metrics/summary", get(metrics::api_metrics_summary))
         .route("/api/metrics/history", get(metrics::api_metrics_history))
         .route("/api/send", post(api_send))
+        .route("/api/chat", post(api_send))
         .route("/api/send_stream", post(stream::api_send_stream))
+        .route("/api/chat_stream", post(stream::api_send_stream))
         .route("/api/stream", get(stream::api_stream))
         .route("/api/run_status", get(stream::api_run_status))
         .route("/api/reset", post(sessions::api_reset))
@@ -1919,6 +1921,68 @@ mod tests {
             .unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("event: delta"));
+        assert!(text.contains("event: done"));
+    }
+
+    #[tokio::test]
+    async fn test_chat_alias_matches_send_behavior() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/chat")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"main","sender_name":"u","message":"hi"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+        assert_eq!(v.get("session_key").and_then(|x| x.as_str()), Some("main"));
+        assert_eq!(
+            v.get("response").and_then(|x| x.as_str()),
+            Some("hello from llm")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chat_stream_alias_works() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/chat_stream")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"main","sender_name":"u","message":"hi"}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let run_id = v.get("run_id").and_then(|x| x.as_str()).unwrap();
+
+        let req2 = Request::builder()
+            .method("GET")
+            .uri(format!("/api/stream?run_id={run_id}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp2 = app.oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("event: done"));
     }
 
