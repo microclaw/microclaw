@@ -1558,6 +1558,9 @@ impl SetupApp {
                     if let Some(web_cfg) = config.channels.get("web").and_then(|v| v.as_mapping()) {
                         if let Some(v) = web_cfg
                             .get(serde_yaml::Value::String("hooks_token".to_string()))
+                            .or_else(|| {
+                                web_cfg.get(serde_yaml::Value::String("hook_token".to_string()))
+                            })
                             .and_then(|v| v.as_str())
                             .map(str::trim)
                             .filter(|v| !v.is_empty())
@@ -3635,8 +3638,6 @@ impl SetupApp {
             "TELEGRAM_BOT_TOKEN"
             | "BOT_USERNAME"
             | "WEB_HOOKS_TOKEN"
-            | "WEB_HOOKS_DEFAULT_SESSION_KEY"
-            | "WEB_HOOKS_ALLOW_REQUEST_SESSION_KEY"
             | "WEB_HOOKS_ALLOWED_SESSION_KEY_PREFIXES"
             | "TELEGRAM_MODEL"
             | "TELEGRAM_ALLOWED_USER_IDS"
@@ -3647,6 +3648,8 @@ impl SetupApp {
             | "DISCORD_MODEL"
             | "DISCORD_ACCOUNTS_JSON"
             | "LLM_API_KEY" => String::new(),
+            "WEB_HOOKS_DEFAULT_SESSION_KEY" => "hook:ingress".into(),
+            "WEB_HOOKS_ALLOW_REQUEST_SESSION_KEY" => "false".into(),
             _ if key == telegram_bot_count_key() => TELEGRAM_DEFAULT_BOT_COUNT.to_string(),
             _ if key.starts_with("TELEGRAM_BOT") => {
                 if key.ends_with("_ENABLED") {
@@ -3793,6 +3796,22 @@ impl SetupApp {
             "ENABLED_CHANNELS" => (
                 "Comma-separated channel names to enable now. You can configure more later.",
                 "Example: web,feishu,telegram",
+            ),
+            "WEB_HOOKS_TOKEN" => (
+                "Bearer token used to authenticate /hooks/* and /api/hooks/* requests.",
+                "Example: my-hooks-secret",
+            ),
+            "WEB_HOOKS_DEFAULT_SESSION_KEY" => (
+                "Default session key used by hooks when request payload omits sessionKey.",
+                "Example: hook:ingress",
+            ),
+            "WEB_HOOKS_ALLOW_REQUEST_SESSION_KEY" => (
+                "Whether hook payload may override sessionKey. Keep false unless you trust callers.",
+                "Example: true or false",
+            ),
+            "WEB_HOOKS_ALLOWED_SESSION_KEY_PREFIXES" => (
+                "Allowlist of sessionKey prefixes when request override is enabled (csv/JSON array).",
+                "Example: hook:,chat:",
             ),
             "DATA_DIR" => (
                 "Root directory for runtime data (DB, sessions, memory, skills).",
