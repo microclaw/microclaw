@@ -767,6 +767,18 @@ struct HookAgentRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HookWakeRequest {
+    #[serde(default, alias = "session_key")]
+    session_key: Option<String>,
+    #[serde(default, alias = "sender_name")]
+    sender_name: Option<String>,
+    text: String,
+    #[serde(default)]
+    mode: Option<String>, // now | next-heartbeat
+}
+
+#[derive(Debug, Deserialize)]
 struct StreamQuery {
     run_id: String,
     last_event_id: Option<u64>,
@@ -1102,6 +1114,147 @@ fn parse_chat_id_from_session_key(session_key: &str) -> Option<i64> {
         .and_then(|s| s.parse::<i64>().ok())
 }
 
+fn web_channel_value<'a>(cfg: &'a Config, key: &str) -> Option<&'a serde_yaml::Value> {
+    cfg.channels
+        .get("web")
+        .and_then(|v| v.as_mapping())
+        .and_then(|m| m.get(serde_yaml::Value::String(key.to_string())))
+}
+
+fn web_channel_string(cfg: &Config, key: &str) -> Option<String> {
+    web_channel_value(cfg, key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn web_channel_bool(cfg: &Config, key: &str, default: bool) -> bool {
+    web_channel_value(cfg, key)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(default)
+}
+
+fn web_channel_string_list(cfg: &Config, key: &str) -> Vec<String> {
+    web_channel_value(cfg, key)
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn hook_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    auth_token_from_headers(headers).or_else(|| {
+        headers
+            .get("x-openclaw-token")
+            .or_else(|| headers.get("x-microclaw-hook-token"))
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn resolve_hook_session_key(
+    cfg: &Config,
+    requested: Option<&str>,
+) -> Result<String, (StatusCode, String)> {
+    let requested = requested.map(str::trim).filter(|s| !s.is_empty());
+    let allow_request = web_channel_bool(cfg, "hooks_allow_request_session_key", false);
+    let default_key = web_channel_string(cfg, "hooks_default_session_key")
+        .unwrap_or_else(|| "hook:ingress".to_string());
+    if requested.is_some() && !allow_request {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "sessionKey override is disabled".into(),
+        ));
+    }
+    if let Some(candidate) = requested {
+        let prefixes = web_channel_string_list(cfg, "hooks_allowed_session_key_prefixes");
+        if !prefixes.is_empty() && !prefixes.iter().any(|p| candidate.starts_with(p)) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "sessionKey is not allowed by configured prefixes".into(),
+            ));
+        }
+        return Ok(candidate.to_string());
+    }
+    Ok(default_key)
+}
+
+fn require_hook_auth(state: &WebState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
+    let expected = web_channel_string(&state.app_state.config, "hooks_token")
+        .or_else(|| web_channel_string(&state.app_state.config, "hook_token"));
+    let Some(expected) = expected else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "hooks token is not configured (set channels.web.hooks_token)".into(),
+        ));
+    };
+    let Some(provided) = hook_token_from_headers(headers) else {
+        return Err((StatusCode::UNAUTHORIZED, "unauthorized".into()));
+    };
+    if provided != expected {
+        return Err((StatusCode::UNAUTHORIZED, "unauthorized".into()));
+    }
+    Ok(())
+}
+
+async fn ensure_web_writable_chat(
+    state: &WebState,
+    parsed_chat_id: Option<i64>,
+) -> Result<(), (StatusCode, String)> {
+    if let Some(explicit_chat_id) = parsed_chat_id {
+        let is_web = get_chat_routing(
+            &state.app_state.channel_registry,
+            state.app_state.db.clone(),
+            explicit_chat_id,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map(|r| r.channel_name == "web")
+        .unwrap_or(false);
+        if !is_web {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "this channel is read-only in Web UI; use source channel to send".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn enqueue_hook_message(
+    state: &WebState,
+    session_key: &str,
+    sender_name: &str,
+    message: &str,
+) -> Result<i64, (StatusCode, String)> {
+    let parsed_chat_id = parse_chat_id_from_session_key(session_key);
+    ensure_web_writable_chat(state, parsed_chat_id).await?;
+    let chat_id = resolve_chat_id_for_session_key(state, session_key).await?;
+    let user_msg = StoredMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id,
+        sender_name: sender_name.to_string(),
+        content: message.to_string(),
+        is_from_bot: false,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    call_blocking(state.app_state.db.clone(), move |db| {
+        db.store_message(&user_msg)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(chat_id)
+}
+
 async fn resolve_chat_id_for_session_key_read(
     state: &WebState,
     session_key: &str,
@@ -1346,13 +1499,66 @@ async fn api_hook_agent(
     State(state): State<WebState>,
     Json(body): Json<HookAgentRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_hook_auth(&state, &headers)?;
+    let session_key =
+        resolve_hook_session_key(&state.app_state.config, body.session_key.as_deref())?;
     // OpenClaw-compatible webhook shape:
     // { message, sessionKey?, senderName?, name? }
     // `name` falls back to sender_name for simple integrations.
     let send = SendRequest {
-        session_key: body.session_key,
+        session_key: Some(session_key),
         sender_name: body.sender_name.or(body.name),
         message: body.message,
+    };
+    stream::api_send_stream(headers, State(state), Json(send)).await
+}
+
+async fn api_hook_wake(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<HookWakeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_hook_auth(&state, &headers)?;
+    let text = body.text.trim();
+    if text.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "text is required".into()));
+    }
+    let session_key =
+        resolve_hook_session_key(&state.app_state.config, body.session_key.as_deref())?;
+    let sender_name = body
+        .sender_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("webhook-system")
+        .to_string();
+    let message = format!("System event: {text}");
+    let mode = body
+        .mode
+        .as_deref()
+        .unwrap_or("now")
+        .trim()
+        .to_ascii_lowercase();
+    if mode == "next-heartbeat" {
+        let chat_id = enqueue_hook_message(&state, &session_key, &sender_name, &message).await?;
+        return Ok(Json(json!({
+            "ok": true,
+            "mode": "next-heartbeat",
+            "queued": true,
+            "session_key": session_key,
+            "chat_id": chat_id
+        })));
+    }
+    if mode != "now" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "mode must be one of: now, next-heartbeat".into(),
+        ));
+    }
+    let send = SendRequest {
+        session_key: Some(session_key),
+        sender_name: Some(sender_name),
+        message,
     };
     stream::api_send_stream(headers, State(state), Json(send)).await
 }
@@ -1411,23 +1617,7 @@ async fn send_and_store_response_with_events(
     .await
     .ok();
 
-    if let Some(explicit_chat_id) = parsed_chat_id {
-        let is_web = get_chat_routing(
-            &state.app_state.channel_registry,
-            state.app_state.db.clone(),
-            explicit_chat_id,
-        )
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
-        .map(|r| r.channel_name == "web")
-        .unwrap_or(false);
-        if !is_web {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "this channel is read-only in Web UI; use source channel to send".into(),
-            ));
-        }
-    }
+    ensure_web_writable_chat(&state, parsed_chat_id).await?;
 
     if let Some(command_reply) =
         handle_chat_command(&state.app_state, chat_id, "web", &text, None).await
@@ -1709,9 +1899,11 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/send", post(api_send))
         .route("/api/chat", post(api_send))
         .route("/api/hooks/agent", post(api_hook_agent))
+        .route("/api/hooks/wake", post(api_hook_wake))
         .route("/api/send_stream", post(stream::api_send_stream))
         .route("/api/chat_stream", post(stream::api_send_stream))
         .route("/hooks/agent", post(api_hook_agent))
+        .route("/hooks/wake", post(api_hook_wake))
         .route("/api/stream", get(stream::api_stream))
         .route("/api/run_status", get(stream::api_run_status))
         .route("/api/reset", post(sessions::api_reset))
@@ -1860,6 +2052,48 @@ mod tests {
         let mut cfg = Config::test_defaults();
         cfg.working_dir_isolation = WorkingDirIsolation::Shared;
         cfg.web_port = 3900;
+        cfg
+    }
+
+    fn with_hooks_token(mut cfg: Config, token: &str) -> Config {
+        let mut web = serde_yaml::Mapping::new();
+        web.insert(
+            serde_yaml::Value::String("hooks_token".to_string()),
+            serde_yaml::Value::String(token.to_string()),
+        );
+        cfg.channels
+            .insert("web".to_string(), serde_yaml::Value::Mapping(web));
+        cfg
+    }
+
+    fn with_hooks_session_key_policy(
+        mut cfg: Config,
+        allow_request: bool,
+        prefixes: &[&str],
+    ) -> Config {
+        let mut web = cfg
+            .channels
+            .get("web")
+            .and_then(|v| v.as_mapping())
+            .cloned()
+            .unwrap_or_default();
+        web.insert(
+            serde_yaml::Value::String("hooks_allow_request_session_key".to_string()),
+            serde_yaml::Value::Bool(allow_request),
+        );
+        if !prefixes.is_empty() {
+            web.insert(
+                serde_yaml::Value::String("hooks_allowed_session_key_prefixes".to_string()),
+                serde_yaml::Value::Sequence(
+                    prefixes
+                        .iter()
+                        .map(|p| serde_yaml::Value::String((*p).to_string()))
+                        .collect(),
+                ),
+            );
+        }
+        cfg.channels
+            .insert("web".to_string(), serde_yaml::Value::Mapping(web));
         cfg
     }
 
@@ -2018,16 +2252,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_hooks_agent_accepts_openclaw_shape() {
-        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        let cfg = with_hooks_token(test_config_template(), "hooks-secret");
+        let web_state = test_web_state_from_app_state(
+            test_state_with_config(Box::new(DummyLlm), cfg),
+            WebLimits::default(),
+        );
         let app = build_router(web_state);
 
         let req = Request::builder()
             .method("POST")
             .uri("/hooks/agent")
+            .header("authorization", "Bearer hooks-secret")
             .header("content-type", "application/json")
-            .body(Body::from(
-                r#"{"message":"hi","name":"Email","sessionKey":"hook:email:1"}"#,
-            ))
+            .body(Body::from(r#"{"message":"hi","name":"Email"}"#))
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -2049,6 +2286,134 @@ mod tests {
             .unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("event: done"));
+    }
+
+    #[tokio::test]
+    async fn test_hooks_agent_rejects_missing_or_invalid_token() {
+        let cfg = with_hooks_token(test_config_template(), "hooks-secret");
+        let web_state = test_web_state_from_app_state(
+            test_state_with_config(Box::new(DummyLlm), cfg),
+            WebLimits::default(),
+        );
+        let app = build_router(web_state);
+
+        let no_token_req = Request::builder()
+            .method("POST")
+            .uri("/hooks/agent")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"message":"hi"}"#))
+            .unwrap();
+        let no_token_resp = app.clone().oneshot(no_token_req).await.unwrap();
+        assert_eq!(no_token_resp.status(), StatusCode::UNAUTHORIZED);
+
+        let bad_token_req = Request::builder()
+            .method("POST")
+            .uri("/hooks/agent")
+            .header("x-openclaw-token", "wrong")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"message":"hi"}"#))
+            .unwrap();
+        let bad_token_resp = app.oneshot(bad_token_req).await.unwrap();
+        assert_eq!(bad_token_resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_hooks_agent_session_key_override_policy() {
+        let cfg = with_hooks_session_key_policy(
+            with_hooks_token(test_config_template(), "hooks-secret"),
+            false,
+            &["hook:"],
+        );
+        let web_state = test_web_state_from_app_state(
+            test_state_with_config(Box::new(DummyLlm), cfg),
+            WebLimits::default(),
+        );
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/hooks/agent")
+            .header("authorization", "Bearer hooks-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"message":"hi","sessionKey":"hook:explicit:1"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_hooks_agent_session_key_prefix_allowlist() {
+        let cfg = with_hooks_session_key_policy(
+            with_hooks_token(test_config_template(), "hooks-secret"),
+            true,
+            &["hook:"],
+        );
+        let web_state = test_web_state_from_app_state(
+            test_state_with_config(Box::new(DummyLlm), cfg),
+            WebLimits::default(),
+        );
+        let app = build_router(web_state);
+
+        let blocked = Request::builder()
+            .method("POST")
+            .uri("/hooks/agent")
+            .header("authorization", "Bearer hooks-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"message":"hi","sessionKey":"ops:1"}"#))
+            .unwrap();
+        let blocked_resp = app.clone().oneshot(blocked).await.unwrap();
+        assert_eq!(blocked_resp.status(), StatusCode::BAD_REQUEST);
+
+        let allowed = Request::builder()
+            .method("POST")
+            .uri("/hooks/agent")
+            .header("authorization", "Bearer hooks-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"message":"hi","sessionKey":"hook:ok:1"}"#))
+            .unwrap();
+        let allowed_resp = app.oneshot(allowed).await.unwrap();
+        assert_eq!(allowed_resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_hooks_wake_next_heartbeat_queues_message() {
+        let cfg = with_hooks_token(test_config_template(), "hooks-secret");
+        let web_state = test_web_state_from_app_state(
+            test_state_with_config(Box::new(DummyLlm), cfg),
+            WebLimits::default(),
+        );
+        let db = web_state.app_state.db.clone();
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/hooks/wake")
+            .header("authorization", "Bearer hooks-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"text":"new email","mode":"next-heartbeat"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            v.get("mode").and_then(|x| x.as_str()),
+            Some("next-heartbeat")
+        );
+        let chat_id = v.get("chat_id").and_then(|x| x.as_i64()).unwrap();
+
+        let rows = call_blocking(db, move |d| d.get_all_messages(chat_id))
+            .await
+            .unwrap();
+        assert!(rows
+            .iter()
+            .any(|m| m.content.contains("System event: new email")));
     }
 
     #[tokio::test]

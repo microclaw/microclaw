@@ -426,6 +426,22 @@ Todo 列表存储在 `<data_dir>/runtime/groups/{chat_id}/TODO.json`，跨会话
 - `POST /api/send_stream`（异步运行 + SSE 回放）
 - `POST /api/chat_stream`（聊天客户端风格别名）
 - `POST /hooks/agent` 与 `POST /api/hooks/agent`（兼容 OpenClaw webhook 请求体）
+- `POST /hooks/wake` 与 `POST /api/hooks/wake`（系统事件唤醒，支持 `now` 或 `next-heartbeat`）
+
+Hook 鉴权与策略（`channels.web`）：
+```yaml
+channels:
+  web:
+    hooks_token: "replace-with-secret"
+    hooks_default_session_key: "hook:ingress"
+    hooks_allow_request_session_key: false
+    hooks_allowed_session_key_prefixes: ["hook:"]
+```
+
+说明：
+- `/hooks/*` 需要独立 hook token（`Authorization: Bearer <token>` 或 `x-openclaw-token`）。
+- 请求体里的 `sessionKey` 默认拒绝；只有 `hooks_allow_request_session_key: true` 才允许。
+- 若允许外部传 `sessionKey`，建议同时配置前缀白名单，避免任意会话路由。
 
 请求体：
 ```json
@@ -457,9 +473,17 @@ curl -sS http://127.0.0.1:10961/api/chat \
 OpenClaw 风格 webhook 请求体示例：
 ```sh
 curl -sS http://127.0.0.1:10961/hooks/agent \
-  -H "Authorization: Bearer $MICROCLAW_API_KEY" \
+  -H "Authorization: Bearer $MICROCLAW_HOOKS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message":"Summarize inbox","name":"Email","sessionKey":"hook:email:msg-123"}'
+```
+
+Wake 示例：
+```sh
+curl -sS http://127.0.0.1:10961/hooks/wake \
+  -H "Authorization: Bearer $MICROCLAW_HOOKS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"New email received","mode":"now"}'
 ```
 
 ## 发布

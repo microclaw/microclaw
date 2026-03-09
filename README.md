@@ -545,6 +545,22 @@ Endpoints:
 - `POST /api/send_stream` (async run + SSE replay)
 - `POST /api/chat_stream` (alias for chatbot-style clients)
 - `POST /hooks/agent` and `POST /api/hooks/agent` (OpenClaw-style webhook payload compatibility)
+- `POST /hooks/wake` and `POST /api/hooks/wake` (system-event wake trigger: `now` or `next-heartbeat`)
+
+Hook auth + policy (`channels.web`):
+```yaml
+channels:
+  web:
+    hooks_token: "replace-with-secret"
+    hooks_default_session_key: "hook:ingress"
+    hooks_allow_request_session_key: false
+    hooks_allowed_session_key_prefixes: ["hook:"]
+```
+
+Notes:
+- `/hooks/*` requires hook token (`Authorization: Bearer <token>` or `x-openclaw-token`).
+- `sessionKey` in request body is rejected by default unless `hooks_allow_request_session_key: true`.
+- If you enable request `sessionKey`, use prefix allowlist to avoid arbitrary session routing.
 
 Request body:
 ```json
@@ -576,9 +592,17 @@ curl -sS http://127.0.0.1:10961/api/chat \
 OpenClaw-compatible webhook shape:
 ```sh
 curl -sS http://127.0.0.1:10961/hooks/agent \
-  -H "Authorization: Bearer $MICROCLAW_API_KEY" \
+  -H "Authorization: Bearer $MICROCLAW_HOOKS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message":"Summarize inbox","name":"Email","sessionKey":"hook:email:msg-123"}'
+```
+
+Wake example:
+```sh
+curl -sS http://127.0.0.1:10961/hooks/wake \
+  -H "Authorization: Bearer $MICROCLAW_HOOKS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"New email received","mode":"now"}'
 ```
 
 ## Release
