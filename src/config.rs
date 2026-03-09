@@ -171,6 +171,9 @@ fn default_subagent_max_tokens_per_run() -> i64 {
 fn default_subagent_orchestrate_max_workers() -> usize {
     5
 }
+fn default_a2a_enabled() -> bool {
+    false
+}
 
 fn default_model_prices() -> Vec<ModelPrice> {
     Vec::new()
@@ -295,6 +298,49 @@ impl Default for SubagentConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct A2APeerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub default_session_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct A2AConfig {
+    #[serde(default = "default_a2a_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub public_base_url: Option<String>,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub agent_description: Option<String>,
+    #[serde(default)]
+    pub shared_tokens: Vec<String>,
+    #[serde(default)]
+    pub peers: HashMap<String, A2APeerConfig>,
+}
+
+impl Default for A2AConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_a2a_enabled(),
+            public_base_url: None,
+            agent_name: None,
+            agent_description: None,
+            shared_tokens: Vec::new(),
+            peers: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     // --- LLM / API ---
@@ -336,6 +382,8 @@ pub struct Config {
     pub show_thinking: bool,
     #[serde(default)]
     pub subagents: SubagentConfig,
+    #[serde(default)]
+    pub a2a: A2AConfig,
     /// OpenAI-compatible request-body overrides applied for all models/providers.
     /// Set a key to `null` to remove that field from the outgoing JSON body.
     #[serde(default)]
@@ -678,6 +726,7 @@ impl Config {
             allow_group_slash_without_mention: false,
             show_thinking: false,
             subagents: SubagentConfig::default(),
+            a2a: A2AConfig::default(),
             openai_compat_body_overrides: HashMap::new(),
             openai_compat_body_overrides_by_provider: HashMap::new(),
             openai_compat_body_overrides_by_model: HashMap::new(),
@@ -1009,6 +1058,62 @@ impl Config {
         if self.web_host.trim().is_empty() {
             self.web_host = default_web_host();
         }
+        self.a2a.public_base_url = self
+            .a2a
+            .public_base_url
+            .as_ref()
+            .map(|v| v.trim().trim_end_matches('/').to_string())
+            .filter(|v| !v.is_empty());
+        self.a2a.agent_name = self
+            .a2a
+            .agent_name
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        self.a2a.agent_description = self
+            .a2a
+            .agent_description
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        self.a2a.shared_tokens = self
+            .a2a
+            .shared_tokens
+            .drain(..)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+        self.a2a.peers = self
+            .a2a
+            .peers
+            .drain()
+            .filter_map(|(name, mut peer)| {
+                let normalized = name.trim().to_ascii_lowercase();
+                if normalized.is_empty() {
+                    return None;
+                }
+                peer.base_url = peer.base_url.trim().trim_end_matches('/').to_string();
+                if peer.base_url.is_empty() {
+                    return None;
+                }
+                peer.bearer_token = peer
+                    .bearer_token
+                    .as_ref()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty());
+                peer.description = peer
+                    .description
+                    .as_ref()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty());
+                peer.default_session_key = peer
+                    .default_session_key
+                    .as_ref()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty());
+                Some((normalized, peer))
+            })
+            .collect();
         if let Some(provider) = &self.embedding_provider {
             let p = provider.trim().to_lowercase();
             self.embedding_provider = if p.is_empty() { None } else { Some(p) };
@@ -2247,6 +2352,41 @@ openai_compat_body_overrides_by_model:
             .map(|map| map.contains_key(serde_yaml::Value::String("auth_token".to_string())))
             .unwrap_or(false);
         assert!(!has_auth_token);
+    }
+
+    #[test]
+    fn test_post_deserialize_normalizes_a2a_config() {
+        let mut config = Config::test_defaults();
+        config.a2a.enabled = true;
+        config.a2a.public_base_url = Some(" https://mc.example.com/ ".into());
+        config.a2a.agent_name = Some(" Planner ".into());
+        config.a2a.agent_description = Some(" Plans ".into());
+        config.a2a.shared_tokens = vec!["  ".into(), " secret ".into()];
+        config.a2a.peers.insert(
+            " Worker ".into(),
+            A2APeerConfig {
+                enabled: true,
+                base_url: " https://worker.example.com/ ".into(),
+                bearer_token: Some(" token ".into()),
+                description: Some(" executes ".into()),
+                default_session_key: Some(" team/work ".into()),
+            },
+        );
+
+        config.post_deserialize().unwrap();
+
+        assert_eq!(
+            config.a2a.public_base_url.as_deref(),
+            Some("https://mc.example.com")
+        );
+        assert_eq!(config.a2a.agent_name.as_deref(), Some("Planner"));
+        assert_eq!(config.a2a.agent_description.as_deref(), Some("Plans"));
+        assert_eq!(config.a2a.shared_tokens, vec!["secret".to_string()]);
+        let peer = config.a2a.peers.get("worker").unwrap();
+        assert_eq!(peer.base_url, "https://worker.example.com");
+        assert_eq!(peer.bearer_token.as_deref(), Some("token"));
+        assert_eq!(peer.description.as_deref(), Some("executes"));
+        assert_eq!(peer.default_session_key.as_deref(), Some("team/work"));
     }
 
     #[test]

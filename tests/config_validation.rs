@@ -41,6 +41,7 @@ fn minimal_config() -> Config {
         allow_group_slash_without_mention: false,
         show_thinking: false,
         subagents: microclaw::config::SubagentConfig::default(),
+        a2a: microclaw::config::A2AConfig::default(),
         openai_compat_body_overrides: std::collections::HashMap::new(),
         openai_compat_body_overrides_by_provider: std::collections::HashMap::new(),
         openai_compat_body_overrides_by_model: std::collections::HashMap::new(),

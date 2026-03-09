@@ -100,6 +100,7 @@ pub fn tool_risk(name: &str) -> ToolRisk {
         "write_file"
         | "edit_file"
         | "write_memory"
+        | "a2a_send"
         | "send_message"
         | "sync_skills"
         | "schedule_task"
