@@ -3612,7 +3612,7 @@ impl SetupApp {
             ),
             "LLM_USER_AGENT" => (
                 "HTTP User-Agent for LLM requests. Empty means automatic MicroClaw/<version>.",
-                "Example: OpenClaw/0.1.0",
+                "Example: OpenClaw-Gateway/1.0",
             ),
             "SHOW_THINKING" => (
                 "Show model reasoning/thinking text in channel output when provider supports it.",
