@@ -755,6 +755,18 @@ struct SendRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HookAgentRequest {
+    #[serde(default, alias = "session_key")]
+    session_key: Option<String>,
+    #[serde(default, alias = "sender_name")]
+    sender_name: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct StreamQuery {
     run_id: String,
     last_event_id: Option<u64>,
@@ -1329,6 +1341,22 @@ async fn api_send(
     result
 }
 
+async fn api_hook_agent(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<HookAgentRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // OpenClaw-compatible webhook shape:
+    // { message, sessionKey?, senderName?, name? }
+    // `name` falls back to sender_name for simple integrations.
+    let send = SendRequest {
+        session_key: body.session_key,
+        sender_name: body.sender_name.or(body.name),
+        message: body.message,
+    };
+    stream::api_send_stream(headers, State(state), Json(send)).await
+}
+
 async fn send_and_store_response(
     state: WebState,
     body: SendRequest,
@@ -1680,8 +1708,10 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/metrics/history", get(metrics::api_metrics_history))
         .route("/api/send", post(api_send))
         .route("/api/chat", post(api_send))
+        .route("/api/hooks/agent", post(api_hook_agent))
         .route("/api/send_stream", post(stream::api_send_stream))
         .route("/api/chat_stream", post(stream::api_send_stream))
+        .route("/hooks/agent", post(api_hook_agent))
         .route("/api/stream", get(stream::api_stream))
         .route("/api/run_status", get(stream::api_run_status))
         .route("/api/reset", post(sessions::api_reset))
@@ -1962,6 +1992,41 @@ mod tests {
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"session_key":"main","sender_name":"u","message":"hi"}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let run_id = v.get("run_id").and_then(|x| x.as_str()).unwrap();
+
+        let req2 = Request::builder()
+            .method("GET")
+            .uri(format!("/api/stream?run_id={run_id}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp2 = app.oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("event: done"));
+    }
+
+    #[tokio::test]
+    async fn test_hooks_agent_accepts_openclaw_shape() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/hooks/agent")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"message":"hi","name":"Email","sessionKey":"hook:email:1"}"#,
             ))
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();

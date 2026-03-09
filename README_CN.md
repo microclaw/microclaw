@@ -425,6 +425,7 @@ Todo 列表存储在 `<data_dir>/runtime/groups/{chat_id}/TODO.json`，跨会话
 - `POST /api/chat`（聊天客户端风格别名）
 - `POST /api/send_stream`（异步运行 + SSE 回放）
 - `POST /api/chat_stream`（聊天客户端风格别名）
+- `POST /hooks/agent` 与 `POST /api/hooks/agent`（兼容 OpenClaw webhook 请求体）
 
 请求体：
 ```json
@@ -451,6 +452,14 @@ curl -sS http://127.0.0.1:10961/api/chat \
   -H "Authorization: Bearer $MICROCLAW_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"session_key":"ops-bot","sender_name":"automation","message":"请给出状态摘要"}'
+```
+
+OpenClaw 风格 webhook 请求体示例：
+```sh
+curl -sS http://127.0.0.1:10961/hooks/agent \
+  -H "Authorization: Bearer $MICROCLAW_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Summarize inbox","name":"Email","sessionKey":"hook:email:msg-123"}'
 ```
 
 ## 发布

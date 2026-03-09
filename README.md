@@ -544,6 +544,7 @@ Endpoints:
 - `POST /api/chat` (alias for chatbot-style clients)
 - `POST /api/send_stream` (async run + SSE replay)
 - `POST /api/chat_stream` (alias for chatbot-style clients)
+- `POST /hooks/agent` and `POST /api/hooks/agent` (OpenClaw-style webhook payload compatibility)
 
 Request body:
 ```json
@@ -570,6 +571,14 @@ curl -sS http://127.0.0.1:10961/api/chat \
   -H "Authorization: Bearer $MICROCLAW_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"session_key":"ops-bot","sender_name":"automation","message":"status summary"}'
+```
+
+OpenClaw-compatible webhook shape:
+```sh
+curl -sS http://127.0.0.1:10961/hooks/agent \
+  -H "Authorization: Bearer $MICROCLAW_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Summarize inbox","name":"Email","sessionKey":"hook:email:msg-123"}'
 ```
 
 ## Release
