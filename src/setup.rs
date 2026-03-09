@@ -1945,7 +1945,9 @@ impl SetupApp {
                     if let Some(url) = config.llm_base_url {
                         map.insert("LLM_BASE_URL".into(), url);
                     }
-                    map.insert("LLM_USER_AGENT".into(), config.llm_user_agent);
+                    if config.llm_user_agent != crate::http_client::default_llm_user_agent() {
+                        map.insert("LLM_USER_AGENT".into(), config.llm_user_agent);
+                    }
                     map.insert("SHOW_THINKING".into(), config.show_thinking.to_string());
                     map.insert("DATA_DIR".into(), config.data_dir);
                     map.insert(
