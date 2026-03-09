@@ -542,6 +542,9 @@ Publish both installer mode (GitHub Release asset used by `install.sh`) and Home
 ./deploy.sh
 ```
 
+Nixpkgs upstream/update playbook:
+- `docs/releases/nixpkgs-upstream-guide.md`
+
 ## Setup
 
 > **New:** MicroClaw now includes an interactive setup wizard (`microclaw setup`) and will auto-launch it on first `start` when required config is missing.

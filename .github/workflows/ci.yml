@@ -55,10 +55,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: scripts/ci/stability_smoke.sh
 
+  nix-build:
+    name: Nix Build (flake)
+    runs-on: ubuntu-latest
+    needs: [web, rust-checks]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v19
+      - uses: DeterminateSystems/magic-nix-cache-action@v13
+      - run: nix build .#microclaw
+
   build:
     name: Build (Release)
     runs-on: ubuntu-latest
-    needs: [web, rust-checks, stability-smoke]
+    needs: [web, rust-checks, stability-smoke, nix-build]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

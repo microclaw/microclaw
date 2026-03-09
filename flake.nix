@@ -20,6 +20,7 @@
             openssl
             sqlite
             libsodium
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             udev
           ];
 
@@ -36,7 +37,7 @@
         packages = {
           microclaw = pkgs.rustPlatform.buildRustPackage {
             pname = "microclaw";
-            version = "0.0.156";
+            version = "0.0.163";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
             buildFeatures = pkgs.lib.optionals pkgs.stdenv.isLinux [ "journald" "sqlite-vec" ];
@@ -47,6 +48,7 @@
               openssl.out
               sqlite
               libsodium
+            ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               udev
             ];
             OPENSSL_DIR = "${pkgs.openssl.dev}";

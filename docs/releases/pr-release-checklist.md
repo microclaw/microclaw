@@ -29,6 +29,8 @@ Last reviewed: 2026-03-05
 - [ ] Hook runtime sanity verified (`hooks list/info/enable/disable`).
 - [ ] Metrics pipeline verified (`/api/metrics`, `/api/metrics/history`, OTLP export if enabled).
 - [ ] Config self-check reviewed (`/api/config/self_check`) with no unaccepted `high` warnings.
+- [ ] `nix build .#microclaw` passes (Linux required; Darwin strongly recommended).
+- [ ] Nixpkgs status reviewed/updated (`docs/releases/nixpkgs-upstream-guide.md`).
 
 ## Rollback Prep
 

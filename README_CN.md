@@ -423,6 +423,9 @@ Todo 列表存储在 `<data_dir>/runtime/groups/{chat_id}/TODO.json`，跨会话
 ./deploy.sh
 ```
 
+Nixpkgs 上游/更新流程参考：
+- `docs/releases/nixpkgs-upstream-guide.md`
+
 ## 配置
 
 > **新功能：** 现在支持交互式问答配置（`microclaw config`），并且在 `start` 时若缺少必需配置会自动进入配置流程。
