@@ -139,6 +139,30 @@ fn web_hooks_allowed_session_key_prefixes_key() -> &'static str {
     "WEB_HOOKS_ALLOWED_SESSION_KEY_PREFIXES"
 }
 
+fn a2a_enabled_key() -> &'static str {
+    "A2A_ENABLED"
+}
+
+fn a2a_public_base_url_key() -> &'static str {
+    "A2A_PUBLIC_BASE_URL"
+}
+
+fn a2a_agent_name_key() -> &'static str {
+    "A2A_AGENT_NAME"
+}
+
+fn a2a_agent_description_key() -> &'static str {
+    "A2A_AGENT_DESCRIPTION"
+}
+
+fn a2a_shared_tokens_key() -> &'static str {
+    "A2A_SHARED_TOKENS"
+}
+
+fn a2a_peers_json_key() -> &'static str {
+    "A2A_PEERS_JSON"
+}
+
 fn telegram_llm_provider_key() -> &'static str {
     "TELEGRAM_LLM_PROVIDER"
 }
@@ -989,6 +1013,66 @@ impl SetupApp {
                     secret: false,
                 },
                 Field {
+                    key: a2a_enabled_key().into(),
+                    label: "Enable A2A HTTP integration (true/false)".into(),
+                    value: existing
+                        .get(a2a_enabled_key())
+                        .cloned()
+                        .unwrap_or_else(|| "false".into()),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: a2a_public_base_url_key().into(),
+                    label: "A2A public base URL (optional)".into(),
+                    value: existing
+                        .get(a2a_public_base_url_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: a2a_agent_name_key().into(),
+                    label: "A2A agent name (optional)".into(),
+                    value: existing
+                        .get(a2a_agent_name_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: a2a_agent_description_key().into(),
+                    label: "A2A agent description (optional)".into(),
+                    value: existing
+                        .get(a2a_agent_description_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: a2a_shared_tokens_key().into(),
+                    label: "A2A shared bearer tokens (csv, optional)".into(),
+                    value: existing
+                        .get(a2a_shared_tokens_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: true,
+                },
+                Field {
+                    key: a2a_peers_json_key().into(),
+                    label: "A2A peers JSON ({name:{base_url,...}}, optional)".into(),
+                    value: existing
+                        .get(a2a_peers_json_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
                     key: telegram_bot_count_key().into(),
                     label: format!("Telegram bot count (1-{MAX_BOT_SLOTS})"),
                     value: existing
@@ -1636,6 +1720,49 @@ impl SetupApp {
                                     prefixes.join(","),
                                 );
                             }
+                        }
+                    }
+                    map.insert(a2a_enabled_key().into(), config.a2a.enabled.to_string());
+                    if let Some(v) = config
+                        .a2a
+                        .public_base_url
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                    {
+                        map.insert(a2a_public_base_url_key().into(), v.to_string());
+                    }
+                    if let Some(v) = config
+                        .a2a
+                        .agent_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                    {
+                        map.insert(a2a_agent_name_key().into(), v.to_string());
+                    }
+                    if let Some(v) = config
+                        .a2a
+                        .agent_description
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                    {
+                        map.insert(a2a_agent_description_key().into(), v.to_string());
+                    }
+                    if !config.a2a.shared_tokens.is_empty() {
+                        map.insert(
+                            a2a_shared_tokens_key().into(),
+                            config.a2a.shared_tokens.join(","),
+                        );
+                    }
+                    if !config.a2a.peers.is_empty() {
+                        let peers_json =
+                            serde_yaml::to_value(&config.a2a.peers).ok().and_then(|v| {
+                                compact_json_string(&v)
+                            });
+                        if let Some(peers_json) = peers_json {
+                            map.insert(a2a_peers_json_key().into(), peers_json);
                         }
                     }
                     let telegram_bot_token = if !config.telegram_bot_token.trim().is_empty() {
@@ -2675,6 +2802,12 @@ impl SetupApp {
             | "WEB_HOOKS_DEFAULT_SESSION_KEY"
             | "WEB_HOOKS_ALLOW_REQUEST_SESSION_KEY"
             | "WEB_HOOKS_ALLOWED_SESSION_KEY_PREFIXES" => self.channel_enabled("web"),
+            "A2A_ENABLED"
+            | "A2A_PUBLIC_BASE_URL"
+            | "A2A_AGENT_NAME"
+            | "A2A_AGENT_DESCRIPTION"
+            | "A2A_SHARED_TOKENS"
+            | "A2A_PEERS_JSON" => true,
             "TELEGRAM_MODEL" | "TELEGRAM_ALLOWED_USER_IDS" | "TELEGRAM_TOPIC_ROUTING" => {
                 self.channel_enabled("telegram")
             }
@@ -3721,6 +3854,11 @@ impl SetupApp {
             | "BOT_USERNAME"
             | "WEB_HOOKS_TOKEN"
             | "WEB_HOOKS_ALLOWED_SESSION_KEY_PREFIXES"
+            | "A2A_PUBLIC_BASE_URL"
+            | "A2A_AGENT_NAME"
+            | "A2A_AGENT_DESCRIPTION"
+            | "A2A_SHARED_TOKENS"
+            | "A2A_PEERS_JSON"
             | "TELEGRAM_MODEL"
             | "TELEGRAM_ALLOWED_USER_IDS"
             | "TELEGRAM_TOPIC_ROUTING"
@@ -3733,6 +3871,7 @@ impl SetupApp {
             | "LLM_API_KEY" => String::new(),
             "WEB_HOOKS_DEFAULT_SESSION_KEY" => "hook:ingress".into(),
             "WEB_HOOKS_ALLOW_REQUEST_SESSION_KEY" => "false".into(),
+            "A2A_ENABLED" => "false".into(),
             _ if key == telegram_bot_count_key() => TELEGRAM_DEFAULT_BOT_COUNT.to_string(),
             _ if key.starts_with("TELEGRAM_BOT") => {
                 if key.ends_with("_ENABLED") {
@@ -3829,6 +3968,12 @@ impl SetupApp {
             | "WEB_HOOKS_DEFAULT_SESSION_KEY"
             | "WEB_HOOKS_ALLOW_REQUEST_SESSION_KEY"
             | "WEB_HOOKS_ALLOWED_SESSION_KEY_PREFIXES"
+            | "A2A_ENABLED"
+            | "A2A_PUBLIC_BASE_URL"
+            | "A2A_AGENT_NAME"
+            | "A2A_AGENT_DESCRIPTION"
+            | "A2A_SHARED_TOKENS"
+            | "A2A_PEERS_JSON"
             | "TELEGRAM_BOT_TOKEN"
             | "BOT_USERNAME"
             | "TELEGRAM_ACCOUNT_ID"
@@ -3896,6 +4041,30 @@ impl SetupApp {
             "WEB_HOOKS_ALLOWED_SESSION_KEY_PREFIXES" => (
                 "Allowlist of sessionKey prefixes when request override is enabled (csv/JSON array).",
                 "Example: hook:,chat:",
+            ),
+            "A2A_ENABLED" => (
+                "Enable agent-to-agent HTTP endpoints and outbound delegation tools.",
+                "Example: true or false",
+            ),
+            "A2A_PUBLIC_BASE_URL" => (
+                "Public base URL remote peers should use for agent-card discovery and message delivery.",
+                "Example: https://planner.example.com",
+            ),
+            "A2A_AGENT_NAME" => (
+                "Friendly name exposed in the A2A agent card and outbound calls.",
+                "Example: Planner",
+            ),
+            "A2A_AGENT_DESCRIPTION" => (
+                "Short description of this agent's role for other agents.",
+                "Example: Routes work to specialized agents",
+            ),
+            "A2A_SHARED_TOKENS" => (
+                "Inbound bearer tokens accepted by /api/a2a/message (csv/JSON array).",
+                "Example: shared-a2a-token,backup-token",
+            ),
+            "A2A_PEERS_JSON" => (
+                "JSON object of outbound peers keyed by name. Supports base_url, bearer_token, description, default_session_key, enabled.",
+                "Example: {\"worker\":{\"base_url\":\"https://worker.example.com\",\"bearer_token\":\"shared-a2a-token\"}}",
             ),
             "DATA_DIR" => (
                 "Root directory for runtime data (DB, sessions, memory, skills).",
@@ -4051,16 +4220,22 @@ impl SetupApp {
             "WEB_HOOKS_DEFAULT_SESSION_KEY" => ORDER_CHANNEL_BASE + 2,
             "WEB_HOOKS_ALLOW_REQUEST_SESSION_KEY" => ORDER_CHANNEL_BASE + 3,
             "WEB_HOOKS_ALLOWED_SESSION_KEY_PREFIXES" => ORDER_CHANNEL_BASE + 4,
-            "TELEGRAM_BOT_TOKEN" => ORDER_CHANNEL_BASE + 10,
-            "BOT_USERNAME" => ORDER_CHANNEL_BASE + 11,
-            "TELEGRAM_ACCOUNT_ID" => ORDER_CHANNEL_BASE + 12,
-            _ if key == telegram_bot_count_key() => ORDER_CHANNEL_BASE + 13,
-            "TELEGRAM_MODEL" => ORDER_CHANNEL_BASE + 14,
-            "TELEGRAM_ALLOWED_USER_IDS" => ORDER_CHANNEL_BASE + 15,
-            "TELEGRAM_TOPIC_ROUTING" => ORDER_CHANNEL_BASE + 16,
-            "TELEGRAM_LLM_PROVIDER" => ORDER_CHANNEL_BASE + 17,
-            "TELEGRAM_LLM_API_KEY" => ORDER_CHANNEL_BASE + 18,
-            "TELEGRAM_LLM_BASE_URL" => ORDER_CHANNEL_BASE + 19,
+            "A2A_ENABLED" => ORDER_CHANNEL_BASE + 5,
+            "A2A_PUBLIC_BASE_URL" => ORDER_CHANNEL_BASE + 6,
+            "A2A_AGENT_NAME" => ORDER_CHANNEL_BASE + 7,
+            "A2A_AGENT_DESCRIPTION" => ORDER_CHANNEL_BASE + 8,
+            "A2A_SHARED_TOKENS" => ORDER_CHANNEL_BASE + 9,
+            "A2A_PEERS_JSON" => ORDER_CHANNEL_BASE + 10,
+            "TELEGRAM_BOT_TOKEN" => ORDER_CHANNEL_BASE + 20,
+            "BOT_USERNAME" => ORDER_CHANNEL_BASE + 21,
+            "TELEGRAM_ACCOUNT_ID" => ORDER_CHANNEL_BASE + 22,
+            _ if key == telegram_bot_count_key() => ORDER_CHANNEL_BASE + 23,
+            "TELEGRAM_MODEL" => ORDER_CHANNEL_BASE + 24,
+            "TELEGRAM_ALLOWED_USER_IDS" => ORDER_CHANNEL_BASE + 25,
+            "TELEGRAM_TOPIC_ROUTING" => ORDER_CHANNEL_BASE + 26,
+            "TELEGRAM_LLM_PROVIDER" => ORDER_CHANNEL_BASE + 27,
+            "TELEGRAM_LLM_API_KEY" => ORDER_CHANNEL_BASE + 28,
+            "TELEGRAM_LLM_BASE_URL" => ORDER_CHANNEL_BASE + 29,
             "DISCORD_BOT_TOKEN" => ORDER_CHANNEL_BASE + 900,
             "DISCORD_ACCOUNT_ID" => ORDER_CHANNEL_BASE + 901,
             "DISCORD_MODEL" => ORDER_CHANNEL_BASE + 902,
@@ -4524,6 +4699,23 @@ fn save_config_yaml(
         parse_boolish(&web_hooks_allow_request_session_key_raw, false)?;
     let web_hooks_allowed_session_key_prefixes =
         parse_string_list_field(&get(web_hooks_allowed_session_key_prefixes_key()))?;
+    let a2a_enabled = parse_boolish(&get(a2a_enabled_key()), false)?;
+    let a2a_public_base_url = get(a2a_public_base_url_key()).trim().to_string();
+    let a2a_agent_name = get(a2a_agent_name_key()).trim().to_string();
+    let a2a_agent_description = get(a2a_agent_description_key()).trim().to_string();
+    let a2a_shared_tokens = parse_string_list_field(&get(a2a_shared_tokens_key()))?;
+    let a2a_peers_raw = get(a2a_peers_json_key());
+    let a2a_peers = if a2a_peers_raw.trim().is_empty() {
+        HashMap::new()
+    } else {
+        serde_json::from_str::<HashMap<String, crate::config::A2APeerConfig>>(a2a_peers_raw.trim())
+            .map_err(|e| {
+                MicroClawError::Config(format!(
+                    "{} must be valid JSON object: {e}",
+                    a2a_peers_json_key()
+                ))
+            })?
+    };
     let telegram_token = if !get("TELEGRAM_BOT_TOKEN").trim().is_empty() {
         get("TELEGRAM_BOT_TOKEN")
     } else {
@@ -5007,6 +5199,47 @@ fn save_config_yaml(
                     MicroClawError::Config(format!("Failed to render {} accounts: {e}", ch.name))
                 })?;
             append_yaml_value(&mut yaml, 6, &yaml_accounts);
+        }
+    }
+    if a2a_enabled
+        || !a2a_public_base_url.is_empty()
+        || !a2a_agent_name.is_empty()
+        || !a2a_agent_description.is_empty()
+        || !a2a_shared_tokens.is_empty()
+        || !a2a_peers.is_empty()
+    {
+        yaml.push_str("a2a:\n");
+        yaml.push_str(&format!("  enabled: {}\n", a2a_enabled));
+        if !a2a_public_base_url.is_empty() {
+            yaml.push_str(&format!(
+                "  public_base_url: {}\n",
+                yaml_double_quoted(&a2a_public_base_url)
+            ));
+        }
+        if !a2a_agent_name.is_empty() {
+            yaml.push_str(&format!(
+                "  agent_name: {}\n",
+                yaml_double_quoted(&a2a_agent_name)
+            ));
+        }
+        if !a2a_agent_description.is_empty() {
+            yaml.push_str(&format!(
+                "  agent_description: {}\n",
+                yaml_double_quoted(&a2a_agent_description)
+            ));
+        }
+        if !a2a_shared_tokens.is_empty() {
+            yaml.push_str("  shared_tokens:\n");
+            for token in &a2a_shared_tokens {
+                yaml.push_str(&format!("    - {}\n", yaml_double_quoted(token)));
+            }
+        }
+        if !a2a_peers.is_empty() {
+            yaml.push_str("  peers:\n");
+            let yaml_peers = serde_yaml::to_value(&a2a_peers).map_err(|e| {
+                MicroClawError::Config(format!("Failed to render A2A peers: {e}"))
+            })?;
+            append_yaml_value(&mut yaml, 4, &yaml_peers);
         }
     }
     yaml.push('\n');
@@ -6097,6 +6330,54 @@ channels:
     }
 
     #[test]
+    fn test_setup_loads_existing_a2a_settings() {
+        let _guard = env_lock();
+        let temp = std::env::temp_dir().join(format!(
+            "microclaw_setup_load_a2a_{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let old_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp).unwrap();
+        std::fs::write(
+            temp.join("microclaw.config.yaml"),
+            r#"
+bot_username: bot
+api_key: key
+a2a:
+  enabled: true
+  public_base_url: "https://planner.example.com"
+  agent_name: "Planner"
+  agent_description: "Routes work"
+  shared_tokens:
+    - "shared-a2a-token"
+  peers:
+    worker:
+      enabled: true
+      base_url: "https://worker.example.com"
+      bearer_token: "secret"
+      default_session_key: "a2a:worker"
+"#,
+        )
+        .unwrap();
+
+        let app = SetupApp::new();
+        assert_eq!(app.field_value(a2a_enabled_key()), "true");
+        assert_eq!(
+            app.field_value(a2a_public_base_url_key()),
+            "https://planner.example.com"
+        );
+        assert_eq!(app.field_value(a2a_agent_name_key()), "Planner");
+        assert_eq!(app.field_value(a2a_agent_description_key()), "Routes work");
+        assert_eq!(app.field_value(a2a_shared_tokens_key()), "shared-a2a-token");
+        assert!(app.field_value(a2a_peers_json_key()).contains("\"worker\""));
+
+        std::env::set_current_dir(old_cwd).unwrap();
+        let _ = std::fs::remove_file(temp.join("microclaw.config.yaml"));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
     fn test_setup_loads_existing_telegram_topic_routing() {
         let _guard = env_lock();
         let temp = std::env::temp_dir().join(format!(
@@ -6199,6 +6480,46 @@ channels:
         save_config_yaml(&yaml_path, &values).unwrap();
         let s = fs::read_to_string(&yaml_path).unwrap();
         assert!(s.contains("high_risk_tool_user_confirmation_required: false\n"));
+
+        let _ = fs::remove_file(&yaml_path);
+    }
+
+    #[test]
+    fn test_save_config_yaml_writes_a2a_section() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_a2a_test_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "web".into());
+        values.insert("LLM_PROVIDER".into(), "anthropic".into());
+        values.insert("LLM_API_KEY".into(), "key".into());
+        values.insert(a2a_enabled_key().into(), "true".into());
+        values.insert(
+            a2a_public_base_url_key().into(),
+            "https://planner.example.com".into(),
+        );
+        values.insert(a2a_agent_name_key().into(), "Planner".into());
+        values.insert(
+            a2a_agent_description_key().into(),
+            "Routes work".into(),
+        );
+        values.insert(a2a_shared_tokens_key().into(), "shared-a2a-token".into());
+        values.insert(
+            a2a_peers_json_key().into(),
+            r#"{"worker":{"enabled":true,"base_url":"https://worker.example.com","default_session_key":"a2a:worker"}}"#
+                .into(),
+        );
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains("a2a:\n"));
+        assert!(s.contains("  enabled: true\n"));
+        assert!(s.contains("  public_base_url: \"https://planner.example.com\"\n"));
+        assert!(s.contains("  agent_name: \"Planner\"\n"));
+        assert!(s.contains("  shared_tokens:\n"));
+        assert!(s.contains("    worker:\n"));
 
         let _ = fs::remove_file(&yaml_path);
     }

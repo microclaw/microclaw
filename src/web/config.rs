@@ -65,14 +65,26 @@ fn merge_yaml_value(
     incoming: &serde_yaml::Value,
     parent_key: Option<&str>,
 ) {
-    if parent_key.is_some_and(is_sensitive_config_key)
-        && incoming
+    if parent_key.is_some_and(is_sensitive_config_key) {
+        let keep_existing = incoming
             .as_str()
             .map(|s| s.trim() == "***")
             .unwrap_or(false)
-    {
-        // Frontend redacts secrets in /api/config as "***"; keep existing value when unchanged.
-        return;
+            || incoming
+                .as_sequence()
+                .map(|items| {
+                    !items.is_empty()
+                        && items.iter().all(|item| {
+                            item.as_str()
+                                .map(|s| s.trim() == "***")
+                                .unwrap_or(false)
+                        })
+                })
+                .unwrap_or(false);
+        if keep_existing {
+            // Frontend redacts secrets in /api/config as "***"; keep existing value when unchanged.
+            return;
+        }
     }
 
     match incoming {
@@ -540,6 +552,45 @@ pub(super) async fn api_update_config(
     }
     if let Some(v) = body.embedding_dim {
         cfg.embedding_dim = v;
+    }
+    if let Some(v) = body.a2a_enabled {
+        cfg.a2a.enabled = v;
+    }
+    if let Some(v) = body.a2a_public_base_url {
+        cfg.a2a.public_base_url = v.and_then(|s| {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+    }
+    if let Some(v) = body.a2a_agent_name {
+        cfg.a2a.agent_name = v.and_then(|s| {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+    }
+    if let Some(v) = body.a2a_agent_description {
+        cfg.a2a.agent_description = v.and_then(|s| {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+    }
+    if let Some(v) = body.a2a_shared_tokens {
+        cfg.a2a.shared_tokens = v;
+    }
+    if let Some(v) = body.a2a_peers {
+        cfg.a2a.peers = v;
     }
     if let Some(v) = body.souls_dir {
         cfg.souls_dir = v.and_then(|s| {

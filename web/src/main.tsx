@@ -158,6 +158,16 @@ type ConfigSelfCheck = {
   security_posture?: SecurityPosture
 }
 
+type A2APeerDraft = {
+  name: string
+  enabled: boolean
+  base_url: string
+  bearer_token: string
+  has_bearer_token?: boolean
+  description: string
+  default_session_key: string
+}
+
 const DOCS_BASE = 'https://microclaw.ai/docs'
 
 function warningDocUrl(code?: string): string {
@@ -268,6 +278,12 @@ const DEFAULT_CONFIG_VALUES = {
   embedding_base_url: '',
   embedding_model: '',
   embedding_dim: '',
+  a2a_enabled: false,
+  a2a_public_base_url: '',
+  a2a_agent_name: '',
+  a2a_agent_description: '',
+  a2a_shared_tokens: '',
+  a2a_peers: [] as A2APeerDraft[],
   souls_dir: '',
 }
 
@@ -1046,6 +1062,63 @@ function parseI64ListCsvOrJsonArray(input: string, fieldName: string): number[] 
   }
 
   return parsedAsCsv()
+}
+
+function parseStringListInput(input: string): string[] {
+  const trimmed = input.trim()
+  if (!trimmed) return []
+  if (trimmed.startsWith('[')) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch (e) {
+      throw new Error(`a2a_shared_tokens must be valid JSON array: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error('a2a_shared_tokens must be a JSON array when using JSON format')
+    }
+    return Array.from(
+      new Set(
+        parsed
+          .map((item) => String(item || '').trim())
+          .filter(Boolean),
+      ),
+    )
+  }
+  return Array.from(new Set(trimmed.split(',').map((item) => item.trim()).filter(Boolean)))
+}
+
+function peersFromConfigValue(value: unknown): A2APeerDraft[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return Object.entries(value as Record<string, unknown>)
+    .map(([name, raw]) => {
+      const peer = (raw && typeof raw === 'object' && !Array.isArray(raw))
+        ? (raw as Record<string, unknown>)
+        : {}
+      const bearer = String(peer.bearer_token || '').trim()
+      return {
+        name,
+        enabled: peer.enabled !== false,
+        base_url: String(peer.base_url || ''),
+        bearer_token: '',
+        has_bearer_token: Boolean(bearer),
+        description: String(peer.description || ''),
+        default_session_key: String(peer.default_session_key || ''),
+      }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function emptyA2APeer(): A2APeerDraft {
+  return {
+    name: '',
+    enabled: true,
+    base_url: '',
+    bearer_token: '',
+    has_bearer_token: false,
+    description: '',
+    default_session_key: '',
+  }
 }
 
 function parseOptionalBoolString(input: string, fieldName: string): boolean | null {
@@ -1868,6 +1941,7 @@ function App() {
         discordBotDraft[`discord_bot_${slot}_model`] = String(accountCfg.model || '')
       }
       const ircCfg = channelsCfg.irc || {}
+      const a2aCfg = ((data.config?.a2a as Record<string, unknown> | undefined) || {})
       setConfigDraft({
         llm_provider: data.config?.llm_provider || '',
         model: data.config?.model || defaultModelForProvider(String(data.config?.llm_provider || 'anthropic')),
@@ -1916,6 +1990,12 @@ function App() {
         embedding_base_url: String(data.config?.embedding_base_url || ''),
         embedding_model: String(data.config?.embedding_model || ''),
         embedding_dim: String(data.config?.embedding_dim || ''),
+        a2a_enabled: Boolean(a2aCfg.enabled),
+        a2a_public_base_url: String(a2aCfg.public_base_url || ''),
+        a2a_agent_name: String(a2aCfg.agent_name || ''),
+        a2a_agent_description: String(a2aCfg.agent_description || ''),
+        a2a_shared_tokens: '',
+        a2a_peers: peersFromConfigValue(a2aCfg.peers),
         souls_dir: String(
           data.config?.souls_dir ||
             (String(data.config?.data_dir || '').trim()
@@ -2030,6 +2110,31 @@ function App() {
     setConfigDraft((prev) => ({ ...prev, [field]: value }))
   }
 
+  function updateA2APeer(index: number, patch: Partial<A2APeerDraft>): void {
+    setConfigDraft((prev) => {
+      const peers = Array.isArray(prev.a2a_peers) ? [...(prev.a2a_peers as A2APeerDraft[])] : []
+      if (!peers[index]) return prev
+      peers[index] = { ...peers[index], ...patch }
+      return { ...prev, a2a_peers: peers }
+    })
+  }
+
+  function addA2APeer(): void {
+    setConfigDraft((prev) => {
+      const peers = Array.isArray(prev.a2a_peers) ? [...(prev.a2a_peers as A2APeerDraft[])] : []
+      peers.push(emptyA2APeer())
+      return { ...prev, a2a_peers: peers }
+    })
+  }
+
+  function removeA2APeer(index: number): void {
+    setConfigDraft((prev) => {
+      const peers = Array.isArray(prev.a2a_peers) ? [...(prev.a2a_peers as A2APeerDraft[])] : []
+      peers.splice(index, 1)
+      return { ...prev, a2a_peers: peers }
+    })
+  }
+
   function resetConfigField(field: string): void {
     setConfigDraft((prev) => {
       const next = { ...prev }
@@ -2135,6 +2240,24 @@ function App() {
           break
         case 'embedding_dim':
           next.embedding_dim = DEFAULT_CONFIG_VALUES.embedding_dim
+          break
+        case 'a2a_enabled':
+          next.a2a_enabled = DEFAULT_CONFIG_VALUES.a2a_enabled
+          break
+        case 'a2a_public_base_url':
+          next.a2a_public_base_url = DEFAULT_CONFIG_VALUES.a2a_public_base_url
+          break
+        case 'a2a_agent_name':
+          next.a2a_agent_name = DEFAULT_CONFIG_VALUES.a2a_agent_name
+          break
+        case 'a2a_agent_description':
+          next.a2a_agent_description = DEFAULT_CONFIG_VALUES.a2a_agent_description
+          break
+        case 'a2a_shared_tokens':
+          next.a2a_shared_tokens = DEFAULT_CONFIG_VALUES.a2a_shared_tokens
+          break
+        case 'a2a_peers':
+          next.a2a_peers = DEFAULT_CONFIG_VALUES.a2a_peers
           break
         case 'irc_server':
           next.irc_server = ''
@@ -2256,6 +2379,10 @@ function App() {
         embedding_dim: String(configDraft.embedding_dim || '').trim()
           ? Number(configDraft.embedding_dim)
           : null,
+        a2a_enabled: Boolean(configDraft.a2a_enabled),
+        a2a_public_base_url: String(configDraft.a2a_public_base_url || '').trim() || null,
+        a2a_agent_name: String(configDraft.a2a_agent_name || '').trim() || null,
+        a2a_agent_description: String(configDraft.a2a_agent_description || '').trim() || null,
         souls_dir: String(configDraft.souls_dir || '').trim() || null,
       }
       if (String(configDraft.llm_provider || '').trim().toLowerCase() === 'custom') {
@@ -2361,6 +2488,41 @@ function App() {
 
       const embeddingApiKey = String(configDraft.embedding_api_key || '').trim()
       if (embeddingApiKey) payload.embedding_api_key = embeddingApiKey
+      const a2aSharedTokens = String(configDraft.a2a_shared_tokens || '').trim()
+      if (a2aSharedTokens) {
+        payload.a2a_shared_tokens = parseStringListInput(a2aSharedTokens)
+      }
+      const a2aPeers = Array.isArray(configDraft.a2a_peers)
+        ? (configDraft.a2a_peers as A2APeerDraft[])
+        : []
+      if (a2aPeers.length > 0) {
+        const serializedPeers: Record<string, unknown> = {}
+        for (const [index, peer] of a2aPeers.entries()) {
+          const name = String(peer.name || '').trim()
+          const baseUrl = String(peer.base_url || '').trim()
+          const bearerToken = String(peer.bearer_token || '').trim()
+          const hasBearerToken = Boolean(peer.has_bearer_token)
+          const description = String(peer.description || '').trim()
+          const defaultSessionKey = String(peer.default_session_key || '').trim()
+          if (!name && !baseUrl && !bearerToken && !description && !defaultSessionKey && !hasBearerToken) {
+            continue
+          }
+          if (!name) {
+            throw new Error(`A2A peer #${index + 1} is missing a name`)
+          }
+          if (Object.prototype.hasOwnProperty.call(serializedPeers, name)) {
+            throw new Error(`Duplicate A2A peer name: ${name}`)
+          }
+          serializedPeers[name] = {
+            enabled: peer.enabled !== false,
+            ...(baseUrl ? { base_url: baseUrl } : {}),
+            ...(bearerToken ? { bearer_token: bearerToken } : {}),
+            ...(description ? { description } : {}),
+            ...(defaultSessionKey ? { default_session_key: defaultSessionKey } : {}),
+          }
+        }
+        if (Object.keys(serializedPeers).length > 0) payload.a2a_peers = serializedPeers
+      }
 
       // Build generic channel_configs from dynamic channel definitions
       const channelConfigs: Record<string, Record<string, unknown>> = {}
@@ -2982,6 +3144,7 @@ function App() {
 
                       <Text size="1" color="gray" className="px-2 pt-3 uppercase tracking-wide">Integrations</Text>
                       <Tabs.Trigger value="web" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">🌐  Web</Tabs.Trigger>
+                      <Tabs.Trigger value="a2a" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">🔗  A2A</Tabs.Trigger>
                       {authAuthenticated ? (
                         <div className="mt-auto pt-3">
                           <Separator size="4" />
@@ -3719,6 +3882,142 @@ function App() {
                             </Card>
                           </details>
                         ) : null}
+                      </div>
+                    </Tabs.Content>
+
+                    <Tabs.Content value="a2a">
+                      <div className={sectionCardClass} style={sectionCardStyle}>
+                        <Text size="3" weight="bold">A2A</Text>
+                        <ConfigStepsCard
+                          steps={[
+                            <>Enable A2A only on instances that should accept or send agent-to-agent HTTP traffic.</>,
+                            <>Set <code>public_base_url</code> to the externally reachable HTTPS origin for this instance.</>,
+                            <>Configure shared bearer tokens for inbound auth and peers JSON for outbound targets.</>,
+                          ]}
+                        />
+                        <Text size="1" color="gray" className="mt-3 block">
+                          <code>a2a.shared_tokens</code> is write-only here for safety. Leave it blank to keep existing tokens unchanged.
+                        </Text>
+                        <div className="mt-4 grid grid-cols-1 gap-3">
+                          <ConfigToggleCard
+                            label="a2a_enabled"
+                            description={<>Enable A2A HTTP endpoints and built-in delegation tools.</>}
+                            checked={Boolean(configDraft.a2a_enabled)}
+                            onCheckedChange={(checked) => setConfigField('a2a_enabled', checked)}
+                            className={toggleCardClass}
+                            style={toggleCardStyle}
+                          />
+                        </div>
+                        <div className="mt-4 space-y-3">
+                          <ConfigFieldCard label="a2a_public_base_url" description={<>Public HTTPS base URL advertised in the agent card.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.a2a_public_base_url || '')}
+                              onChange={(e) => setConfigField('a2a_public_base_url', e.target.value)}
+                              placeholder="https://planner.example.com"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="a2a_agent_name" description={<>Friendly agent name shown to remote peers.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.a2a_agent_name || '')}
+                              onChange={(e) => setConfigField('a2a_agent_name', e.target.value)}
+                              placeholder="Planner"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="a2a_agent_description" description={<>Optional short description for the A2A agent card.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.a2a_agent_description || '')}
+                              onChange={(e) => setConfigField('a2a_agent_description', e.target.value)}
+                              placeholder="Routes work to specialized agents"
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="a2a_shared_tokens" description={<>Inbound bearer tokens accepted by <code>/api/a2a/message</code>. CSV or JSON array. Leave blank to keep unchanged.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.a2a_shared_tokens || '')}
+                              onChange={(e) => setConfigField('a2a_shared_tokens', e.target.value)}
+                              placeholder='["shared-a2a-token"]'
+                            />
+                          </ConfigFieldCard>
+                          <ConfigFieldCard label="a2a_peers" description={<>Outbound peers used by <code>a2a_send</code>. Add one card per remote agent.</>}>
+                            <div className="space-y-3">
+                              {Array.isArray(configDraft.a2a_peers) && (configDraft.a2a_peers as A2APeerDraft[]).length > 0 ? (
+                                (configDraft.a2a_peers as A2APeerDraft[]).map((peer, index) => (
+                                  <Card key={`a2a-peer-${index}`} className="p-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <Text size="2" weight="medium">
+                                        {String(peer.name || '').trim() || `Peer #${index + 1}`}
+                                      </Text>
+                                      <Button variant="soft" color="red" size="1" onClick={() => removeA2APeer(index)}>
+                                        Remove
+                                      </Button>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-1 gap-3">
+                                      <ConfigToggleCard
+                                        label={`a2a_peer_${index + 1}_enabled`}
+                                        description={<>Whether this peer can be targeted by outbound delegation.</>}
+                                        checked={peer.enabled !== false}
+                                        onCheckedChange={(checked) => updateA2APeer(index, { enabled: checked })}
+                                        className={toggleCardClass}
+                                        style={toggleCardStyle}
+                                      />
+                                      <ConfigFieldCard label={`a2a_peer_${index + 1}_name`} description={<>Peer key used in <code>a2a_send</code>, for example <code>worker</code>.</>}>
+                                        <TextField.Root
+                                          className="mt-2"
+                                          value={peer.name}
+                                          onChange={(e) => updateA2APeer(index, { name: e.target.value })}
+                                          placeholder="worker"
+                                        />
+                                      </ConfigFieldCard>
+                                      <ConfigFieldCard label={`a2a_peer_${index + 1}_base_url`} description={<>Remote base URL, for example <code>https://worker.example.com</code>.</>}>
+                                        <TextField.Root
+                                          className="mt-2"
+                                          value={peer.base_url}
+                                          onChange={(e) => updateA2APeer(index, { base_url: e.target.value })}
+                                          placeholder="https://worker.example.com"
+                                        />
+                                      </ConfigFieldCard>
+                                      <ConfigFieldCard label={`a2a_peer_${index + 1}_bearer_token`} description={<>Optional outbound bearer token. Leave blank to keep existing token unchanged.</>}>
+                                        <TextField.Root
+                                          className="mt-2"
+                                          value={peer.bearer_token}
+                                          onChange={(e) => updateA2APeer(index, { bearer_token: e.target.value })}
+                                          placeholder="shared-a2a-token"
+                                        />
+                                        {peer.has_bearer_token && !String(peer.bearer_token || '').trim() ? (
+                                          <Text size="1" color="gray" className="mt-2 block">Existing token is configured and will be preserved.</Text>
+                                        ) : null}
+                                      </ConfigFieldCard>
+                                      <ConfigFieldCard label={`a2a_peer_${index + 1}_description`} description={<>Optional description shown by <code>a2a_list_peers</code>.</>}>
+                                        <TextField.Root
+                                          className="mt-2"
+                                          value={peer.description}
+                                          onChange={(e) => updateA2APeer(index, { description: e.target.value })}
+                                          placeholder="Executes implementation tasks"
+                                        />
+                                      </ConfigFieldCard>
+                                      <ConfigFieldCard label={`a2a_peer_${index + 1}_default_session_key`} description={<>Optional default remote session key.</>}>
+                                        <TextField.Root
+                                          className="mt-2"
+                                          value={peer.default_session_key}
+                                          onChange={(e) => updateA2APeer(index, { default_session_key: e.target.value })}
+                                          placeholder="a2a:worker"
+                                        />
+                                      </ConfigFieldCard>
+                                    </div>
+                                  </Card>
+                                ))
+                              ) : (
+                                <Text size="1" color="gray">No peers configured yet.</Text>
+                              )}
+                              <Button variant="soft" onClick={() => addA2APeer()}>
+                                Add Peer
+                              </Button>
+                            </div>
+                          </ConfigFieldCard>
+                        </div>
                       </div>
                     </Tabs.Content>
 

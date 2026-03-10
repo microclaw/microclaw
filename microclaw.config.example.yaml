@@ -130,6 +130,29 @@ channels:
   #   # Optional Graph API version override
   #   # api_version: "v21.0"
 
+# Agent-to-agent HTTP integration (optional)
+# Exposes:
+# - /.well-known/agent.json
+# - /api/a2a/agent-card
+# - /api/a2a/message
+# Built-in tools:
+# - a2a_list_peers
+# - a2a_send
+# a2a:
+#   enabled: true
+#   public_base_url: "https://planner.example.com"
+#   agent_name: "Planner"
+#   agent_description: "Routes work to specialized agents"
+#   shared_tokens:
+#     - "shared-a2a-token"
+#   peers:
+#     worker:
+#       enabled: true
+#       base_url: "https://worker.example.com"
+#       bearer_token: "shared-a2a-token"
+#       description: "Executes implementation tasks"
+#       default_session_key: "a2a:worker"
+
 # Local web UI (optional)
 # Channel on/off is controlled by `channels.web.enabled`.
 # Bind address for local web UI

@@ -829,6 +829,12 @@ struct UpdateConfigRequest {
     embedding_base_url: Option<Option<String>>,
     embedding_model: Option<Option<String>>,
     embedding_dim: Option<Option<usize>>,
+    a2a_enabled: Option<bool>,
+    a2a_public_base_url: Option<Option<String>>,
+    a2a_agent_name: Option<Option<String>>,
+    a2a_agent_description: Option<Option<String>>,
+    a2a_shared_tokens: Option<Vec<String>>,
+    a2a_peers: Option<HashMap<String, crate::config::A2APeerConfig>>,
     souls_dir: Option<Option<String>>,
     working_dir_isolation: Option<WorkingDirIsolation>,
     high_risk_tool_user_confirmation_required: Option<bool>,
@@ -967,6 +973,7 @@ fn is_sensitive_config_key(key: &str) -> bool {
         "api_key",
         "openai_api_key",
         "embedding_api_key",
+        "shared_tokens",
         "telegram_bot_token",
         "discord_bot_token",
         "bot_token",
@@ -988,7 +995,16 @@ fn is_sensitive_config_key(key: &str) -> bool {
 
 fn redact_json_secrets(value: &mut serde_json::Value, parent_key: Option<&str>) {
     if parent_key.is_some_and(is_sensitive_config_key) {
-        *value = serde_json::Value::String("***".to_string());
+        match value {
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    *item = serde_json::Value::String("***".to_string());
+                }
+            }
+            _ => {
+                *value = serde_json::Value::String("***".to_string());
+            }
+        }
         return;
     }
     match value {
@@ -3764,6 +3780,7 @@ commands:
     fn test_redact_config_recursively_masks_nested_and_flattened_secrets() {
         let mut cfg = test_config_template();
         cfg.clawhub.token = Some("clawhub-secret".to_string());
+        cfg.a2a.shared_tokens = vec!["a2a-secret".to_string()];
         cfg.channels.insert(
             "discord".to_string(),
             serde_yaml::to_value(json!({
@@ -3783,6 +3800,12 @@ commands:
         assert_eq!(
             redacted
                 .pointer("/channels/discord/accounts/main/bot_token")
+                .and_then(|v| v.as_str()),
+            Some("***")
+        );
+        assert_eq!(
+            redacted
+                .pointer("/a2a/shared_tokens/0")
                 .and_then(|v| v.as_str()),
             Some("***")
         );
