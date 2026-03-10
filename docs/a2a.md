@@ -68,3 +68,20 @@ The endpoint returns:
   "response": "..."
 }
 ```
+
+## Follow-up UX work
+
+The current A2A config flow is ready to use and merge, but the next iteration should improve operator ergonomics in the Web settings UI:
+
+- Add finer validation and clearer inline errors for A2A config fields.
+  - Examples: invalid peer names, missing/invalid `base_url`, duplicate peer names, malformed token lists.
+- Add a peer connectivity test flow from the Web UI.
+  - Goal: let operators verify agent-card discovery and message endpoint reachability before saving or delegating work.
+- Add a "duplicate peer" action in the Web UI.
+  - Goal: make it faster to create similar peer entries when only host/token/session defaults differ.
+
+Suggested priority:
+
+1. Better validation
+2. Connectivity test
+3. Duplicate peer action
