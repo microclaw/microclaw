@@ -90,7 +90,7 @@ pub fn local_agent_name(config: &Config) -> String {
 
 pub fn default_session_key_for_source(source_agent: Option<&str>) -> String {
     source_agent
-        .and_then(|v| normalize_peer_name(v))
+        .and_then(normalize_peer_name)
         .map(|v| format!("a2a:{v}"))
         .unwrap_or_else(|| "a2a:remote".to_string())
 }

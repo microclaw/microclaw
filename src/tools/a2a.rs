@@ -220,7 +220,7 @@ impl Tool for A2ASendTool {
                 "session_key": parsed.session_key,
                 "response": parsed.response
             }))
-            .unwrap_or_else(|_| parsed.response),
+            .unwrap_or(parsed.response),
         )
     }
 }

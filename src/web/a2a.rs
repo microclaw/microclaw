@@ -23,7 +23,7 @@ fn a2a_token_allowed(config: &Config, headers: &HeaderMap) -> bool {
         .a2a
         .shared_tokens
         .iter()
-        .any(|candidate| candidate == &token)
+        .any(|candidate| candidate == token)
 }
 
 pub(super) async fn api_a2a_agent_card(
