@@ -74,11 +74,9 @@ fn merge_yaml_value(
                 .as_sequence()
                 .map(|items| {
                     !items.is_empty()
-                        && items.iter().all(|item| {
-                            item.as_str()
-                                .map(|s| s.trim() == "***")
-                                .unwrap_or(false)
-                        })
+                        && items
+                            .iter()
+                            .all(|item| item.as_str().map(|s| s.trim() == "***").unwrap_or(false))
                 })
                 .unwrap_or(false);
         if keep_existing {

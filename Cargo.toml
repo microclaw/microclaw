@@ -44,6 +44,7 @@ regex = "1"
 thiserror = "2"
 anyhow = "1"
 async-trait = "0.1"
+agent-client-protocol = "0.10.0"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_yaml = "0.9"
@@ -61,6 +62,7 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 include_dir = "0.7"
 async-stream = "0.3"
 futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["compat"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 argon2 = "0.5"
 opentelemetry-proto = { version = "0.28", features = ["gen-tonic-messages"] }

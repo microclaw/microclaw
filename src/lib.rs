@@ -1,4 +1,5 @@
 pub mod a2a;
+pub mod acp;
 pub mod agent_engine;
 pub mod channels;
 pub mod chat_commands;

@@ -1757,10 +1757,9 @@ impl SetupApp {
                         );
                     }
                     if !config.a2a.peers.is_empty() {
-                        let peers_json =
-                            serde_yaml::to_value(&config.a2a.peers).ok().and_then(|v| {
-                                compact_json_string(&v)
-                            });
+                        let peers_json = serde_yaml::to_value(&config.a2a.peers)
+                            .ok()
+                            .and_then(|v| compact_json_string(&v));
                         if let Some(peers_json) = peers_json {
                             map.insert(a2a_peers_json_key().into(), peers_json);
                         }
@@ -5236,9 +5235,8 @@ fn save_config_yaml(
         }
         if !a2a_peers.is_empty() {
             yaml.push_str("  peers:\n");
-            let yaml_peers = serde_yaml::to_value(&a2a_peers).map_err(|e| {
-                MicroClawError::Config(format!("Failed to render A2A peers: {e}"))
-            })?;
+            let yaml_peers = serde_yaml::to_value(&a2a_peers)
+                .map_err(|e| MicroClawError::Config(format!("Failed to render A2A peers: {e}")))?;
             append_yaml_value(&mut yaml, 4, &yaml_peers);
         }
     }
@@ -6501,10 +6499,7 @@ channels:
             "https://planner.example.com".into(),
         );
         values.insert(a2a_agent_name_key().into(), "Planner".into());
-        values.insert(
-            a2a_agent_description_key().into(),
-            "Routes work".into(),
-        );
+        values.insert(a2a_agent_description_key().into(), "Routes work".into());
         values.insert(a2a_shared_tokens_key().into(), "shared-a2a-token".into());
         values.insert(
             a2a_peers_json_key().into(),
