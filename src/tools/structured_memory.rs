@@ -5,8 +5,8 @@ use tracing::info;
 
 use crate::memory_backend::MemoryBackend;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Memory;
 use microclaw_storage::db::Database;
+use microclaw_storage::db::Memory;
 
 use super::{auth_context_from_input, authorize_chat_access, schema_object, Tool, ToolResult};
 
@@ -85,7 +85,11 @@ impl Tool for StructuredMemorySearchTool {
         );
 
         let result = if query.is_empty() {
-            let mut memories = match self.memory_backend.get_all_memories_for_chat(Some(chat_id)).await {
+            let mut memories = match self
+                .memory_backend
+                .get_all_memories_for_chat(Some(chat_id))
+                .await
+            {
                 Ok(m) => m,
                 Err(e) => return ToolResult::error(format!("Search failed: {e}")),
             };
@@ -420,8 +424,10 @@ mod tests {
     #[tokio::test]
     async fn test_search_empty_query_lists_recent_visible_memories() {
         let db = test_db();
-        db.insert_memory(Some(100), "chat memory", "PROFILE").unwrap();
-        db.insert_memory(None, "global memory", "KNOWLEDGE").unwrap();
+        db.insert_memory(Some(100), "chat memory", "PROFILE")
+            .unwrap();
+        db.insert_memory(None, "global memory", "KNOWLEDGE")
+            .unwrap();
         let tool = StructuredMemorySearchTool::new(db.clone(), test_backend(db));
         let result = tool
             .execute(json!({

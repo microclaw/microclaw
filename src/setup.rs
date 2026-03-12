@@ -5015,27 +5015,27 @@ fn save_config_yaml(
         if trimmed.is_empty() {
             return Ok(default);
         }
-        trimmed.parse::<usize>().map_err(|e| {
-            MicroClawError::Config(format!("{key} must be a positive integer: {e}"))
-        })
+        trimmed
+            .parse::<usize>()
+            .map_err(|e| MicroClawError::Config(format!("{key} must be a positive integer: {e}")))
     };
     let parse_u64_or_default = |raw: String, key: &str, default: u64| {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return Ok(default);
         }
-        trimmed.parse::<u64>().map_err(|e| {
-            MicroClawError::Config(format!("{key} must be a positive integer: {e}"))
-        })
+        trimmed
+            .parse::<u64>()
+            .map_err(|e| MicroClawError::Config(format!("{key} must be a positive integer: {e}")))
     };
     let parse_i64_or_default = |raw: String, key: &str, default: i64| {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return Ok(default);
         }
-        trimmed.parse::<i64>().map_err(|e| {
-            MicroClawError::Config(format!("{key} must be a positive integer: {e}"))
-        })
+        trimmed
+            .parse::<i64>()
+            .map_err(|e| MicroClawError::Config(format!("{key} must be a positive integer: {e}")))
     };
     let subagents_max_concurrent = parse_usize_or_default(
         get(subagents_max_concurrent_key()),
@@ -5052,8 +5052,7 @@ fn save_config_yaml(
         subagents_run_timeout_secs_key(),
         900,
     )?;
-    let subagents_announce_to_chat =
-        parse_boolish(&get(subagents_announce_to_chat_key()), true)?;
+    let subagents_announce_to_chat = parse_boolish(&get(subagents_announce_to_chat_key()), true)?;
     let subagents_max_spawn_depth = parse_usize_or_default(
         get(subagents_max_spawn_depth_key()),
         subagents_max_spawn_depth_key(),
@@ -5607,10 +5606,7 @@ fn save_config_yaml(
         }
     }
     yaml.push_str("subagents:\n");
-    yaml.push_str(&format!(
-        "  max_concurrent: {}\n",
-        subagents_max_concurrent
-    ));
+    yaml.push_str(&format!("  max_concurrent: {}\n", subagents_max_concurrent));
     yaml.push_str(&format!(
         "  max_active_per_chat: {}\n",
         subagents_max_active_per_chat
@@ -6878,8 +6874,14 @@ subagents:
             app.field_value(subagents_announce_relay_interval_secs_key()),
             "30"
         );
-        assert_eq!(app.field_value(subagents_max_tokens_per_run_key()), "240000");
-        assert_eq!(app.field_value(subagents_orchestrate_max_workers_key()), "6");
+        assert_eq!(
+            app.field_value(subagents_max_tokens_per_run_key()),
+            "240000"
+        );
+        assert_eq!(
+            app.field_value(subagents_orchestrate_max_workers_key()),
+            "6"
+        );
 
         std::env::set_current_dir(old_cwd).unwrap();
         let _ = std::fs::remove_file(temp.join("microclaw.config.yaml"));

@@ -594,9 +594,8 @@ fn process_openai_stream_event(
                 None
             };
 
-            let index = index.unwrap_or_else(|| {
-                tool_calls.keys().last().map(|last| last + 1).unwrap_or(0)
-            });
+            let index =
+                index.unwrap_or_else(|| tool_calls.keys().last().map(|last| last + 1).unwrap_or(0));
 
             let entry = tool_calls.entry(index).or_default();
             if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
@@ -696,7 +695,8 @@ fn build_stream_response(
     let mut normalized_stop_reason = normalize_stop_reason(stop_reason);
     if !tool_blocks.is_empty() {
         normalized_stop_reason = Some("tool_use".to_string());
-    } else if normalized_stop_reason.as_deref() == Some("tool_use") && !has_tool_use_block(&content) {
+    } else if normalized_stop_reason.as_deref() == Some("tool_use") && !has_tool_use_block(&content)
+    {
         warn!("Downgrading stop_reason=tool_use to end_turn because no tool_calls were parsed");
         normalized_stop_reason = Some("end_turn".into());
     }
@@ -2213,7 +2213,10 @@ mod tests {
         }];
         let out = translate_messages_to_oai("", &msgs);
         let tc = out[0]["tool_calls"].as_array().unwrap();
-        assert_eq!(tc[0]["extra_content"]["google"]["thought_signature"], "sig_abc");
+        assert_eq!(
+            tc[0]["extra_content"]["google"]["thought_signature"],
+            "sig_abc"
+        );
     }
 
     #[test]
