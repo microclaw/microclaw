@@ -324,7 +324,7 @@ pub async fn build_model_response(
 
     let mut allowed_models = profile.models.clone();
     if is_placeholder_model_list(&allowed_models) {
-        if let Ok(live) = fetch_models_from_provider_api(&profile, &config.llm_user_agent).await {
+        if let Ok(live) = fetch_models_from_provider_api(&profile).await {
             if !live.is_empty() {
                 allowed_models = live;
             }
@@ -486,7 +486,7 @@ pub async fn build_models_response(
         }
     };
     if api_mode {
-        return match fetch_models_from_provider_api(&profile, &config.llm_user_agent).await {
+        return match fetch_models_from_provider_api(&profile).await {
             Ok(models) => {
                 let listed = models
                     .iter()
@@ -510,7 +510,7 @@ pub async fn build_models_response(
         };
     }
     if is_placeholder_model_list(&profile.models) {
-        return match fetch_models_from_provider_api(&profile, &config.llm_user_agent).await {
+        return match fetch_models_from_provider_api(&profile).await {
             Ok(models) if !models.is_empty() => format!(
                 "Live models for provider '{}': {}",
                 profile.alias,
@@ -619,7 +619,6 @@ fn resolve_anthropic_models_url(profile: &ResolvedLlmProviderProfile) -> String 
 
 async fn fetch_models_from_provider_api(
     profile: &ResolvedLlmProviderProfile,
-    configured_user_agent: &str,
 ) -> Result<Vec<String>, String> {
     let backend = profile.provider.trim().to_ascii_lowercase();
     if backend == "openai-codex" && profile.api_key.trim().is_empty() {
@@ -634,7 +633,7 @@ async fn fetch_models_from_provider_api(
         }
         let url = resolve_anthropic_models_url(profile);
         let client = reqwest::Client::builder()
-            .user_agent(llm_user_agent(configured_user_agent))
+            .user_agent(llm_user_agent(&profile.llm_user_agent))
             .build()
             .map_err(|e| e.to_string())?;
         let response = client
@@ -657,7 +656,7 @@ async fn fetch_models_from_provider_api(
 
     let url = resolve_openai_models_url(profile);
     let client = reqwest::Client::builder()
-        .user_agent(llm_user_agent(configured_user_agent))
+        .user_agent(llm_user_agent(&profile.llm_user_agent))
         .build()
         .map_err(|e| e.to_string())?;
     let mut request = client.get(&url);
@@ -761,8 +760,10 @@ mod tests {
                 provider: Some("openai".to_string()),
                 api_key: None,
                 llm_base_url: None,
+                llm_user_agent: None,
                 default_model: Some("gpt-5.2".to_string()),
                 models: vec!["gpt-5.2".to_string(), "gpt-5".to_string()],
+                show_thinking: None,
             },
         );
         cfg.llm_providers.insert(
@@ -771,11 +772,13 @@ mod tests {
                 provider: Some("anthropic".to_string()),
                 api_key: Some("k".to_string()),
                 llm_base_url: None,
+                llm_user_agent: None,
                 default_model: Some("claude-sonnet-4-5-20250929".to_string()),
                 models: vec![
                     "claude-sonnet-4-5-20250929".to_string(),
                     "claude-opus-4-6-20260205".to_string(),
                 ],
+                show_thinking: None,
             },
         );
         cfg
@@ -966,8 +969,10 @@ mod tests {
                 provider: Some("openai".to_string()),
                 api_key: None,
                 llm_base_url: Some(format!("http://{addr}/v1")),
+                llm_user_agent: None,
                 default_model: Some("custom-model".to_string()),
                 models: vec!["custom-model".to_string()],
+                show_thinking: None,
             },
         );
         let provider_overrides = Arc::new(RwLock::new(HashMap::new()));
@@ -1016,8 +1021,10 @@ mod tests {
                 provider: Some("openai".to_string()),
                 api_key: None,
                 llm_base_url: Some(format!("http://{addr}/v1")),
+                llm_user_agent: None,
                 default_model: Some("custom-model".to_string()),
                 models: vec!["custom-model".to_string()],
+                show_thinking: None,
             },
         );
         let provider_overrides = Arc::new(RwLock::new(HashMap::new()));
@@ -1058,8 +1065,10 @@ mod tests {
             provider: provider.to_string(),
             api_key: String::new(),
             llm_base_url: None,
+            llm_user_agent: String::new(),
             default_model: "x".to_string(),
             models: vec!["x".to_string()],
+            show_thinking: false,
         };
         assert_eq!(
             resolve_openai_models_url(&mk("synthetic")),

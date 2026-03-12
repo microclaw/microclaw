@@ -253,6 +253,8 @@ fn build_provider_runtime_config(
     cfg.llm_provider = profile.provider.clone();
     cfg.api_key = profile.api_key.clone();
     cfg.llm_base_url = profile.llm_base_url.clone();
+    cfg.llm_user_agent = profile.llm_user_agent.clone();
+    cfg.show_thinking = profile.show_thinking;
     cfg.model = model.to_string();
     cfg
 }
@@ -920,7 +922,7 @@ pub(crate) async fn process_with_agent_impl(
             // Always compute visible text without thinking tags for retry/fallback decisions.
             let visible_text = strip_thinking(&text);
             // Keep raw thinking text only when show_thinking is enabled.
-            let display_text = if state.config.show_thinking {
+            let display_text = if effective_profile.show_thinking {
                 text.clone()
             } else {
                 visible_text.clone()

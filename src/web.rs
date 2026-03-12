@@ -816,6 +816,8 @@ struct UpdateConfigRequest {
     api_key: Option<String>,
     model: Option<String>,
     llm_base_url: Option<Option<String>>,
+    llm_user_agent: Option<Option<String>>,
+    provider_presets: Option<HashMap<String, crate::config::LlmProviderProfile>>,
     max_tokens: Option<u32>,
     max_tool_iterations: Option<usize>,
     openai_compat_body_overrides: Option<HashMap<String, serde_json::Value>>,
@@ -2557,8 +2559,10 @@ mod tests {
                 provider: Some("openai".to_string()),
                 api_key: None,
                 llm_base_url: Some(format!("http://{addr}/v1")),
+                llm_user_agent: None,
                 default_model: Some("custom-model".to_string()),
                 models: vec!["custom-model".to_string()],
+                show_thinking: None,
             },
         );
         let web_state = test_web_state_from_app_state(

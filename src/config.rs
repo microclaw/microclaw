@@ -242,9 +242,13 @@ pub struct LlmProviderProfile {
     #[serde(default)]
     pub llm_base_url: Option<String>,
     #[serde(default)]
+    pub llm_user_agent: Option<String>,
+    #[serde(default)]
     pub default_model: Option<String>,
     #[serde(default)]
     pub models: Vec<String>,
+    #[serde(default)]
+    pub show_thinking: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -253,8 +257,10 @@ pub struct ResolvedLlmProviderProfile {
     pub provider: String,
     pub api_key: String,
     pub llm_base_url: Option<String>,
+    pub llm_user_agent: String,
     pub default_model: String,
     pub models: Vec<String>,
+    pub show_thinking: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1455,8 +1461,10 @@ Use operator password + API keys for Web auth."
             let mut provider = self.llm_provider.clone();
             let mut api_key = self.api_key.clone();
             let mut llm_base_url = self.llm_base_url.clone();
+            let mut llm_user_agent = self.llm_user_agent.clone();
             let mut default_model = self.model.clone();
             let mut models = vec![default_model.clone()];
+            let mut show_thinking = self.show_thinking;
             if let Some(profile) = self.llm_providers.get(&alias) {
                 if let Some(v) = &profile.provider {
                     provider = v.clone();
@@ -1467,11 +1475,17 @@ Use operator password + API keys for Web auth."
                 if let Some(v) = &profile.llm_base_url {
                     llm_base_url = Some(v.clone());
                 }
+                if let Some(v) = &profile.llm_user_agent {
+                    llm_user_agent = v.clone();
+                }
                 if let Some(v) = &profile.default_model {
                     default_model = v.clone();
                 }
                 if !profile.models.is_empty() {
                     models = profile.models.clone();
+                }
+                if let Some(v) = profile.show_thinking {
+                    show_thinking = v;
                 }
             }
             if !models.iter().any(|m| m == &default_model) {
@@ -1484,8 +1498,10 @@ Use operator password + API keys for Web auth."
                 provider,
                 api_key,
                 llm_base_url,
+                llm_user_agent,
                 default_model,
                 models,
+                show_thinking,
             });
         }
 
@@ -1499,6 +1515,10 @@ Use operator password + API keys for Web auth."
             .llm_base_url
             .clone()
             .or_else(|| self.llm_base_url.clone());
+        let llm_user_agent = profile
+            .llm_user_agent
+            .clone()
+            .unwrap_or_else(|| self.llm_user_agent.clone());
         let default_model = profile
             .default_model
             .clone()
@@ -1508,6 +1528,7 @@ Use operator password + API keys for Web auth."
         } else {
             profile.models.clone()
         };
+        let show_thinking = profile.show_thinking.unwrap_or(self.show_thinking);
         if !models.iter().any(|m| m == &default_model) {
             models.push(default_model.clone());
         }
@@ -1518,8 +1539,10 @@ Use operator password + API keys for Web auth."
             provider,
             api_key,
             llm_base_url,
+            llm_user_agent,
             default_model,
             models,
+            show_thinking,
         })
     }
 
@@ -1647,6 +1670,11 @@ fn normalize_provider_profiles(
                 .as_ref()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty());
+            profile.llm_user_agent = profile
+                .llm_user_agent
+                .as_ref()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
             profile.default_model = profile
                 .default_model
                 .as_ref()
@@ -1681,8 +1709,10 @@ fn merge_provider_profile(
         provider: override_profile.provider.or(base.provider),
         api_key: override_profile.api_key.or(base.api_key),
         llm_base_url: override_profile.llm_base_url.or(base.llm_base_url),
+        llm_user_agent: override_profile.llm_user_agent.or(base.llm_user_agent),
         default_model: override_profile.default_model.or(base.default_model),
         models,
+        show_thinking: override_profile.show_thinking.or(base.show_thinking),
     }
 }
 
@@ -1871,8 +1901,10 @@ provider_presets:
     provider: OPENAI
     api_key: preset-key
     llm_base_url: https://preset.example/v1
+    llm_user_agent: preset-agent
     default_model: preset-model
     models: [preset-model, preset-model]
+    show_thinking: true
 llm_providers:
   lab:
     api_key: legacy-key
@@ -1888,11 +1920,13 @@ llm_providers:
             profile.llm_base_url.as_deref(),
             Some("https://preset.example/v1")
         );
+        assert_eq!(profile.llm_user_agent, "preset-agent");
         assert_eq!(profile.default_model, "preset-model");
         assert_eq!(
             profile.models,
             vec!["legacy-model".to_string(), "preset-model".to_string()]
         );
+        assert!(profile.show_thinking);
     }
 
     #[test]

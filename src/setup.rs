@@ -227,8 +227,8 @@ fn discord_llm_base_url_key() -> &'static str {
     "DISCORD_LLM_BASE_URL"
 }
 
-fn llm_provider_presets_json_key() -> &'static str {
-    "LLM_PROVIDER_PRESETS_JSON"
+fn llm_provider_profiles_key() -> &'static str {
+    "LLM_PROVIDER_PROFILES"
 }
 
 fn dynamic_bot_count_field_key(channel: &str) -> String {
@@ -937,6 +937,14 @@ fn provider_display(provider: &str) -> String {
     }
 }
 
+fn parse_bool_like(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Some(true),
+        "false" | "0" | "no" | "" => Some(false),
+        _ => None,
+    }
+}
+
 const MODEL_PICKER_MANUAL_INPUT: &str = "<Manual input...>";
 const SOUL_PICKER_CLEAR: &str = "<None>";
 const SOUL_PICKER_MANUAL_INPUT: &str = "<Manual input...>";
@@ -1009,7 +1017,9 @@ struct ProviderPresetDraft {
     provider: String,
     api_key: String,
     base_url: String,
+    user_agent: String,
     default_model: String,
+    show_thinking: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1291,7 +1301,7 @@ impl SetupApp {
                 },
                 Field {
                     key: "TELEGRAM_MODEL".into(),
-                    label: "Telegram LLM preset override (optional)".into(),
+                    label: "Telegram LLM provider profile override (optional)".into(),
                     value: existing.get("TELEGRAM_MODEL").cloned().unwrap_or_default(),
                     required: false,
                     secret: false,
@@ -1368,7 +1378,7 @@ impl SetupApp {
                 },
                 Field {
                     key: "DISCORD_MODEL".into(),
-                    label: "Discord LLM preset override (optional)".into(),
+                    label: "Discord LLM provider profile override (optional)".into(),
                     value: existing.get("DISCORD_MODEL").cloned().unwrap_or_default(),
                     required: false,
                     secret: false,
@@ -1455,22 +1465,22 @@ impl SetupApp {
                     secret: false,
                 },
                 Field {
-                    key: llm_provider_presets_json_key().into(),
-                    label: "LLM provider presets (optional)".into(),
-                    value: existing
-                        .get(llm_provider_presets_json_key())
-                        .cloned()
-                        .unwrap_or_default(),
-                    required: false,
-                    secret: false,
-                },
-                Field {
                     key: "SHOW_THINKING".into(),
-                    label: "Show thinking/reasoning text (true/false)".into(),
+                    label: "LLM Show thinking/reasoning text (true/false)".into(),
                     value: existing
                         .get("SHOW_THINKING")
                         .cloned()
                         .unwrap_or_else(|| "false".into()),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: llm_provider_profiles_key().into(),
+                    label: "LLM provider profiles (optional)".into(),
+                    value: existing
+                        .get(llm_provider_profiles_key())
+                        .cloned()
+                        .unwrap_or_default(),
                     required: false,
                     secret: false,
                 },
@@ -1670,7 +1680,7 @@ impl SetupApp {
             });
             app.fields.push(Field {
                 key: telegram_slot_model_key(slot),
-                label: format!("Telegram bot #{slot}: LLM preset override (optional)"),
+                label: format!("Telegram bot #{slot}: LLM provider profile override (optional)"),
                 value: existing
                     .get(&telegram_slot_model_key(slot))
                     .cloned()
@@ -2552,7 +2562,7 @@ impl SetupApp {
                     if !presets_for_setup.is_empty() {
                         let presets_json = serde_json::to_string(&presets_for_setup).ok();
                         if let Some(presets_json) = presets_json {
-                            map.insert(llm_provider_presets_json_key().into(), presets_json);
+                            map.insert(llm_provider_profiles_key().into(), presets_json);
                         }
                     }
                     map.insert("SHOW_THINKING".into(), config.show_thinking.to_string());
@@ -2690,8 +2700,8 @@ impl SetupApp {
 
     fn llm_provider_presets(&self) -> HashMap<String, LlmProviderProfile> {
         parse_provider_presets_json_value(
-            &self.field_value(llm_provider_presets_json_key()),
-            llm_provider_presets_json_key(),
+            &self.field_value(llm_provider_profiles_key()),
+            llm_provider_profiles_key(),
         )
         .unwrap_or_default()
     }
@@ -2707,7 +2717,9 @@ impl SetupApp {
                 provider: profile.provider.unwrap_or_default(),
                 api_key: profile.api_key.unwrap_or_default(),
                 base_url: profile.llm_base_url.unwrap_or_default(),
+                user_agent: profile.llm_user_agent.unwrap_or_default(),
                 default_model: profile.default_model.unwrap_or_default(),
+                show_thinking: profile.show_thinking.unwrap_or(false),
             })
             .collect()
     }
@@ -2736,14 +2748,16 @@ impl SetupApp {
                     .filter(|v| !v.is_empty()),
                 api_key: Some(draft.api_key.trim().to_string()).filter(|v| !v.is_empty()),
                 llm_base_url: Some(draft.base_url.trim().to_string()).filter(|v| !v.is_empty()),
+                llm_user_agent: Some(draft.user_agent.trim().to_string()).filter(|v| !v.is_empty()),
                 default_model: Some(draft.default_model.trim().to_string())
                     .filter(|v| !v.is_empty()),
                 models: Vec::new(),
+                show_thinking: Some(draft.show_thinking),
             };
             presets.insert(id, profile);
         }
         serde_json::to_string(&presets).map_err(|e| {
-            MicroClawError::Config(format!("Failed to serialize provider presets: {e}"))
+            MicroClawError::Config(format!("Failed to serialize provider profiles: {e}"))
         })
     }
 
@@ -2752,7 +2766,7 @@ impl SetupApp {
             return Ok(());
         };
         let json = Self::serialize_provider_preset_drafts(&page.entries)?;
-        self.set_field_value(llm_provider_presets_json_key(), json);
+        self.set_field_value(llm_provider_profiles_key(), json);
         Ok(())
     }
 
@@ -2771,6 +2785,24 @@ impl SetupApp {
         "provider1".to_string()
     }
 
+    fn next_cloned_provider_preset_id(entries: &[ProviderPresetDraft], source_id: &str) -> String {
+        let base = source_id.trim().to_ascii_lowercase();
+        if base.is_empty() {
+            return Self::next_provider_preset_id(entries);
+        }
+        let used = entries
+            .iter()
+            .map(|entry| entry.id.trim().to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>();
+        for idx in 2usize.. {
+            let candidate = format!("{base}-{idx}");
+            if !used.contains(&candidate) {
+                return candidate;
+            }
+        }
+        format!("{base}-2")
+    }
+
     fn open_provider_preset_page(&mut self) {
         self.provider_preset_page = Some(ProviderPresetPage {
             entries: self.provider_preset_drafts(),
@@ -2780,7 +2812,7 @@ impl SetupApp {
             editing: false,
             picker: None,
         });
-        self.status = "Editing provider presets".to_string();
+        self.status = "Editing provider profiles".to_string();
     }
 
     fn provider_preset_references(&self, preset_id: &str) -> Vec<String> {
@@ -2829,8 +2861,16 @@ impl SetupApp {
         }
     }
 
-    fn provider_preset_field_labels() -> [&'static str; 5] {
-        ["Preset ID", "Provider", "API key", "Base URL", "Model"]
+    fn provider_preset_field_labels() -> [&'static str; 7] {
+        [
+            "Preset ID",
+            "Provider",
+            "API key",
+            "Base URL",
+            "User-Agent",
+            "Model",
+            "Show thinking",
+        ]
     }
 
     fn provider_preset_selected_field_value(page: &ProviderPresetPage) -> String {
@@ -2842,7 +2882,9 @@ impl SetupApp {
             1 => entry.provider.clone(),
             2 => entry.api_key.clone(),
             3 => entry.base_url.clone(),
-            4 => entry.default_model.clone(),
+            4 => entry.user_agent.clone(),
+            5 => entry.default_model.clone(),
+            6 => entry.show_thinking.to_string(),
             _ => String::new(),
         }
     }
@@ -2876,6 +2918,24 @@ impl SetupApp {
             .and_then(|page| page.entries.get(page.selected))
             .map(|entry| entry.id.trim().to_string())
             .filter(|id| !id.is_empty())
+    }
+
+    fn clone_selected_provider_preset(&mut self) -> Result<Option<String>, MicroClawError> {
+        let Some(page) = self.provider_preset_page.as_mut() else {
+            return Ok(None);
+        };
+        let Some(selected_entry) = page.entries.get(page.selected).cloned() else {
+            return Ok(None);
+        };
+        let mut cloned = selected_entry.clone();
+        cloned.id = Self::next_cloned_provider_preset_id(&page.entries, &selected_entry.id);
+        page.entries.push(cloned.clone());
+        page.selected = page.entries.len().saturating_sub(1);
+        page.mode = ProviderPresetPageMode::Edit;
+        page.field_selected = 5;
+        page.editing = false;
+        self.sync_provider_preset_page_field()?;
+        Ok(Some(cloned.id))
     }
 
     fn delete_selected_provider_preset(
@@ -2927,12 +2987,23 @@ impl SetupApp {
                 1 => entry.provider = value,
                 2 => entry.api_key = value,
                 3 => entry.base_url = value,
-                4 => entry.default_model = value,
+                4 => entry.user_agent = value,
+                5 => entry.default_model = value,
+                6 => entry.show_thinking = parse_bool_like(&value).unwrap_or(false),
                 _ => {}
             }
         }
         if rename_target {
             self.rename_provider_preset_references(&old_id, &new_value_for_rename);
+        }
+    }
+
+    fn toggle_selected_provider_preset_show_thinking(&mut self) {
+        if let Some(page) = self.provider_preset_page.as_mut() {
+            let Some(entry) = page.entries.get_mut(page.selected) else {
+                return;
+            };
+            entry.show_thinking = !entry.show_thinking;
         }
     }
 
@@ -3032,7 +3103,7 @@ impl SetupApp {
             };
             if value == MODEL_PICKER_MANUAL_INPUT {
                 page.editing = true;
-                page.field_selected = 4;
+                page.field_selected = 5;
                 self.status = "Editing default model (manual input)".to_string();
                 return;
             }
@@ -3149,7 +3220,8 @@ impl SetupApp {
             selected: 0,
             editing: false,
         });
-        self.status = "Editing channel LLM overrides".to_string();
+        self.open_llm_override_provider_picker();
+        self.status = "Selecting LLM provider profile override".to_string();
     }
 
     fn open_llm_override_provider_picker(&mut self) {
@@ -3209,6 +3281,17 @@ impl SetupApp {
             );
             return true;
         }
+        for slot in 1..=MAX_BOT_SLOTS {
+            if field_key == telegram_slot_model_key(slot) {
+                self.open_llm_override_page(
+                    format!("Telegram Bot #{slot} LLM Override"),
+                    dynamic_slot_llm_provider_key("telegram", slot),
+                    dynamic_slot_llm_api_key_key("telegram", slot),
+                    dynamic_slot_llm_base_url_key("telegram", slot),
+                );
+                return true;
+            }
+        }
         for ch in DYNAMIC_CHANNELS {
             for slot in 1..=MAX_BOT_SLOTS {
                 let model_key = dynamic_slot_field_key(ch.name, slot, "model");
@@ -3232,6 +3315,11 @@ impl SetupApp {
         }
         if field_key == "DISCORD_MODEL" {
             return Some(discord_llm_provider_key().to_string());
+        }
+        for slot in 1..=MAX_BOT_SLOTS {
+            if field_key == telegram_slot_model_key(slot) {
+                return Some(dynamic_slot_llm_provider_key("telegram", slot));
+            }
         }
         for ch in DYNAMIC_CHANNELS {
             for slot in 1..=MAX_BOT_SLOTS {
@@ -3259,6 +3347,16 @@ impl SetupApp {
                 discord_llm_base_url_key().to_string(),
                 "DISCORD_MODEL".to_string(),
             ]);
+        }
+        for slot in 1..=MAX_BOT_SLOTS {
+            if field_key == telegram_slot_model_key(slot) {
+                return Some([
+                    dynamic_slot_llm_provider_key("telegram", slot),
+                    dynamic_slot_llm_api_key_key("telegram", slot),
+                    dynamic_slot_llm_base_url_key("telegram", slot),
+                    telegram_slot_model_key(slot),
+                ]);
+            }
         }
         for ch in DYNAMIC_CHANNELS {
             for slot in 1..=MAX_BOT_SLOTS {
@@ -3751,8 +3849,8 @@ impl SetupApp {
             ))
         })?;
         let _ = parse_provider_presets_json_value(
-            &self.field_value(llm_provider_presets_json_key()),
-            llm_provider_presets_json_key(),
+            &self.field_value(llm_provider_profiles_key()),
+            llm_provider_profiles_key(),
         )?;
 
         if self.channel_enabled("telegram") {
@@ -4021,14 +4119,10 @@ impl SetupApp {
             }
         }
         let show_thinking = self.field_value("SHOW_THINKING");
-        if !show_thinking.is_empty() {
-            let lower = show_thinking.to_ascii_lowercase();
-            let valid = matches!(lower.as_str(), "true" | "false" | "1" | "0" | "yes" | "no");
-            if !valid {
-                return Err(MicroClawError::Config(
-                    "SHOW_THINKING must be true/false (or 1/0)".into(),
-                ));
-            }
+        if !show_thinking.is_empty() && parse_bool_like(&show_thinking).is_none() {
+            return Err(MicroClawError::Config(
+                "SHOW_THINKING must be true/false (or 1/0)".into(),
+            ));
         }
 
         let memory_token_budget_raw = self.field_value("MEMORY_TOKEN_BUDGET");
@@ -4386,7 +4480,7 @@ impl SetupApp {
                 });
                 true
             }
-            _ if selected_key == llm_provider_presets_json_key() => {
+            _ if selected_key == llm_provider_profiles_key() => {
                 self.open_provider_preset_page();
                 true
             }
@@ -4416,8 +4510,8 @@ impl SetupApp {
     }
 
     fn key_display(key: &str) -> String {
-        if key == llm_provider_presets_json_key() {
-            "LLM_PROVIDER_PRESETS".to_string()
+        if key == llm_provider_profiles_key() {
+            "LLM_PROVIDER_PROFILES".to_string()
         } else {
             key.to_string()
         }
@@ -4605,7 +4699,7 @@ impl SetupApp {
                 .map(|p| p.default_base_url.to_string())
                 .unwrap_or_default(),
             "LLM_USER_AGENT" => String::new(),
-            _ if key == llm_provider_presets_json_key() => String::new(),
+            _ if key == llm_provider_profiles_key() => String::new(),
             "SHOW_THINKING" => "false".into(),
             "DATA_DIR" => default_data_dir_for_setup(),
             "OVERRIDE_TIMEZONE" => String::new(),
@@ -4681,7 +4775,7 @@ impl SetupApp {
             "REFLECTOR_ENABLED" | "REFLECTOR_INTERVAL_MINS" | "MEMORY_TOKEN_BUDGET" => "Memory",
             "LLM_PROVIDER" | "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL" | "LLM_USER_AGENT"
             | "SHOW_THINKING" => "Model",
-            _ if key == llm_provider_presets_json_key() => "Model",
+            _ if key == llm_provider_profiles_key() => "Model",
             "EMBEDDING_PROVIDER" | "EMBEDDING_API_KEY" | "EMBEDDING_BASE_URL"
             | "EMBEDDING_MODEL" | "EMBEDDING_DIM" => "Embedding",
             "A2A_ENABLED"
@@ -4749,7 +4843,7 @@ impl SetupApp {
                 "HTTP User-Agent for LLM requests. Empty means automatic MicroClaw/<version>.",
                 "Example: OpenClaw-Gateway/1.0",
             ),
-            _ if key == llm_provider_presets_json_key() => (
+            _ if key == llm_provider_profiles_key() => (
                 "Reusable preset definitions keyed by preset id. Press Enter to open the preset editor.",
                 "Example: create preset provider1 for OpenAI, then let channels/bots select provider1",
             ),
@@ -4896,7 +4990,7 @@ impl SetupApp {
                 "Example: 123456:ABCDEF...",
             ),
             _ if key.ends_with("_MODEL") => (
-                "Per-channel/per-account preset override entry point. Press Enter to choose preset; model follows the preset.",
+                "Per-channel/per-account provider profile override entry point. Press Enter to choose profile; model follows the profile.",
                 "Example: choose provider1 or leave empty for main",
             ),
             _ if key.ends_with("_LLM_PROVIDER") => (
@@ -4990,8 +5084,8 @@ impl SetupApp {
             "LLM_MODEL" => ORDER_MODEL_BASE + 2,
             "LLM_BASE_URL" => ORDER_MODEL_BASE + 3,
             "LLM_USER_AGENT" => ORDER_MODEL_BASE + 4,
-            _ if key == llm_provider_presets_json_key() => ORDER_MODEL_BASE + 5,
-            "SHOW_THINKING" => ORDER_MODEL_BASE + 6,
+            "SHOW_THINKING" => ORDER_MODEL_BASE + 5,
+            _ if key == llm_provider_profiles_key() => ORDER_MODEL_BASE + 6,
             // 2) Channel (dynamic channel fields are placed in the branch above)
             "ENABLED_CHANNELS" => ORDER_CHANNEL_BASE,
             "WEB_HOOKS_TOKEN" => ORDER_CHANNEL_BASE + 1,
@@ -5515,8 +5609,8 @@ fn save_config_yaml(
             })?
     };
     let provider_presets = parse_provider_presets_json_value(
-        &get(llm_provider_presets_json_key()),
-        llm_provider_presets_json_key(),
+        &get(llm_provider_profiles_key()),
+        llm_provider_profiles_key(),
     )?;
     let parse_usize_or_default = |raw: String, key: &str, default: usize| {
         let trimmed = raw.trim();
@@ -6182,13 +6276,15 @@ fn save_config_yaml(
         yaml.push_str(&format!("llm_user_agent: \"{}\"\n", llm_user_agent));
     }
     if provider_presets.is_empty() {
-        yaml.push_str("# Optional reusable provider presets for per-bot/channel selection\n");
+        yaml.push_str("# Optional reusable provider profiles for per-bot/channel selection\n");
         yaml.push_str("# provider_presets:\n");
         yaml.push_str("#   provider1:\n");
         yaml.push_str("#     provider: \"openai\"\n");
         yaml.push_str("#     api_key: \"sk-...\"\n");
         yaml.push_str("#     llm_base_url: \"https://example.com/v1\"\n");
+        yaml.push_str("#     llm_user_agent: \"microclaw/1.0\"\n");
         yaml.push_str("#     default_model: \"gpt-5.2\"\n");
+        yaml.push_str("#     show_thinking: false\n");
         yaml.push_str("#   deepseek-hk:\n");
         yaml.push_str("#     provider: \"deepseek\"\n");
         yaml.push_str("#     api_key: \"sk-...\"\n");
@@ -6201,10 +6297,7 @@ fn save_config_yaml(
     }
     let show_thinking = values
         .get("SHOW_THINKING")
-        .map(|v| {
-            let lower = v.trim().to_ascii_lowercase();
-            lower == "true" || lower == "1" || lower == "yes"
-        })
+        .and_then(|v| parse_bool_like(v))
         .unwrap_or(false);
     yaml.push_str("# Show model thinking/reasoning text when available\n");
     yaml.push_str(&format!("show_thinking: {}\n", show_thinking));
@@ -6469,7 +6562,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             } else {
                 format!("preset={provider}")
             }
-        } else if f.key == llm_provider_presets_json_key() {
+        } else if f.key == llm_provider_profiles_key() {
             let presets = app.llm_provider_presets();
             if presets.is_empty() {
                 String::new()
@@ -6636,8 +6729,8 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             let next_id_hint = SetupApp::next_provider_preset_id(&page.entries);
             if page.entries.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    "No provider presets yet. Press a to add one.",
-                    Style::default().fg(Color::DarkGray),
+                    "No provider profiles yet. Press a to add one.",
+                    Style::default().fg(Color::White),
                 )));
             } else {
                 for (idx, entry) in page.entries.iter().enumerate() {
@@ -6673,18 +6766,22 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("Next default preset id: {next_id_hint}"),
-                Style::default().fg(Color::DarkGray),
+                "----------------------------------------------------------------",
+                Style::default().fg(Color::Gray),
             )));
             lines.push(Line::from(Span::styled(
-                "a add · Enter edit · d delete only if unused · x reset refs to main and delete · Esc close",
-                Style::default().fg(Color::DarkGray),
+                format!("Next default preset id: {next_id_hint}"),
+                Style::default().fg(Color::Gray),
+            )));
+            lines.push(Line::from(Span::styled(
+                "a add · c clone · Enter edit · d delete only if unused · x reset refs to main and delete · Esc close",
+                Style::default().fg(Color::White),
             )));
             let overlay = Paragraph::new(lines)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title("Provider Presets")
+                        .title("Provider Profiles")
                         .style(Style::default().bg(Color::Black)),
                 )
                 .style(Style::default().bg(Color::Black))
@@ -6709,7 +6806,9 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                             }
                         }
                         3 => entry.base_url.clone(),
-                        4 => entry.default_model.clone(),
+                        4 => entry.user_agent.clone(),
+                        5 => entry.default_model.clone(),
+                        6 => entry.show_thinking.to_string(),
                         _ => String::new(),
                     };
                     let style = if selected {
@@ -6725,6 +6824,10 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                     )));
                 }
                 lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "----------------------------------------------------------------",
+                    Style::default().fg(Color::Gray),
+                )));
                 let refs = app.provider_preset_references(&entry.id);
                 lines.push(Line::from(Span::styled(
                     format!(
@@ -6735,22 +6838,22 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                             refs.join(", ")
                         }
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Gray),
                 )));
                 lines.push(Line::from(Span::styled(
                     "Delete actions: d = delete only when unused; x = reset all refs to main, then delete",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::White),
                 )));
                 lines.push(Line::from(Span::styled(
                     "Use d when you expect zero references. Use x when this preset is still attached somewhere.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Gray),
                 )));
                 if entry.id.strip_prefix("provider").is_some_and(|suffix| {
                     !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
                 }) {
                     lines.push(Line::from(Span::styled(
                         "Tip: providerN ids are convenient for sequential presets; descriptive ids also work.",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(Color::Gray),
                     )));
                 } else {
                     lines.push(Line::from(Span::styled(
@@ -6758,14 +6861,14 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                             "Tip: next default preset id would be {}",
                             SetupApp::next_provider_preset_id(&page.entries)
                         ),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(Color::Gray),
                     )));
                 }
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Enter edit/select · Esc back · ↑/↓ move · Ctrl+D clear",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::White),
             )));
             let overlay = Paragraph::new(lines)
                 .block(
@@ -7120,7 +7223,7 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                     ProviderPresetPageMode::List => match key.code {
                         KeyCode::Esc => {
                             app.provider_preset_page = None;
-                            app.status = "Closed provider presets".into();
+                            app.status = "Closed provider profiles".into();
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
                             if let Some(page) = app.provider_preset_page.as_mut() {
@@ -7152,8 +7255,10 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                                     provider: "anthropic".to_string(),
                                     api_key: String::new(),
                                     base_url: String::new(),
+                                    user_agent: String::new(),
                                     default_model: default_model_for_provider("anthropic")
                                         .to_string(),
+                                    show_thinking: false,
                                 });
                                 page.selected = page.entries.len().saturating_sub(1);
                                 page.mode = ProviderPresetPageMode::Edit;
@@ -7163,6 +7268,13 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                             let _ = app.sync_provider_preset_page_field();
                             app.status = "Added provider preset".into();
                         }
+                        KeyCode::Char('c') => match app.clone_selected_provider_preset() {
+                            Ok(Some(cloned_id)) => {
+                                app.status = format!("Cloned provider profile as {cloned_id}")
+                            }
+                            Ok(None) => app.status = "No provider profile selected to clone".into(),
+                            Err(e) => app.status = e.to_string(),
+                        },
                         KeyCode::Char('d') => match app.delete_selected_provider_preset(false) {
                             Ok(_) => app.status = "Deleted provider preset".into(),
                             Err(e) => app.status = e.to_string(),
@@ -7190,8 +7302,10 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                                         provider: "anthropic".to_string(),
                                         api_key: String::new(),
                                         base_url: String::new(),
+                                        user_agent: String::new(),
                                         default_model: default_model_for_provider("anthropic")
                                             .to_string(),
+                                        show_thinking: false,
                                     });
                                     page.selected = 0;
                                 }
@@ -7266,8 +7380,12 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                                 app.status = "Updated provider preset field".into();
                             } else if selected_field == 1 {
                                 app.open_provider_preset_provider_picker();
-                            } else if selected_field == 4 {
+                            } else if selected_field == 5 {
                                 app.open_provider_preset_model_picker();
+                            } else if selected_field == 6 {
+                                app.toggle_selected_provider_preset_show_thinking();
+                                let _ = app.sync_provider_preset_page_field();
+                                app.status = "Toggled provider preset show_thinking".into();
                             } else if let Some(page) = app.provider_preset_page.as_mut() {
                                 page.editing = true;
                                 app.status = "Editing provider preset field".into();
@@ -7586,9 +7704,9 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                 }
                 KeyCode::Char('e') => {
                     let selected_key = app.selected_field().key.clone();
-                    if selected_key == llm_provider_presets_json_key() {
+                    if selected_key == llm_provider_profiles_key() {
                         app.open_provider_preset_page();
-                        app.status = "Editing provider presets".into();
+                        app.status = "Editing provider profiles".into();
                     } else if app.open_llm_override_page_for_field(&selected_key) {
                         app.status = format!("Editing {}", selected_key);
                     } else {
@@ -7798,7 +7916,7 @@ llm_providers:
         .unwrap();
 
         let app = SetupApp::new();
-        let presets = app.field_value(llm_provider_presets_json_key());
+        let presets = app.field_value(llm_provider_profiles_key());
         assert!(presets.contains("\"1\""));
         assert!(presets.contains("\"provider\":\"openai\""));
 
@@ -7973,7 +8091,7 @@ subagents:
     fn test_parse_provider_presets_json_rejects_reserved_main() {
         let err = parse_provider_presets_json_value(
             r#"{"main":{"provider":"openai"}}"#,
-            llm_provider_presets_json_key(),
+            llm_provider_profiles_key(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("reserved"));
@@ -7995,7 +8113,7 @@ subagents:
         values.insert("LLM_PROVIDER".into(), "anthropic".into());
         values.insert("LLM_API_KEY".into(), "key".into());
         values.insert(
-            llm_provider_presets_json_key().into(),
+            llm_provider_profiles_key().into(),
             r#"{"1":{"provider":"openai","api_key":"preset-key","default_model":"gpt-5.2"}}"#
                 .into(),
         );
@@ -8024,17 +8142,119 @@ subagents:
                 provider: "openai".into(),
                 api_key: String::new(),
                 base_url: String::new(),
+                user_agent: String::new(),
                 default_model: String::new(),
+                show_thinking: false,
             },
             ProviderPresetDraft {
                 id: "provider3".into(),
                 provider: "anthropic".into(),
                 api_key: String::new(),
                 base_url: String::new(),
+                user_agent: String::new(),
                 default_model: String::new(),
+                show_thinking: false,
             },
         ];
         assert_eq!(SetupApp::next_provider_preset_id(&entries), "provider2");
+    }
+
+    #[test]
+    fn test_next_cloned_provider_preset_id_uses_incrementing_dash_suffix() {
+        let entries = vec![
+            ProviderPresetDraft {
+                id: "provider1".into(),
+                provider: "openai".into(),
+                api_key: String::new(),
+                base_url: String::new(),
+                user_agent: String::new(),
+                default_model: String::new(),
+                show_thinking: false,
+            },
+            ProviderPresetDraft {
+                id: "provider1-2".into(),
+                provider: "openai".into(),
+                api_key: String::new(),
+                base_url: String::new(),
+                user_agent: String::new(),
+                default_model: String::new(),
+                show_thinking: false,
+            },
+        ];
+        assert_eq!(
+            SetupApp::next_cloned_provider_preset_id(&entries, "provider1"),
+            "provider1-3"
+        );
+    }
+
+    #[test]
+    fn test_provider_preset_serialization_keeps_user_agent_and_show_thinking() {
+        let json = SetupApp::serialize_provider_preset_drafts(&[ProviderPresetDraft {
+            id: "provider1".into(),
+            provider: "openai".into(),
+            api_key: "sk-test".into(),
+            base_url: "https://example.com/v1".into(),
+            user_agent: "microclaw-test/1.0".into(),
+            default_model: "gpt-5.2".into(),
+            show_thinking: true,
+        }])
+        .unwrap();
+        let presets =
+            parse_provider_presets_json_value(&json, llm_provider_profiles_key()).unwrap();
+        let preset = presets.get("provider1").unwrap();
+        assert_eq!(preset.llm_user_agent.as_deref(), Some("microclaw-test/1.0"));
+        assert_eq!(preset.show_thinking, Some(true));
+    }
+
+    #[test]
+    fn test_clone_selected_provider_preset_creates_dash_suffix_copy_and_focuses_model() {
+        let mut app = SetupApp::new();
+        app.provider_preset_page = Some(ProviderPresetPage {
+            entries: vec![ProviderPresetDraft {
+                id: "provider1".into(),
+                provider: "anthropic".into(),
+                api_key: "sk-test".into(),
+                base_url: "https://example.com/v1".into(),
+                user_agent: "microclaw-test/1.0".into(),
+                default_model: "claude-sonnet-4-5-20250929".into(),
+                show_thinking: true,
+            }],
+            selected: 0,
+            mode: ProviderPresetPageMode::List,
+            field_selected: 0,
+            editing: false,
+            picker: None,
+        });
+
+        let cloned_id = app.clone_selected_provider_preset().unwrap().unwrap();
+
+        assert_eq!(cloned_id, "provider1-2");
+        let page = app.provider_preset_page.as_ref().unwrap();
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.selected, 1);
+        assert!(matches!(page.mode, ProviderPresetPageMode::Edit));
+        assert_eq!(page.field_selected, 5);
+        assert!(!page.editing);
+        assert_eq!(page.entries[1].id, "provider1-2");
+        assert_eq!(page.entries[1].provider, "anthropic");
+        assert_eq!(page.entries[1].default_model, "claude-sonnet-4-5-20250929");
+        assert!(page.entries[1].show_thinking);
+    }
+
+    #[test]
+    fn test_provider_presets_field_comes_after_show_thinking_in_model_section() {
+        let app = SetupApp::new();
+        let show_idx = app
+            .fields
+            .iter()
+            .position(|f| f.key == "SHOW_THINKING")
+            .unwrap();
+        let presets_idx = app
+            .fields
+            .iter()
+            .position(|f| f.key == llm_provider_profiles_key())
+            .unwrap();
+        assert!(presets_idx > show_idx);
     }
 
     #[test]
@@ -8061,7 +8281,9 @@ subagents:
                 provider: "openai".into(),
                 api_key: String::new(),
                 base_url: String::new(),
+                user_agent: String::new(),
                 default_model: "gpt-5.2".into(),
+                show_thinking: false,
             }],
             selected: 0,
             mode: ProviderPresetPageMode::Edit,
@@ -8092,7 +8314,9 @@ subagents:
                 provider: "openai".into(),
                 api_key: String::new(),
                 base_url: String::new(),
+                user_agent: String::new(),
                 default_model: "gpt-5.2".into(),
+                show_thinking: false,
             }],
             selected: 0,
             mode: ProviderPresetPageMode::List,
@@ -8124,7 +8348,9 @@ subagents:
                 provider: "openai".into(),
                 api_key: String::new(),
                 base_url: String::new(),
+                user_agent: String::new(),
                 default_model: "gpt-5.2".into(),
+                show_thinking: false,
             }],
             selected: 0,
             mode: ProviderPresetPageMode::List,
@@ -8155,8 +8381,8 @@ subagents:
     #[test]
     fn test_key_display_hides_json_suffix_for_provider_presets() {
         assert_eq!(
-            SetupApp::key_display(llm_provider_presets_json_key()),
-            "LLM_PROVIDER_PRESETS"
+            SetupApp::key_display(llm_provider_profiles_key()),
+            "LLM_PROVIDER_PROFILES"
         );
     }
 
