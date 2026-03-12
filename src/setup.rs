@@ -1011,7 +1011,6 @@ struct ProviderPresetDraft {
     api_key: String,
     base_url: String,
     default_model: String,
-    models_csv: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2710,7 +2709,6 @@ impl SetupApp {
                 api_key: profile.api_key.unwrap_or_default(),
                 base_url: profile.llm_base_url.unwrap_or_default(),
                 default_model: profile.default_model.unwrap_or_default(),
-                models_csv: profile.models.join(","),
             })
             .collect()
     }
@@ -2734,7 +2732,6 @@ impl SetupApp {
                     "provider preset id '{id}' must use only letters, numbers, '_' or '-'"
                 )));
             }
-            let models = parse_string_list_field(&draft.models_csv)?;
             let profile = LlmProviderProfile {
                 provider: Some(draft.provider.trim().to_ascii_lowercase())
                     .filter(|v| !v.is_empty()),
@@ -2742,7 +2739,7 @@ impl SetupApp {
                 llm_base_url: Some(draft.base_url.trim().to_string()).filter(|v| !v.is_empty()),
                 default_model: Some(draft.default_model.trim().to_string())
                     .filter(|v| !v.is_empty()),
-                models,
+                models: Vec::new(),
             };
             presets.insert(id, profile);
         }
@@ -2767,12 +2764,12 @@ impl SetupApp {
             .collect::<Vec<_>>();
         used.sort();
         for idx in 1usize.. {
-            let candidate = idx.to_string();
+            let candidate = format!("provider{idx}");
             if !used.iter().any(|id| id == &candidate) {
                 return candidate;
             }
         }
-        "1".to_string()
+        "provider1".to_string()
     }
 
     fn open_provider_preset_page(&mut self) {
@@ -2833,15 +2830,8 @@ impl SetupApp {
         }
     }
 
-    fn provider_preset_field_labels() -> [&'static str; 6] {
-        [
-            "Preset ID",
-            "Provider",
-            "API key",
-            "Base URL",
-            "Default model",
-            "Models (csv)",
-        ]
+    fn provider_preset_field_labels() -> [&'static str; 5] {
+        ["Preset ID", "Provider", "API key", "Base URL", "Model"]
     }
 
     fn provider_preset_selected_field_value(page: &ProviderPresetPage) -> String {
@@ -2854,7 +2844,6 @@ impl SetupApp {
             2 => entry.api_key.clone(),
             3 => entry.base_url.clone(),
             4 => entry.default_model.clone(),
-            5 => entry.models_csv.clone(),
             _ => String::new(),
         }
     }
@@ -2940,7 +2929,6 @@ impl SetupApp {
                 2 => entry.api_key = value,
                 3 => entry.base_url = value,
                 4 => entry.default_model = value,
-                5 => entry.models_csv = value,
                 _ => {}
             }
         }
@@ -3197,13 +3185,12 @@ impl SetupApp {
             self.model_options()
         } else if let Some(profile) = self.llm_provider_presets().get(&provider_ref_normalized) {
             provider_label = provider_ref_normalized.clone();
-            let mut models = profile.models.clone();
-            if let Some(default_model) = profile.default_model.clone() {
-                if !default_model.trim().is_empty() && !models.iter().any(|m| m == &default_model) {
-                    models.push(default_model);
-                }
-            }
-            models
+            profile
+                .default_model
+                .clone()
+                .into_iter()
+                .filter(|model| !model.trim().is_empty())
+                .collect()
         } else if let Some(preset) = find_provider_preset(&provider_ref_normalized) {
             preset.models.iter().map(|m| (*m).to_string()).collect()
         } else {
@@ -4831,7 +4818,7 @@ impl SetupApp {
             ),
             _ if key == llm_provider_presets_json_key() => (
                 "Reusable preset definitions keyed by preset id. Press Enter to open the preset editor.",
-                "Example: create preset 1 for OpenAI, then let channels/bots select preset 1",
+                "Example: create preset provider1 for OpenAI, then let channels/bots select provider1",
             ),
             "SHOW_THINKING" => (
                 "Show model reasoning/thinking text in channel output when provider supports it.",
@@ -6264,12 +6251,11 @@ fn save_config_yaml(
     if provider_presets.is_empty() {
         yaml.push_str("# Optional reusable provider presets for per-bot/channel selection\n");
         yaml.push_str("# provider_presets:\n");
-        yaml.push_str("#   \"1\":\n");
+        yaml.push_str("#   provider1:\n");
         yaml.push_str("#     provider: \"openai\"\n");
         yaml.push_str("#     api_key: \"sk-...\"\n");
         yaml.push_str("#     llm_base_url: \"https://example.com/v1\"\n");
         yaml.push_str("#     default_model: \"gpt-5.2\"\n");
-        yaml.push_str("#     models: [\"gpt-5.2\", \"gpt-5.2-mini\"]\n");
         yaml.push_str("#   deepseek-hk:\n");
         yaml.push_str("#     provider: \"deepseek\"\n");
         yaml.push_str("#     api_key: \"sk-...\"\n");
@@ -6759,7 +6745,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("Next numeric preset id: {next_id_hint}"),
+                format!("Next default preset id: {next_id_hint}"),
                 Style::default().fg(Color::DarkGray),
             )));
             lines.push(Line::from(Span::styled(
@@ -6796,7 +6782,6 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                         }
                         3 => entry.base_url.clone(),
                         4 => entry.default_model.clone(),
-                        5 => entry.models_csv.clone(),
                         _ => String::new(),
                     };
                     let style = if selected {
@@ -6832,15 +6817,17 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
                     "Use d when you expect zero references. Use x when this preset is still attached somewhere.",
                     Style::default().fg(Color::DarkGray),
                 )));
-                if entry.id.chars().all(|c| c.is_ascii_digit()) {
+                if entry.id.strip_prefix("provider").is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+                }) {
                     lines.push(Line::from(Span::styled(
-                        "Tip: numeric ids are convenient for sequential presets; text ids work too.",
+                        "Tip: providerN ids are convenient for sequential presets; descriptive ids also work.",
                         Style::default().fg(Color::DarkGray),
                     )));
                 } else {
                     lines.push(Line::from(Span::styled(
                         format!(
-                            "Tip: next numeric preset id would be {}",
+                            "Tip: next default preset id would be {}",
                             SetupApp::next_provider_preset_id(&page.entries)
                         ),
                         Style::default().fg(Color::DarkGray),
@@ -7239,7 +7226,6 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                                     base_url: String::new(),
                                     default_model: default_model_for_provider("anthropic")
                                         .to_string(),
-                                    models_csv: default_model_for_provider("anthropic").to_string(),
                                 });
                                 page.selected = page.entries.len().saturating_sub(1);
                                 page.mode = ProviderPresetPageMode::Edit;
@@ -7277,8 +7263,6 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                                         api_key: String::new(),
                                         base_url: String::new(),
                                         default_model: default_model_for_provider("anthropic")
-                                            .to_string(),
-                                        models_csv: default_model_for_provider("anthropic")
                                             .to_string(),
                                     });
                                     page.selected = 0;
@@ -8105,26 +8089,24 @@ subagents:
     }
 
     #[test]
-    fn test_next_provider_preset_id_skips_used_numeric_ids() {
+    fn test_next_provider_preset_id_uses_provider_prefix() {
         let entries = vec![
             ProviderPresetDraft {
-                id: "1".into(),
+                id: "provider1".into(),
                 provider: "openai".into(),
                 api_key: String::new(),
                 base_url: String::new(),
                 default_model: String::new(),
-                models_csv: String::new(),
             },
             ProviderPresetDraft {
-                id: "3".into(),
+                id: "provider3".into(),
                 provider: "anthropic".into(),
                 api_key: String::new(),
                 base_url: String::new(),
                 default_model: String::new(),
-                models_csv: String::new(),
             },
         ];
-        assert_eq!(SetupApp::next_provider_preset_id(&entries), "2");
+        assert_eq!(SetupApp::next_provider_preset_id(&entries), "provider2");
     }
 
     #[test]
@@ -8152,7 +8134,6 @@ subagents:
                 api_key: String::new(),
                 base_url: String::new(),
                 default_model: "gpt-5.2".into(),
-                models_csv: "gpt-5.2".into(),
             }],
             selected: 0,
             mode: ProviderPresetPageMode::Edit,
@@ -8184,7 +8165,6 @@ subagents:
                 api_key: String::new(),
                 base_url: String::new(),
                 default_model: "gpt-5.2".into(),
-                models_csv: "gpt-5.2".into(),
             }],
             selected: 0,
             mode: ProviderPresetPageMode::List,
@@ -8217,7 +8197,6 @@ subagents:
                 api_key: String::new(),
                 base_url: String::new(),
                 default_model: "gpt-5.2".into(),
-                models_csv: "gpt-5.2".into(),
             }],
             selected: 0,
             mode: ProviderPresetPageMode::List,
