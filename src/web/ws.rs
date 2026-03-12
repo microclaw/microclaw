@@ -180,8 +180,7 @@ struct ChatEventContent {
     text: String,
 }
 
-type SharedSender =
-    std::sync::Arc<TokioMutex<futures_util::stream::SplitSink<WebSocket, Message>>>;
+type SharedSender = std::sync::Arc<TokioMutex<futures_util::stream::SplitSink<WebSocket, Message>>>;
 
 pub(super) async fn api_ws(
     ws: WebSocketUpgrade,
@@ -214,15 +213,22 @@ async fn handle_ws_socket(state: WebState, socket: WebSocket, client_key: String
         Some(Ok(Message::Text(text))) => text,
         Some(Ok(Message::Close(_))) | None => return,
         _ => {
-            let _ = send_error_response(&sender, "connect", "INVALID_REQUEST", "first frame must be a connect request").await;
+            let _ = send_error_response(
+                &sender,
+                "connect",
+                "INVALID_REQUEST",
+                "first frame must be a connect request",
+            )
+            .await;
             return;
         }
     };
 
-    let (identity, is_admin) = match process_connect_frame(&state, &sender, &conn_id, &connect).await {
-        Some(v) => v,
-        None => return,
-    };
+    let (identity, is_admin) =
+        match process_connect_frame(&state, &sender, &conn_id, &connect).await {
+            Some(v) => v,
+            None => return,
+        };
 
     let tick_sender = sender.clone();
     tokio::spawn(async move {
@@ -284,31 +290,55 @@ async fn process_connect_frame(
     let frame = match serde_json::from_str::<ClientFrame>(text) {
         Ok(frame) => frame,
         Err(err) => {
-            let _ = send_error_response(sender, "connect", "INVALID_REQUEST", &format!("invalid JSON: {err}")).await;
+            let _ = send_error_response(
+                sender,
+                "connect",
+                "INVALID_REQUEST",
+                &format!("invalid JSON: {err}"),
+            )
+            .await;
             return None;
         }
     };
     let ClientFrame::Request { id, method, params } = frame;
     if method != "connect" {
-        let _ = send_error_response(sender, &id, "INVALID_REQUEST", "connect is only valid as the first request").await;
+        let _ = send_error_response(
+            sender,
+            &id,
+            "INVALID_REQUEST",
+            "connect is only valid as the first request",
+        )
+        .await;
         return None;
     }
     let params = match serde_json::from_value::<ConnectParams>(params) {
         Ok(v) => v,
         Err(err) => {
-            let _ = send_error_response(sender, &id, "INVALID_REQUEST", &format!("invalid connect params: {err}")).await;
+            let _ = send_error_response(
+                sender,
+                &id,
+                "INVALID_REQUEST",
+                &format!("invalid connect params: {err}"),
+            )
+            .await;
             return None;
         }
     };
     if params.min_protocol > PROTOCOL_VERSION || params.max_protocol < PROTOCOL_VERSION {
-        let _ = send_error_response(sender, &id, "UNSUPPORTED_PROTOCOL", "protocol version mismatch").await;
+        let _ = send_error_response(
+            sender,
+            &id,
+            "UNSUPPORTED_PROTOCOL",
+            "protocol version mismatch",
+        )
+        .await;
         return None;
     }
     let token = params.auth.and_then(|auth| auth.token).unwrap_or_default();
     let identity = match require_token_scope(state, &token, AuthScope::Read).await {
         Ok(identity) => identity,
-        Err((_, msg)) => {
-            let _ = send_error_response(sender, &id, "UNAUTHORIZED", &msg).await;
+        Err((status, msg)) => {
+            let _ = send_error_response(sender, &id, ws_error_code_for_status(status), &msg).await;
             return None;
         }
     };
@@ -356,6 +386,18 @@ async fn process_connect_frame(
     Some((identity, is_admin))
 }
 
+fn ws_error_code_for_status(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::UNAUTHORIZED => "UNAUTHORIZED",
+        StatusCode::FORBIDDEN => "FORBIDDEN",
+        StatusCode::TOO_MANY_REQUESTS => "RATE_LIMITED",
+        StatusCode::NOT_FOUND => "NOT_FOUND",
+        StatusCode::BAD_REQUEST => "INVALID_REQUEST",
+        StatusCode::SERVICE_UNAVAILABLE => "UNAVAILABLE",
+        _ => "INTERNAL_ERROR",
+    }
+}
+
 async fn handle_request_frame(
     state: &WebState,
     sender: &SharedSender,
@@ -371,7 +413,13 @@ async fn handle_request_frame(
     let ClientFrame::Request { id, method, params } = frame;
     match method.as_str() {
         "connect" => {
-            let _ = send_error_response(sender, &id, "INVALID_REQUEST", "connect is only valid as the first request").await;
+            let _ = send_error_response(
+                sender,
+                &id,
+                "INVALID_REQUEST",
+                "connect is only valid as the first request",
+            )
+            .await;
         }
         "health" | "status" => {
             let payload = json!({
@@ -396,7 +444,13 @@ async fn handle_request_frame(
             let params = match serde_json::from_value::<ChatHistoryParams>(params) {
                 Ok(v) => v,
                 Err(err) => {
-                    let _ = send_error_response(sender, &id, "INVALID_REQUEST", &format!("invalid chat.history params: {err}")).await;
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid chat.history params: {err}"),
+                    )
+                    .await;
                     return Ok(());
                 }
             };
@@ -449,7 +503,13 @@ async fn handle_request_frame(
             let params = match serde_json::from_value::<ChatSendParams>(params) {
                 Ok(v) => v,
                 Err(err) => {
-                    let _ = send_error_response(sender, &id, "INVALID_REQUEST", &format!("invalid chat.send params: {err}")).await;
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid chat.send params: {err}"),
+                    )
+                    .await;
                     return Ok(());
                 }
             };
@@ -478,7 +538,11 @@ async fn handle_request_frame(
                 .get("run_id")
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
-                .unwrap_or_else(|| params.idempotency_key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()));
+                .unwrap_or_else(|| {
+                    params
+                        .idempotency_key
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+                });
             let ack = ResponseFrame {
                 kind: "res",
                 id: &id,
@@ -500,7 +564,13 @@ async fn handle_request_frame(
             );
         }
         _ => {
-            let _ = send_error_response(sender, &id, "METHOD_NOT_FOUND", "method not supported by MicroClaw mission-control bridge").await;
+            let _ = send_error_response(
+                sender,
+                &id,
+                "METHOD_NOT_FOUND",
+                "method not supported by MicroClaw mission-control bridge",
+            )
+            .await;
         }
     }
     Ok(())
@@ -576,7 +646,11 @@ async fn forward_run_event(
         "done" => {
             let text = serde_json::from_str::<serde_json::Value>(&evt.data)
                 .ok()
-                .and_then(|v| v.get("response").and_then(|v| v.as_str()).map(str::to_string))
+                .and_then(|v| {
+                    v.get("response")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
                 .unwrap_or_default();
             Some(ChatEventPayload {
                 run_id: run_id.to_string(),
@@ -585,10 +659,7 @@ async fn forward_run_event(
                 state: "final",
                 message: Some(ChatEventMessage {
                     role: "assistant",
-                    content: vec![ChatEventContent {
-                        kind: "text",
-                        text,
-                    }],
+                    content: vec![ChatEventContent { kind: "text", text }],
                 }),
                 error_message: None,
             })
