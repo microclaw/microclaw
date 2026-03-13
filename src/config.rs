@@ -1026,6 +1026,9 @@ impl Config {
                 })
                 .or_insert(preset);
         }
+        for channel_cfg in self.channels.values_mut() {
+            migrate_model_override_alias_to_provider_preset(channel_cfg, &self.provider_presets);
+        }
 
         self.override_timezone = self
             .override_timezone
@@ -1693,6 +1696,46 @@ fn normalize_provider_profiles(
         .collect()
 }
 
+fn migrate_model_override_alias_to_provider_preset(
+    value: &mut serde_yaml::Value,
+    known_profiles: &HashMap<String, LlmProviderProfile>,
+) {
+    let Some(map) = value.as_mapping_mut() else {
+        return;
+    };
+
+    let provider_preset_key = serde_yaml::Value::String("provider_preset".to_string());
+    let llm_provider_key = serde_yaml::Value::String("llm_provider".to_string());
+    let model_key = serde_yaml::Value::String("model".to_string());
+
+    let has_provider_override =
+        map.contains_key(&provider_preset_key) || map.contains_key(&llm_provider_key);
+    if !has_provider_override {
+        let maybe_profile_alias = map
+            .get(&model_key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_ascii_lowercase());
+        if let Some(alias) = maybe_profile_alias {
+            if known_profiles.contains_key(&alias) {
+                map.insert(
+                    provider_preset_key.clone(),
+                    serde_yaml::Value::String(alias),
+                );
+                map.remove(&model_key);
+            }
+        }
+    }
+
+    let accounts_key = serde_yaml::Value::String("accounts".to_string());
+    if let Some(accounts) = map.get_mut(&accounts_key).and_then(|v| v.as_mapping_mut()) {
+        for (_, account) in accounts.iter_mut() {
+            migrate_model_override_alias_to_provider_preset(account, known_profiles);
+        }
+    }
+}
+
 fn merge_provider_profile(
     base: LlmProviderProfile,
     override_profile: LlmProviderProfile,
@@ -1982,6 +2025,70 @@ discord:
             overrides.get("discord").map(String::as_str),
             Some("discord-legacy")
         );
+    }
+
+    #[test]
+    fn test_post_deserialize_migrates_profile_aliases_out_of_channel_model_fields() {
+        let yaml = r#"
+telegram_bot_token: tok
+bot_username: bot
+api_key: key
+provider_presets:
+  googlegemini:
+    provider: google
+    default_model: gemini-2.5-pro
+channels:
+  telegram:
+    enabled: true
+    model: googlegemini
+    default_account: sales
+    accounts:
+      sales:
+        enabled: true
+        bot_token: tg_sales
+        model: googlegemini
+  discord:
+    enabled: true
+    model: googlegemini
+    accounts:
+      default:
+        enabled: true
+        bot_token: dc_tok
+"#;
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+
+        assert_eq!(
+            config.provider_override_for_channel("telegram").as_deref(),
+            Some("googlegemini")
+        );
+        assert_eq!(
+            config.provider_override_for_channel("discord").as_deref(),
+            Some("googlegemini")
+        );
+
+        let telegram = config.channels.get("telegram").unwrap();
+        assert_eq!(
+            telegram
+                .get("provider_preset")
+                .and_then(|v| v.as_str())
+                .map(str::trim),
+            Some("googlegemini")
+        );
+        assert!(telegram.get("model").is_none());
+
+        let sales = telegram
+            .get("accounts")
+            .and_then(|v| v.get("sales"))
+            .unwrap();
+        assert_eq!(
+            sales
+                .get("provider_preset")
+                .and_then(|v| v.as_str())
+                .map(str::trim),
+            Some("googlegemini")
+        );
+        assert!(sales.get("model").is_none());
     }
 
     #[test]

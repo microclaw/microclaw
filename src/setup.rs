@@ -2100,19 +2100,19 @@ impl SetupApp {
                         .get("telegram")
                         .and_then(resolve_channel_default_account_id)
                         .unwrap_or_else(|| default_account_id().to_string());
-                    let telegram_model = config
+                    let telegram_profile_override = config
                         .channels
                         .get("telegram")
                         .and_then(|ch_cfg| {
                             ch_cfg
-                                .get("model")
+                                .get("provider_preset")
+                                .or_else(|| ch_cfg.get("llm_provider"))
                                 .and_then(|v| {
                                     v.as_str()
                                         .map(str::trim)
                                         .filter(|v| !v.is_empty())
                                         .map(ToOwned::to_owned)
                                 })
-                                .or_else(|| channel_default_account_str_value(ch_cfg, "model"))
                         })
                         .unwrap_or_default();
                     let telegram_allowed_user_ids = config
@@ -2218,18 +2218,17 @@ impl SetupApp {
                         .get("discord")
                         .and_then(resolve_channel_default_account_id)
                         .unwrap_or_else(|| default_account_id().to_string());
-                    let discord_model = config
+                    let discord_profile_override = config
                         .channels
                         .get("discord")
                         .and_then(|ch_cfg| {
-                            channel_default_account_str_value(ch_cfg, "model").or_else(|| {
-                                ch_cfg
-                                    .get("model")
-                                    .and_then(|v| v.as_str())
-                                    .map(str::trim)
-                                    .filter(|v| !v.is_empty())
-                                    .map(ToOwned::to_owned)
-                            })
+                            ch_cfg
+                                .get("provider_preset")
+                                .or_else(|| ch_cfg.get("llm_provider"))
+                                .and_then(|v| v.as_str())
+                                .map(str::trim)
+                                .filter(|v| !v.is_empty())
+                                .map(ToOwned::to_owned)
                         })
                         .unwrap_or_default();
                     let discord_llm_provider = config
@@ -2271,7 +2270,7 @@ impl SetupApp {
                         .unwrap_or_default();
                     map.insert("TELEGRAM_BOT_TOKEN".into(), telegram_bot_token.clone());
                     map.insert("TELEGRAM_ACCOUNT_ID".into(), telegram_account_id.clone());
-                    map.insert("TELEGRAM_MODEL".into(), telegram_model.clone());
+                    map.insert("TELEGRAM_MODEL".into(), telegram_profile_override.clone());
                     map.insert(
                         telegram_allowed_user_ids_key().into(),
                         telegram_allowed_user_ids.clone(),
@@ -2344,7 +2343,8 @@ impl SetupApp {
                                         map.insert(telegram_slot_username_key(slot), v.to_string());
                                     }
                                     if let Some(v) = account
-                                        .get("model")
+                                        .get("provider_preset")
+                                        .or_else(|| account.get("llm_provider"))
                                         .and_then(|v| v.as_str())
                                         .map(str::trim)
                                         .filter(|v| !v.is_empty())
@@ -2427,13 +2427,16 @@ impl SetupApp {
                         .get(&telegram_slot_model_key(1))
                         .map(|v| v.trim().is_empty())
                         .unwrap_or(true)
-                        && !telegram_model.trim().is_empty()
+                        && !telegram_profile_override.trim().is_empty()
                     {
-                        map.insert(telegram_slot_model_key(1), telegram_model.clone());
+                        map.insert(
+                            telegram_slot_model_key(1),
+                            telegram_profile_override.clone(),
+                        );
                     }
                     map.insert("DISCORD_BOT_TOKEN".into(), discord_bot_token);
                     map.insert("DISCORD_ACCOUNT_ID".into(), discord_account_id);
-                    map.insert("DISCORD_MODEL".into(), discord_model);
+                    map.insert("DISCORD_MODEL".into(), discord_profile_override);
                     map.insert(discord_llm_provider_key().into(), discord_llm_provider);
                     map.insert(discord_llm_api_key_key().into(), discord_llm_api_key);
                     map.insert(discord_llm_base_url_key().into(), discord_llm_base_url);
@@ -3075,6 +3078,35 @@ impl SetupApp {
         }
     }
 
+    fn clear_selected_provider_preset_field(&mut self) {
+        self.set_provider_preset_selected_field_value(String::new());
+    }
+
+    fn provider_preset_selected_field_default(&self) -> Option<String> {
+        let page = self.provider_preset_page.as_ref()?;
+        let entry = page.entries.get(page.selected)?;
+        match page.field_selected {
+            0 => Some(SetupApp::next_provider_preset_id(&page.entries)),
+            1 => Some("anthropic".to_string()),
+            2 => Some(String::new()),
+            3 => Some(
+                find_provider_preset(&entry.provider)
+                    .map(|preset| preset.default_base_url.to_string())
+                    .unwrap_or_default(),
+            ),
+            4 => Some(default_model_for_provider(&entry.provider).to_string()),
+            5 => Some("false".to_string()),
+            6 => Some(String::new()),
+            _ => None,
+        }
+    }
+
+    fn restore_selected_provider_preset_field_default(&mut self) -> Option<String> {
+        let default = self.provider_preset_selected_field_default()?;
+        self.set_provider_preset_selected_field_value(default.clone());
+        Some(default)
+    }
+
     fn open_provider_preset_provider_picker(&mut self) {
         let Some(page) = self.provider_preset_page.as_ref() else {
             return;
@@ -3180,14 +3212,24 @@ impl SetupApp {
             };
             match picker.target_key.as_str() {
                 "provider" => {
+                    let old_provider = entry.provider.clone();
+                    let old_base_url = entry.base_url.clone();
+                    let old_model = entry.default_model.clone();
                     entry.provider = value.clone();
-                    if entry.default_model.trim().is_empty() {
-                        entry.default_model = default_model_for_provider(value).to_string();
+                    let old_default_base_url = find_provider_preset(&old_provider)
+                        .map(|preset| preset.default_base_url)
+                        .unwrap_or("");
+                    let next_default_base_url = find_provider_preset(value)
+                        .map(|preset| preset.default_base_url)
+                        .unwrap_or("");
+                    if old_base_url.trim().is_empty() || old_base_url == old_default_base_url {
+                        entry.base_url = next_default_base_url.to_string();
                     }
-                    if entry.base_url.trim().is_empty() {
-                        entry.base_url = find_provider_preset(value)
-                            .map(|preset| preset.default_base_url.to_string())
-                            .unwrap_or_default();
+                    let old_model_in_old_preset = find_provider_preset(&old_provider)
+                        .map(|preset| preset.models.iter().any(|model| *model == old_model))
+                        .unwrap_or(false);
+                    if old_model.trim().is_empty() || old_model_in_old_preset {
+                        entry.default_model = default_model_for_provider(value).to_string();
                     }
                 }
                 "default_model" => entry.default_model = value.clone(),
@@ -4992,8 +5034,8 @@ impl SetupApp {
     fn field_guidance(key: &str) -> (&'static str, &'static str) {
         match key {
             "LLM_PROVIDER" => (
-                "Select the LLM backend. Presets auto-fill a sensible model/base URL.",
-                "Example: openai, anthropic, deepseek, custom",
+                "Select the LLM backend. Presets auto-fill a sensible model/base URL. OpenRouter models: https://openrouter.ai/models . NVIDIA models: https://build.nvidia.com/models",
+                "Example: openai, anthropic, openrouter, nvidia, custom",
             ),
             "LLM_API_KEY" => (
                 "API key for the selected provider. Leave empty only for providers that allow it.",
@@ -5880,11 +5922,7 @@ fn save_config_yaml(
         } else {
             get(&telegram_slot_id_key(1))
         });
-    let telegram_model = if !get("TELEGRAM_MODEL").trim().is_empty() {
-        get("TELEGRAM_MODEL")
-    } else {
-        get(&telegram_slot_model_key(1))
-    };
+    let telegram_profile_override = get("TELEGRAM_MODEL");
     let telegram_topic_routing_raw = get(telegram_topic_routing_key());
     let telegram_topic_routing = if telegram_topic_routing_raw.trim().is_empty() {
         false
@@ -5897,6 +5935,11 @@ fn save_config_yaml(
         })?
     };
     let telegram_llm_provider = get(telegram_llm_provider_key());
+    let telegram_channel_profile_override = if !telegram_profile_override.trim().is_empty() {
+        telegram_profile_override.trim().to_string()
+    } else {
+        telegram_llm_provider.trim().to_string()
+    };
     let telegram_llm_api_key = get(telegram_llm_api_key_key());
     let telegram_llm_base_url = get(telegram_llm_base_url_key());
     let telegram_channel_allowed_user_ids = parse_i64_list_field(
@@ -5910,7 +5953,7 @@ fn save_config_yaml(
         let id = get(&telegram_slot_id_key(slot));
         let token = get(&telegram_slot_token_key(slot));
         let username = get(&telegram_slot_username_key(slot));
-        let model = get(&telegram_slot_model_key(slot));
+        let provider_preset = get(&telegram_slot_model_key(slot));
         let soul_path =
             normalize_soul_path_input(&get(&telegram_slot_soul_path_key(slot)), &souls_dir);
         let allowed_user_ids_raw = get(&telegram_slot_allowed_user_ids_key(slot));
@@ -5934,7 +5977,7 @@ fn save_config_yaml(
         let enabled = parse_boolish(&get(&telegram_slot_enabled_key(slot)), true)?;
         let has_any = !token.trim().is_empty()
             || !username.trim().is_empty()
-            || !model.trim().is_empty()
+            || !provider_preset.trim().is_empty()
             || !soul_path.is_empty()
             || !allowed_user_ids.is_empty()
             || slot_topic_routing_enabled.is_some();
@@ -5962,10 +6005,12 @@ fn save_config_yaml(
                 serde_json::Value::String(username.trim().to_string()),
             );
         }
-        if !model.trim().is_empty() {
+        if !provider_preset.trim().is_empty()
+            && !provider_preset.trim().eq_ignore_ascii_case("main")
+        {
             account.insert(
-                "model".into(),
-                serde_json::Value::String(model.trim().to_string()),
+                "provider_preset".into(),
+                serde_json::Value::String(provider_preset.trim().to_string()),
             );
         }
         if let Some(enabled) = slot_topic_routing_enabled {
@@ -5997,8 +6042,13 @@ fn save_config_yaml(
     };
     let discord_token = get("DISCORD_BOT_TOKEN");
     let discord_account_id = account_id_from_value(&get("DISCORD_ACCOUNT_ID"));
-    let discord_model = get("DISCORD_MODEL");
+    let discord_profile_override = get("DISCORD_MODEL");
     let discord_llm_provider = get(discord_llm_provider_key());
+    let discord_channel_profile_override = if !discord_profile_override.trim().is_empty() {
+        discord_profile_override.trim().to_string()
+    } else {
+        discord_llm_provider.trim().to_string()
+    };
     let discord_llm_api_key = get(discord_llm_api_key_key());
     let discord_llm_base_url = get(discord_llm_base_url_key());
     let discord_accounts_json = get("DISCORD_ACCOUNTS_JSON");
@@ -6023,10 +6073,10 @@ fn save_config_yaml(
 
     let telegram_present = !telegram_token.trim().is_empty()
         || !telegram_username.trim().is_empty()
-        || !telegram_llm_provider.trim().is_empty()
+        || !telegram_channel_profile_override.trim().is_empty()
         || !telegram_llm_api_key.trim().is_empty()
         || !telegram_llm_base_url.trim().is_empty()
-        || !telegram_model.trim().is_empty()
+        || !telegram_profile_override.trim().is_empty()
         || !normalize_soul_path_input(&get(&telegram_slot_soul_path_key(1)), &souls_dir).is_empty()
         || !telegram_channel_allowed_user_ids.is_empty()
         || telegram_accounts
@@ -6035,10 +6085,10 @@ fn save_config_yaml(
             .unwrap_or(false)
         || telegram_bot_count > 1;
     let discord_present = !discord_token.trim().is_empty()
-        || !discord_llm_provider.trim().is_empty()
+        || !discord_channel_profile_override.trim().is_empty()
         || !discord_llm_api_key.trim().is_empty()
         || !discord_llm_base_url.trim().is_empty()
-        || !discord_model.trim().is_empty()
+        || !discord_profile_override.trim().is_empty()
         || discord_accounts
             .as_ref()
             .map(|v| !v.is_empty())
@@ -6115,12 +6165,14 @@ fn save_config_yaml(
     if channel_selected("telegram") || telegram_present {
         yaml.push_str("  telegram:\n");
         yaml.push_str(&format!("    enabled: {}\n", channel_selected("telegram")));
-        if !telegram_llm_provider.trim().is_empty()
-            && !telegram_llm_provider.trim().eq_ignore_ascii_case("main")
+        if !telegram_channel_profile_override.trim().is_empty()
+            && !telegram_channel_profile_override
+                .trim()
+                .eq_ignore_ascii_case("main")
         {
             yaml.push_str(&format!(
                 "    provider_preset: \"{}\"\n",
-                telegram_llm_provider.trim()
+                telegram_channel_profile_override.trim()
             ));
         }
         if !telegram_llm_api_key.trim().is_empty() {
@@ -6134,9 +6186,6 @@ fn save_config_yaml(
                 "    llm_base_url: \"{}\"\n",
                 telegram_llm_base_url.trim()
             ));
-        }
-        if !telegram_model.trim().is_empty() {
-            yaml.push_str(&format!("    model: \"{}\"\n", telegram_model.trim()));
         }
         if !telegram_topic_routing_raw.trim().is_empty() {
             yaml.push_str("    topic_routing:\n");
@@ -6185,12 +6234,14 @@ fn save_config_yaml(
     if channel_selected("discord") || discord_present {
         yaml.push_str("  discord:\n");
         yaml.push_str(&format!("    enabled: {}\n", channel_selected("discord")));
-        if !discord_llm_provider.trim().is_empty()
-            && !discord_llm_provider.trim().eq_ignore_ascii_case("main")
+        if !discord_channel_profile_override.trim().is_empty()
+            && !discord_channel_profile_override
+                .trim()
+                .eq_ignore_ascii_case("main")
         {
             yaml.push_str(&format!(
                 "    provider_preset: \"{}\"\n",
-                discord_llm_provider.trim()
+                discord_channel_profile_override.trim()
             ));
         }
         if !discord_llm_api_key.trim().is_empty() {
@@ -6204,9 +6255,6 @@ fn save_config_yaml(
                 "    llm_base_url: \"{}\"\n",
                 discord_llm_base_url.trim()
             ));
-        }
-        if !discord_model.trim().is_empty() {
-            yaml.push_str(&format!("    model: \"{}\"\n", discord_model.trim()));
         }
         if let Some(accounts) = &discord_accounts {
             let default_id = pick_default_account_id(&discord_account_id, accounts);
@@ -7049,7 +7097,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Enter edit/select · t test current profile · Esc back · ↑/↓ move · Ctrl+D clear",
+                "Enter edit/select · t test current profile · Esc back · ↑/↓ move · Ctrl+D clear · Ctrl+R default",
                 Style::default().fg(Color::White),
             )));
             let overlay = Paragraph::new(lines)
@@ -7514,54 +7562,73 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                                 }
                             }
                         }
-                        KeyCode::Char('t') => {
-                            let editing = app
+                        KeyCode::Char('t')
+                            if app
                                 .provider_preset_page
                                 .as_ref()
-                                .map(|page| page.editing)
-                                .unwrap_or(false);
-                            if !editing {
-                                let profile_id = app
-                                    .provider_preset_page
-                                    .as_ref()
-                                    .and_then(|page| page.entries.get(page.selected))
-                                    .map(|entry| entry.id.clone())
-                                    .unwrap_or_else(|| "current".to_string());
-                                let app_for_online = app.clone();
-                                match run_with_spinner(
-                                    &mut terminal,
-                                    &mut app,
-                                    &format!("Testing provider profile {profile_id}"),
-                                    move || {
-                                        app_for_online.validate_selected_provider_preset_online()
-                                    },
-                                ) {
-                                    Ok((validated_profile_id, checks)) => {
-                                        app.status = format!(
-                                            "Profile {validated_profile_id} passed: {}",
-                                            checks.join(" | ")
-                                        );
-                                    }
-                                    Err(e) => {
-                                        app.status =
-                                            format!("Profile {profile_id} test failed: {e}");
-                                    }
+                                .map(|page| !page.editing)
+                                .unwrap_or(false) =>
+                        {
+                            let profile_id = app
+                                .provider_preset_page
+                                .as_ref()
+                                .and_then(|page| page.entries.get(page.selected))
+                                .map(|entry| entry.id.clone())
+                                .unwrap_or_else(|| "current".to_string());
+                            let app_for_online = app.clone();
+                            match run_with_spinner(
+                                &mut terminal,
+                                &mut app,
+                                &format!("Testing provider profile {profile_id}"),
+                                move || app_for_online.validate_selected_provider_preset_online(),
+                            ) {
+                                Ok((validated_profile_id, checks)) => {
+                                    app.status = format!(
+                                        "Profile {validated_profile_id} passed: {}",
+                                        checks.join(" | ")
+                                    );
+                                }
+                                Err(e) => {
+                                    app.status = format!("Profile {profile_id} test failed: {e}");
                                 }
                             }
                         }
-                        KeyCode::Up | KeyCode::Char('k') => {
+                        KeyCode::Up => {
                             if let Some(page) = app.provider_preset_page.as_mut() {
                                 if !page.editing {
                                     page.field_selected = page.field_selected.saturating_sub(1);
                                 }
                             }
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
+                        KeyCode::Down => {
                             if let Some(page) = app.provider_preset_page.as_mut() {
                                 if !page.editing {
                                     page.field_selected = (page.field_selected + 1)
                                         .min(field_count.saturating_sub(1));
                                 }
+                            }
+                        }
+                        KeyCode::Char('k')
+                            if app
+                                .provider_preset_page
+                                .as_ref()
+                                .map(|page| !page.editing)
+                                .unwrap_or(false) =>
+                        {
+                            if let Some(page) = app.provider_preset_page.as_mut() {
+                                page.field_selected = page.field_selected.saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Char('j')
+                            if app
+                                .provider_preset_page
+                                .as_ref()
+                                .map(|page| !page.editing)
+                                .unwrap_or(false) =>
+                        {
+                            if let Some(page) = app.provider_preset_page.as_mut() {
+                                page.field_selected =
+                                    (page.field_selected + 1).min(field_count.saturating_sub(1));
                             }
                         }
                         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -7626,15 +7693,47 @@ fn run_wizard(mut terminal: DefaultTerminal) -> Result<bool, MicroClawError> {
                                 let _ = app.sync_provider_preset_page_field();
                             }
                         }
-                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            let editing = app
-                                .provider_preset_page
-                                .as_ref()
-                                .map(|page| page.editing)
-                                .unwrap_or(false);
-                            if editing {
-                                app.set_provider_preset_selected_field_value(String::new());
-                                let _ = app.sync_provider_preset_page_field();
+                        KeyCode::Char('d')
+                            if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && app
+                                    .provider_preset_page
+                                    .as_ref()
+                                    .map(|page| !page.editing)
+                                    .unwrap_or(false) =>
+                        {
+                            app.clear_selected_provider_preset_field();
+                            let _ = app.sync_provider_preset_page_field();
+                            if let Some(page) = app.provider_preset_page.as_mut() {
+                                page.editing = false;
+                            }
+                            app.status = "Cleared provider profile field".into();
+                        }
+                        KeyCode::Char('r')
+                            if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && app
+                                    .provider_preset_page
+                                    .as_ref()
+                                    .map(|page| !page.editing)
+                                    .unwrap_or(false) =>
+                        {
+                            match app.restore_selected_provider_preset_field_default() {
+                                Some(default) => {
+                                    let _ = app.sync_provider_preset_page_field();
+                                    if let Some(page) = app.provider_preset_page.as_mut() {
+                                        page.editing = false;
+                                    }
+                                    app.status = if default.is_empty() {
+                                        "Restored provider profile field to default (empty)".into()
+                                    } else {
+                                        format!(
+                                            "Restored provider profile field to default: {default}"
+                                        )
+                                    };
+                                }
+                                None => {
+                                    app.status =
+                                        "Selected provider profile field has no default".into();
+                                }
                             }
                         }
                         KeyCode::Char(c) => {
@@ -8403,6 +8502,41 @@ subagents:
     }
 
     #[test]
+    fn test_save_config_yaml_writes_profile_overrides_as_provider_presets_not_models() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_provider_profile_override_test_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "telegram,discord".into());
+        values.insert("TELEGRAM_MODEL".into(), "gemini".into());
+        values.insert(telegram_slot_id_key(1), "main".into());
+        values.insert(telegram_slot_token_key(1), "telegram-token".into());
+        values.insert(telegram_slot_model_key(1), "gemini".into());
+        values.insert("DISCORD_MODEL".into(), "nvidia".into());
+        values.insert("DISCORD_BOT_TOKEN".into(), "discord-token".into());
+        values.insert("DISCORD_ACCOUNT_ID".into(), "default".into());
+        values.insert("LLM_PROVIDER".into(), "anthropic".into());
+        values.insert("LLM_API_KEY".into(), "key".into());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains("  telegram:\n"));
+        assert!(s.contains("    provider_preset: \"gemini\"\n"));
+        assert!(s.contains("        provider_preset: gemini\n"));
+        assert!(s.contains("  discord:\n"));
+        assert!(s.contains("    provider_preset: \"nvidia\"\n"));
+        assert!(!s.contains("    model: \"gemini\"\n"));
+        assert!(!s.contains("    model: \"nvidia\"\n"));
+        assert!(!s.contains("        model: gemini\n"));
+
+        let _ = fs::remove_file(&yaml_path);
+        let _ = fs::remove_dir(config_backup_dir_for(&yaml_path));
+    }
+
+    #[test]
     fn test_next_provider_preset_id_uses_provider_prefix() {
         let entries = vec![
             ProviderPresetDraft {
@@ -8538,6 +8672,94 @@ subagents:
         assert_eq!(request.user_agent, "microclaw-test/1.0");
         assert_eq!(request.model, "claude-sonnet-4-5-20250929");
         assert_eq!(request.codex_account_id, None);
+    }
+
+    #[test]
+    fn test_clear_selected_provider_preset_field_clears_without_edit_mode() {
+        let mut app = SetupApp::new();
+        app.provider_preset_page = Some(ProviderPresetPage {
+            entries: vec![ProviderPresetDraft {
+                id: "provider1".into(),
+                provider: "google".into(),
+                api_key: "secret".into(),
+                base_url: "https://example.com/v1".into(),
+                user_agent: "ua".into(),
+                default_model: "gemini-2.5-pro".into(),
+                show_thinking: false,
+            }],
+            selected: 0,
+            mode: ProviderPresetPageMode::Edit,
+            field_selected: 2,
+            editing: false,
+            picker: None,
+        });
+
+        app.clear_selected_provider_preset_field();
+
+        let page = app.provider_preset_page.as_ref().unwrap();
+        assert_eq!(page.entries[0].api_key, "");
+    }
+
+    #[test]
+    fn test_restore_selected_provider_preset_field_default_restores_provider_base_url() {
+        let mut app = SetupApp::new();
+        app.provider_preset_page = Some(ProviderPresetPage {
+            entries: vec![ProviderPresetDraft {
+                id: "provider1".into(),
+                provider: "openai".into(),
+                api_key: String::new(),
+                base_url: "https://integrate.api.nvidia.com/v1".into(),
+                user_agent: String::new(),
+                default_model: "meta/llama-3.3-70b-instruct".into(),
+                show_thinking: false,
+            }],
+            selected: 0,
+            mode: ProviderPresetPageMode::Edit,
+            field_selected: 3,
+            editing: false,
+            picker: None,
+        });
+
+        let restored = app
+            .restore_selected_provider_preset_field_default()
+            .unwrap();
+
+        assert_eq!(restored, "https://api.openai.com/v1");
+        let page = app.provider_preset_page.as_ref().unwrap();
+        assert_eq!(page.entries[0].base_url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_switching_provider_updates_default_base_url_and_model_when_still_on_old_defaults() {
+        let mut app = SetupApp::new();
+        app.provider_preset_page = Some(ProviderPresetPage {
+            entries: vec![ProviderPresetDraft {
+                id: "provider1".into(),
+                provider: "nvidia".into(),
+                api_key: String::new(),
+                base_url: "https://integrate.api.nvidia.com/v1".into(),
+                user_agent: String::new(),
+                default_model: "meta/llama-3.3-70b-instruct".into(),
+                show_thinking: false,
+            }],
+            selected: 0,
+            mode: ProviderPresetPageMode::Edit,
+            field_selected: 1,
+            editing: false,
+            picker: Some(LlmOverridePicker {
+                title: "Select Provider".into(),
+                target_key: "provider".into(),
+                options: vec![("openai".into(), "openai".into())],
+                selected: 0,
+            }),
+        });
+
+        app.apply_provider_preset_picker_selection();
+
+        let page = app.provider_preset_page.as_ref().unwrap();
+        assert_eq!(page.entries[0].provider, "openai");
+        assert_eq!(page.entries[0].base_url, "https://api.openai.com/v1");
+        assert_eq!(page.entries[0].default_model, "gpt-5.2");
     }
 
     #[test]
