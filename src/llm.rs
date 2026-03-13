@@ -694,7 +694,11 @@ fn combine_visible_and_reasoning_text(visible: &str, reasoning: &str) -> String 
     format!("<thought>\n{}\n</thought>\n\n{}", reasoning, visible)
 }
 
-fn combine_response_text_for_display(visible: &str, reasoning: &str, show_thinking: bool) -> String {
+fn combine_response_text_for_display(
+    visible: &str,
+    reasoning: &str,
+    show_thinking: bool,
+) -> String {
     if show_thinking {
         combine_visible_and_reasoning_text(visible, reasoning)
     } else {

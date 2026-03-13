@@ -17,11 +17,11 @@ use microclaw_observability::traces::{
     kv, kv_int, new_span_id, new_trace_id, now_unix_nano, SpanData,
 };
 use microclaw_storage::db::{call_blocking, StoredMessage};
+use opentelemetry_proto::tonic::trace::v1::Status;
 use opentelemetry_semantic_conventions::attribute::{
     GEN_AI_OPERATION_NAME, GEN_AI_REQUEST_MODEL, GEN_AI_SYSTEM, GEN_AI_USAGE_INPUT_TOKENS,
     GEN_AI_USAGE_OUTPUT_TOKENS, USER_ID,
 };
-use opentelemetry_proto::tonic::trace::v1::Status;
 
 #[derive(Debug, Clone, Copy)]
 pub struct AgentRequestContext<'a> {

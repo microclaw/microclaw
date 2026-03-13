@@ -21,9 +21,8 @@ pub fn apply(map: &Mapping, target: &mut TraceTargetConfig) {
         .iter()
         .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
     {
-        target.headers.push((
-            "Authorization".to_string(),
-            format!("Bearer {api_key}"),
-        ));
+        target
+            .headers
+            .push(("Authorization".to_string(), format!("Bearer {api_key}")));
     }
 }

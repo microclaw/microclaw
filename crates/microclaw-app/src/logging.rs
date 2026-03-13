@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use microclaw_observability::logs::OtlpLogExporter;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_sdk::logs::{SdkLogger, SdkLoggerProvider};
+use serde_yaml::Value;
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use microclaw_observability::logs::OtlpLogExporter;
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_sdk::logs::{SdkLogger, SdkLoggerProvider};
-use serde_yaml::Value;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
