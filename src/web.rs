@@ -3432,6 +3432,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_config_self_check_warns_for_risky_execution_defaults() {
+        let mut cfg = test_config_template();
+        cfg.high_risk_tool_user_confirmation_required = false;
+        cfg.web_fetch_validation.enabled = false;
+        cfg.web_fetch_url_validation.enabled = false;
+        let state = test_state_with_config(Box::new(DummyLlm), cfg);
+        let web_state = test_web_state_from_app_state(state, WebLimits::default());
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/config/self_check")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let warnings = json
+            .get("warnings")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let has_auto_approve = warnings.iter().any(|w| {
+            w.get("code").and_then(|v| v.as_str()) == Some("high_risk_tool_auto_approved")
+        });
+        let has_fetch_content_disabled = warnings.iter().any(|w| {
+            w.get("code").and_then(|v| v.as_str()) == Some("web_fetch_content_validation_disabled")
+        });
+        let has_fetch_url_disabled = warnings.iter().any(|w| {
+            w.get("code").and_then(|v| v.as_str()) == Some("web_fetch_url_validation_disabled")
+        });
+
+        assert!(has_auto_approve);
+        assert!(has_fetch_content_disabled);
+        assert!(has_fetch_url_disabled);
+    }
+
+    #[tokio::test]
+    async fn test_config_self_check_warns_for_non_strict_web_fetch_validation() {
+        let mut cfg = test_config_template();
+        cfg.web_fetch_validation.strict_mode = false;
+        let state = test_state_with_config(Box::new(DummyLlm), cfg);
+        let web_state = test_web_state_from_app_state(state, WebLimits::default());
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/config/self_check")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let warnings = json
+            .get("warnings")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let has_non_strict_warning = warnings.iter().any(|w| {
+            w.get("code").and_then(|v| v.as_str())
+                == Some("web_fetch_content_validation_non_strict")
+        });
+
+        assert!(has_non_strict_warning);
+    }
+
+    #[tokio::test]
     async fn test_config_self_check_warns_scheduler_failures_and_reflector_idle() {
         let cfg = test_config_template();
         let state = test_state_with_config(Box::new(DummyLlm), cfg);

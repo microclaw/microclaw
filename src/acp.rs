@@ -403,7 +403,10 @@ fn available_commands() -> Vec<AvailableCommand> {
         AvailableCommand::new("/clear", "Clear session state but keep scheduled tasks."),
         AvailableCommand::new("/stop", "Cancel the active run for this ACP session."),
         AvailableCommand::new("/providers", "List configured providers."),
-        AvailableCommand::new("/provider", "Inspect or switch the current bot/account provider."),
+        AvailableCommand::new(
+            "/provider",
+            "Inspect or switch the current bot/account provider.",
+        ),
         AvailableCommand::new("/models", "List configured models."),
         AvailableCommand::new("/model", "Inspect or switch the current bot/account model."),
     ]

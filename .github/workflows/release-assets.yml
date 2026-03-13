@@ -34,7 +34,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CI_WAIT_TIMEOUT_SECONDS: "900"
           CI_WAIT_INTERVAL_SECONDS: "30"
-          REQUIRED_CI_JOBS_JSON: '["Web Build","Rust (ubuntu-latest)","Rust (macos-latest)","Stability Smoke"]'
+          REQUIRED_CI_JOBS_JSON: '["Web And Docs Build","Security Audit","Rust (ubuntu-latest)","Rust (macos-latest)","Stability Smoke"]'
         shell: bash
         run: |
           TARGET_SHA="$(git rev-parse HEAD)"
@@ -135,6 +135,18 @@ jobs:
             target_triple: x86_64-unknown-linux-gnu
             asset_triple: x86_64-linux-gnu
             archive_ext: tar.gz
+          - label: macos-x86_64
+            os: macos-13
+            bin: microclaw
+            target_triple: x86_64-apple-darwin
+            asset_triple: x86_64-apple-darwin
+            archive_ext: tar.gz
+          - label: macos-arm64
+            os: macos-14
+            bin: microclaw
+            target_triple: aarch64-apple-darwin
+            asset_triple: aarch64-apple-darwin
+            archive_ext: tar.gz
           - label: windows-x86_64
             os: windows-latest
             bin: microclaw.exe
@@ -159,6 +171,8 @@ jobs:
         run: |
           npm --prefix web ci
           npm --prefix web run build
+          npm --prefix website ci
+          npm --prefix website run build
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -211,6 +225,12 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          shasum -a 256 * > SHA256SUMS.txt
 
       - name: Ensure release exists
         env:

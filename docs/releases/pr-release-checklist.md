@@ -7,9 +7,11 @@ Last reviewed: 2026-03-05
 - [ ] Scope is clear and limited to intended feature set.
 - [ ] PR description includes motivation, behavior changes, and rollback notes.
 - [ ] Linked issue/PR references are present (`Fixes #...` or related PR IDs).
+- [ ] `CHANGELOG.md` updated when release-visible behavior changes.
 - [ ] Migration impact reviewed (`schema_migrations`, compatibility paths).
 - [ ] API contract changes documented (new/changed endpoints, request/response fields).
 - [ ] Security-sensitive paths reviewed (auth scope, CSRF, audit events).
+- [ ] Governance/support docs updated when policy or support expectations changed (`SECURITY.md`, `SUPPORT.md`, `docs/releases/release-policy.md`).
 - [ ] Docs updated in both `docs/` and `website/docs/` when user-facing behavior changes.
 
 ## Required Validation
@@ -20,6 +22,8 @@ Last reviewed: 2026-03-05
 - [ ] `npm --prefix web run build`
 - [ ] `npm --prefix website run build`
 - [ ] `node scripts/generate_docs_artifacts.mjs --check`
+- [ ] `cargo audit`
+- [ ] `cargo deny check advisories bans licenses`
 
 ## Release Gate
 
@@ -29,6 +33,7 @@ Last reviewed: 2026-03-05
 - [ ] Hook runtime sanity verified (`hooks list/info/enable/disable`).
 - [ ] Metrics pipeline verified (`/api/metrics`, `/api/metrics/history`, OTLP export if enabled).
 - [ ] Config self-check reviewed (`/api/config/self_check`) with no unaccepted `high` warnings.
+- [ ] macOS, Linux, and Windows release assets are present and checksummed.
 - [ ] `nix build .#microclaw` passes (Linux required; Darwin strongly recommended).
 - [ ] Nixpkgs status reviewed/updated (`docs/releases/nixpkgs-upstream-guide.md`).
 

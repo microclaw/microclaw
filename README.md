@@ -928,7 +928,7 @@ data_dir: "~/.microclaw"
 working_dir: "~/.microclaw/working_dir"
 working_dir_isolation: "chat" # optional; defaults to "chat" if omitted
 sandbox:
-  mode: "off" # optional; default off. set "all" to run bash in docker sandbox
+  mode: "off" # optional; default off. set "all" to run bash in a container sandbox
 max_document_size_mb: 100
 memory_token_budget: 1500
 timezone: "UTC"
@@ -1141,7 +1141,7 @@ sandbox:
   image: "ubuntu:25.10"
   container_prefix: "microclaw-sandbox"
   no_network: true
-  require_runtime: false
+  require_runtime: true
   # optional external allowlist file
   # mount_allowlist_path: "~/.microclaw/sandbox-mount-allowlist.txt"
 ```
@@ -1160,6 +1160,7 @@ Then ask the agent to run:
 
 Notes:
 - `sandbox.mode: "off"` (default) means `bash` runs on host.
+- Recommended production posture: `sandbox.mode=all`, `require_runtime=true`, `security_profile=hardened`, and keep high-risk confirmation enabled.
 - `sandbox.security_profile` defaults to `hardened` (same behavior as old hardcoded settings):
   - `hardened`: `--cap-drop ALL --security-opt no-new-privileges`
   - `standard`: Docker default capabilities (useful for `apt/chown/su` in sandbox)
@@ -1369,8 +1370,13 @@ export no_proxy=127.0.0.1,localhost,<your-langfuse-host>
 | [README.md](README.md) | This file -- overview, setup, usage |
 | [DEVELOP.md](DEVELOP.md) | Developer guide -- architecture, adding tools, debugging |
 | [TEST.md](TEST.md) | Manual testing guide for all features |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution workflow and required local checks |
+| [SECURITY.md](SECURITY.md) | Vulnerability reporting and supported version policy |
+| [SUPPORT.md](SUPPORT.md) | Operator support and compatibility expectations |
+| [CHANGELOG.md](CHANGELOG.md) | Release-oriented change log |
 | [docs/operations/acp-stdio.md](docs/operations/acp-stdio.md) | ACP stdio mode overview and verification steps |
 | [docs/operations/http-hook-trigger.md](docs/operations/http-hook-trigger.md) | Webhook and async streaming trigger behavior |
+| [docs/releases/release-policy.md](docs/releases/release-policy.md) | Release targets, gates, and rollback standard |
 | [CLAUDE.md](CLAUDE.md) | Project context for AI coding assistants |
 | [AGENTS.md](AGENTS.md) | Agent-friendly project reference |
 

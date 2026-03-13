@@ -99,6 +99,11 @@ fn test_yaml_parse_minimal() {
     assert_eq!(config.compact_keep_recent, 20);
     assert_eq!(config.default_tool_timeout_secs, 30);
     assert_eq!(config.default_mcp_request_timeout_secs, 120);
+    assert!(config.high_risk_tool_user_confirmation_required);
+    assert!(config.sandbox.require_runtime);
+    assert!(config.web_fetch_validation.enabled);
+    assert!(config.web_fetch_validation.strict_mode);
+    assert!(config.web_fetch_url_validation.enabled);
 }
 
 #[test]

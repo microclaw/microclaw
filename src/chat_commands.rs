@@ -1210,7 +1210,9 @@ channels:
             Some("gpt-5.2")
         );
         assert_eq!(
-            saved_cfg.model_override_for_channel("telegram.ops").as_deref(),
+            saved_cfg
+                .model_override_for_channel("telegram.ops")
+                .as_deref(),
             Some("gpt-5")
         );
         assert_eq!(

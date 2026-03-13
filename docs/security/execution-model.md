@@ -3,8 +3,13 @@
 ## Default posture
 
 - `sandbox.mode` remains `off` by default to keep first-run setup friction low.
+- When sandbox is enabled, `require_runtime` defaults to `true` so a missing container runtime fails closed.
 - High-risk actions are guarded by tool risk + approval gates.
 - File tools are protected by path guards, sensitive-path blocking, symlink validation, and optional external allowlists.
+- `web_fetch` validation defaults are intended to be secure-by-default:
+  - content validation enabled
+  - strict mode enabled
+  - URL validation enabled
 
 ## Sandbox posture
 
@@ -71,4 +76,6 @@ For production environments, use:
 ## Operational recommendation
 
 - Keep default `sandbox=off` for onboarding.
-- For production or higher-risk deployments, enable sandbox and require an explicit allowlist.
+- For production or higher-risk deployments, enable sandbox, keep `require_runtime=true`, and require an explicit allowlist.
+- Keep `high_risk_tool_user_confirmation_required=true`.
+- Do not disable `web_fetch` validation layers unless you have an explicit upstream network control boundary.

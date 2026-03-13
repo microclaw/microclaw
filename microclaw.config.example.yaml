@@ -221,3 +221,12 @@ web_session_idle_ttl_seconds: 300
 # plugins:
 #   enabled: true
 #   dir: "~/microclaw.data/plugins"
+
+# Recommended production sandbox baseline:
+# sandbox:
+#   mode: "all"
+#   backend: "auto"
+#   security_profile: "hardened"
+#   no_network: true
+#   require_runtime: true
+#   # mount_allowlist_path: "~/.microclaw/sandbox-mount-allowlist.txt"

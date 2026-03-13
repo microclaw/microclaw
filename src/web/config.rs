@@ -241,6 +241,19 @@ pub(super) async fn api_config_self_check(
                     .to_string(),
         });
     }
+    if !state
+        .app_state
+        .config
+        .high_risk_tool_user_confirmation_required
+    {
+        warnings.push(ConfigWarning {
+            code: "high_risk_tool_auto_approved",
+            severity: "high",
+            message:
+                "High-risk tool confirmation is disabled; risky actions can execute without an explicit user approval boundary."
+                    .to_string(),
+        });
+    }
     if mount_allowlist_status
         .as_ref()
         .and_then(|m| m.get("exists"))
@@ -252,6 +265,32 @@ pub(super) async fn api_config_self_check(
             severity: "medium",
             message: "Sandbox mount allowlist file is missing; define explicit allowed roots."
                 .to_string(),
+        });
+    }
+    if !state.app_state.config.web_fetch_validation.enabled {
+        warnings.push(ConfigWarning {
+            code: "web_fetch_content_validation_disabled",
+            severity: "high",
+            message:
+                "web_fetch content validation is disabled; prompt-injection patterns in fetched content will not be screened."
+                    .to_string(),
+        });
+    } else if !state.app_state.config.web_fetch_validation.strict_mode {
+        warnings.push(ConfigWarning {
+            code: "web_fetch_content_validation_non_strict",
+            severity: "medium",
+            message:
+                "web_fetch content validation is not in strict mode; suspicious content may be allowed through."
+                    .to_string(),
+        });
+    }
+    if !state.app_state.config.web_fetch_url_validation.enabled {
+        warnings.push(ConfigWarning {
+            code: "web_fetch_url_validation_disabled",
+            severity: "high",
+            message:
+                "web_fetch URL validation is disabled; requests can target any host allowed by network reachability."
+                    .to_string(),
         });
     }
     if state.app_state.config.web_max_requests_per_window > 200 {

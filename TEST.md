@@ -8,6 +8,17 @@ This document describes how to test every feature of MicroClaw. It includes both
 cargo test              # Run all unit + integration tests
 cargo clippy            # Lint check
 cargo fmt --check       # Format check
+scripts/ci/stability_smoke.sh
+```
+
+Additional CI-equivalent quality checks:
+
+```sh
+npm --prefix web run build
+npm --prefix website run build
+node scripts/generate_docs_artifacts.mjs --check
+cargo audit
+cargo deny check advisories bans licenses
 ```
 
 ## Black-Box Functional Tests
