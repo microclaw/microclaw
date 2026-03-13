@@ -694,6 +694,14 @@ fn combine_visible_and_reasoning_text(visible: &str, reasoning: &str) -> String 
     format!("<thought>\n{}\n</thought>\n\n{}", reasoning, visible)
 }
 
+fn combine_response_text_for_display(visible: &str, reasoning: &str, show_thinking: bool) -> String {
+    if show_thinking {
+        combine_visible_and_reasoning_text(visible, reasoning)
+    } else {
+        visible.trim().to_string()
+    }
+}
+
 fn build_stream_response(
     ordered_indexes: Vec<usize>,
     text_blocks: std::collections::HashMap<usize, String>,
@@ -884,6 +892,7 @@ pub struct OpenAiProvider {
     is_openai_codex: bool,
     enable_reasoning_content_bridge: bool,
     enable_thinking_param: bool,
+    show_thinking: bool,
     prefer_max_completion_tokens: bool,
     openai_compat_body_overrides: HashMap<String, serde_json::Value>,
     openai_compat_body_overrides_by_provider: HashMap<String, HashMap<String, serde_json::Value>>,
@@ -957,6 +966,7 @@ impl OpenAiProvider {
             is_openai_codex,
             enable_reasoning_content_bridge,
             enable_thinking_param,
+            show_thinking: config.show_thinking,
             prefer_max_completion_tokens: config.llm_provider.eq_ignore_ascii_case("openai"),
             openai_compat_body_overrides: config.openai_compat_body_overrides.clone(),
             openai_compat_body_overrides_by_provider: config
@@ -1361,7 +1371,10 @@ impl LlmProvider for OpenAiProvider {
                         "Failed to parse OpenAI response: {e}\nBody: {text}"
                     ))
                 })?;
-                return Ok(translate_oai_response(oai));
+                return Ok(translate_oai_response_with_display_reasoning(
+                    oai,
+                    self.show_thinking,
+                ));
             }
 
             if status.as_u16() == 429 && retries < max_retries {
@@ -1573,7 +1586,8 @@ impl LlmProvider for OpenAiProvider {
         }
 
         let mut content = Vec::new();
-        let combined_text = combine_visible_and_reasoning_text(&text, &reasoning_text);
+        let combined_text =
+            combine_response_text_for_display(&text, &reasoning_text, self.show_thinking);
         if !combined_text.is_empty() {
             content.push(ResponseContentBlock::Text {
                 text: combined_text,
@@ -2141,7 +2155,15 @@ fn translate_oai_responses_response(resp: OaiResponsesResponse) -> MessagesRespo
     }
 }
 
+#[cfg(test)]
 fn translate_oai_response(oai: OaiResponse) -> MessagesResponse {
+    translate_oai_response_with_display_reasoning(oai, true)
+}
+
+fn translate_oai_response_with_display_reasoning(
+    oai: OaiResponse,
+    show_thinking: bool,
+) -> MessagesResponse {
     let choice = match oai.choices.into_iter().next() {
         Some(c) => c,
         None => {
@@ -2164,7 +2186,7 @@ fn translate_oai_response(oai: OaiResponse) -> MessagesResponse {
 
     let visible = message_content.unwrap_or_default();
     let reasoning = reasoning_content.unwrap_or_default();
-    let combined_text = combine_visible_and_reasoning_text(&visible, &reasoning);
+    let combined_text = combine_response_text_for_display(&visible, &reasoning, show_thinking);
     if !combined_text.is_empty() {
         content.push(ResponseContentBlock::Text {
             text: combined_text,
@@ -2792,6 +2814,26 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_oai_response_omits_reasoning_when_disabled() {
+        let oai = OaiResponse {
+            choices: vec![OaiChoice {
+                message: OaiMessage {
+                    content: Some("Visible".into()),
+                    reasoning_content: Some("internal".into()),
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: None,
+        };
+        let resp = translate_oai_response_with_display_reasoning(oai, false);
+        match &resp.content[0] {
+            ResponseContentBlock::Text { text } => assert_eq!(text, "Visible"),
+            _ => panic!("Expected Text"),
+        }
+    }
+
+    #[test]
     fn test_normalize_stop_reason_stream_variants() {
         assert_eq!(
             normalize_stop_reason(Some("tool_calls".into())).as_deref(),
@@ -3193,6 +3235,24 @@ mod tests {
 
         let provider = OpenAiProvider::new(&config);
         assert!(provider.enable_thinking_param);
+        assert!(provider.enable_reasoning_content_bridge);
+    }
+
+    #[test]
+    fn test_openai_provider_disables_google_thinking_param_when_show_thinking_is_false() {
+        let mut config = Config::test_defaults();
+        config.llm_provider = "google".into();
+        config.model = "gemini-3-flash-preview".into();
+        config.show_thinking = false;
+        config.data_dir = "/tmp".into();
+        config.working_dir = "/tmp".into();
+        config.working_dir_isolation = WorkingDirIsolation::Shared;
+        config.web_enabled = false;
+        config.web_port = 3900;
+
+        let provider = OpenAiProvider::new(&config);
+        assert!(!provider.enable_thinking_param);
+        assert!(!provider.show_thinking);
         assert!(provider.enable_reasoning_content_bridge);
     }
 
