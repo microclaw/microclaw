@@ -10,6 +10,7 @@ fn minimal_config() -> Config {
         llm_provider: "anthropic".into(),
         api_key: "test-key".into(),
         model: String::new(),
+        provider_presets: std::collections::HashMap::new(),
         llm_providers: std::collections::HashMap::new(),
         llm_base_url: None,
         llm_user_agent: microclaw::http_client::default_llm_user_agent(),

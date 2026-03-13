@@ -565,34 +565,37 @@ fn process_openai_stream_event(
         return;
     };
 
-    if let Some(piece) = delta.get("content").and_then(|t| t.as_str()) {
+    if let Some(piece) = delta.get("content").and_then(extract_text_from_oai_value) {
         if !piece.is_empty() {
-            text.push_str(piece);
+            text.push_str(&piece);
             if let Some(tx) = text_tx {
-                let _ = tx.send(piece.to_string());
+                let _ = tx.send(piece);
             }
         }
     }
 
     if let Some(piece) = delta
         .get("thought")
-        .and_then(|t| t.as_str())
-        .or_else(|| delta.get("thinking").and_then(|t| t.as_str()))
+        .and_then(extract_text_from_oai_value)
+        .or_else(|| delta.get("thinking").and_then(extract_text_from_oai_value))
     {
         if !piece.is_empty() {
             if reasoning_text.is_empty() {
                 debug!("AI started generating thinking/thought");
             }
-            reasoning_text.push_str(piece);
+            reasoning_text.push_str(&piece);
         }
     }
 
-    if let Some(piece) = delta.get("reasoning_content").and_then(|t| t.as_str()) {
+    if let Some(piece) = delta
+        .get("reasoning_content")
+        .and_then(extract_text_from_oai_value)
+    {
         if !piece.is_empty() {
             if reasoning_text.is_empty() {
                 debug!("AI started generating reasoning_content");
             }
-            reasoning_text.push_str(piece);
+            reasoning_text.push_str(&piece);
         }
     }
 
@@ -1090,6 +1093,41 @@ where
     Ok(Option::<Vec<OaiChoice>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+fn deserialize_optional_oai_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|v| extract_text_from_oai_value(&v)))
+}
+
+fn extract_text_from_oai_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Array(items) => {
+            let combined = items
+                .iter()
+                .filter_map(extract_text_from_oai_value)
+                .collect::<Vec<_>>()
+                .join("");
+            if combined.is_empty() {
+                None
+            } else {
+                Some(combined)
+            }
+        }
+        serde_json::Value::Object(map) => map
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string())
+            .or_else(|| map.get("content").and_then(extract_text_from_oai_value))
+            .or_else(|| map.get("parts").and_then(extract_text_from_oai_value))
+            .or_else(|| map.get("value").and_then(extract_text_from_oai_value)),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct OaiChoice {
     message: OaiMessage,
@@ -1098,7 +1136,9 @@ struct OaiChoice {
 
 #[derive(Debug, Deserialize)]
 struct OaiMessage {
+    #[serde(default, deserialize_with = "deserialize_optional_oai_text")]
     content: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_oai_text")]
     reasoning_content: Option<String>,
     tool_calls: Option<Vec<OaiToolCall>>,
 }
@@ -2717,6 +2757,19 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_oai_response_accepts_structured_content_arrays() {
+        let raw = r#"{"choices":[{"message":{"content":[{"type":"text","text":"Hello "},{"type":"text","text":"Gemini"}],"reasoning_content":[{"type":"text","text":"plan "},{"type":"text","text":"steps"}],"tool_calls":null},"finish_reason":"stop"}],"usage":null}"#;
+        let oai: OaiResponse = serde_json::from_str(raw).unwrap();
+        let resp = translate_oai_response(oai);
+        match &resp.content[0] {
+            ResponseContentBlock::Text { text } => {
+                assert_eq!(text, "<thought>\nplan steps\n</thought>\n\nHello Gemini")
+            }
+            _ => panic!("Expected Text"),
+        }
+    }
+
+    #[test]
     fn test_translate_oai_response_reasoning_only() {
         let oai = OaiResponse {
             choices: vec![OaiChoice {
@@ -2797,6 +2850,32 @@ mod tests {
         assert_eq!(call.name, "bash");
         assert_eq!(call.input_json, r#"{"command":"ls"}"#);
         assert_eq!(call.thought_signature.as_deref(), Some("sig_123"));
+    }
+
+    #[test]
+    fn test_process_openai_stream_event_accepts_structured_delta_content() {
+        let data = r#"{"choices":[{"delta":{"content":[{"type":"text","text":"Hello "},{"type":"text","text":"Gemini"}],"reasoning_content":[{"type":"text","text":"plan"},{"type":"text","text":" more"}]}}],"usage":null}"#;
+        let mut text = String::new();
+        let mut reasoning_text = String::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+        let mut tool_calls = std::collections::BTreeMap::new();
+
+        process_openai_stream_event(
+            data,
+            None,
+            &mut text,
+            &mut reasoning_text,
+            &mut stop_reason,
+            &mut usage,
+            &mut tool_calls,
+        );
+
+        assert_eq!(text, "Hello Gemini");
+        assert_eq!(reasoning_text, "plan more");
+        assert_eq!(stop_reason, None);
+        assert!(usage.is_none());
+        assert!(tool_calls.is_empty());
     }
 
     #[test]

@@ -175,40 +175,40 @@ For a deeper dive into the architecture and design decisions, read: **[Building 
 
 ## Tools
 
-| Tool                        | Description                                                                                                          |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `bash`                      | Execute shell commands with configurable timeout                                                                     |
-| `read_file`                 | Read files with line numbers, optional offset/limit                                                                  |
-| `write_file`                | Create or overwrite files (auto-creates directories)                                                                 |
-| `edit_file`                 | Find-and-replace editing with uniqueness validation                                                                  |
-| `glob`                      | Find files by pattern (`**/*.rs`, `src/**/*.ts`)                                                                     |
-| `grep`                      | Regex search across file contents                                                                                    |
-| `read_memory`               | Read persistent AGENTS.md memory (`global`, `bot`, or `chat`)                                                        |
-| `write_memory`              | Write persistent AGENTS.md memory                                                                                    |
-| `web_search`                | Search the web via DuckDuckGo (returns titles, URLs, snippets)                                                       |
-| `web_fetch`                 | Fetch a URL and return plain text (HTML stripped, max 20KB)                                                          |
-| `send_message`              | Send mid-conversation messages; supports attachments for Telegram/Discord via `attachment_path` + optional `caption` |
-| `schedule_task`             | Schedule a recurring (cron) or one-time task                                                                         |
-| `list_scheduled_tasks`      | List all active/paused tasks for a chat                                                                              |
-| `pause_scheduled_task`      | Pause a scheduled task                                                                                               |
-| `resume_scheduled_task`     | Resume a paused task                                                                                                 |
-| `cancel_scheduled_task`     | Cancel a task permanently                                                                                            |
-| `get_task_history`          | View execution history for a scheduled task                                                                          |
-| `export_chat`               | Export chat history to markdown                                                                                      |
-| `sessions_spawn`            | Spawn an asynchronous sub-agent run and return immediately                                                           |
-| `subagents_list`            | List sub-agent runs for the current chat                                                                             |
-| `subagents_info`            | Inspect one sub-agent run in detail                                                                                  |
-| `subagents_kill`            | Cancel one run or all active runs in the current chat                                                                |
-| `subagents_focus`           | Focus the chat on a specific sub-agent run                                                                           |
-| `subagents_unfocus`         | Clear focused sub-agent binding                                                                                      |
-| `subagents_focused`         | Show current focused sub-agent run                                                                                   |
-| `subagents_send`            | Send follow-up work to the focused sub-agent run                                                                     |
-| `subagents_log`             | Read timeline events for one sub-agent run                                                                           |
-| `subagents_retry_announces` | Retry pending completion announcements for control chats                                                             |
-| `activate_skill`            | Activate an agent skill to load specialized instructions                                                             |
-| `sync_skills`               | Sync a skill from external registry (e.g. vercel-labs/skills) and normalize local frontmatter                        |
-| `todo_read`                 | Read the current task/plan list for a chat                                                                           |
-| `todo_write`                | Create or update the task/plan list for a chat                                                                       |
+| Tool | Description |
+|------|-------------|
+| `bash` | Execute shell commands with configurable timeout |
+| `read_file` | Read files with line numbers, optional offset/limit |
+| `write_file` | Create or overwrite files (auto-creates directories) |
+| `edit_file` | Find-and-replace editing with uniqueness validation |
+| `glob` | Find files by pattern (`**/*.rs`, `src/**/*.ts`) |
+| `grep` | Regex search across file contents |
+| `read_memory` | Read persistent AGENTS.md memory (`global`, `bot`, or `chat`) |
+| `write_memory` | Write persistent AGENTS.md memory |
+| `web_search` | Search the web via DuckDuckGo (returns titles, URLs, snippets) |
+| `web_fetch` | Fetch a URL and return plain text (HTML stripped, max 20KB) |
+| `send_message` | Send mid-conversation messages; supports attachments for Telegram/Discord via `attachment_path` + optional `caption` |
+| `schedule_task` | Schedule a recurring (cron) or one-time task |
+| `list_scheduled_tasks` | List all active/paused tasks for a chat |
+| `pause_scheduled_task` | Pause a scheduled task |
+| `resume_scheduled_task` | Resume a paused task |
+| `cancel_scheduled_task` | Cancel a task permanently |
+| `get_task_history` | View execution history for a scheduled task |
+| `export_chat` | Export chat history to markdown |
+| `sessions_spawn` | Spawn an asynchronous sub-agent run and return immediately |
+| `subagents_list` | List sub-agent runs for the current chat |
+| `subagents_info` | Inspect one sub-agent run in detail |
+| `subagents_kill` | Cancel one run or all active runs in the current chat |
+| `subagents_focus` | Focus the chat on a specific sub-agent run |
+| `subagents_unfocus` | Clear focused sub-agent binding |
+| `subagents_focused` | Show current focused sub-agent run |
+| `subagents_send` | Send follow-up work to the focused sub-agent run |
+| `subagents_log` | Read timeline events for one sub-agent run |
+| `subagents_retry_announces` | Retry pending completion announcements for control chats |
+| `activate_skill` | Activate an agent skill to load specialized instructions |
+| `sync_skills` | Sync a skill from external registry (e.g. vercel-labs/skills) and normalize local frontmatter |
+| `todo_read` | Read the current task/plan list for a chat |
+| `todo_write` | Create or update the task/plan list for a chat |
 
 Generated reference (source-of-truth, anti-drift):
 - `docs/generated/tools.md`
@@ -560,6 +560,7 @@ Endpoints:
 - `POST /api/chat` (alias for chatbot-style clients)
 - `POST /api/send_stream` (async run + SSE replay)
 - `POST /api/chat_stream` (alias for chatbot-style clients)
+- `GET /ws` (OpenClaw Mission Control-compatible WebSocket bridge)
 - `POST /hooks/agent` and `POST /api/hooks/agent` (OpenClaw-style webhook payload compatibility)
 - `POST /hooks/wake` and `POST /api/hooks/wake` (system-event wake trigger: `now` or `next-heartbeat`)
 
@@ -611,6 +612,43 @@ Consume SSE events:
 ```sh
 curl -N "http://127.0.0.1:10961/api/stream?run_id=<RUN_ID>" \
   -H "Authorization: Bearer $MICROCLAW_API_KEY"
+```
+
+Mission Control / OpenClaw-style WebSocket bridge:
+
+1. Connect to `ws://127.0.0.1:10961/ws`
+2. Wait for `connect.challenge`
+3. Send a `connect` frame with your operator API key in `params.auth.token`
+4. Use `chat.send` and consume live `chat` events (`delta` / `final` / `error`)
+
+Example connect frame:
+
+```json
+{
+  "type": "req",
+  "id": "connect-1",
+  "method": "connect",
+  "params": {
+    "minProtocol": 3,
+    "maxProtocol": 3,
+    "auth": { "token": "mc_..." }
+  }
+}
+```
+
+Example chat send frame:
+
+```json
+{
+  "type": "req",
+  "id": "send-1",
+  "method": "chat.send",
+  "params": {
+    "sessionKey": "ops-bot",
+    "message": "Summarize the current repo",
+    "idempotencyKey": "idem-1"
+  }
+}
 ```
 
 Example:
@@ -900,95 +938,98 @@ Use this mode when another local tool wants to talk to MicroClaw as a sessioned 
 
 All configuration is via `microclaw.config.yaml`:
 
-| Key                                                     | Required | Default                    | Description                                                                                                                                                                                      |
-| ------------------------------------------------------- | -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `telegram_bot_token`                                    | No*      | --                         | Telegram bot token from BotFather (legacy single-account mode)                                                                                                                                   |
-| `channels.telegram.default_account`                     | No       | unset                      | Default Telegram account ID in multi-account mode                                                                                                                                                |
-| `channels.telegram.accounts.<id>.bot_token`             | No*      | unset                      | Telegram bot token for a specific account (recommended multi-account mode)                                                                                                                       |
-| `channels.telegram.accounts.<id>.bot_username`          | No       | unset                      | Telegram username for a specific account (without `@`)                                                                                                                                           |
-| `channels.telegram.accounts.<id>.model`                 | No       | unset                      | Optional per-bot model override for that Telegram account                                                                                                                                        |
-| `channels.telegram.accounts.<id>.soul_path`             | No       | unset                      | Optional per-bot SOUL file path for this Telegram account                                                                                                                                        |
-| `channels.telegram.topic_routing.enabled`               | No       | `false`                    | If true, Telegram topics are routed as separate chats using `external_chat_id=<chat_id>:<thread_id>`                                                                                             |
-| `channels.telegram.accounts.<id>.topic_routing.enabled` | No       | inherit channel-level      | Optional per-account override for Telegram topic routing                                                                                                                                         |
-| `channels.telegram.allowed_user_ids`                    | No       | `[]`                       | Optional Telegram private chat sender allowlist at channel scope                                                                                                                                 |
-| `channels.telegram.accounts.<id>.allowed_groups`        | No       | `[]`                       | Optional Telegram group allowlist scoped to one account                                                                                                                                          |
-| `channels.telegram.accounts.<id>.allowed_user_ids`      | No       | `[]`                       | Optional Telegram private chat sender allowlist scoped to one account (merged with channel scope)                                                                                                |
-| `discord_bot_token`                                     | No*      | --                         | Discord bot token from Discord Developer Portal                                                                                                                                                  |
-| `channels.discord.default_account`                      | No       | unset                      | Default Discord account ID in multi-account mode                                                                                                                                                 |
-| `channels.discord.accounts.<id>.bot_token`              | No*      | unset                      | Discord bot token for a specific account                                                                                                                                                         |
-| `channels.discord.accounts.<id>.allowed_channels`       | No       | `[]`                       | Optional Discord channel allowlist scoped to one account                                                                                                                                         |
-| `channels.discord.accounts.<id>.no_mention`             | No       | `false`                    | If true, that Discord account responds in guild channels without @mention                                                                                                                        |
-| `channels.discord.accounts.<id>.model`                  | No       | unset                      | Optional per-bot model override for that Discord account                                                                                                                                         |
-| `channels.discord.accounts.<id>.soul_path`              | No       | unset                      | Optional per-bot SOUL file path for this Discord account                                                                                                                                         |
-| `allow_group_slash_without_mention`                     | No       | `false`                    | If true, allow slash commands in group/server/channel chats without @mention                                                                                                                     |
-| `discord_allowed_channels`                              | No       | `[]`                       | Discord channel ID allowlist; empty means no channel restriction                                                                                                                                 |
-| `api_key`                                               | Yes*     | --                         | LLM API key (`ollama` can leave this empty; `openai-codex` supports OAuth or `api_key`)                                                                                                          |
-| `bot_username`                                          | No       | --                         | Telegram bot username (without @; needed for Telegram group mentions)                                                                                                                            |
-| `llm_provider`                                          | No       | `anthropic`                | Provider preset ID (or custom ID). `anthropic` uses native Anthropic API, others use OpenAI-compatible API                                                                                       |
-| `model`                                                 | No       | provider-specific          | Model name                                                                                                                                                                                       |
-| `model_prices`                                          | No       | `[]`                       | Optional per-model pricing table (USD per 1M tokens) used by `/usage` cost estimates                                                                                                             |
-| `llm_base_url`                                          | No       | provider preset default    | Custom provider base URL                                                                                                                                                                         |
-| `openai_compat_body_overrides`                          | No       | `{}`                       | Global request-body overrides for OpenAI-compatible providers (`openai`, `openrouter`, `deepseek`, `ollama`, etc.)                                                                               |
-| `openai_compat_body_overrides_by_provider`              | No       | `{}`                       | Provider-specific OpenAI-compatible request-body overrides (keyed by provider name, case-insensitive)                                                                                            |
-| `openai_compat_body_overrides_by_model`                 | No       | `{}`                       | Model-specific OpenAI-compatible request-body overrides (keyed by exact model name)                                                                                                              |
-| `data_dir`                                              | No       | `~/.microclaw`             | Data root (`runtime` data in `data_dir/runtime`, skills in `data_dir/skills`)                                                                                                                    |
-| `working_dir`                                           | No       | `~/.microclaw/working_dir` | Default working directory for tool operations; relative paths in `bash/read_file/write_file/edit_file/glob/grep` resolve from here                                                               |
-| `working_dir_isolation`                                 | No       | `chat`                     | Working directory isolation mode for `bash/read_file/write_file/edit_file/glob/grep`: `shared` uses `working_dir/shared`, `chat` isolates each chat under `working_dir/chat/<channel>/<chat_id>` |
-| `high_risk_tool_user_confirmation_required`             | No       | `true`                     | Require explicit user confirmation before high-risk tool execution (for example `bash`)                                                                                                          |
-| `sandbox.mode`                                          | No       | `off`                      | Container sandbox mode for bash tool execution: `off` runs on host; `all` routes bash commands into docker containers                                                                            |
-| `sandbox.security_profile`                              | No       | `hardened`                 | Sandbox privilege profile: `hardened` (`--cap-drop ALL --security-opt no-new-privileges`), `standard` (Docker default caps), `privileged` (`--privileged`)                                       |
-| `sandbox.cap_add`                                       | No       | `[]`                       | Optional extra Linux capabilities to add (`--cap-add`); applies to `hardened` and `standard` profiles                                                                                            |
-| `sandbox.mount_allowlist_path`                          | No       | unset                      | Optional external mount allowlist file (one allowed root path per line)                                                                                                                          |
-| `max_tokens`                                            | No       | `8192`                     | Max tokens per model response                                                                                                                                                                    |
-| `max_tool_iterations`                                   | No       | `100`                      | Max tool-use loop iterations per message                                                                                                                                                         |
-| `max_document_size_mb`                                  | No       | `100`                      | Maximum allowed size for inbound Telegram documents; larger files are rejected with a hint message                                                                                               |
-| `memory_token_budget`                                   | No       | `1500`                     | Estimated token budget for injecting structured memories into prompt context                                                                                                                     |
-| `subagents.max_concurrent`                              | No       | `4`                        | Maximum number of active sub-agent runs across the runtime                                                                                                                                       |
-| `subagents.max_active_per_chat`                         | No       | `5`                        | Maximum number of active sub-agent runs allowed per chat                                                                                                                                         |
-| `subagents.run_timeout_secs`                            | No       | `900`                      | Timeout for a single sub-agent run                                                                                                                                                               |
-| `subagents.max_spawn_depth`                             | No       | `1`                        | Maximum recursive sub-agent depth                                                                                                                                                                |
-| `subagents.max_children_per_run`                        | No       | `5`                        | Maximum number of child runs created from one parent run                                                                                                                                         |
-| `subagents.max_tokens_per_run`                          | No       | `400000`                   | Per-run token budget ceiling used by `sessions_spawn` and `subagents_orchestrate`                                                                                                                |
-| `subagents.orchestrate_max_workers`                     | No       | `5`                        | Worker cap for `subagents_orchestrate` fan-out                                                                                                                                                   |
-| `subagents.announce_to_chat`                            | No       | `true`                     | Post sub-agent completion notices back into the parent chat                                                                                                                                      |
-| `subagents.thread_bound_routing_enabled`                | No       | `true`                     | Route thread replies to the currently focused sub-agent when supported by the channel                                                                                                            |
-| `max_history_messages`                                  | No       | `50`                       | Number of recent messages sent as context                                                                                                                                                        |
-| `control_chat_ids`                                      | No       | `[]`                       | Chat IDs that can perform cross-chat actions (send_message/schedule/export/memory global/todo)                                                                                                   |
-| `max_session_messages`                                  | No       | `40`                       | Message count threshold that triggers context compaction                                                                                                                                         |
-| `compact_keep_recent`                                   | No       | `20`                       | Number of recent messages to keep verbatim during compaction                                                                                                                                     |
-| `embedding_provider`                                    | No       | unset                      | Runtime embedding provider (`openai` or `ollama`) for semantic memory retrieval; requires `--features sqlite-vec` build                                                                          |
-| `embedding_api_key`                                     | No       | unset                      | API key for embedding provider (optional for `ollama`)                                                                                                                                           |
-| `embedding_base_url`                                    | No       | provider default           | Optional base URL override for embedding provider                                                                                                                                                |
-| `embedding_model`                                       | No       | provider default           | Embedding model ID                                                                                                                                                                               |
-| `embedding_dim`                                         | No       | provider default           | Embedding vector dimension for sqlite-vec index initialization                                                                                                                                   |
-| `channels.slack.default_account`                        | No       | unset                      | Default Slack account ID in multi-account mode                                                                                                                                                   |
-| `channels.slack.accounts.<id>.bot_token`                | No*      | unset                      | Slack bot token for a specific account                                                                                                                                                           |
-| `channels.slack.accounts.<id>.app_token`                | No*      | unset                      | Slack app token (Socket Mode) for a specific account                                                                                                                                             |
-| `channels.slack.accounts.<id>.allowed_channels`         | No       | `[]`                       | Optional Slack channel allowlist scoped to one account                                                                                                                                           |
-| `channels.slack.accounts.<id>.model`                    | No       | unset                      | Optional per-bot model override for that Slack account                                                                                                                                           |
-| `channels.slack.accounts.<id>.soul_path`                | No       | unset                      | Optional per-bot SOUL file path for this Slack account                                                                                                                                           |
-| `channels.feishu.default_account`                       | No       | unset                      | Default Feishu/Lark account ID in multi-account mode                                                                                                                                             |
-| `channels.feishu.accounts.<id>.app_id`                  | No*      | unset                      | Feishu/Lark app ID for a specific account                                                                                                                                                        |
-| `channels.feishu.accounts.<id>.app_secret`              | No*      | unset                      | Feishu/Lark app secret for a specific account                                                                                                                                                    |
-| `channels.feishu.accounts.<id>.domain`                  | No       | `feishu`                   | Feishu domain for that account (`feishu`, `lark`, or custom URL)                                                                                                                                 |
-| `channels.feishu.accounts.<id>.allowed_chats`           | No       | `[]`                       | Optional Feishu chat allowlist scoped to one account                                                                                                                                             |
-| `channels.feishu.accounts.<id>.model`                   | No       | unset                      | Optional per-bot model override for that Feishu/Lark account                                                                                                                                     |
-| `channels.feishu.accounts.<id>.soul_path`               | No       | unset                      | Optional per-bot SOUL file path for this Feishu/Lark account                                                                                                                                     |
-| `channels.feishu.accounts.<id>.topic_mode`              | No       | `false`                    | Optional per-bot threaded reply mode; only supported when account domain is `feishu` or `lark`                                                                                                   |
-| `channels.<name>.soul_path`                             | No       | unset                      | Optional channel-level SOUL file path fallback (used when account-level `soul_path` is not set)                                                                                                  |
-| `soul_path`                                             | No       | unset                      | Global SOUL file path fallback (used when channel/account `soul_path` is not set)                                                                                                                |
-| `channels.irc.server`                                   | No*      | unset                      | IRC server host/IP                                                                                                                                                                               |
-| `channels.irc.port`                                     | No       | `"6667"`                   | IRC server port                                                                                                                                                                                  |
-| `channels.irc.nick`                                     | No*      | unset                      | IRC bot nick                                                                                                                                                                                     |
-| `channels.irc.username`                                 | No       | unset                      | IRC username (defaults to nick)                                                                                                                                                                  |
-| `channels.irc.real_name`                                | No       | `"MicroClaw"`              | IRC real name (sent in USER command)                                                                                                                                                             |
-| `channels.irc.channels`                                 | No*      | unset                      | Comma-separated channel list (for example `#general,#ops`)                                                                                                                                       |
-| `channels.irc.password`                                 | No       | unset                      | Optional IRC server password                                                                                                                                                                     |
-| `channels.irc.model`                                    | No       | unset                      | Optional model override for IRC bot                                                                                                                                                              |
-| `channels.irc.mention_required`                         | No       | `"true"`                   | In channel chats, require mention before replying                                                                                                                                                |
-| `channels.irc.tls`                                      | No       | `"false"`                  | Enable IRC TLS connection                                                                                                                                                                        |
-| `channels.irc.tls_server_name`                          | No       | unset                      | Optional TLS SNI/server name override                                                                                                                                                            |
-| `channels.irc.tls_danger_accept_invalid_certs`          | No       | `"false"`                  | Accept invalid TLS certs (testing only)                                                                                                                                                          |
+| Key | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `telegram_bot_token` | No* | -- | Telegram bot token from BotFather (legacy single-account mode) |
+| `channels.telegram.default_account` | No | unset | Default Telegram account ID in multi-account mode |
+| `channels.telegram.accounts.<id>.bot_token` | No* | unset | Telegram bot token for a specific account (recommended multi-account mode) |
+| `channels.telegram.accounts.<id>.bot_username` | No | unset | Telegram username for a specific account (without `@`) |
+| `channels.telegram.provider_preset` | No | unset | Optional Telegram channel-level provider profile override |
+| `channels.telegram.accounts.<id>.provider_preset` | No | unset | Optional per-bot provider profile override for that Telegram account |
+| `channels.telegram.accounts.<id>.soul_path` | No | unset | Optional per-bot SOUL file path for this Telegram account |
+| `channels.telegram.topic_routing.enabled` | No | `false` | If true, Telegram topics are routed as separate chats using `external_chat_id=<chat_id>:<thread_id>` |
+| `channels.telegram.accounts.<id>.topic_routing.enabled` | No | inherit channel-level | Optional per-account override for Telegram topic routing |
+| `channels.telegram.allowed_user_ids` | No | `[]` | Optional Telegram private chat sender allowlist at channel scope |
+| `channels.telegram.accounts.<id>.allowed_groups` | No | `[]` | Optional Telegram group allowlist scoped to one account |
+| `channels.telegram.accounts.<id>.allowed_user_ids` | No | `[]` | Optional Telegram private chat sender allowlist scoped to one account (merged with channel scope) |
+| `discord_bot_token` | No* | -- | Discord bot token from Discord Developer Portal |
+| `channels.discord.default_account` | No | unset | Default Discord account ID in multi-account mode |
+| `channels.discord.accounts.<id>.bot_token` | No* | unset | Discord bot token for a specific account |
+| `channels.discord.accounts.<id>.allowed_channels` | No | `[]` | Optional Discord channel allowlist scoped to one account |
+| `channels.discord.accounts.<id>.no_mention` | No | `false` | If true, that Discord account responds in guild channels without @mention |
+| `channels.discord.provider_preset` | No | unset | Optional Discord channel-level provider profile override |
+| `channels.discord.accounts.<id>.provider_preset` | No | unset | Optional per-bot provider profile override for that Discord account |
+| `channels.discord.accounts.<id>.soul_path` | No | unset | Optional per-bot SOUL file path for this Discord account |
+| `allow_group_slash_without_mention` | No | `false` | If true, allow slash commands in group/server/channel chats without @mention |
+| `discord_allowed_channels` | No | `[]` | Discord channel ID allowlist; empty means no channel restriction |
+| `api_key` | Yes* | -- | LLM API key (`ollama` can leave this empty; `openai-codex` supports OAuth or `api_key`) |
+| `bot_username` | No | -- | Telegram bot username (without @; needed for Telegram group mentions) |
+| `llm_provider` | No | `anthropic` | Global main LLM provider profile. Built-ins include `anthropic`, `openai`, `google`, `aliyun-bailian`, `nvidia`, `openrouter`, `ollama`, and `custom` |
+| `model` | No | provider-specific | Model name |
+| `provider_presets.<id>` | No | `{}` | Optional reusable provider profiles for channel/bot overrides. Each profile can define provider, api key, base URL, user-agent, model, and show-thinking |
+| `model_prices` | No | `[]` | Optional per-model pricing table (USD per 1M tokens) used by `/usage` cost estimates |
+| `llm_base_url` | No | provider preset default | Custom provider base URL |
+| `openai_compat_body_overrides` | No | `{}` | Global request-body overrides for OpenAI-compatible providers (`openai`, `openrouter`, `deepseek`, `ollama`, etc.) |
+| `openai_compat_body_overrides_by_provider` | No | `{}` | Provider-specific OpenAI-compatible request-body overrides (keyed by provider name, case-insensitive) |
+| `openai_compat_body_overrides_by_model` | No | `{}` | Model-specific OpenAI-compatible request-body overrides (keyed by exact model name) |
+| `data_dir` | No | `~/.microclaw` | Data root (`runtime` data in `data_dir/runtime`, skills in `data_dir/skills`) |
+| `working_dir` | No | `~/.microclaw/working_dir` | Default working directory for tool operations; relative paths in `bash/read_file/write_file/edit_file/glob/grep` resolve from here |
+| `working_dir_isolation` | No | `chat` | Working directory isolation mode for `bash/read_file/write_file/edit_file/glob/grep`: `shared` uses `working_dir/shared`, `chat` isolates each chat under `working_dir/chat/<channel>/<chat_id>` |
+| `high_risk_tool_user_confirmation_required` | No | `true` | Require explicit user confirmation before high-risk tool execution (for example `bash`) |
+| `sandbox.mode` | No | `off` | Container sandbox mode for bash tool execution: `off` runs on host; `all` routes bash commands into docker containers |
+| `sandbox.security_profile` | No | `hardened` | Sandbox privilege profile: `hardened` (`--cap-drop ALL --security-opt no-new-privileges`), `standard` (Docker default caps), `privileged` (`--privileged`) |
+| `sandbox.cap_add` | No | `[]` | Optional extra Linux capabilities to add (`--cap-add`); applies to `hardened` and `standard` profiles |
+| `sandbox.mount_allowlist_path` | No | unset | Optional external mount allowlist file (one allowed root path per line) |
+| `max_tokens` | No | `8192` | Max tokens per model response |
+| `max_tool_iterations` | No | `100` | Max tool-use loop iterations per message |
+| `max_document_size_mb` | No | `100` | Maximum allowed size for inbound Telegram documents; larger files are rejected with a hint message |
+| `memory_token_budget` | No | `1500` | Estimated token budget for injecting structured memories into prompt context |
+| `subagents.max_concurrent` | No | `4` | Maximum number of active sub-agent runs across the runtime |
+| `subagents.max_active_per_chat` | No | `5` | Maximum number of active sub-agent runs allowed per chat |
+| `subagents.run_timeout_secs` | No | `900` | Timeout for a single sub-agent run |
+| `subagents.max_spawn_depth` | No | `1` | Maximum recursive sub-agent depth |
+| `subagents.max_children_per_run` | No | `5` | Maximum number of child runs created from one parent run |
+| `subagents.max_tokens_per_run` | No | `400000` | Per-run token budget ceiling used by `sessions_spawn` and `subagents_orchestrate` |
+| `subagents.orchestrate_max_workers` | No | `5` | Worker cap for `subagents_orchestrate` fan-out |
+| `subagents.announce_to_chat` | No | `true` | Post sub-agent completion notices back into the parent chat |
+| `subagents.thread_bound_routing_enabled` | No | `true` | Route thread replies to the currently focused sub-agent when supported by the channel |
+| `max_history_messages` | No | `50` | Number of recent messages sent as context |
+| `control_chat_ids` | No | `[]` | Chat IDs that can perform cross-chat actions (send_message/schedule/export/memory global/todo) |
+| `max_session_messages` | No | `40` | Message count threshold that triggers context compaction |
+| `compact_keep_recent` | No | `20` | Number of recent messages to keep verbatim during compaction |
+| `embedding_provider` | No | unset | Runtime embedding provider (`openai` or `ollama`) for semantic memory retrieval; requires `--features sqlite-vec` build |
+| `embedding_api_key` | No | unset | API key for embedding provider (optional for `ollama`) |
+| `embedding_base_url` | No | provider default | Optional base URL override for embedding provider |
+| `embedding_model` | No | provider default | Embedding model ID |
+| `embedding_dim` | No | provider default | Embedding vector dimension for sqlite-vec index initialization |
+| `channels.slack.default_account` | No | unset | Default Slack account ID in multi-account mode |
+| `channels.slack.accounts.<id>.bot_token` | No* | unset | Slack bot token for a specific account |
+| `channels.slack.accounts.<id>.app_token` | No* | unset | Slack app token (Socket Mode) for a specific account |
+| `channels.slack.accounts.<id>.allowed_channels` | No | `[]` | Optional Slack channel allowlist scoped to one account |
+| `channels.slack.accounts.<id>.model` | No | unset | Optional per-bot model override for that Slack account |
+| `channels.slack.accounts.<id>.soul_path` | No | unset | Optional per-bot SOUL file path for this Slack account |
+| `channels.feishu.default_account` | No | unset | Default Feishu/Lark account ID in multi-account mode |
+| `channels.feishu.accounts.<id>.app_id` | No* | unset | Feishu/Lark app ID for a specific account |
+| `channels.feishu.accounts.<id>.app_secret` | No* | unset | Feishu/Lark app secret for a specific account |
+| `channels.feishu.accounts.<id>.domain` | No | `feishu` | Feishu domain for that account (`feishu`, `lark`, or custom URL) |
+| `channels.feishu.accounts.<id>.allowed_chats` | No | `[]` | Optional Feishu chat allowlist scoped to one account |
+| `channels.feishu.accounts.<id>.model` | No | unset | Optional per-bot model override for that Feishu/Lark account |
+| `channels.feishu.accounts.<id>.soul_path` | No | unset | Optional per-bot SOUL file path for this Feishu/Lark account |
+| `channels.feishu.accounts.<id>.topic_mode` | No | `false` | Optional per-bot threaded reply mode; only supported when account domain is `feishu` or `lark` |
+| `channels.<name>.soul_path` | No | unset | Optional channel-level SOUL file path fallback (used when account-level `soul_path` is not set) |
+| `soul_path` | No | unset | Global SOUL file path fallback (used when channel/account `soul_path` is not set) |
+| `channels.irc.server` | No* | unset | IRC server host/IP |
+| `channels.irc.port` | No | `"6667"` | IRC server port |
+| `channels.irc.nick` | No* | unset | IRC bot nick |
+| `channels.irc.username` | No | unset | IRC username (defaults to nick) |
+| `channels.irc.real_name` | No | `"MicroClaw"` | IRC real name (sent in USER command) |
+| `channels.irc.channels` | No* | unset | Comma-separated channel list (for example `#general,#ops`) |
+| `channels.irc.password` | No | unset | Optional IRC server password |
+| `channels.irc.model` | No | unset | Optional model override for IRC bot |
+| `channels.irc.mention_required` | No | `"true"` | In channel chats, require mention before replying |
+| `channels.irc.tls` | No | `"false"` | Enable IRC TLS connection |
+| `channels.irc.tls_server_name` | No | unset | Optional TLS SNI/server name override |
+| `channels.irc.tls_danger_accept_invalid_certs` | No | `"false"` | Accept invalid TLS certs (testing only) |
 
 Path compatibility policy:
 - If `data_dir` / `skills_dir` / `working_dir` are already configured, MicroClaw keeps using those configured paths.
@@ -1085,7 +1126,7 @@ Notes:
 
 ### Supported `llm_provider` values
 
-`openai`, `openai-codex`, `openrouter`, `anthropic`, `ollama`, `google`, `alibaba`, `deepseek`, `moonshot`, `mistral`, `azure`, `bedrock`, `zhipu`, `minimax`, `cohere`, `tencent`, `xai`, `huggingface`, `together`, `custom`.
+`openai`, `openai-codex`, `openrouter`, `anthropic`, `ollama`, `google`, `alibaba`, `aliyun-bailian`, `nvidia`, `deepseek`, `moonshot`, `mistral`, `azure`, `bedrock`, `zhipu`, `minimax`, `cohere`, `tencent`, `xai`, `huggingface`, `together`, `custom`.
 
 ## Platform behavior
 
@@ -1275,15 +1316,15 @@ export no_proxy=127.0.0.1,localhost,<your-langfuse-host>
 
 ## Documentation
 
-| File                                                                         | Description                                              |
-| ---------------------------------------------------------------------------- | -------------------------------------------------------- |
-| [README.md](README.md)                                                       | This file -- overview, setup, usage                      |
-| [DEVELOP.md](DEVELOP.md)                                                     | Developer guide -- architecture, adding tools, debugging |
-| [TEST.md](TEST.md)                                                           | Manual testing guide for all features                    |
-| [docs/operations/acp-stdio.md](docs/operations/acp-stdio.md)                 | ACP stdio mode overview and verification steps           |
-| [docs/operations/http-hook-trigger.md](docs/operations/http-hook-trigger.md) | Webhook and async streaming trigger behavior             |
-| [CLAUDE.md](CLAUDE.md)                                                       | Project context for AI coding assistants                 |
-| [AGENTS.md](AGENTS.md)                                                       | Agent-friendly project reference                         |
+| File | Description |
+|------|-------------|
+| [README.md](README.md) | This file -- overview, setup, usage |
+| [DEVELOP.md](DEVELOP.md) | Developer guide -- architecture, adding tools, debugging |
+| [TEST.md](TEST.md) | Manual testing guide for all features |
+| [docs/operations/acp-stdio.md](docs/operations/acp-stdio.md) | ACP stdio mode overview and verification steps |
+| [docs/operations/http-hook-trigger.md](docs/operations/http-hook-trigger.md) | Webhook and async streaming trigger behavior |
+| [CLAUDE.md](CLAUDE.md) | Project context for AI coding assistants |
+| [AGENTS.md](AGENTS.md) | Agent-friendly project reference |
 
 ## Star History
 

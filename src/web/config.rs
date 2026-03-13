@@ -556,6 +556,12 @@ pub(super) async fn api_update_config(
     if let Some(v) = body.llm_base_url {
         cfg.llm_base_url = v;
     }
+    if let Some(v) = body.llm_user_agent {
+        cfg.llm_user_agent = v.unwrap_or_default();
+    }
+    if let Some(v) = body.provider_presets {
+        cfg.provider_presets = v;
+    }
     if let Some(v) = body.max_tokens {
         cfg.max_tokens = v;
     }

@@ -168,6 +168,16 @@ type A2APeerDraft = {
   default_session_key: string
 }
 
+type ProviderProfileDraft = {
+  id: string
+  provider: string
+  api_key: string
+  llm_base_url: string
+  llm_user_agent: string
+  default_model: string
+  show_thinking: boolean
+}
+
 const DOCS_BASE = 'https://microclaw.ai/docs'
 
 function warningDocUrl(code?: string): string {
@@ -233,6 +243,7 @@ const PROVIDER_SUGGESTIONS = [
   'openrouter',
   'anthropic',
   'google',
+  'aliyun-bailian',
   'alibaba',
   'deepseek',
   'moonshot',
@@ -244,6 +255,7 @@ const PROVIDER_SUGGESTIONS = [
   'cohere',
   'tencent',
   'xai',
+  'nvidia',
   'huggingface',
   'together',
   'custom',
@@ -257,6 +269,8 @@ const MODEL_OPTIONS: Record<string, string[]> = {
   openrouter: ['openai/gpt-5', 'anthropic/claude-sonnet-4-5', 'google/gemini-2.5-pro'],
   deepseek: ['deepseek-chat', 'deepseek-reasoner'],
   google: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+  'aliyun-bailian': ['qwen3.5-plus', 'qwen3-max', 'qwen-plus-latest'],
+  nvidia: ['meta/llama-3.3-70b-instruct', 'meta/llama-3.1-70b-instruct'],
 }
 
 const DEFAULT_CONFIG_VALUES = {
@@ -337,7 +351,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'bot_token', label: 'slack_bot_token', placeholder: 'xoxb-...', description: 'Bot User OAuth Token (xoxb-) for sending messages. Leave blank to keep current secret unchanged.', secret: true },
       { yamlKey: 'app_token', label: 'slack_app_token', placeholder: 'xapp-...', description: 'App-level token (xapp-) for Socket Mode connection. Leave blank to keep current secret unchanged.', secret: true },
       { yamlKey: 'bot_username', label: 'slack_bot_username', placeholder: 'slack_bot_name', description: 'Optional Slack-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'slack_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Slack bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'slack_provider_preset', placeholder: 'provider1', description: 'Optional Slack bot LLM provider profile override for this account.', secret: false },
       { yamlKey: 'capture_unmentioned_images', label: 'slack_capture_unmentioned_images', placeholder: 'false', description: 'Capture inbound images without @mention in group channels (true/false). Default: false.', secret: false, valueType: 'bool' },
       { yamlKey: 'inbound_image_max_mb', label: 'slack_inbound_image_max_mb', placeholder: '20', description: 'Max inbound Slack image size in MB. Default: 20.', secret: false, valueType: 'number' },
     ],
@@ -359,7 +373,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'app_secret', label: 'feishu_app_secret', placeholder: 'xxx', description: 'App Secret from Feishu Open Platform. Leave blank to keep current secret unchanged.', secret: true },
       { yamlKey: 'domain', label: 'feishu_domain', placeholder: 'feishu', description: 'Use "feishu" for China, "lark" for international, or a custom base URL.', secret: false },
       { yamlKey: 'bot_username', label: 'feishu_bot_username', placeholder: 'feishu_bot_name', description: 'Optional Feishu-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'feishu_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Feishu bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'feishu_provider_preset', placeholder: 'provider1', description: 'Optional Feishu bot LLM provider profile override for this account.', secret: false },
       { yamlKey: 'topic_mode', label: 'feishu_topic_mode', placeholder: 'false', description: 'Optional topic mode (true/false).', secret: false, valueType: 'bool' },
       { yamlKey: 'show_progress', label: 'feishu_show_progress', placeholder: 'false', description: 'Optional progress updates in topic mode (true/false).', secret: false, valueType: 'bool' },
     ],
@@ -399,7 +413,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'webhook_path', label: 'whatsapp_webhook_path', placeholder: '/whatsapp/webhook', description: 'Webhook path.', secret: false },
       { yamlKey: 'allowed_user_ids', label: 'whatsapp_allowed_user_ids', placeholder: 'user1,user2', description: 'Optional allowed user IDs csv.', secret: false },
       { yamlKey: 'bot_username', label: 'whatsapp_bot_username', placeholder: 'whatsapp_bot_name', description: 'Optional WhatsApp-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'whatsapp_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional WhatsApp bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'whatsapp_provider_preset', placeholder: 'provider1', description: 'Optional WhatsApp bot LLM provider profile override for this account.', secret: false },
     ],
   },
   {
@@ -414,7 +428,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
     fields: [
       { yamlKey: 'service', label: 'imessage_service', placeholder: 'iMessage', description: 'Service type (iMessage/SMS relay setup dependent).', secret: false },
       { yamlKey: 'bot_username', label: 'imessage_bot_username', placeholder: 'imessage_bot_name', description: 'Optional iMessage-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'imessage_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional iMessage bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'imessage_provider_preset', placeholder: 'provider1', description: 'Optional iMessage bot LLM provider profile override for this account.', secret: false },
     ],
   },
   {
@@ -434,7 +448,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'webhook_token', label: 'email_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
       { yamlKey: 'allowed_senders', label: 'email_allowed_senders', placeholder: 'a@example.com,b@example.com', description: 'Optional allowed sender list csv.', secret: false },
       { yamlKey: 'bot_username', label: 'email_bot_username', placeholder: 'email_bot_name', description: 'Optional Email-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'email_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Email bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'email_provider_preset', placeholder: 'provider1', description: 'Optional Email bot LLM provider profile override for this account.', secret: false },
     ],
   },
   {
@@ -452,7 +466,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'webhook_token', label: 'nostr_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
       { yamlKey: 'allowed_pubkeys', label: 'nostr_allowed_pubkeys', placeholder: 'npub1...,npub1...', description: 'Optional allowed pubkeys csv.', secret: false },
       { yamlKey: 'bot_username', label: 'nostr_bot_username', placeholder: 'nostr_bot_name', description: 'Optional Nostr-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'nostr_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Nostr bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'nostr_provider_preset', placeholder: 'provider1', description: 'Optional Nostr bot LLM provider profile override for this account.', secret: false },
     ],
   },
   {
@@ -470,7 +484,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'webhook_token', label: 'signal_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
       { yamlKey: 'allowed_numbers', label: 'signal_allowed_numbers', placeholder: '+15551234567,+15559876543', description: 'Optional allowed numbers csv.', secret: false },
       { yamlKey: 'bot_username', label: 'signal_bot_username', placeholder: 'signal_bot_name', description: 'Optional Signal-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'signal_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional Signal bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'signal_provider_preset', placeholder: 'provider1', description: 'Optional Signal bot LLM provider profile override for this account.', secret: false },
     ],
   },
   {
@@ -488,7 +502,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'webhook_token', label: 'dingtalk_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
       { yamlKey: 'allowed_chat_ids', label: 'dingtalk_allowed_chat_ids', placeholder: 'chat1,chat2', description: 'Optional allowed chat IDs csv.', secret: false },
       { yamlKey: 'bot_username', label: 'dingtalk_bot_username', placeholder: 'dingtalk_bot_name', description: 'Optional DingTalk-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'dingtalk_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional DingTalk bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'dingtalk_provider_preset', placeholder: 'provider1', description: 'Optional DingTalk bot LLM provider profile override for this account.', secret: false },
     ],
   },
   {
@@ -506,7 +520,7 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'webhook_token', label: 'qq_webhook_token', placeholder: 'token', description: 'Optional webhook token.', secret: true },
       { yamlKey: 'allowed_user_ids', label: 'qq_allowed_user_ids', placeholder: '10001,10002', description: 'Optional allowed user IDs csv.', secret: false },
       { yamlKey: 'bot_username', label: 'qq_bot_username', placeholder: 'qq_bot_name', description: 'Optional QQ-specific bot username override.', secret: false },
-      { yamlKey: 'model', label: 'qq_model', placeholder: 'claude-sonnet-4-5-20250929', description: 'Optional QQ bot model override for this account.', secret: false },
+      { yamlKey: 'provider_preset', label: 'qq_provider_preset', placeholder: 'provider1', description: 'Optional QQ bot LLM provider profile override for this account.', secret: false },
     ],
   },
 ]
@@ -537,12 +551,203 @@ const RADIX_ACCENT_BY_THEME: Record<UiTheme, string> = {
   indigo: 'indigo',
 }
 const BOT_SLOT_MAX = 10
+const MAIN_PROFILE_VALUE = '__main__'
+
+function nextProviderProfileId(entries: ProviderProfileDraft[]): string {
+  const used = new Set(entries.map((entry) => String(entry.id || '').trim().toLowerCase()).filter(Boolean))
+  for (let idx = 1; idx < 10_000; idx += 1) {
+    const candidate = `provider${idx}`
+    if (!used.has(candidate)) return candidate
+  }
+  return 'provider1'
+}
+
+function nextClonedProviderProfileId(entries: ProviderProfileDraft[], sourceId: string): string {
+  const base = String(sourceId || '').trim().toLowerCase()
+  if (!base) return nextProviderProfileId(entries)
+  const used = new Set(entries.map((entry) => String(entry.id || '').trim().toLowerCase()).filter(Boolean))
+  for (let idx = 2; idx < 10_000; idx += 1) {
+    const candidate = `${base}-${idx}`
+    if (!used.has(candidate)) return candidate
+  }
+  return `${base}-2`
+}
+
+function emptyProviderProfileDraft(entries: ProviderProfileDraft[]): ProviderProfileDraft {
+  return {
+    id: nextProviderProfileId(entries),
+    provider: 'anthropic',
+    api_key: '',
+    llm_base_url: '',
+    llm_user_agent: '',
+    default_model: defaultModelForProvider('anthropic'),
+    show_thinking: false,
+  }
+}
+
+function normalizeProviderProfileDraft(raw: unknown, fallbackId = ''): ProviderProfileDraft {
+  const draft = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  return {
+    id: String(draft.id || fallbackId || '').trim(),
+    provider: String(draft.provider || '').trim(),
+    api_key: typeof draft.api_key === 'string' && draft.api_key.trim() === '***' ? '' : String(draft.api_key || ''),
+    llm_base_url: String(draft.llm_base_url || ''),
+    llm_user_agent: String(draft.llm_user_agent || ''),
+    default_model: String(draft.default_model || ''),
+    show_thinking: Boolean(draft.show_thinking),
+  }
+}
+
+function providerProfilesFromConfig(config: ConfigPayload | null): ProviderProfileDraft[] {
+  const presetsRaw =
+    (config?.provider_presets as Record<string, unknown> | undefined) ||
+    (config?.llm_providers as Record<string, unknown> | undefined) ||
+    {}
+  return Object.entries(presetsRaw)
+    .filter(([id]) => id.trim() && id.trim().toLowerCase() !== 'main')
+    .map(([id, value]) => normalizeProviderProfileDraft(value, id))
+    .sort((a, b) => a.id.localeCompare(b.id))
+}
+
+function serializeProviderProfiles(entries: ProviderProfileDraft[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const raw of entries) {
+    const entry = normalizeProviderProfileDraft(raw)
+    const id = entry.id.trim().toLowerCase()
+    if (!id || id === 'main') continue
+    out[id] = {
+      ...(entry.provider.trim() ? { provider: entry.provider.trim().toLowerCase() } : {}),
+      ...(entry.api_key.trim() ? { api_key: entry.api_key.trim() } : {}),
+      ...(entry.llm_base_url.trim() ? { llm_base_url: entry.llm_base_url.trim() } : {}),
+      ...(entry.llm_user_agent.trim() ? { llm_user_agent: entry.llm_user_agent.trim() } : {}),
+      ...(entry.default_model.trim() ? { default_model: entry.default_model.trim() } : {}),
+      show_thinking: Boolean(entry.show_thinking),
+    }
+  }
+  return out
+}
+
+function providerPresetFromConfigValue(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') return ''
+  const cfg = raw as Record<string, unknown>
+  return String(cfg.provider_preset || cfg.llm_provider || '').trim()
+}
+
+function providerProfileOptions(entries: ProviderProfileDraft[], currentRaw: unknown): Array<{ value: string; label: string }> {
+  const current = String(currentRaw || '').trim()
+  const options = [{ value: MAIN_PROFILE_VALUE, label: 'main (global default)' }]
+  const seen = new Set<string>([MAIN_PROFILE_VALUE])
+  for (const entry of entries) {
+    const id = String(entry.id || '').trim()
+    if (!id || seen.has(id)) continue
+    options.push({
+      value: id,
+      label: `${id} · ${String(entry.provider || 'custom').trim() || 'custom'} / ${String(entry.default_model || '').trim() || '(no model)'}`,
+    })
+    seen.add(id)
+  }
+  if (current && !seen.has(current)) {
+    options.push({ value: current, label: `${current} · custom/current` })
+  }
+  return options
+}
+
+function providerProfileReferences(configDraft: Record<string, unknown>, profileIdRaw: unknown): string[] {
+  const profileId = String(profileIdRaw || '').trim()
+  if (!profileId) return []
+  const refs: string[] = []
+
+  if (String(configDraft.telegram_provider_preset || '').trim().toLowerCase() === profileId.toLowerCase()) {
+    refs.push('telegram channel')
+  }
+  if (String(configDraft.discord_provider_preset || '').trim().toLowerCase() === profileId.toLowerCase()) {
+    refs.push('discord channel')
+  }
+
+  for (let slot = 1; slot <= normalizeBotCount(configDraft.telegram_bot_count || 1); slot += 1) {
+    if (String(configDraft[`telegram_bot_${slot}_provider_preset`] || '').trim().toLowerCase() === profileId.toLowerCase()) {
+      const accountId = normalizeAccountId(configDraft[`telegram_bot_${slot}_account_id`] || defaultTelegramAccountIdForSlot(slot))
+      refs.push(`telegram.${accountId}`)
+    }
+  }
+
+  for (let slot = 1; slot <= normalizeBotCount(configDraft.discord_bot_count || 1); slot += 1) {
+    if (String(configDraft[`discord_bot_${slot}_provider_preset`] || '').trim().toLowerCase() === profileId.toLowerCase()) {
+      const accountId = normalizeAccountId(configDraft[`discord_bot_${slot}_account_id`] || defaultAccountIdForSlot(slot))
+      refs.push(`discord.${accountId}`)
+    }
+  }
+
+  if (String(configDraft.irc_provider_preset || '').trim().toLowerCase() === profileId.toLowerCase()) {
+    refs.push('irc channel')
+  }
+
+  for (const ch of DYNAMIC_CHANNELS) {
+    for (let slot = 1; slot <= normalizeBotCount(configDraft[`${ch.name}__bot_count`] || 1); slot += 1) {
+      const stateKey = `${ch.name}__bot_${slot}__provider_preset`
+      if (String(configDraft[stateKey] || '').trim().toLowerCase() === profileId.toLowerCase()) {
+        const accountId = normalizeAccountId(configDraft[`${ch.name}__bot_${slot}__account_id`] || defaultAccountIdForSlot(slot))
+        refs.push(`${ch.name}.${accountId}`)
+      }
+    }
+  }
+
+  return Array.from(new Set(refs)).sort((a, b) => a.localeCompare(b))
+}
+
+function renameProviderProfileReferences(
+  configDraft: Record<string, unknown>,
+  oldIdRaw: unknown,
+  newIdRaw: unknown,
+): Record<string, unknown> {
+  const oldId = String(oldIdRaw || '').trim()
+  const newId = String(newIdRaw || '').trim()
+  if (!oldId || oldId.toLowerCase() === newId.toLowerCase()) return configDraft
+
+  const next: Record<string, unknown> = { ...configDraft }
+  const maybeReplace = (key: string): void => {
+    if (String(next[key] || '').trim().toLowerCase() === oldId.toLowerCase()) {
+      next[key] = newId
+    }
+  }
+
+  maybeReplace('telegram_provider_preset')
+  maybeReplace('discord_provider_preset')
+  for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
+    maybeReplace(`telegram_bot_${slot}_provider_preset`)
+    maybeReplace(`discord_bot_${slot}_provider_preset`)
+  }
+  maybeReplace('irc_provider_preset')
+  for (const ch of DYNAMIC_CHANNELS) {
+    for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
+      maybeReplace(`${ch.name}__bot_${slot}__provider_preset`)
+    }
+  }
+  return next
+}
+
+function resetProviderProfileReferencesToMain(
+  configDraft: Record<string, unknown>,
+  profileIdRaw: unknown,
+): { nextDraft: Record<string, unknown>; resetRefs: string[] } {
+  const profileId = String(profileIdRaw || '').trim()
+  if (!profileId) return { nextDraft: configDraft, resetRefs: [] }
+
+  const refs = providerProfileReferences(configDraft, profileId)
+  if (refs.length === 0) return { nextDraft: configDraft, resetRefs: [] }
+
+  const next = renameProviderProfileReferences(configDraft, profileId, '')
+  return { nextDraft: next, resetRefs: refs }
+}
 
 function defaultModelForProvider(providerRaw: string): string {
   const provider = providerRaw.trim().toLowerCase()
   if (provider === 'anthropic') return 'claude-sonnet-4-5-20250929'
   if (provider === 'openai-codex') return 'gpt-5.3-codex'
   if (provider === 'ollama') return 'llama3.2'
+  if (provider === 'google') return 'gemini-2.5-pro'
+  if (provider === 'aliyun-bailian') return 'qwen3.5-plus'
+  if (provider === 'nvidia') return 'meta/llama-3.3-70b-instruct'
   return 'gpt-5.2'
 }
 
@@ -1938,7 +2143,7 @@ function App() {
           ? (accountCfg.allowed_channels as number[]).join(',')
           : ''
         discordBotDraft[`discord_bot_${slot}_username`] = String(accountCfg.bot_username || '')
-        discordBotDraft[`discord_bot_${slot}_model`] = String(accountCfg.model || '')
+        discordBotDraft[`discord_bot_${slot}_provider_preset`] = providerPresetFromConfigValue(accountCfg)
       }
       const ircCfg = channelsCfg.irc || {}
       const a2aCfg = ((data.config?.a2a as Record<string, unknown> | undefined) || {})
@@ -1946,17 +2151,22 @@ function App() {
         llm_provider: data.config?.llm_provider || '',
         model: data.config?.model || defaultModelForProvider(String(data.config?.llm_provider || 'anthropic')),
         llm_base_url: String(data.config?.llm_base_url || ''),
+        llm_user_agent: String(data.config?.llm_user_agent || ''),
         api_key: '',
+        provider_profiles: providerProfilesFromConfig(data.config || null),
         bot_username: String(data.config?.bot_username || ''),
         telegram_account_id: telegramDefaultAccount,
         telegram_bot_count: telegramBotCount,
-        telegram_model: String(telegramCfg.model || telegramAccountCfg.model || ''),
+        telegram_provider_preset:
+          providerPresetFromConfigValue(telegramCfg) || providerPresetFromConfigValue(telegramAccountCfg),
         telegram_allowed_user_ids: Array.isArray(telegramCfg.allowed_user_ids)
           ? (telegramCfg.allowed_user_ids as number[]).join(',')
           : '',
         ...telegramBotDraft,
         discord_account_id: discordDefaultAccount,
         discord_bot_count: discordBotCount,
+        discord_provider_preset:
+          providerPresetFromConfigValue(discordCfg) || providerPresetFromConfigValue(discordAccounts[0]?.[1] || {}),
         ...discordBotDraft,
         irc_server: String(ircCfg.server || ''),
         irc_port: String(ircCfg.port || ''),
@@ -1969,7 +2179,7 @@ function App() {
         irc_tls: String(ircCfg.tls || ''),
         irc_tls_server_name: String(ircCfg.tls_server_name || ''),
         irc_tls_danger_accept_invalid_certs: String(ircCfg.tls_danger_accept_invalid_certs || ''),
-        irc_model: String(ircCfg.model || ''),
+        irc_provider_preset: providerPresetFromConfigValue(ircCfg),
         web_bot_username: String((channelsCfg.web?.bot_username) || ''),
         working_dir_isolation: normalizeWorkingDirIsolation(
           data.config?.working_dir_isolation || DEFAULT_CONFIG_VALUES.working_dir_isolation,
@@ -2020,9 +2230,12 @@ function App() {
                   pairs.push([`${ch.name}__bot_${slot}__has__${f.yamlKey}`, Boolean(String(accountCfg[f.yamlKey] || '').trim())])
                   pairs.push([`${ch.name}__bot_${slot}__${f.yamlKey}`, ''])
                 } else {
+                  const value = f.yamlKey === 'provider_preset'
+                    ? providerPresetFromConfigValue(accountCfg)
+                    : dynamicFieldDraftValue(accountCfg[f.yamlKey], f.valueType || 'string')
                   pairs.push([
                     `${ch.name}__bot_${slot}__${f.yamlKey}`,
-                    dynamicFieldDraftValue(accountCfg[f.yamlKey], f.valueType || 'string'),
+                    value,
                   ])
                 }
               }
@@ -2110,6 +2323,77 @@ function App() {
     setConfigDraft((prev) => ({ ...prev, [field]: value }))
   }
 
+  function updateProviderProfile(index: number, patch: Partial<ProviderProfileDraft>): void {
+    setConfigDraft((prev) => {
+      const entries = Array.isArray(prev.provider_profiles)
+        ? [...(prev.provider_profiles as ProviderProfileDraft[])]
+        : []
+      if (!entries[index]) return prev
+      const oldId = String(entries[index].id || '').trim()
+      entries[index] = { ...entries[index], ...patch }
+      const nextDraft = { ...prev, provider_profiles: entries }
+      if (Object.prototype.hasOwnProperty.call(patch, 'id')) {
+        return renameProviderProfileReferences(nextDraft, oldId, entries[index].id)
+      }
+      return nextDraft
+    })
+  }
+
+  function addProviderProfile(): void {
+    setConfigDraft((prev) => {
+      const entries = Array.isArray(prev.provider_profiles)
+        ? [...(prev.provider_profiles as ProviderProfileDraft[])]
+        : []
+      entries.push(emptyProviderProfileDraft(entries))
+      return { ...prev, provider_profiles: entries }
+    })
+  }
+
+  function cloneProviderProfile(index: number): void {
+    setConfigDraft((prev) => {
+      const entries = Array.isArray(prev.provider_profiles)
+        ? [...(prev.provider_profiles as ProviderProfileDraft[])]
+        : []
+      const source = entries[index]
+      if (!source) return prev
+      entries.push({
+        ...source,
+        id: nextClonedProviderProfileId(entries, source.id),
+      })
+      return { ...prev, provider_profiles: entries }
+    })
+  }
+
+  function removeProviderProfile(index: number): void {
+    setConfigDraft((prev) => {
+      const entries = Array.isArray(prev.provider_profiles)
+        ? [...(prev.provider_profiles as ProviderProfileDraft[])]
+        : []
+      const target = entries[index]
+      if (!target) return prev
+      const refs = providerProfileReferences(prev, target.id)
+      if (refs.length > 0) return prev
+      entries.splice(index, 1)
+      return { ...prev, provider_profiles: entries }
+    })
+  }
+
+  function resetRefsAndRemoveProviderProfile(index: number): void {
+    setConfigDraft((prev) => {
+      const entries = Array.isArray(prev.provider_profiles)
+        ? [...(prev.provider_profiles as ProviderProfileDraft[])]
+        : []
+      const target = entries[index]
+      if (!target) return prev
+      const { nextDraft } = resetProviderProfileReferencesToMain(prev, target.id)
+      const nextEntries = Array.isArray(nextDraft.provider_profiles)
+        ? [...(nextDraft.provider_profiles as ProviderProfileDraft[])]
+        : entries
+      nextEntries.splice(index, 1)
+      return { ...nextDraft, provider_profiles: nextEntries }
+    })
+  }
+
   function updateA2APeer(index: number, patch: Partial<A2APeerDraft>): void {
     setConfigDraft((prev) => {
       const peers = Array.isArray(prev.a2a_peers) ? [...(prev.a2a_peers as A2APeerDraft[])] : []
@@ -2149,6 +2433,9 @@ function App() {
         case 'llm_base_url':
           next.llm_base_url = ''
           break
+        case 'llm_user_agent':
+          next.llm_user_agent = ''
+          break
         case 'max_tokens':
           next.max_tokens = DEFAULT_CONFIG_VALUES.max_tokens
           break
@@ -2169,14 +2456,17 @@ function App() {
         case 'bot_username':
           next.bot_username = ''
           break
-        case 'telegram_model':
-          next.telegram_model = ''
+        case 'telegram_provider_preset':
+          next.telegram_provider_preset = ''
           break
         case 'telegram_allowed_user_ids':
           next.telegram_allowed_user_ids = ''
           break
         case 'discord_account_id':
           next.discord_account_id = 'main'
+          break
+        case 'discord_provider_preset':
+          next.discord_provider_preset = ''
           break
         case 'discord_bot_count':
           next.discord_bot_count = 1
@@ -2186,8 +2476,11 @@ function App() {
             next[`discord_bot_${slot}_has_token`] = false
             next[`discord_bot_${slot}_allowed_channels_csv`] = ''
             next[`discord_bot_${slot}_username`] = ''
-            next[`discord_bot_${slot}_model`] = ''
+            next[`discord_bot_${slot}_provider_preset`] = ''
           }
+          break
+        case 'provider_profiles':
+          next.provider_profiles = []
           break
         case 'web_bot_username':
           next.web_bot_username = ''
@@ -2292,8 +2585,8 @@ function App() {
         case 'irc_tls_danger_accept_invalid_certs':
           next.irc_tls_danger_accept_invalid_certs = ''
           break
-        case 'irc_model':
-          next.irc_model = ''
+        case 'irc_provider_preset':
+          next.irc_provider_preset = ''
           break
         default:
           for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
@@ -2352,6 +2645,8 @@ function App() {
       const payload: Record<string, unknown> = {
         llm_provider: String(configDraft.llm_provider || ''),
         model: String(configDraft.model || ''),
+        llm_user_agent: String(configDraft.llm_user_agent || '').trim() || null,
+        provider_presets: serializeProviderProfiles(providerProfileDrafts),
         bot_username: String(configDraft.bot_username || '').trim(),
         web_bot_username: String(configDraft.web_bot_username || '').trim() || null,
         working_dir_isolation: normalizeWorkingDirIsolation(
@@ -2398,7 +2693,7 @@ function App() {
       }
 
       const telegramAccountId = normalizeAccountId(configDraft.telegram_account_id)
-      const telegramModel = String(configDraft.telegram_model || '').trim()
+      const telegramProviderPreset = String(configDraft.telegram_provider_preset || '').trim()
       const telegramBotCount = normalizeBotCount(configDraft.telegram_bot_count)
       const telegramAllowedUserIds = parseI64ListCsvOrJsonArray(
         String(configDraft.telegram_allowed_user_ids || ''),
@@ -2412,6 +2707,7 @@ function App() {
         const token = String(configDraft[`telegram_bot_${slot}_token`] || '').trim()
         const hasToken = Boolean(configDraft[`telegram_bot_${slot}_has_token`])
         const username = String(configDraft[`telegram_bot_${slot}_username`] || '').trim()
+        const providerPreset = String(configDraft[`telegram_bot_${slot}_provider_preset`] || '').trim()
         const soulPath = normalizeSoulPathInput(
           configDraft[`telegram_bot_${slot}_soul_path`],
           configDraft.souls_dir,
@@ -2424,6 +2720,7 @@ function App() {
           Boolean(token) ||
           hasToken ||
           Boolean(username) ||
+          Boolean(providerPreset) ||
           Boolean(soulPath) ||
           accountAllowedUserIds.length > 0 ||
           accountId === telegramAccountId
@@ -2435,12 +2732,14 @@ function App() {
           enabled: true,
           ...(token ? { bot_token: token } : {}),
           ...(username ? { bot_username: username } : {}),
+          ...(providerPreset ? { provider_preset: providerPreset } : {}),
           ...(soulPath ? { soul_path: soulPath } : {}),
           ...(accountAllowedUserIds.length > 0 ? { allowed_user_ids: accountAllowedUserIds } : {}),
         }
       }
 
       const discordAccountId = normalizeAccountId(configDraft.discord_account_id)
+      const discordProviderPreset = String(configDraft.discord_provider_preset || '').trim()
       const discordBotCount = normalizeBotCount(configDraft.discord_bot_count)
       const discordAccounts: Record<string, unknown> = {}
       for (let slot = 1; slot <= discordBotCount; slot += 1) {
@@ -2453,13 +2752,13 @@ function App() {
           String(configDraft[`discord_bot_${slot}_allowed_channels_csv`] || ''),
         )
         const username = String(configDraft[`discord_bot_${slot}_username`] || '').trim()
-        const model = String(configDraft[`discord_bot_${slot}_model`] || '').trim()
+        const providerPreset = String(configDraft[`discord_bot_${slot}_provider_preset`] || '').trim()
         const hasAny =
           Boolean(token) ||
           hasToken ||
           allowedChannels.length > 0 ||
           Boolean(username) ||
-          Boolean(model) ||
+          Boolean(providerPreset) ||
           accountId === discordAccountId
         if (!hasAny) continue
         if (Object.prototype.hasOwnProperty.call(discordAccounts, accountId)) {
@@ -2470,7 +2769,7 @@ function App() {
           ...(token ? { bot_token: token } : {}),
           ...(allowedChannels.length > 0 ? { allowed_channels: allowedChannels } : {}),
           ...(username ? { bot_username: username } : {}),
-          ...(model ? { model } : {}),
+          ...(providerPreset ? { provider_preset: providerPreset } : {}),
         }
       }
       const ircServer = String(configDraft.irc_server || '').trim()
@@ -2484,7 +2783,7 @@ function App() {
       const ircTls = String(configDraft.irc_tls || '').trim()
       const ircTlsServerName = String(configDraft.irc_tls_server_name || '').trim()
       const ircTlsDangerAcceptInvalidCerts = String(configDraft.irc_tls_danger_accept_invalid_certs || '').trim()
-      const ircModel = String(configDraft.irc_model || '').trim()
+      const ircProviderPreset = String(configDraft.irc_provider_preset || '').trim()
 
       const embeddingApiKey = String(configDraft.embedding_api_key || '').trim()
       if (embeddingApiKey) payload.embedding_api_key = embeddingApiKey
@@ -2529,11 +2828,11 @@ function App() {
       if (
         Object.keys(telegramAccounts).length > 0 ||
         telegramAllowedUserIds.length > 0 ||
-        telegramModel
+        telegramProviderPreset
       ) {
         channelConfigs.telegram = {
           default_account: telegramAccountId,
-          ...(telegramModel ? { model: telegramModel } : {}),
+          ...(telegramProviderPreset ? { provider_preset: telegramProviderPreset } : {}),
           ...(telegramAllowedUserIds.length > 0 ? { allowed_user_ids: telegramAllowedUserIds } : {}),
           accounts: telegramAccounts,
         }
@@ -2541,6 +2840,7 @@ function App() {
       if (Object.keys(discordAccounts).length > 0) {
         channelConfigs.discord = {
           default_account: discordAccountId,
+          ...(discordProviderPreset ? { provider_preset: discordProviderPreset } : {}),
           accounts: discordAccounts,
         }
       }
@@ -2556,7 +2856,7 @@ function App() {
         ircTls ||
         ircTlsServerName ||
         ircTlsDangerAcceptInvalidCerts ||
-        ircModel
+        ircProviderPreset
       ) {
         channelConfigs.irc = {
           ...(ircServer ? { server: ircServer } : {}),
@@ -2572,7 +2872,7 @@ function App() {
           ...(ircTlsDangerAcceptInvalidCerts
             ? { tls_danger_accept_invalid_certs: ircTlsDangerAcceptInvalidCerts }
             : {}),
-          ...(ircModel ? { model: ircModel } : {}),
+          ...(ircProviderPreset ? { provider_preset: ircProviderPreset } : {}),
         }
       }
       for (const ch of DYNAMIC_CHANNELS) {
@@ -2717,6 +3017,19 @@ function App() {
     new Set([currentProvider, ...PROVIDER_SUGGESTIONS.map((p) => p.toLowerCase())].filter(Boolean)),
   )
   const modelOptions = MODEL_OPTIONS[currentProvider] || []
+  const providerProfileDrafts = useMemo(
+    () =>
+      Array.isArray(configDraft.provider_profiles)
+        ? (configDraft.provider_profiles as ProviderProfileDraft[]).map((entry) =>
+            normalizeProviderProfileDraft(entry),
+          )
+        : [],
+    [configDraft.provider_profiles],
+  )
+  const nextProviderProfileHint = useMemo(
+    () => nextProviderProfileId(providerProfileDrafts),
+    [providerProfileDrafts],
+  )
   const sectionCardClass = appearance === 'dark'
     ? 'rounded-xl border p-5'
     : 'rounded-xl border border-slate-200/80 p-5'
@@ -3297,10 +3610,23 @@ function App() {
                         <Text size="1" color="gray" className="mt-1 block">
                           LLM provider and API settings.
                         </Text>
-                        <Text size="1" color="gray" className="mt-2 block">llm_provider selects routing preset; model is the exact model id sent to provider API.</Text>
+                        <Text size="1" color="gray" className="mt-2 block">Global LLM config acts like the main profile. Channel and bot overrides should select a provider profile instead of overriding model directly.</Text>
                         <Text size="1" color="gray" className="mt-1 block">For custom providers set <code>llm_base_url</code>. For <code>openai-codex</code>, configure auth/provider in <code>~/.codex/auth.json</code> and <code>~/.codex/config.toml</code> (this form ignores <code>api_key</code>/<code>llm_base_url</code>). <code>ollama</code> can leave <code>api_key</code> empty.</Text>
                         <div className="mt-4 space-y-3">
-                          <ConfigFieldCard label="llm_provider" description={<>Select provider preset for request routing and defaults.</>}>
+                          <ConfigFieldCard
+                            label="llm_provider"
+                            description={
+                              <>
+                                Select the global main provider backend.
+                                {currentProvider === 'openrouter' ? (
+                                  <> Browse models: <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer">openrouter.ai/models</a>.</>
+                                ) : null}
+                                {currentProvider === 'nvidia' ? (
+                                  <> Browse models: <a href="https://build.nvidia.com/models" target="_blank" rel="noreferrer">build.nvidia.com/models</a>.</>
+                                ) : null}
+                              </>
+                            }
+                          >
                             <div className="mt-2">
                               <Select.Root
                                 value={String(configDraft.llm_provider || DEFAULT_CONFIG_VALUES.llm_provider)}
@@ -3330,6 +3656,15 @@ function App() {
                             ) : null}
                           </ConfigFieldCard>
 
+                          <ConfigFieldCard label="llm_user_agent" description={<>Optional global HTTP user-agent for LLM requests.</>}>
+                            <TextField.Root
+                              className="mt-2"
+                              value={String(configDraft.llm_user_agent || '')}
+                              onChange={(e) => setConfigField('llm_user_agent', e.target.value)}
+                              placeholder="microclaw/1.0"
+                            />
+                          </ConfigFieldCard>
+
                           {currentProvider === 'custom' ? (
                             <ConfigFieldCard label="llm_base_url" description={<>Base URL for OpenAI-compatible custom provider endpoint.</>}>
                               <TextField.Root
@@ -3356,6 +3691,133 @@ function App() {
                               placeholder={currentProvider === 'openai-codex' ? '(ignored for openai-codex)' : 'sk-...'}
                             />
                           </ConfigFieldCard>
+                        </div>
+
+                        <div className="mt-6">
+                          <Flex align="center" justify="between" gap="3">
+                            <div>
+                              <Text size="3" weight="bold">LLM provider profiles</Text>
+                              <Text size="1" color="gray" className="mt-1 block">
+                                Reusable provider profiles for channel and bot overrides.
+                              </Text>
+                            </div>
+                            <Button variant="soft" onClick={addProviderProfile}>Add profile</Button>
+                          </Flex>
+                          <Text size="1" color="gray" className="mt-2 block">
+                            Next default profile id: {nextProviderProfileHint}
+                          </Text>
+                          <div className="mt-3 space-y-3">
+                            {providerProfileDrafts.length === 0 ? (
+                              <Card className="p-3">
+                                <Text size="2">No provider profiles yet. Add one, then point channel or bot overrides at it.</Text>
+                              </Card>
+                            ) : providerProfileDrafts.map((entry, index) => (
+                              <Card key={`provider-profile-${index}`} className="p-3">
+                                {(() => {
+                                  const refs = providerProfileReferences(configDraft, entry.id)
+                                  const inUse = refs.length > 0
+                                  return (
+                                    <>
+                                <Flex align="center" justify="between" gap="3">
+                                  <div>
+                                    <Text size="2" weight="medium">{entry.id || `Profile #${index + 1}`}</Text>
+                                    <Text size="1" color="gray" className="mt-1 block">
+                                      {entry.provider || 'custom'} / {entry.default_model || '(no model)'}
+                                    </Text>
+                                    <Text size="1" color={inUse ? 'amber' : 'gray'} className="mt-1 block">
+                                      {inUse ? `${refs.length} ref(s) · ${refs.join(', ')}` : 'unused'}
+                                    </Text>
+                                  </div>
+                                  <Flex gap="2">
+                                    <Button variant="soft" onClick={() => cloneProviderProfile(index)}>Clone</Button>
+                                    {inUse ? (
+                                      <Button variant="soft" color="amber" onClick={() => resetRefsAndRemoveProviderProfile(index)}>
+                                        Reset refs + delete
+                                      </Button>
+                                    ) : null}
+                                    <Button variant="soft" color="red" disabled={inUse} onClick={() => removeProviderProfile(index)}>
+                                      Delete
+                                    </Button>
+                                  </Flex>
+                                </Flex>
+                                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                                  <ConfigFieldCard label="profile_id" description={<>Unique id for channel/bot profile selection. Avoid <code>main</code>.</>}>
+                                    <TextField.Root
+                                      className="mt-2"
+                                      value={entry.id}
+                                      onChange={(e) => updateProviderProfile(index, { id: e.target.value })}
+                                      placeholder={nextProviderProfileHint}
+                                    />
+                                  </ConfigFieldCard>
+                                  <ConfigFieldCard label="provider" description={<>Provider backend used by this profile.</>}>
+                                    <div className="mt-2">
+                                      <Select.Root
+                                        value={entry.provider || 'anthropic'}
+                                        onValueChange={(value) => updateProviderProfile(index, {
+                                          provider: value,
+                                          default_model: entry.default_model || defaultModelForProvider(value),
+                                        })}
+                                      >
+                                        <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select provider" />
+                                        <Select.Content>
+                                          {providerOptions.map((provider) => (
+                                            <Select.Item key={`provider-profile-opt-${index}-${provider}`} value={provider}>
+                                              {provider}
+                                            </Select.Item>
+                                          ))}
+                                        </Select.Content>
+                                      </Select.Root>
+                                    </div>
+                                  </ConfigFieldCard>
+                                  <ConfigFieldCard label="api_key" description={<>Optional API key. Leave blank to keep current secret unchanged.</>}>
+                                    <TextField.Root
+                                      className="mt-2"
+                                      value={entry.api_key}
+                                      onChange={(e) => updateProviderProfile(index, { api_key: e.target.value })}
+                                      placeholder="sk-..."
+                                    />
+                                  </ConfigFieldCard>
+                                  <ConfigFieldCard label="llm_base_url" description={<>Optional base URL override for this profile.</>}>
+                                    <TextField.Root
+                                      className="mt-2"
+                                      value={entry.llm_base_url}
+                                      onChange={(e) => updateProviderProfile(index, { llm_base_url: e.target.value })}
+                                      placeholder="https://api.example.com/v1"
+                                    />
+                                  </ConfigFieldCard>
+                                  <ConfigFieldCard label="llm_user_agent" description={<>Optional HTTP user-agent override for this profile.</>}>
+                                    <TextField.Root
+                                      className="mt-2"
+                                      value={entry.llm_user_agent}
+                                      onChange={(e) => updateProviderProfile(index, { llm_user_agent: e.target.value })}
+                                      placeholder="microclaw/1.0"
+                                    />
+                                  </ConfigFieldCard>
+                                  <ConfigFieldCard label="default_model" description={<>Exact model id for this profile.</>}>
+                                    <TextField.Root
+                                      className="mt-2"
+                                      value={entry.default_model}
+                                      onChange={(e) => updateProviderProfile(index, { default_model: e.target.value })}
+                                      placeholder={defaultModelForProvider(entry.provider || 'anthropic')}
+                                    />
+                                  </ConfigFieldCard>
+                                </div>
+                                <div className="mt-3">
+                                  <ConfigToggleCard
+                                    label="show_thinking"
+                                    description={<>Show reasoning text when this profile is selected.</>}
+                                    checked={entry.show_thinking}
+                                    onCheckedChange={(checked) => updateProviderProfile(index, { show_thinking: checked })}
+                                    className={toggleCardClass}
+                                    style={toggleCardStyle}
+                                  />
+                                </div>
+                                    </>
+                                  )
+                                })()}
+                              </Card>
+                            ))}
+                          </div>
                         </div>
                       </div>
                       <div className={`${sectionCardClass} mt-4`} style={sectionCardStyle}>
@@ -3450,13 +3912,22 @@ function App() {
                               onChange={(e) => setConfigField('telegram_bot_count', normalizeBotCount(e.target.value))}
                             />
                           </ConfigFieldCard>
-                          <ConfigFieldCard label="telegram_model" description={<>Optional Telegram channel-level model override.</>}>
-                            <TextField.Root
-                              className="mt-2"
-                              value={String(configDraft.telegram_model || '')}
-                              onChange={(e) => setConfigField('telegram_model', e.target.value)}
-                              placeholder="claude-sonnet-4-5-20250929"
-                            />
+                          <ConfigFieldCard label="telegram_provider_preset" description={<>Optional Telegram channel-level LLM provider profile override.</>}>
+                            <div className="mt-2">
+                              <Select.Root
+                                value={String(configDraft.telegram_provider_preset || '') || MAIN_PROFILE_VALUE}
+                                onValueChange={(value) => setConfigField('telegram_provider_preset', value === MAIN_PROFILE_VALUE ? '' : value)}
+                              >
+                                <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select provider profile" />
+                                <Select.Content>
+                                  {providerProfileOptions(providerProfileDrafts, configDraft.telegram_provider_preset).map((option) => (
+                                    <Select.Item key={`telegram-provider-preset-${option.value}`} value={option.value}>
+                                      {option.label}
+                                    </Select.Item>
+                                  ))}
+                                </Select.Content>
+                              </Select.Root>
+                            </div>
                           </ConfigFieldCard>
                           <ConfigFieldCard label="telegram_allowed_user_ids" description={<>Optional channel-level allowlist. Accepts CSV or JSON array (for example <code>123,456</code> or <code>[123,456]</code>). Merged with each bot account&apos;s <code>allowed_user_ids</code>.</>}>
                             <TextField.Root
@@ -3495,6 +3966,23 @@ function App() {
                                       onChange={(e) => setConfigField(`telegram_bot_${slot}_username`, e.target.value)}
                                       placeholder={slot === 1 ? 'my_main_bot' : `my_bot_${slot}`}
                                     />
+                                  </ConfigFieldCard>
+                                  <ConfigFieldCard label={`telegram_bot_${slot}_provider_preset`} description={<>Optional Telegram bot LLM provider profile override.</>}>
+                                    <div className="mt-2">
+                                      <Select.Root
+                                        value={String(configDraft[`telegram_bot_${slot}_provider_preset`] || '') || MAIN_PROFILE_VALUE}
+                                        onValueChange={(value) => setConfigField(`telegram_bot_${slot}_provider_preset`, value === MAIN_PROFILE_VALUE ? '' : value)}
+                                      >
+                                        <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select provider profile" />
+                                        <Select.Content>
+                                          {providerProfileOptions(providerProfileDrafts, configDraft[`telegram_bot_${slot}_provider_preset`]).map((option) => (
+                                            <Select.Item key={`telegram-bot-${slot}-provider-preset-${option.value}`} value={option.value}>
+                                              {option.label}
+                                            </Select.Item>
+                                          ))}
+                                        </Select.Content>
+                                      </Select.Root>
+                                    </div>
                                   </ConfigFieldCard>
                                   <ConfigFieldCard label={`telegram_bot_${slot}_soul_path`} description={<>Per-bot soul file. Select from <code>{String(configDraft.souls_dir || '').trim() || 'souls'}/*.md</code> or input a custom filename/path.</>}>
                                     <SoulPathPickerField
@@ -3554,6 +4042,23 @@ function App() {
                               onChange={(e) => setConfigField('discord_bot_count', normalizeBotCount(e.target.value))}
                             />
                           </ConfigFieldCard>
+                          <ConfigFieldCard label="discord_provider_preset" description={<>Optional Discord channel-level LLM provider profile override.</>}>
+                            <div className="mt-2">
+                              <Select.Root
+                                value={String(configDraft.discord_provider_preset || '') || MAIN_PROFILE_VALUE}
+                                onValueChange={(value) => setConfigField('discord_provider_preset', value === MAIN_PROFILE_VALUE ? '' : value)}
+                              >
+                                <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select provider profile" />
+                                <Select.Content>
+                                  {providerProfileOptions(providerProfileDrafts, configDraft.discord_provider_preset).map((option) => (
+                                    <Select.Item key={`discord-provider-preset-${option.value}`} value={option.value}>
+                                      {option.label}
+                                    </Select.Item>
+                                  ))}
+                                </Select.Content>
+                              </Select.Root>
+                            </div>
+                          </ConfigFieldCard>
                           {Array.from({ length: normalizeBotCount(configDraft.discord_bot_count || 1) }).map((_, idx) => {
                             const slot = idx + 1
                             return (
@@ -3592,13 +4097,22 @@ function App() {
                                       placeholder={slot === 1 ? 'discord_main_bot' : `discord_bot_${slot}`}
                                     />
                                   </ConfigFieldCard>
-                                  <ConfigFieldCard label={`discord_bot_${slot}_model`} description={<>Optional model override for this bot account.</>}>
-                                    <TextField.Root
-                                      className="mt-2"
-                                      value={String(configDraft[`discord_bot_${slot}_model`] || '')}
-                                      onChange={(e) => setConfigField(`discord_bot_${slot}_model`, e.target.value)}
-                                      placeholder="claude-sonnet-4-5-20250929"
-                                    />
+                                  <ConfigFieldCard label={`discord_bot_${slot}_provider_preset`} description={<>Optional Discord bot LLM provider profile override.</>}>
+                                    <div className="mt-2">
+                                      <Select.Root
+                                        value={String(configDraft[`discord_bot_${slot}_provider_preset`] || '') || MAIN_PROFILE_VALUE}
+                                        onValueChange={(value) => setConfigField(`discord_bot_${slot}_provider_preset`, value === MAIN_PROFILE_VALUE ? '' : value)}
+                                      >
+                                        <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select provider profile" />
+                                        <Select.Content>
+                                          {providerProfileOptions(providerProfileDrafts, configDraft[`discord_bot_${slot}_provider_preset`]).map((option) => (
+                                            <Select.Item key={`discord-bot-${slot}-provider-preset-${option.value}`} value={option.value}>
+                                              {option.label}
+                                            </Select.Item>
+                                          ))}
+                                        </Select.Content>
+                                      </Select.Root>
+                                    </div>
                                   </ConfigFieldCard>
                                 </div>
                               </Card>
@@ -3710,13 +4224,22 @@ function App() {
                               placeholder="false"
                             />
                           </ConfigFieldCard>
-                          <ConfigFieldCard label="irc_model" description={<>Optional IRC model override.</>}>
-                            <TextField.Root
-                              className="mt-2"
-                              value={String(configDraft.irc_model || '')}
-                              onChange={(e) => setConfigField('irc_model', e.target.value)}
-                              placeholder="claude-sonnet-4-5-20250929"
-                            />
+                          <ConfigFieldCard label="irc_provider_preset" description={<>Optional IRC LLM provider profile override.</>}>
+                            <div className="mt-2">
+                              <Select.Root
+                                value={String(configDraft.irc_provider_preset || '') || MAIN_PROFILE_VALUE}
+                                onValueChange={(value) => setConfigField('irc_provider_preset', value === MAIN_PROFILE_VALUE ? '' : value)}
+                              >
+                                <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select provider profile" />
+                                <Select.Content>
+                                  {providerProfileOptions(providerProfileDrafts, configDraft.irc_provider_preset).map((option) => (
+                                    <Select.Item key={`irc-provider-preset-${option.value}`} value={option.value}>
+                                      {option.label}
+                                    </Select.Item>
+                                  ))}
+                                </Select.Content>
+                              </Select.Root>
+                            </div>
                           </ConfigFieldCard>
                         </div>
                       </div>
@@ -3787,6 +4310,27 @@ function App() {
                                     </ConfigFieldCard>
                                     {ch.fields.map((f) => {
                                       const stateKey = `${ch.name}__bot_${slot}__${f.yamlKey}`
+                                      if (f.yamlKey === 'provider_preset') {
+                                        return (
+                                          <ConfigFieldCard key={stateKey} label={`${ch.name}_bot_${slot}_${f.yamlKey}`} description={<>{f.description}</>}>
+                                            <div className="mt-2">
+                                              <Select.Root
+                                                value={String(configDraft[stateKey] || '') || MAIN_PROFILE_VALUE}
+                                                onValueChange={(value) => setConfigField(stateKey, value === MAIN_PROFILE_VALUE ? '' : value)}
+                                              >
+                                                <Select.Trigger className="w-full mc-select-trigger-full" placeholder="Select provider profile" />
+                                                <Select.Content>
+                                                  {providerProfileOptions(providerProfileDrafts, configDraft[stateKey]).map((option) => (
+                                                    <Select.Item key={`${stateKey}-${option.value}`} value={option.value}>
+                                                      {option.label}
+                                                    </Select.Item>
+                                                  ))}
+                                                </Select.Content>
+                                              </Select.Root>
+                                            </div>
+                                          </ConfigFieldCard>
+                                        )
+                                      }
                                       return (
                                         <ConfigFieldCard key={stateKey} label={`${ch.name}_bot_${slot}_${f.yamlKey}`} description={<>{f.description}</>}>
                                           <TextField.Root

@@ -242,9 +242,13 @@ pub struct LlmProviderProfile {
     #[serde(default)]
     pub llm_base_url: Option<String>,
     #[serde(default)]
+    pub llm_user_agent: Option<String>,
+    #[serde(default)]
     pub default_model: Option<String>,
     #[serde(default)]
     pub models: Vec<String>,
+    #[serde(default)]
+    pub show_thinking: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -253,8 +257,10 @@ pub struct ResolvedLlmProviderProfile {
     pub provider: String,
     pub api_key: String,
     pub llm_base_url: Option<String>,
+    pub llm_user_agent: String,
     pub default_model: String,
     pub models: Vec<String>,
+    pub show_thinking: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -350,6 +356,8 @@ pub struct Config {
     pub api_key: String,
     #[serde(default = "default_model")]
     pub model: String,
+    #[serde(default)]
+    pub provider_presets: HashMap<String, LlmProviderProfile>,
     #[serde(default)]
     pub llm_providers: HashMap<String, LlmProviderProfile>,
     #[serde(default)]
@@ -573,6 +581,46 @@ impl Config {
             .map(ToOwned::to_owned)
     }
 
+    fn provider_override_from_value(value: &serde_yaml::Value) -> Option<String> {
+        value
+            .get("provider_preset")
+            .and_then(|v| v.as_str())
+            .or_else(|| value.get("llm_provider").and_then(|v| v.as_str()))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_ascii_lowercase())
+    }
+
+    fn channel_account_provider_override(&self, channel: &str, account_id: &str) -> Option<String> {
+        self.channels
+            .get(channel)
+            .and_then(|v| v.get("accounts"))
+            .and_then(|v| v.get(account_id))
+            .and_then(Self::provider_override_from_value)
+    }
+
+    pub fn provider_override_for_channel(&self, channel: &str) -> Option<String> {
+        if let Some((base_channel, account_id)) = channel.split_once('.') {
+            if let Some(v) = self.channel_account_provider_override(base_channel, account_id) {
+                return Some(v);
+            }
+            return self
+                .channels
+                .get(base_channel)
+                .and_then(Self::provider_override_from_value);
+        }
+
+        if let Some(default_account) = self.channel_default_account_id(channel) {
+            if let Some(v) = self.channel_account_provider_override(channel, &default_account) {
+                return Some(v);
+            }
+        }
+
+        self.channels
+            .get(channel)
+            .and_then(Self::provider_override_from_value)
+    }
+
     pub fn soul_path_for_channel(&self, channel: &str) -> Option<String> {
         let channel_override = self
             .channels
@@ -691,6 +739,43 @@ impl Config {
         overrides
     }
 
+    pub fn llm_provider_overrides(&self) -> HashMap<String, String> {
+        let mut overrides: HashMap<String, String> = self
+            .channels
+            .iter()
+            .filter_map(|(channel, cfg)| {
+                Self::provider_override_from_value(cfg).map(|provider| (channel.clone(), provider))
+            })
+            .collect();
+
+        for (channel, channel_cfg) in &self.channels {
+            let accounts = channel_cfg.get("accounts").and_then(|v| v.as_mapping());
+            let Some(accounts) = accounts else {
+                continue;
+            };
+            let default_account = self.channel_default_account_id(channel);
+            for (key, value) in accounts {
+                let Some(account_id) = key.as_str() else {
+                    continue;
+                };
+                let Some(provider) = Self::provider_override_from_value(value) else {
+                    continue;
+                };
+                if default_account
+                    .as_deref()
+                    .map(|v| v == account_id)
+                    .unwrap_or(false)
+                {
+                    overrides.insert(channel.clone(), provider);
+                } else {
+                    overrides.insert(format!("{channel}.{account_id}"), provider);
+                }
+            }
+        }
+
+        overrides
+    }
+
     #[cfg(test)]
     pub(crate) fn test_defaults() -> Self {
         Self {
@@ -699,6 +784,7 @@ impl Config {
             llm_provider: "anthropic".into(),
             api_key: "key".into(),
             model: "claude-sonnet-4-5-20250929".into(),
+            provider_presets: HashMap::new(),
             llm_providers: HashMap::new(),
             llm_base_url: None,
             llm_user_agent: default_llm_user_agent(),
@@ -934,45 +1020,20 @@ impl Config {
         if self.model.is_empty() {
             self.model = "gpt-5.2".into();
         }
-        self.llm_providers = self
-            .llm_providers
-            .drain()
-            .filter_map(|(alias, mut profile)| {
-                let alias = alias.trim().to_ascii_lowercase();
-                if alias.is_empty() {
-                    return None;
-                }
-                profile.provider = profile
-                    .provider
-                    .as_ref()
-                    .map(|v| v.trim().to_ascii_lowercase())
-                    .filter(|v| !v.is_empty());
-                profile.api_key = profile
-                    .api_key
-                    .as_ref()
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty());
-                profile.llm_base_url = profile
-                    .llm_base_url
-                    .as_ref()
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty());
-                profile.default_model = profile
-                    .default_model
-                    .as_ref()
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty());
-                profile.models = profile
-                    .models
-                    .into_iter()
-                    .map(|m| m.trim().to_string())
-                    .filter(|m| !m.is_empty())
-                    .collect::<Vec<_>>();
-                profile.models.sort();
-                profile.models.dedup();
-                Some((alias, profile))
-            })
-            .collect();
+        self.provider_presets =
+            normalize_provider_profiles(std::mem::take(&mut self.provider_presets));
+        self.llm_providers = normalize_provider_profiles(std::mem::take(&mut self.llm_providers));
+        for (alias, preset) in self.provider_presets.clone() {
+            self.llm_providers
+                .entry(alias)
+                .and_modify(|existing| {
+                    *existing = merge_provider_profile(preset.clone(), existing.clone());
+                })
+                .or_insert(preset);
+        }
+        for channel_cfg in self.channels.values_mut() {
+            migrate_model_override_alias_to_provider_preset(channel_cfg, &self.provider_presets);
+        }
 
         self.override_timezone = self
             .override_timezone
@@ -1408,8 +1469,10 @@ Use operator password + API keys for Web auth."
             let mut provider = self.llm_provider.clone();
             let mut api_key = self.api_key.clone();
             let mut llm_base_url = self.llm_base_url.clone();
+            let mut llm_user_agent = self.llm_user_agent.clone();
             let mut default_model = self.model.clone();
             let mut models = vec![default_model.clone()];
+            let mut show_thinking = self.show_thinking;
             if let Some(profile) = self.llm_providers.get(&alias) {
                 if let Some(v) = &profile.provider {
                     provider = v.clone();
@@ -1420,11 +1483,17 @@ Use operator password + API keys for Web auth."
                 if let Some(v) = &profile.llm_base_url {
                     llm_base_url = Some(v.clone());
                 }
+                if let Some(v) = &profile.llm_user_agent {
+                    llm_user_agent = v.clone();
+                }
                 if let Some(v) = &profile.default_model {
                     default_model = v.clone();
                 }
                 if !profile.models.is_empty() {
                     models = profile.models.clone();
+                }
+                if let Some(v) = profile.show_thinking {
+                    show_thinking = v;
                 }
             }
             if !models.iter().any(|m| m == &default_model) {
@@ -1437,8 +1506,10 @@ Use operator password + API keys for Web auth."
                 provider,
                 api_key,
                 llm_base_url,
+                llm_user_agent,
                 default_model,
                 models,
+                show_thinking,
             });
         }
 
@@ -1452,6 +1523,10 @@ Use operator password + API keys for Web auth."
             .llm_base_url
             .clone()
             .or_else(|| self.llm_base_url.clone());
+        let llm_user_agent = profile
+            .llm_user_agent
+            .clone()
+            .unwrap_or_else(|| self.llm_user_agent.clone());
         let default_model = profile
             .default_model
             .clone()
@@ -1461,6 +1536,7 @@ Use operator password + API keys for Web auth."
         } else {
             profile.models.clone()
         };
+        let show_thinking = profile.show_thinking.unwrap_or(self.show_thinking);
         if !models.iter().any(|m| m == &default_model) {
             models.push(default_model.clone());
         }
@@ -1471,8 +1547,10 @@ Use operator password + API keys for Web auth."
             provider,
             api_key,
             llm_base_url,
+            llm_user_agent,
             default_model,
             models,
+            show_thinking,
         })
     }
 
@@ -1573,6 +1651,117 @@ fn normalize_body_override_params(
             }
         })
         .collect()
+}
+
+fn normalize_provider_profiles(
+    profiles: HashMap<String, LlmProviderProfile>,
+) -> HashMap<String, LlmProviderProfile> {
+    profiles
+        .into_iter()
+        .filter_map(|(alias, mut profile)| {
+            let alias = alias.trim().to_ascii_lowercase();
+            if alias.is_empty() {
+                return None;
+            }
+            profile.provider = profile
+                .provider
+                .as_ref()
+                .map(|v| v.trim().to_ascii_lowercase())
+                .filter(|v| !v.is_empty());
+            profile.api_key = profile
+                .api_key
+                .as_ref()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+            profile.llm_base_url = profile
+                .llm_base_url
+                .as_ref()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+            profile.llm_user_agent = profile
+                .llm_user_agent
+                .as_ref()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+            profile.default_model = profile
+                .default_model
+                .as_ref()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+            profile.models = profile
+                .models
+                .into_iter()
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty())
+                .collect::<Vec<_>>();
+            profile.models.sort();
+            profile.models.dedup();
+            Some((alias, profile))
+        })
+        .collect()
+}
+
+fn migrate_model_override_alias_to_provider_preset(
+    value: &mut serde_yaml::Value,
+    known_profiles: &HashMap<String, LlmProviderProfile>,
+) {
+    let Some(map) = value.as_mapping_mut() else {
+        return;
+    };
+
+    let provider_preset_key = serde_yaml::Value::String("provider_preset".to_string());
+    let llm_provider_key = serde_yaml::Value::String("llm_provider".to_string());
+    let model_key = serde_yaml::Value::String("model".to_string());
+
+    let has_provider_override =
+        map.contains_key(&provider_preset_key) || map.contains_key(&llm_provider_key);
+    if !has_provider_override {
+        let maybe_profile_alias = map
+            .get(&model_key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_ascii_lowercase());
+        if let Some(alias) = maybe_profile_alias {
+            if known_profiles.contains_key(&alias) {
+                map.insert(
+                    provider_preset_key.clone(),
+                    serde_yaml::Value::String(alias),
+                );
+                map.remove(&model_key);
+            }
+        }
+    }
+
+    let accounts_key = serde_yaml::Value::String("accounts".to_string());
+    if let Some(accounts) = map.get_mut(&accounts_key).and_then(|v| v.as_mapping_mut()) {
+        for (_, account) in accounts.iter_mut() {
+            migrate_model_override_alias_to_provider_preset(account, known_profiles);
+        }
+    }
+}
+
+fn merge_provider_profile(
+    base: LlmProviderProfile,
+    override_profile: LlmProviderProfile,
+) -> LlmProviderProfile {
+    let mut models = if override_profile.models.is_empty() {
+        base.models
+    } else {
+        override_profile.models
+    };
+    models.sort();
+    models.dedup();
+
+    LlmProviderProfile {
+        provider: override_profile.provider.or(base.provider),
+        api_key: override_profile.api_key.or(base.api_key),
+        llm_base_url: override_profile.llm_base_url.or(base.llm_base_url),
+        llm_user_agent: override_profile.llm_user_agent.or(base.llm_user_agent),
+        default_model: override_profile.default_model.or(base.default_model),
+        models,
+        show_thinking: override_profile.show_thinking.or(base.show_thinking),
+    }
 }
 
 #[cfg(test)]
@@ -1747,6 +1936,164 @@ voice_transcription_command: "whisper-mlx --file {file}"
 
         assert_eq!(config.tool_timeout_secs("bash", 120), 75);
         assert_eq!(config.tool_timeout_secs("browser", 120), 45);
+    }
+
+    #[test]
+    fn test_post_deserialize_merges_provider_presets_with_legacy_profiles() {
+        let yaml = r#"
+telegram_bot_token: tok
+bot_username: bot
+api_key: key
+provider_presets:
+  lab:
+    provider: OPENAI
+    api_key: preset-key
+    llm_base_url: https://preset.example/v1
+    llm_user_agent: preset-agent
+    default_model: preset-model
+    models: [preset-model, preset-model]
+    show_thinking: true
+llm_providers:
+  lab:
+    api_key: legacy-key
+    models: [legacy-model]
+"#;
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+
+        let profile = config.resolve_llm_provider_profile("lab").unwrap();
+        assert_eq!(profile.provider, "openai");
+        assert_eq!(profile.api_key, "legacy-key");
+        assert_eq!(
+            profile.llm_base_url.as_deref(),
+            Some("https://preset.example/v1")
+        );
+        assert_eq!(profile.llm_user_agent, "preset-agent");
+        assert_eq!(profile.default_model, "preset-model");
+        assert_eq!(
+            profile.models,
+            vec!["legacy-model".to_string(), "preset-model".to_string()]
+        );
+        assert!(profile.show_thinking);
+    }
+
+    #[test]
+    fn test_llm_provider_overrides_support_provider_preset_and_legacy_llm_provider_keys() {
+        let mut config = test_config();
+        config.channels = serde_yaml::from_str(
+            r#"
+telegram:
+  enabled: true
+  provider_preset: channel-default
+  default_account: sales
+  accounts:
+    sales:
+      enabled: true
+      bot_token: tg_sales
+      provider_preset: sales-preset
+    ops:
+      enabled: true
+      bot_token: tg_ops
+      llm_provider: ops-legacy
+discord:
+  enabled: true
+  llm_provider: discord-legacy
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.provider_override_for_channel("telegram").as_deref(),
+            Some("sales-preset")
+        );
+        assert_eq!(
+            config
+                .provider_override_for_channel("telegram.ops")
+                .as_deref(),
+            Some("ops-legacy")
+        );
+        assert_eq!(
+            config.provider_override_for_channel("discord").as_deref(),
+            Some("discord-legacy")
+        );
+
+        let overrides = config.llm_provider_overrides();
+        assert_eq!(
+            overrides.get("telegram").map(String::as_str),
+            Some("sales-preset")
+        );
+        assert_eq!(
+            overrides.get("telegram.ops").map(String::as_str),
+            Some("ops-legacy")
+        );
+        assert_eq!(
+            overrides.get("discord").map(String::as_str),
+            Some("discord-legacy")
+        );
+    }
+
+    #[test]
+    fn test_post_deserialize_migrates_profile_aliases_out_of_channel_model_fields() {
+        let yaml = r#"
+telegram_bot_token: tok
+bot_username: bot
+api_key: key
+provider_presets:
+  googlegemini:
+    provider: google
+    default_model: gemini-2.5-pro
+channels:
+  telegram:
+    enabled: true
+    model: googlegemini
+    default_account: sales
+    accounts:
+      sales:
+        enabled: true
+        bot_token: tg_sales
+        model: googlegemini
+  discord:
+    enabled: true
+    model: googlegemini
+    accounts:
+      default:
+        enabled: true
+        bot_token: dc_tok
+"#;
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+
+        assert_eq!(
+            config.provider_override_for_channel("telegram").as_deref(),
+            Some("googlegemini")
+        );
+        assert_eq!(
+            config.provider_override_for_channel("discord").as_deref(),
+            Some("googlegemini")
+        );
+
+        let telegram = config.channels.get("telegram").unwrap();
+        assert_eq!(
+            telegram
+                .get("provider_preset")
+                .and_then(|v| v.as_str())
+                .map(str::trim),
+            Some("googlegemini")
+        );
+        assert!(telegram.get("model").is_none());
+
+        let sales = telegram
+            .get("accounts")
+            .and_then(|v| v.get("sales"))
+            .unwrap();
+        assert_eq!(
+            sales
+                .get("provider_preset")
+                .and_then(|v| v.as_str())
+                .map(str::trim),
+            Some("googlegemini")
+        );
+        assert!(sales.get("model").is_none());
     }
 
     #[test]

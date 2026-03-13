@@ -36,6 +36,7 @@ mod middleware;
 mod sessions;
 mod skills;
 mod stream;
+mod ws;
 use middleware::*;
 
 static WEB_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
@@ -815,6 +816,8 @@ struct UpdateConfigRequest {
     api_key: Option<String>,
     model: Option<String>,
     llm_base_url: Option<Option<String>>,
+    llm_user_agent: Option<Option<String>>,
+    provider_presets: Option<HashMap<String, crate::config::LlmProviderProfile>>,
     max_tokens: Option<u32>,
     max_tool_iterations: Option<usize>,
     openai_compat_body_overrides: Option<HashMap<String, serde_json::Value>>,
@@ -1941,6 +1944,7 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/hooks/wake", post(api_hook_wake))
         .route("/api/send_stream", post(stream::api_send_stream))
         .route("/api/chat_stream", post(stream::api_send_stream))
+        .route("/ws", get(ws::api_ws))
         .route("/hooks/agent", post(api_hook_agent))
         .route("/hooks/wake", post(api_hook_wake))
         .route("/api/stream", get(stream::api_stream))
@@ -1962,6 +1966,7 @@ mod tests {
     use crate::{error::MicroClawError, llm_types::ResponseContentBlock};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use futures_util::{SinkExt, StreamExt};
     use microclaw_channels::channel_adapter::ChannelRegistry;
     use microclaw_storage::db::call_blocking;
     use serde_json::json;
@@ -2192,6 +2197,59 @@ mod tests {
 
     fn test_web_state(llm: Box<dyn LlmProvider>, limits: WebLimits) -> WebState {
         test_web_state_from_app_state(test_state(llm), limits)
+    }
+
+    async fn seed_test_api_key(state: &WebState, secret: &str) {
+        seed_test_api_key_with_scopes(
+            state,
+            secret,
+            &[
+                "operator.read".to_string(),
+                "operator.write".to_string(),
+                "operator.admin".to_string(),
+            ],
+        )
+        .await;
+    }
+
+    async fn seed_test_api_key_with_scopes(state: &WebState, secret: &str, scopes: &[String]) {
+        let secret_owned = secret.to_string();
+        let key_hash = sha256_hex(&secret_owned);
+        let prefix = secret_owned[..secret_owned.len().min(6)].to_string();
+        let scopes = scopes.to_vec();
+        call_blocking(state.app_state.db.clone(), move |db| {
+            db.upsert_auth_password_hash(&make_password_hash("passw0rd!"))?;
+            db.create_api_key("ws-test", &key_hash, &prefix, &scopes, None, None)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn spawn_test_server(app: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (addr, handle)
+    }
+
+    async fn recv_ws_json(
+        ws: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> serde_json::Value {
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(10), ws.next())
+                .await
+                .expect("ws timeout")
+                .expect("ws closed")
+                .expect("ws message");
+            if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+                return serde_json::from_str(&text).unwrap();
+            }
+        }
     }
 
     #[tokio::test]
@@ -2504,8 +2562,10 @@ mod tests {
                 provider: Some("openai".to_string()),
                 api_key: None,
                 llm_base_url: Some(format!("http://{addr}/v1")),
+                llm_user_agent: None,
                 default_model: Some("custom-model".to_string()),
                 models: vec!["custom-model".to_string()],
+                show_thinking: None,
             },
         );
         let web_state = test_web_state_from_app_state(
@@ -4003,5 +4063,319 @@ commands:
             v.get("session_key").and_then(|x| x.as_str()),
             Some("a2a:worker")
         );
+    }
+
+    #[tokio::test]
+    async fn test_ws_connect_and_chat_send_emit_chat_events() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-secret").await;
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .unwrap();
+
+        let challenge = recv_ws_json(&mut ws).await;
+        assert_eq!(
+            challenge.get("type").and_then(|v| v.as_str()),
+            Some("event")
+        );
+        assert_eq!(
+            challenge.get("event").and_then(|v| v.as_str()),
+            Some("connect.challenge")
+        );
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-secret" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let mut saw_hello = false;
+        for _ in 0..4 {
+            let msg = recv_ws_json(&mut ws).await;
+            if msg.get("type").and_then(|v| v.as_str()) != Some("res") {
+                continue;
+            }
+            if msg.pointer("/payload/type").and_then(|v| v.as_str()) != Some("hello-ok") {
+                continue;
+            }
+            assert_eq!(msg.get("ok").and_then(|v| v.as_bool()), Some(true));
+            saw_hello = true;
+            break;
+        }
+        assert!(saw_hello, "expected websocket hello-ok response");
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "send-1",
+                "method": "chat.send",
+                "params": {
+                    "sessionKey": "main",
+                    "message": "hello over ws",
+                    "idempotencyKey": "idem-ws-1"
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let mut saw_ack = false;
+        for _ in 0..4 {
+            let msg = recv_ws_json(&mut ws).await;
+            if msg.get("type").and_then(|v| v.as_str()) != Some("res") {
+                continue;
+            }
+            if msg.pointer("/payload/status").and_then(|v| v.as_str()) != Some("started") {
+                continue;
+            }
+            saw_ack = true;
+            break;
+        }
+        assert!(saw_ack, "expected websocket started response");
+
+        let mut saw_delta = false;
+        let mut saw_final = false;
+        for _ in 0..8 {
+            let evt = recv_ws_json(&mut ws).await;
+            if evt.get("type").and_then(|v| v.as_str()) != Some("event") {
+                continue;
+            }
+            if evt.get("event").and_then(|v| v.as_str()) != Some("chat") {
+                continue;
+            }
+            let state = evt.pointer("/payload/state").and_then(|v| v.as_str());
+            if state == Some("delta") {
+                saw_delta = true;
+            }
+            if state == Some("final") {
+                saw_final = true;
+                assert_eq!(
+                    evt.pointer("/payload/sessionKey").and_then(|v| v.as_str()),
+                    Some("main")
+                );
+                break;
+            }
+        }
+        assert!(saw_delta);
+        assert!(saw_final);
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_chat_history_returns_session_messages() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-secret-2").await;
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-secret-2" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "send-1",
+                "method": "chat.send",
+                "params": {
+                    "sessionKey": "main",
+                    "message": "history please",
+                    "idempotencyKey": "idem-ws-2"
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        for _ in 0..8 {
+            let evt = recv_ws_json(&mut ws).await;
+            if evt.pointer("/payload/state").and_then(|v| v.as_str()) == Some("final") {
+                break;
+            }
+        }
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "history-1",
+                "method": "chat.history",
+                "params": {
+                    "sessionKey": "main",
+                    "limit": 10
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let history = recv_ws_json(&mut ws).await;
+        assert_eq!(history.get("ok").and_then(|v| v.as_bool()), Some(true));
+        let messages = history
+            .pointer("/payload/messages")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert!(messages.iter().any(|m| {
+            m.get("role").and_then(|v| v.as_str()) == Some("user")
+                && m.get("content").and_then(|v| v.as_str()) == Some("history please")
+        }));
+        assert!(messages.iter().any(|m| {
+            m.get("role").and_then(|v| v.as_str()) == Some("assistant")
+                && m.get("content").and_then(|v| v.as_str()) == Some("hello from llm")
+        }));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_connect_invalid_token_returns_unauthorized() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        call_blocking(web_state.app_state.db.clone(), |db| {
+            db.upsert_auth_password_hash(&make_password_hash("passw0rd!"))
+        })
+        .await
+        .unwrap();
+        let (addr, server) = spawn_test_server(build_router(web_state)).await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "bad-token" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let res = recv_ws_json(&mut ws).await;
+        assert_eq!(res.get("ok").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            res.pointer("/error/code").and_then(|v| v.as_str()),
+            Some("UNAUTHORIZED")
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_connect_scope_denied_returns_forbidden() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        seed_test_api_key_with_scopes(
+            &web_state,
+            "ws-secret-readless",
+            &["operator.write".to_string()],
+        )
+        .await;
+        let (addr, server) = spawn_test_server(build_router(web_state)).await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-secret-readless" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let res = recv_ws_json(&mut ws).await;
+        assert_eq!(res.get("ok").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            res.pointer("/error/code").and_then(|v| v.as_str()),
+            Some("FORBIDDEN")
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_connect_protocol_mismatch_returns_unsupported_protocol() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-secret-3").await;
+        let (addr, server) = spawn_test_server(build_router(web_state)).await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 4,
+                    "maxProtocol": 4,
+                    "auth": { "token": "ws-secret-3" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let res = recv_ws_json(&mut ws).await;
+        assert_eq!(res.get("ok").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            res.pointer("/error/code").and_then(|v| v.as_str()),
+            Some("UNSUPPORTED_PROTOCOL")
+        );
+
+        server.abort();
     }
 }

@@ -263,41 +263,13 @@ pub(super) async fn require_scope(
     }
 
     if let Some(provided) = auth_token_from_headers(headers) {
-        let key_hash = sha256_hex(&provided);
-        if let Some((key_id, scopes)) = call_blocking(state.app_state.db.clone(), move |db| {
-            db.validate_api_key_hash(&key_hash)
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        {
-            let (max_requests, window) = api_key_limits(&state.app_state.config);
-            let allowed = state
-                .auth_hub
-                .allow_api_key_request(&format!("api-key:{key_id}"), max_requests, window)
-                .await;
-            if !allowed {
-                audit_auth_event(
-                    state,
-                    &format!("api-key:{key_id}"),
-                    "api_key.rate_limited",
-                    None,
-                    "deny",
-                    Some("api_key_rate_limit_exceeded"),
-                )
-                .await;
-                return Err((StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".into()));
-            }
-
-            let id = AuthIdentity {
-                scopes,
-                actor: format!("api-key:{key_id}"),
-            };
+        if let Some(id) = auth_identity_from_bearer_token(state, &provided).await? {
             if id.allows(required) {
                 return Ok(id);
             }
             audit_auth_event(
                 state,
-                &format!("api-key:{key_id}"),
+                &id.actor,
                 "api_key.scope_denied",
                 None,
                 "deny",
@@ -355,6 +327,112 @@ pub(super) async fn require_scope(
     )
     .await;
     Err((StatusCode::UNAUTHORIZED, "unauthorized".into()))
+}
+
+pub(super) async fn require_token_scope(
+    state: &WebState,
+    token: &str,
+    required: AuthScope,
+) -> Result<AuthIdentity, (StatusCode, String)> {
+    match auth_identity_from_bearer_token(state, token).await? {
+        Some(identity) if identity.allows(required) => Ok(identity),
+        Some(identity) => {
+            audit_auth_event(
+                state,
+                &identity.actor,
+                "api_key.scope_denied",
+                None,
+                "deny",
+                Some("insufficient_scope"),
+            )
+            .await;
+            Err((StatusCode::FORBIDDEN, "forbidden".into()))
+        }
+        None => {
+            audit_auth_event(
+                state,
+                "anonymous",
+                "auth.unauthorized",
+                None,
+                "deny",
+                Some("missing_or_invalid_credentials"),
+            )
+            .await;
+            Err((StatusCode::UNAUTHORIZED, "unauthorized".into()))
+        }
+    }
+}
+
+async fn auth_identity_from_bearer_token(
+    state: &WebState,
+    token: &str,
+) -> Result<Option<AuthIdentity>, (StatusCode, String)> {
+    let has_password = call_blocking(state.app_state.db.clone(), |db| db.get_auth_password_hash())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .is_some();
+
+    if !has_password {
+        let bootstrap = { state.bootstrap_token.lock().await.clone() };
+        if bootstrap.as_deref() == Some(token) {
+            return Ok(Some(AuthIdentity {
+                scopes: vec![
+                    "operator.read".to_string(),
+                    "operator.write".to_string(),
+                    "operator.admin".to_string(),
+                    "operator.approvals".to_string(),
+                ],
+                actor: "bootstrap-token".to_string(),
+            }));
+        }
+        #[cfg(test)]
+        {
+            return Ok(Some(AuthIdentity {
+                scopes: vec![
+                    "operator.read".to_string(),
+                    "operator.write".to_string(),
+                    "operator.admin".to_string(),
+                    "operator.approvals".to_string(),
+                ],
+                actor: "bootstrap-test".to_string(),
+            }));
+        }
+        #[cfg(not(test))]
+        {
+            return Ok(None);
+        }
+    }
+
+    let key_hash = sha256_hex(token);
+    if let Some((key_id, scopes)) = call_blocking(state.app_state.db.clone(), move |db| {
+        db.validate_api_key_hash(&key_hash)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let actor = format!("api-key:{key_id}");
+        let (max_requests, window) = api_key_limits(&state.app_state.config);
+        let allowed = state
+            .auth_hub
+            .allow_api_key_request(&actor, max_requests, window)
+            .await;
+        if !allowed {
+            audit_auth_event(
+                state,
+                &actor,
+                "api_key.rate_limited",
+                None,
+                "deny",
+                Some("api_key_rate_limit_exceeded"),
+            )
+            .await;
+            return Err((StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".into()));
+        }
+
+        return Ok(Some(AuthIdentity { scopes, actor }));
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]

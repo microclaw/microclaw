@@ -430,6 +430,7 @@ pub async fn run(
     }
 
     let hooks = Arc::new(HookManager::from_config(&config).with_db(db.clone()));
+    let llm_provider_overrides = config.llm_provider_overrides();
 
     let metric_exporter = OtlpMetricExporter::from_observability(config.observability.as_ref());
     let trace_exporter = OtlpTraceExporter::from_observability(config.observability.as_ref());
@@ -443,7 +444,7 @@ pub async fn run(
         skills,
         hooks,
         llm,
-        llm_provider_overrides: Arc::new(RwLock::new(HashMap::new())),
+        llm_provider_overrides: Arc::new(RwLock::new(llm_provider_overrides)),
         llm_model_overrides: Arc::new(RwLock::new(llm_model_overrides)),
         embedding,
         memory_backend,

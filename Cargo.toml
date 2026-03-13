@@ -57,7 +57,7 @@ chrono-tz = "0.10"
 iana-time-zone = "0.1"
 zip = "2"
 sha2 = "0.10"
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "rustls_backend"] }
