@@ -36,10 +36,6 @@
   <a href="docs/clawhub/overview.md">ClawHub</a>
 </p>
 
-
-> **Note:** This project is under active development. Features may change, and contributions are welcome!
-
-
 MicroClaw is an agent runtime for chat surfaces. It gives you one channel-agnostic agent loop, one provider-agnostic LLM layer, and one persistent runtime that can move across Telegram, Discord, Slack, Feishu/Lark, IRC, Web, and additional adapters over time.
 
 It works with Anthropic and OpenAI-compatible providers, supports multi-step tool execution, keeps session state across turns, stores durable memory, runs scheduled tasks, and can expose the same runtime through both chat channels and a local web UI.

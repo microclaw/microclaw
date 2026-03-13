@@ -35,10 +35,6 @@
   <a href="docs/clawhub/overview.md">ClawHub</a>
 </p>
 
-
-> **注意：** 本项目正在积极开发中，功能可能会变化，欢迎贡献！
-
-
 MicroClaw 是一个面向聊天渠道的智能体运行时。它提供统一的渠道无关 agent loop、provider 无关的 LLM 抽象层，以及可以跨 Telegram、Discord、Slack、飞书/Lark、IRC、Web 等渠道复用的持久化运行时。
 
 它支持 Anthropic 和 OpenAI-compatible provider，具备多步工具调用、跨轮次会话恢复、持久化记忆、定时任务，以及同时通过聊天渠道和本地 Web UI 暴露同一套运行时能力。
