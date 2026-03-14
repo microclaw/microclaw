@@ -136,7 +136,7 @@ jobs:
             asset_triple: x86_64-linux-gnu
             archive_ext: tar.gz
           - label: macos-x86_64
-            os: macos-13
+            os: macos-15-intel
             bin: microclaw
             target_triple: x86_64-apple-darwin
             asset_triple: x86_64-apple-darwin
@@ -171,12 +171,6 @@ jobs:
         run: |
           npm --prefix web ci
           npm --prefix web run build
-          if [[ -f website/package-lock.json ]]; then
-            npm --prefix website ci
-            npm --prefix website run build
-          else
-            echo "website workspace not present in this checkout; skipping"
-          fi
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

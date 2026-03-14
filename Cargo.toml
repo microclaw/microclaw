@@ -13,7 +13,7 @@ resolver = "2"
 
 [package]
 name = "microclaw"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
 license = "MIT"
 default-run = "microclaw"
@@ -46,11 +46,11 @@ regex = "1"
 thiserror = "2"
 anyhow = "1"
 async-trait = "0.1"
-agent-client-protocol = "0.10.0"
+agent-client-protocol = "0.10.2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_yaml = "0.9"
-cron = "0.13"
+cron = "0.15"
 urlencoding = "2"
 base64 = "0.22"
 chrono-tz = "0.10"
@@ -71,9 +71,9 @@ opentelemetry-proto = { version = "0.28", features = ["gen-tonic-messages"] }
 opentelemetry-semantic-conventions = { version = "0.30", features = ["semconv_experimental"] }
 prost = "0.13"
 matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "native-tls", "sqlite", "bundled-sqlite"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 http = "1"
-rmcp = { version = "1.1", features = [
+rmcp = { version = "1.2", features = [
     "client",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
