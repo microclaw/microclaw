@@ -34,7 +34,7 @@ jobs:
         continue-on-error: true
       - name: Create or update failure issue
         if: steps.gate.outcome == 'failure'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const owner = context.repo.owner;
