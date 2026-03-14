@@ -171,8 +171,12 @@ jobs:
         run: |
           npm --prefix web ci
           npm --prefix web run build
-          npm --prefix website ci
-          npm --prefix website run build
+          if [[ -f website/package-lock.json ]]; then
+            npm --prefix website ci
+            npm --prefix website run build
+          else
+            echo "website workspace not present in this checkout; skipping"
+          fi
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

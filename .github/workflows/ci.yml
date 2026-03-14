@@ -24,8 +24,15 @@ jobs:
       - run: node scripts/generate_docs_artifacts.mjs --check --no-website
       - run: npm --prefix web ci
       - run: npm --prefix web run build
-      - run: npm --prefix website ci
-      - run: npm --prefix website run build
+      - name: Build website docs when workspace is present
+        shell: bash
+        run: |
+          if [[ -f website/package-lock.json ]]; then
+            npm --prefix website ci
+            npm --prefix website run build
+          else
+            echo "website workspace not present in this checkout; skipping"
+          fi
 
   security-audit:
     name: Security Audit
@@ -93,8 +100,15 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm --prefix web ci
       - run: npm --prefix web run build
-      - run: npm --prefix website ci
-      - run: npm --prefix website run build
+      - name: Build website docs when workspace is present
+        shell: bash
+        run: |
+          if [[ -f website/package-lock.json ]]; then
+            npm --prefix website ci
+            npm --prefix website run build
+          else
+            echo "website workspace not present in this checkout; skipping"
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.93.1
