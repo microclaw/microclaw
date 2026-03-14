@@ -50,7 +50,7 @@ agent-client-protocol = "0.10.0"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_yaml = "0.9"
-cron = "0.13"
+cron = "0.15"
 urlencoding = "2"
 base64 = "0.22"
 chrono-tz = "0.10"
