@@ -6,7 +6,7 @@ license = "MIT"
 
 [dependencies]
 base64 = "0.22"
-opentelemetry = "0.30"
+opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.30", features = ["rt-tokio", "experimental_async_runtime", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
 opentelemetry-otlp = { version = "0.30", features = ["http-proto", "trace", "metrics", "logs", "reqwest-client"] }
 opentelemetry-proto = { version = "0.28", features = ["gen-tonic-messages"] }
