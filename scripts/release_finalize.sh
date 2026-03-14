@@ -51,7 +51,7 @@ wait_for_ci_success() {
   local timeout_seconds="${CI_WAIT_TIMEOUT_SECONDS:-6000}"
   local interval_seconds="${CI_WAIT_INTERVAL_SECONDS:-20}"
   local elapsed=0
-  local required_jobs_json='["Web Build","Rust (ubuntu-latest)","Rust (macos-latest)","Stability Smoke"]'
+  local required_jobs_json='["Web And Docs Build","Rust (ubuntu-latest)","Rust (macos-latest)","Stability Smoke"]'
   local required_job_count
 
   required_job_count="$(jq -r 'length' <<<"$required_jobs_json")"
