@@ -15,7 +15,7 @@ jobs:
     name: Web And Docs Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -38,7 +38,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.93.1
@@ -52,7 +52,7 @@ jobs:
     name: Rust (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.93.1
@@ -65,7 +65,7 @@ jobs:
     name: Rust (macos-latest)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.93.1
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [rust-ubuntu]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.93.1
@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [web, security-audit, rust-ubuntu, rust-macos, stability-smoke]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
