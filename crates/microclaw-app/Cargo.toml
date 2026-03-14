@@ -19,7 +19,7 @@ serde_yaml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-journald = { version = "0.3", optional = true }
-opentelemetry-appender-tracing = "0.30"
+opentelemetry-appender-tracing = "0.31"
 opentelemetry_sdk = "0.30"
 microclaw-observability = { version = "0.1.0", path = "../microclaw-observability" }
 
