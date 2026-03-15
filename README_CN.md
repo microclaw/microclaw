@@ -674,7 +674,6 @@ model: "claude-sonnet-4-20250514"
 data_dir: "~/.microclaw"
 working_dir: "~/.microclaw/working_dir"
 working_dir_isolation: "chat" # 可选；默认 chat
-host_path_mode: "restricted" # 可选；仅在可信宿主上设为 "full_access" 以关闭路径守卫
 sandbox:
   mode: "off" # 可选；默认关闭。设为 "all" 可让 bash 在 docker 沙箱执行
 max_document_size_mb: 100
@@ -741,7 +740,6 @@ microclaw gateway uninstall
 | `data_dir`                                     | 否   | `~/.microclaw`             | 数据根目录（运行时数据在 `data_dir/runtime`，技能在 `data_dir/skills`）                                      |
 | `working_dir`                                  | 否   | `~/.microclaw/working_dir` | 工具默认工作目录；`bash/read_file/write_file/edit_file/glob/grep` 的相对路径都以此为基准                     |
 | `working_dir_isolation`                        | 否   | `chat`                     | 工具工作目录隔离模式：`shared` 使用 `working_dir/shared`，`chat` 使用 `working_dir/chat/<channel>/<chat_id>` |
-| `host_path_mode`                               | 否   | `restricted`               | `bash/read_file/write_file/edit_file/glob/grep` 的宿主路径策略：`restricted` 保持默认路径守卫，`full_access` 会关闭守卫并允许绝对 `/tmp` 路径 |
 | `high_risk_tool_user_confirmation_required`    | 否   | `true`                     | 高风险工具（例如 `bash`）执行前是否必须等待用户明确确认                                                      |
 | `sandbox.mode`                                 | 否   | `off`                      | `bash` 工具的容器沙箱模式：`off` 在宿主执行；`all` 通过 docker 容器执行                                      |
 | `sandbox.mount_allowlist_path`                 | 否   | 未设置                     | 可选外部挂载白名单文件（每行一个允许根路径）                                                                 |
@@ -822,11 +820,10 @@ microclaw start
   - `~/.microclaw/sandbox-mount-allowlist.txt`：沙箱挂载路径白名单。
   - `~/.microclaw/sandbox-path-allowlist.txt`：文件工具路径白名单。
 
-宿主路径访问：
-- `host_path_mode: "restricted"`（默认）会保留文件工具路径守卫，并拒绝 `bash` 中显式的绝对 `/tmp/...` 路径。
-- `host_path_mode: "full_access"` 会关闭 `read_file` / `write_file` / `edit_file` / `glob` / `grep` 的宿主路径守卫，并允许 `bash` 使用显式绝对 `/tmp/...` 路径。
-- `full_access` 只适合你完全信任的自托管环境。
-- 这个开关不会帮你安装缺失命令；如果出现 `command not found`，仍需在宿主安装，或改用已包含该命令的沙箱镜像。
+工作目录约定：
+- `bash` 会在当前 chat 工作目录下的 `tmp/` 子目录执行。
+- 优先使用相对路径或当前 chat 工作目录下的路径，不要使用绝对 `/tmp/...`。
+- 如果出现 `command not found`，仍需在宿主安装该依赖，或改用已包含该命令的沙箱镜像。
 
 ### 支持的 `llm_provider` 值
 

@@ -1,5 +1,4 @@
 use super::*;
-use microclaw_tools::path_guard::HostPathMode;
 use microclaw_tools::runtime::{tool_execution_policy, tool_risk};
 use microclaw_tools::sandbox::{runtime_available_for_backend, selected_runtime_cli};
 
@@ -158,10 +157,6 @@ pub(super) async fn api_config_self_check(
         crate::config::SandboxMode::All => "all",
         crate::config::SandboxMode::Off => "off",
     };
-    let host_path_mode = match state.app_state.config.host_path_mode {
-        HostPathMode::Restricted => "restricted",
-        HostPathMode::FullAccess => "full_access",
-    };
     let execution_policy_items = [
         "bash",
         "read_file",
@@ -243,18 +238,6 @@ pub(super) async fn api_config_self_check(
             },
             message:
                 "Sandbox is enabled but container runtime is unavailable; execution may fall back to host."
-                    .to_string(),
-        });
-    }
-    if matches!(
-        state.app_state.config.host_path_mode,
-        HostPathMode::FullAccess
-    ) {
-        warnings.push(ConfigWarning {
-            code: "host_path_full_access_enabled",
-            severity: "high",
-            message:
-                "host_path_mode is set to full_access; file tools and bash absolute /tmp paths can reach arbitrary host paths."
                     .to_string(),
         });
     }
@@ -573,7 +556,6 @@ pub(super) async fn api_config_self_check(
             "sandbox_runtime_cli": sandbox_runtime_cli,
             "sandbox_backend": format!("{:?}", state.app_state.config.sandbox.backend).to_lowercase(),
             "sandbox_require_runtime": state.app_state.config.sandbox.require_runtime,
-            "host_path_mode": host_path_mode,
             "execution_policies": execution_policy_items,
             "mount_allowlist": mount_allowlist_status
         },
@@ -706,9 +688,6 @@ pub(super) async fn api_update_config(
     }
     if let Some(v) = body.working_dir_isolation {
         cfg.working_dir_isolation = v;
-    }
-    if let Some(v) = body.host_path_mode {
-        cfg.host_path_mode = v;
     }
     if let Some(v) = body.high_risk_tool_user_confirmation_required {
         cfg.high_risk_tool_user_confirmation_required = v;

@@ -17,7 +17,7 @@ use tracing::{error, info, warn};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
 use crate::chat_commands::handle_chat_command;
-use crate::config::{Config, HostPathMode, WorkingDirIsolation};
+use crate::config::{Config, WorkingDirIsolation};
 use crate::runtime::AppState;
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel::{
@@ -840,7 +840,6 @@ struct UpdateConfigRequest {
     a2a_peers: Option<HashMap<String, crate::config::A2APeerConfig>>,
     souls_dir: Option<Option<String>>,
     working_dir_isolation: Option<WorkingDirIsolation>,
-    host_path_mode: Option<HostPathMode>,
     high_risk_tool_user_confirmation_required: Option<bool>,
 
     telegram_bot_token: Option<String>,

@@ -2013,7 +2013,7 @@ Built-in execution playbook:
 - Apply the same behavior across Telegram/Discord/Web unless a tool returns a channel-specific error.
 - Do not answer with "I can't from this runtime" unless a concrete tool attempt failed in this turn.
 - Always prefer absolute paths for files passed between tools (especially attachment_path).
-- For bash/file tools, treat the current chat working directory as the default workspace. Prefer relative paths under that workspace and avoid `/tmp` unless the user explicitly asks for it.
+- For bash/file tools, treat the current chat working directory as the default workspace. For temporary files, clones, and build artifacts, use the current chat working directory's `tmp/` subdirectory. Do not use absolute `/tmp/...` paths.
 - For coding tasks, follow this loop: inspect code (`read_file`/`grep`/`glob`) -> edit (`edit_file`/`write_file`) -> validate (`bash` tests/build) -> summarize concrete changes/results.
 - If you will call any tool or activate any skill in this turn, you must start by calling todo_write to create a concise task list before the first tool/skill call.
 - This requirement includes activate_skill: plan the work in todo_write first, then activate and execute.

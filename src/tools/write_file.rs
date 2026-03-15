@@ -3,7 +3,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use tracing::info;
 
-use crate::config::{HostPathMode, WorkingDirIsolation};
+use crate::config::WorkingDirIsolation;
 use microclaw_core::llm_types::ToolDefinition;
 
 use super::{schema_object, Tool, ToolResult};
@@ -11,7 +11,6 @@ use super::{schema_object, Tool, ToolResult};
 pub struct WriteFileTool {
     working_dir: PathBuf,
     working_dir_isolation: WorkingDirIsolation,
-    host_path_mode: HostPathMode,
 }
 
 impl WriteFileTool {
@@ -26,13 +25,7 @@ impl WriteFileTool {
         Self {
             working_dir: PathBuf::from(working_dir),
             working_dir_isolation,
-            host_path_mode: HostPathMode::Restricted,
         }
-    }
-
-    pub fn with_host_path_mode(mut self, mode: HostPathMode) -> Self {
-        self.host_path_mode = mode;
-        self
     }
 }
 
@@ -72,10 +65,7 @@ impl Tool for WriteFileTool {
         let resolved_path = super::resolve_tool_path(&working_dir, path);
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
 
-        if let Err(msg) = microclaw_tools::path_guard::check_path_with_mode(
-            &resolved_path_str,
-            self.host_path_mode,
-        ) {
+        if let Err(msg) = microclaw_tools::path_guard::check_path(&resolved_path_str) {
             return ToolResult::error(msg);
         }
 

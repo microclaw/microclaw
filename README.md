@@ -927,7 +927,6 @@ model: "claude-sonnet-4-20250514"
 data_dir: "~/.microclaw"
 working_dir: "~/.microclaw/working_dir"
 working_dir_isolation: "chat" # optional; defaults to "chat" if omitted
-host_path_mode: "restricted" # optional; set "full_access" only on trusted hosts to disable path guard
 sandbox:
   mode: "off" # optional; default off. set "all" to run bash in a container sandbox
 max_document_size_mb: 100
@@ -1024,7 +1023,6 @@ All configuration is via `microclaw.config.yaml`:
 | `data_dir` | No | `~/.microclaw` | Data root (`runtime` data in `data_dir/runtime`, skills in `data_dir/skills`) |
 | `working_dir` | No | `~/.microclaw/working_dir` | Default working directory for tool operations; relative paths in `bash/read_file/write_file/edit_file/glob/grep` resolve from here |
 | `working_dir_isolation` | No | `chat` | Working directory isolation mode for `bash/read_file/write_file/edit_file/glob/grep`: `shared` uses `working_dir/shared`, `chat` isolates each chat under `working_dir/chat/<channel>/<chat_id>` |
-| `host_path_mode` | No | `restricted` | Host path policy for `bash/read_file/write_file/edit_file/glob/grep`: `restricted` keeps the default path guard, `full_access` disables it and allows absolute `/tmp` paths |
 | `high_risk_tool_user_confirmation_required` | No | `true` | Require explicit user confirmation before high-risk tool execution (for example `bash`) |
 | `sandbox.mode` | No | `off` | Container sandbox mode for bash tool execution: `off` runs on host; `all` routes bash commands into docker containers |
 | `sandbox.security_profile` | No | `hardened` | Sandbox privilege profile: `hardened` (`--cap-drop ALL --security-opt no-new-privileges`), `standard` (Docker default caps), `privileged` (`--privileged`) |
@@ -1175,11 +1173,10 @@ Notes:
   - `~/.microclaw/sandbox-mount-allowlist.txt` for sandbox mount roots.
   - `~/.microclaw/sandbox-path-allowlist.txt` for file tool path roots.
 
-Host path access:
-- `host_path_mode: "restricted"` (default) keeps the file-tool path guard and rejects explicit absolute `/tmp/...` paths in `bash`.
-- `host_path_mode: "full_access"` disables the host path guard for `read_file` / `write_file` / `edit_file` / `glob` / `grep`, and allows explicit absolute `/tmp/...` paths in `bash`.
-- `full_access` is intended only for trusted self-hosted environments.
-- This does not install missing tools for you; if a command fails with `command not found`, install it on the host or use a sandbox image that includes it.
+Working directory guidance:
+- `bash` runs inside the current chat working directory under its `tmp/` subdirectory.
+- Prefer relative paths or paths under the current chat working directory instead of absolute `/tmp/...`.
+- If a command fails with `command not found`, install the dependency on the host or use a sandbox image that includes it.
 
 ### Supported `llm_provider` values
 

@@ -118,7 +118,6 @@ impl ToolRegistry {
                     &config.working_dir,
                     config.working_dir_isolation,
                 )
-                .with_host_path_mode(config.host_path_mode)
                 .with_default_timeout_secs(config.tool_timeout_secs("bash", 120))
                 .with_sandbox_router(sandbox_router.clone()),
             ),
@@ -126,41 +125,26 @@ impl ToolRegistry {
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),
             ),
-            Box::new(
-                read_file::ReadFileTool::new_with_isolation(
-                    &config.working_dir,
-                    config.working_dir_isolation,
-                )
-                .with_host_path_mode(config.host_path_mode),
-            ),
-            Box::new(
-                write_file::WriteFileTool::new_with_isolation(
-                    &config.working_dir,
-                    config.working_dir_isolation,
-                )
-                .with_host_path_mode(config.host_path_mode),
-            ),
-            Box::new(
-                edit_file::EditFileTool::new_with_isolation(
-                    &config.working_dir,
-                    config.working_dir_isolation,
-                )
-                .with_host_path_mode(config.host_path_mode),
-            ),
-            Box::new(
-                glob::GlobTool::new_with_isolation(
-                    &config.working_dir,
-                    config.working_dir_isolation,
-                )
-                .with_host_path_mode(config.host_path_mode),
-            ),
-            Box::new(
-                grep::GrepTool::new_with_isolation(
-                    &config.working_dir,
-                    config.working_dir_isolation,
-                )
-                .with_host_path_mode(config.host_path_mode),
-            ),
+            Box::new(read_file::ReadFileTool::new_with_isolation(
+                &config.working_dir,
+                config.working_dir_isolation,
+            )),
+            Box::new(write_file::WriteFileTool::new_with_isolation(
+                &config.working_dir,
+                config.working_dir_isolation,
+            )),
+            Box::new(edit_file::EditFileTool::new_with_isolation(
+                &config.working_dir,
+                config.working_dir_isolation,
+            )),
+            Box::new(glob::GlobTool::new_with_isolation(
+                &config.working_dir,
+                config.working_dir_isolation,
+            )),
+            Box::new(grep::GrepTool::new_with_isolation(
+                &config.working_dir,
+                config.working_dir_isolation,
+            )),
             Box::new(memory::ReadMemoryTool::new(&config.data_dir, db.clone())),
             Box::new(memory::WriteMemoryTool::new(
                 &config.data_dir,

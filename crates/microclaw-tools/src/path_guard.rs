@@ -1,7 +1,5 @@
 use std::path::{Component, Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 /// Directory components that are always blocked.
 const BLOCKED_DIRS: &[&str] = &[".ssh", ".aws", ".gnupg", ".kube"];
 
@@ -41,33 +39,8 @@ fn default_path_allowlist_path() -> Option<std::path::PathBuf> {
     Some(home.join(".microclaw/sandbox-path-allowlist.txt"))
 }
 
-fn default_host_path_mode() -> HostPathMode {
-    HostPathMode::Restricted
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HostPathMode {
-    Restricted,
-    FullAccess,
-}
-
-impl Default for HostPathMode {
-    fn default() -> Self {
-        default_host_path_mode()
-    }
-}
-
 /// Check if a path is blocked. Returns Err(message) if blocked.
 pub fn check_path(path: &str) -> Result<(), String> {
-    check_path_with_mode(path, HostPathMode::Restricted)
-}
-
-/// Check if a path is blocked under the selected access mode.
-pub fn check_path_with_mode(path: &str, mode: HostPathMode) -> Result<(), String> {
-    if matches!(mode, HostPathMode::FullAccess) {
-        return Ok(());
-    }
     let candidate = Path::new(path);
     if let Err(err) = validate_symlink_safety(candidate) {
         return Err(format!(
@@ -254,14 +227,6 @@ fn validate_allowlist(path: &Path) -> Result<(), String> {
 
 /// Filter a list of paths, removing blocked ones. For glob results.
 pub fn filter_paths(paths: Vec<String>) -> Vec<String> {
-    filter_paths_with_mode(paths, HostPathMode::Restricted)
-}
-
-/// Filter a list of paths, removing blocked ones according to the selected access mode.
-pub fn filter_paths_with_mode(paths: Vec<String>, mode: HostPathMode) -> Vec<String> {
-    if matches!(mode, HostPathMode::FullAccess) {
-        return paths;
-    }
     paths
         .into_iter()
         .filter(|p| !is_blocked(Path::new(p)))
@@ -357,12 +322,6 @@ mod tests {
     }
 
     #[test]
-    fn test_check_path_with_full_access_mode_bypasses_guard() {
-        let result = check_path_with_mode("/home/user/.ssh/id_rsa", HostPathMode::FullAccess);
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn test_blocks_traversal_via_parent_dir() {
         // Paths using .. to reach blocked locations should still be caught
         assert!(is_blocked(Path::new("/tmp/../etc/shadow")));
@@ -402,16 +361,6 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0], "src/main.rs");
         assert_eq!(filtered[1], "README.md");
-    }
-
-    #[test]
-    fn test_filter_paths_with_full_access_mode_keeps_all_paths() {
-        let paths = vec![
-            "src/main.rs".to_string(),
-            "/home/user/.ssh/id_rsa".to_string(),
-        ];
-        let filtered = filter_paths_with_mode(paths.clone(), HostPathMode::FullAccess);
-        assert_eq!(filtered, paths);
     }
 
     #[test]

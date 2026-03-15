@@ -1,6 +1,6 @@
 //! Integration tests for configuration loading and validation.
 
-use microclaw::config::{Config, HostPathMode, WorkingDirIsolation};
+use microclaw::config::{Config, WorkingDirIsolation};
 
 /// Helper to create a minimal valid config for testing.
 fn minimal_config() -> Config {
@@ -23,7 +23,6 @@ fn minimal_config() -> Config {
         skills_dir: None,
         working_dir: "./tmp".into(),
         working_dir_isolation: WorkingDirIsolation::Chat,
-        host_path_mode: HostPathMode::Restricted,
         high_risk_tool_user_confirmation_required: true,
         sandbox: microclaw::config::SandboxConfig::default(),
         openai_api_key: None,

@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use serde_json::json;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
 
-use crate::config::{HostPathMode, WorkingDirIsolation};
+use crate::config::WorkingDirIsolation;
 use microclaw_core::llm_types::ToolDefinition;
 use microclaw_core::text::floor_char_boundary;
 use microclaw_tools::sandbox::{SandboxExecOptions, SandboxMode, SandboxRouter};
@@ -14,7 +14,6 @@ use super::{schema_object, Tool, ToolResult};
 pub struct BashTool {
     working_dir: PathBuf,
     working_dir_isolation: WorkingDirIsolation,
-    host_path_mode: HostPathMode,
     default_timeout_secs: u64,
     sandbox_router: Option<Arc<SandboxRouter>>,
 }
@@ -31,7 +30,6 @@ impl BashTool {
         Self {
             working_dir: PathBuf::from(working_dir),
             working_dir_isolation,
-            host_path_mode: HostPathMode::Restricted,
             default_timeout_secs: 120,
             sandbox_router: None,
         }
@@ -44,11 +42,6 @@ impl BashTool {
 
     pub fn with_sandbox_router(mut self, router: Arc<SandboxRouter>) -> Self {
         self.sandbox_router = Some(router);
-        self
-    }
-
-    pub fn with_host_path_mode(mut self, mode: HostPathMode) -> Self {
-        self.host_path_mode = mode;
         self
     }
 }
@@ -105,6 +98,41 @@ fn contains_explicit_tmp_absolute_path(command: &str) -> bool {
     false
 }
 
+fn extract_explicit_tmp_absolute_path(command: &str) -> Option<String> {
+    let mut start = 0usize;
+    while let Some(offset) = command[start..].find("/tmp/") {
+        let idx = start + offset;
+        let prev = if idx == 0 {
+            None
+        } else {
+            command[..idx].chars().next_back()
+        };
+        if prev.is_none()
+            || matches!(
+                prev,
+                Some(' ' | '\t' | '\n' | '\'' | '"' | '=' | '(' | ':' | ';' | '|')
+            )
+        {
+            let suffix = &command[idx + 5..];
+            let end = suffix
+                .find(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | ')' | ';' | '|'))
+                .unwrap_or(suffix.len());
+            return Some(command[idx..idx + 5 + end].to_string());
+        }
+        start = idx + 5;
+    }
+    None
+}
+
+fn suggested_tmp_working_dir_path(working_dir: &Path, command: &str) -> Option<PathBuf> {
+    let tmp_path = extract_explicit_tmp_absolute_path(command)?;
+    let relative = tmp_path.trim_start_matches("/tmp/").trim();
+    if relative.is_empty() {
+        return Some(working_dir.to_path_buf());
+    }
+    Some(working_dir.join(relative))
+}
+
 fn command_accesses_dotenv(command: &str) -> bool {
     let patterns = [".env", "dotenv", "env_file"];
     let lower = command.to_ascii_lowercase();
@@ -131,7 +159,7 @@ impl Tool for BashTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "bash".into(),
-            description: "Execute a bash command and return the output. IMPORTANT: You must CALL this tool (not write it as text) to run a command. Use for running shell commands, scripts, or system operations.".into(),
+            description: "Execute a bash command and return the output. IMPORTANT: You must CALL this tool (not write it as text) to run a command. Use for running shell commands, scripts, or system operations. Use relative paths or the current chat working directory's tmp/ subdirectory instead of absolute /tmp paths.".into(),
             input_schema: schema_object(
                 json!({
                     "command": {
@@ -168,12 +196,14 @@ impl Tool for BashTool {
             ));
         }
 
-        if self.host_path_mode != HostPathMode::FullAccess
-            && contains_explicit_tmp_absolute_path(command)
-        {
+        if contains_explicit_tmp_absolute_path(command) {
+            let suggested_path = suggested_tmp_working_dir_path(&working_dir, command)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| working_dir.display().to_string());
             return ToolResult::error(format!(
-                "Command contains absolute /tmp path, which is disallowed in restricted host_path_mode. Use paths under current chat working directory: {} or set host_path_mode: full_access for trusted full-host access.",
-                working_dir.display()
+                "Command contains an absolute /tmp path. Use the current chat working directory instead: {}. For example, replace the /tmp path with {}.",
+                working_dir.display(),
+                suggested_path
             ))
             .with_error_type("path_policy_blocked");
         }
@@ -309,6 +339,27 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_extract_explicit_tmp_absolute_path() {
+        assert_eq!(
+            extract_explicit_tmp_absolute_path("git clone repo /tmp/lootbox"),
+            Some("/tmp/lootbox".to_string())
+        );
+        assert_eq!(
+            extract_explicit_tmp_absolute_path("A=\"/tmp/lootbox\"; echo $A"),
+            Some("/tmp/lootbox".to_string())
+        );
+    }
+
+    #[test]
+    fn test_suggested_tmp_working_dir_path() {
+        let work = Path::new("/workspace/chat/tmp");
+        assert_eq!(
+            suggested_tmp_working_dir_path(work, "git clone repo /tmp/lootbox"),
+            Some(PathBuf::from("/workspace/chat/tmp/lootbox"))
+        );
+    }
+
     #[tokio::test]
     async fn test_bash_echo() {
         let tool = BashTool::new(".");
@@ -351,14 +402,7 @@ mod tests {
         assert!(result.is_error);
         assert_eq!(result.error_type.as_deref(), Some("path_policy_blocked"));
         assert!(result.content.contains("current chat working directory"));
-    }
-
-    #[tokio::test]
-    async fn test_bash_allows_tmp_absolute_path_in_full_access_mode() {
-        let tool = BashTool::new(".").with_host_path_mode(HostPathMode::FullAccess);
-        let result = tool.execute(json!({"command": "ls /tmp/x"})).await;
-        assert!(result.is_error);
-        assert_ne!(result.error_type.as_deref(), Some("path_policy_blocked"));
+        assert!(result.content.contains("replace the /tmp path"));
     }
 
     #[tokio::test]

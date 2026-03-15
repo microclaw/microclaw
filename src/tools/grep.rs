@@ -3,7 +3,7 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-use crate::config::{HostPathMode, WorkingDirIsolation};
+use crate::config::WorkingDirIsolation;
 use microclaw_core::llm_types::ToolDefinition;
 
 use super::{schema_object, Tool, ToolResult};
@@ -11,7 +11,6 @@ use super::{schema_object, Tool, ToolResult};
 pub struct GrepTool {
     working_dir: PathBuf,
     working_dir_isolation: WorkingDirIsolation,
-    host_path_mode: HostPathMode,
 }
 
 impl GrepTool {
@@ -26,13 +25,7 @@ impl GrepTool {
         Self {
             working_dir: PathBuf::from(working_dir),
             working_dir_isolation,
-            host_path_mode: HostPathMode::Restricted,
         }
-    }
-
-    pub fn with_host_path_mode(mut self, mode: HostPathMode) -> Self {
-        self.host_path_mode = mode;
-        self
     }
 }
 
@@ -76,10 +69,7 @@ impl Tool for GrepTool {
             super::resolve_tool_working_dir(&self.working_dir, self.working_dir_isolation, &input);
         let resolved_path = super::resolve_tool_path(&working_dir, path);
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
-        if let Err(msg) = microclaw_tools::path_guard::check_path_with_mode(
-            &resolved_path_str,
-            self.host_path_mode,
-        ) {
+        if let Err(msg) = microclaw_tools::path_guard::check_path(&resolved_path_str) {
             return ToolResult::error(msg);
         }
         let file_glob = input.get("glob").and_then(|v| v.as_str());
@@ -98,7 +88,6 @@ impl Tool for GrepTool {
             &resolved_path,
             file_glob,
             &re,
-            self.host_path_mode,
             &mut results,
             &mut file_count,
         ) {
@@ -121,7 +110,6 @@ fn grep_recursive(
     path: &Path,
     file_glob: Option<&str>,
     re: &regex::Regex,
-    host_path_mode: HostPathMode,
     results: &mut Vec<String>,
     file_count: &mut usize,
 ) -> std::io::Result<()> {
@@ -143,18 +131,9 @@ fn grep_recursive(
             }
 
             if entry_path.is_dir() {
-                grep_recursive(
-                    &entry_path,
-                    file_glob,
-                    re,
-                    host_path_mode,
-                    results,
-                    file_count,
-                )?;
+                grep_recursive(&entry_path, file_glob, re, results, file_count)?;
             } else if entry_path.is_file() {
-                if host_path_mode != HostPathMode::FullAccess
-                    && microclaw_tools::path_guard::is_blocked(&entry_path)
-                {
+                if microclaw_tools::path_guard::is_blocked(&entry_path) {
                     continue;
                 }
                 if let Some(ref pat) = glob_pattern {
@@ -297,15 +276,7 @@ mod tests {
         let re = regex::Regex::new("match_me").unwrap();
         let mut results: Vec<String> = Vec::new();
         let mut count = 0;
-        grep_recursive(
-            &dir,
-            None,
-            &re,
-            HostPathMode::Restricted,
-            &mut results,
-            &mut count,
-        )
-        .unwrap();
+        grep_recursive(&dir, None, &re, &mut results, &mut count).unwrap();
 
         // Should only find in visible.txt
         assert_eq!(results.len(), 1);

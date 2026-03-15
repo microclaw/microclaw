@@ -146,7 +146,6 @@ type SecurityPosture = {
   sandbox_runtime_available?: boolean
   sandbox_backend?: string
   sandbox_require_runtime?: boolean
-  host_path_mode?: 'restricted' | 'full_access' | string
   execution_policies?: ExecutionPolicyItem[]
   mount_allowlist?: MountAllowlistStatus | null
 }
@@ -187,8 +186,6 @@ function warningDocUrl(code?: string): string {
     case 'sandbox_runtime_unavailable':
     case 'sandbox_mount_allowlist_missing':
       return `${DOCS_BASE}/configuration#sandbox`
-    case 'host_path_full_access_enabled':
-      return `${DOCS_BASE}/configuration#host-path-access`
     case 'auth_password_not_configured':
     case 'web_host_not_loopback':
       return `${DOCS_BASE}/permissions`
@@ -279,7 +276,6 @@ const MODEL_OPTIONS: Record<string, string[]> = {
 const DEFAULT_CONFIG_VALUES = {
   llm_provider: 'anthropic',
   working_dir_isolation: 'chat',
-  host_path_mode: 'restricted',
   high_risk_tool_user_confirmation_required: true,
   max_tokens: 8192,
   max_tool_iterations: 100,
@@ -2188,7 +2184,6 @@ function App() {
         working_dir_isolation: normalizeWorkingDirIsolation(
           data.config?.working_dir_isolation || DEFAULT_CONFIG_VALUES.working_dir_isolation,
         ),
-        host_path_mode: String(data.config?.host_path_mode || DEFAULT_CONFIG_VALUES.host_path_mode),
         high_risk_tool_user_confirmation_required: data.config?.high_risk_tool_user_confirmation_required !== false,
         max_tokens: Number(data.config?.max_tokens ?? 8192),
         max_tool_iterations: Number(data.config?.max_tool_iterations ?? 100),
@@ -2493,9 +2488,6 @@ function App() {
         case 'working_dir_isolation':
           next.working_dir_isolation = DEFAULT_CONFIG_VALUES.working_dir_isolation
           break
-        case 'host_path_mode':
-          next.host_path_mode = DEFAULT_CONFIG_VALUES.host_path_mode
-          break
         case 'high_risk_tool_user_confirmation_required':
           next.high_risk_tool_user_confirmation_required =
             DEFAULT_CONFIG_VALUES.high_risk_tool_user_confirmation_required
@@ -2660,7 +2652,6 @@ function App() {
         working_dir_isolation: normalizeWorkingDirIsolation(
           configDraft.working_dir_isolation || DEFAULT_CONFIG_VALUES.working_dir_isolation,
         ),
-        host_path_mode: String(configDraft.host_path_mode || DEFAULT_CONFIG_VALUES.host_path_mode),
         high_risk_tool_user_confirmation_required:
           configDraft.high_risk_tool_user_confirmation_required !== false,
         max_tokens: Number(configDraft.max_tokens || 8192),
@@ -3425,9 +3416,6 @@ function App() {
                     sandbox={String(configSelfCheck.security_posture.sandbox_mode || 'off')} | runtime={String(Boolean(configSelfCheck.security_posture.sandbox_runtime_available))} | backend={String(configSelfCheck.security_posture.sandbox_backend || 'auto')}
                   </Text>
                   <Text size="1" color="gray" className="mt-1 block">
-                    host_path_mode={String(configSelfCheck.security_posture.host_path_mode || 'restricted')}
-                  </Text>
-                  <Text size="1" color="gray" className="mt-1 block">
                     mount allowlist: {String(configSelfCheck.security_posture.mount_allowlist?.path || '(default)')} | exists={String(Boolean(configSelfCheck.security_posture.mount_allowlist?.exists))} | has_entries={String(Boolean(configSelfCheck.security_posture.mount_allowlist?.has_entries))}
                   </Text>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -3522,16 +3510,6 @@ function App() {
                             >
                               <option value="chat">chat (per-chat isolated workspace)</option>
                               <option value="shared">shared (single shared workspace)</option>
-                            </select>
-                          </ConfigFieldCard>
-                          <ConfigFieldCard label="host_path_mode" description={<>Keep <code>restricted</code> for the default path guard. Use <code>full_access</code> only on trusted self-hosted instances when you want file tools and <code>bash</code> to reach arbitrary host paths, including absolute <code>/tmp</code> paths.</>}>
-                            <select
-                              className="mt-2 w-full rounded-md border border-[color:var(--mc-border-soft)] bg-transparent px-3 py-2 text-base text-[color:inherit] outline-none focus:border-[color:var(--mc-accent)]"
-                              value={String(configDraft.host_path_mode || DEFAULT_CONFIG_VALUES.host_path_mode)}
-                              onChange={(e) => setConfigField('host_path_mode', e.target.value)}
-                            >
-                              <option value="restricted">restricted (default path guard)</option>
-                              <option value="full_access">full_access (unsafe, trusted host only)</option>
                             </select>
                           </ConfigFieldCard>
                           <ConfigFieldCard label="souls_dir" description={<>Directory used by SOUL picker and default SOUL path normalization.</>}>
