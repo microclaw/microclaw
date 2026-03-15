@@ -698,13 +698,16 @@ microclaw start
 ```sh
 microclaw gateway install
 microclaw gateway status
+microclaw gateway status --json
 ```
 
 服务生命周期管理：
 
 ```sh
+microclaw gateway install --force
 microclaw gateway start
 microclaw gateway stop
+microclaw gateway restart
 microclaw gateway logs 200
 microclaw gateway uninstall
 ```
@@ -712,6 +715,7 @@ microclaw gateway uninstall
 说明：
 - macOS 使用 `launchd` 用户级服务
 - Linux 使用 `systemd --user`
+- Windows 使用基于 WinSW 的 Windows Service。运行 `microclaw gateway install` 前，请先准备好 `microclaw.config.yaml`，并在管理员终端中执行 gateway 服务命令
 - 运行日志写入 `<data_dir>/runtime/logs/`
 - 日志按小时分片：`microclaw-YYYY-MM-DD-HH.log`
 - 超过 30 天的日志会自动删除

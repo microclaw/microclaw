@@ -2,14 +2,24 @@ use crate::config::Config;
 use crate::logging;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
+use reqwest::blocking::Client;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const LINUX_SERVICE_NAME: &str = "microclaw-gateway.service";
 const MAC_LABEL: &str = "ai.microclaw.gateway";
+const WINDOWS_SERVICE_NAME: &str = "MicroClawGateway";
+const WINDOWS_SERVICE_DISPLAY_NAME: &str = "MicroClaw Gateway";
+const WINDOWS_SERVICE_DESCRIPTION: &str = "MicroClaw Gateway Service";
+const WINDOWS_WINSW_VERSION: &str = "v2.12.0";
+const WINDOWS_WINSW_LOG_DIR: &str = "winsw-logs";
+const WINDOWS_SERVICE_STATE_STOPPED: i64 = 1;
+const WINDOWS_SERVICE_STATE_RUNNING: i64 = 4;
 const LOG_STDOUT_FILE: &str = "microclaw-gateway.log";
 const LOG_STDERR_FILE: &str = "microclaw-gateway.error.log";
 const DEFAULT_LOG_LINES: usize = 200;
@@ -51,6 +61,19 @@ struct LinuxRuntimeStatus {
     exec_main_status: Option<i64>,
     exec_main_code: Option<String>,
     fragment_path: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct WindowsRuntimeStatus {
+    installed: bool,
+    state: Option<String>,
+    state_code: Option<i64>,
+    pid: Option<i64>,
+    start_type: Option<String>,
+    start_type_code: Option<i64>,
+    binary_path_name: Option<String>,
+    service_start_name: Option<String>,
+    display_name: Option<String>,
 }
 
 pub fn handle_gateway_cli(args: &[String]) -> Result<()> {
@@ -150,9 +173,11 @@ fn install(opts: InstallOptions) -> Result<()> {
         install_macos(&ctx, &opts)
     } else if cfg!(target_os = "linux") {
         install_linux(&ctx, &opts)
+    } else if cfg!(target_os = "windows") {
+        install_windows(&ctx, &opts)
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "Gateway service is only supported on macOS, Linux, and Windows"
         ))
     }
 }
@@ -162,9 +187,11 @@ fn uninstall() -> Result<()> {
         uninstall_macos()
     } else if cfg!(target_os = "linux") {
         uninstall_linux()
+    } else if cfg!(target_os = "windows") {
+        uninstall_windows()
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "Gateway service is only supported on macOS, Linux, and Windows"
         ))
     }
 }
@@ -174,9 +201,11 @@ fn start() -> Result<()> {
         start_macos()
     } else if cfg!(target_os = "linux") {
         start_linux()
+    } else if cfg!(target_os = "windows") {
+        start_windows()
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "Gateway service is only supported on macOS, Linux, and Windows"
         ))
     }
 }
@@ -186,9 +215,11 @@ fn stop() -> Result<()> {
         stop_macos()
     } else if cfg!(target_os = "linux") {
         stop_linux()
+    } else if cfg!(target_os = "windows") {
+        stop_windows()
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "Gateway service is only supported on macOS, Linux, and Windows"
         ))
     }
 }
@@ -198,9 +229,11 @@ fn restart() -> Result<()> {
         restart_macos()
     } else if cfg!(target_os = "linux") {
         restart_linux()
+    } else if cfg!(target_os = "windows") {
+        restart_windows()
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "Gateway service is only supported on macOS, Linux, and Windows"
         ))
     }
 }
@@ -212,9 +245,11 @@ fn status(opts: StatusOptions) -> Result<()> {
         status_macos(&ctx, &opts)
     } else if cfg!(target_os = "linux") {
         status_linux(&ctx, &opts)
+    } else if cfg!(target_os = "windows") {
+        status_windows(&ctx, &opts)
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "Gateway service is only supported on macOS, Linux, and Windows"
         ))
     }
 }
@@ -243,8 +278,11 @@ fn parse_log_lines(lines: Option<usize>) -> Result<usize> {
 fn build_context() -> Result<ServiceContext> {
     let exe_path = std::env::current_exe().context("Failed to resolve current binary path")?;
     let working_dir = std::env::current_dir().context("Failed to resolve current directory")?;
-    let config_path = resolve_config_path(&working_dir);
-    let runtime_logs_dir = resolve_runtime_logs_dir(&working_dir);
+    let mut config_path = resolve_config_path(&working_dir);
+    if config_path.is_none() && cfg!(target_os = "windows") {
+        config_path = resolve_windows_wrapper_config_path();
+    }
+    let runtime_logs_dir = resolve_runtime_logs_dir(&working_dir, config_path.as_deref());
     let service_env = build_service_env(config_path.as_ref());
 
     Ok(ServiceContext {
@@ -275,7 +313,25 @@ fn resolve_config_path(cwd: &Path) -> Option<PathBuf> {
     None
 }
 
-fn resolve_runtime_logs_dir(cwd: &Path) -> PathBuf {
+fn load_config_from_path(path: &Path) -> Result<Config> {
+    let path_str = path.to_string_lossy().to_string();
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let mut config: Config = serde_yaml::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    config
+        .post_deserialize()
+        .map_err(|e| anyhow!("Failed to normalize {}: {}", path_str, e))?;
+    Ok(config)
+}
+
+fn resolve_runtime_logs_dir(cwd: &Path, config_path: Option<&Path>) -> PathBuf {
+    if let Some(path) = config_path {
+        if let Ok(cfg) = load_config_from_path(path) {
+            return PathBuf::from(cfg.runtime_data_dir()).join("logs");
+        }
+    }
+
     match Config::load() {
         Ok(cfg) => PathBuf::from(cfg.runtime_data_dir()).join("logs"),
         Err(_) => cwd.join("runtime").join("logs"),
@@ -291,6 +347,40 @@ fn build_service_env(config_path: Option<&PathBuf>) -> BTreeMap<String, String> 
             "MICROCLAW_CONFIG".to_string(),
             path.to_string_lossy().to_string(),
         );
+    }
+
+    if let Ok(rust_log) = std::env::var("RUST_LOG") {
+        if !rust_log.trim().is_empty() {
+            env.insert("RUST_LOG".to_string(), rust_log);
+        }
+    }
+
+    if cfg!(windows) {
+        for key in [
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PROGRAMDATA",
+            "SystemRoot",
+            "COMSPEC",
+            "PATHEXT",
+        ] {
+            if let Ok(value) = std::env::var(key) {
+                if !value.trim().is_empty() {
+                    env.insert(key.to_string(), value);
+                }
+            }
+        }
+
+        let tempdir = std::env::temp_dir().to_string_lossy().to_string();
+        env.insert("TMP".to_string(), tempdir.clone());
+        env.insert("TEMP".to_string(), tempdir.clone());
+        env.insert("TMPDIR".to_string(), tempdir);
+        return env;
     }
 
     if let Ok(home) = std::env::var("HOME") {
@@ -355,6 +445,17 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<std::process::Output> {
         .args(args)
         .output()
         .with_context(|| format!("Failed to execute command: {} {}", cmd, args.join(" ")))?;
+    Ok(output)
+}
+
+fn run_command_path(cmd: &Path, args: &[&str]) -> Result<std::process::Output> {
+    let output = Command::new(cmd).args(args).output().with_context(|| {
+        format!(
+            "Failed to execute command: {} {}",
+            cmd.display(),
+            args.join(" ")
+        )
+    })?;
     Ok(output)
 }
 
@@ -581,6 +682,28 @@ fn parse_key_values(output: &str) -> BTreeMap<String, String> {
     values
 }
 
+fn parse_colon_key_values(output: &str) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::new();
+    for line in output.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            values.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    values
+}
+
+fn parse_numbered_state(value: Option<&String>) -> (Option<i64>, Option<String>) {
+    let Some(value) = value else {
+        return (None, None);
+    };
+
+    let mut parts = value.split_whitespace();
+    let code = parts.next().and_then(|v| v.parse::<i64>().ok());
+    let state = parts.collect::<Vec<_>>().join(" ");
+    let state = if state.is_empty() { None } else { Some(state) };
+    (code, state)
+}
+
 fn parse_linux_runtime_status(output: &str) -> LinuxRuntimeStatus {
     let map = parse_key_values(output);
     LinuxRuntimeStatus {
@@ -764,6 +887,559 @@ fn status_linux(ctx: &ServiceContext, opts: &StatusOptions) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
         print_linux_status_text(&runtime, &issues, deep_output.as_deref(), opts.deep);
+    }
+
+    if running {
+        Ok(())
+    } else {
+        Err(anyhow!("Gateway service is not running"))
+    }
+}
+
+fn windows_service_root() -> PathBuf {
+    std::env::var("ProgramData")
+        .or_else(|_| std::env::var("PROGRAMDATA"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(r"C:\ProgramData"))
+        .join("MicroClaw")
+        .join("gateway")
+}
+
+fn windows_wrapper_exe_path() -> PathBuf {
+    windows_service_root().join(format!("{WINDOWS_SERVICE_NAME}.exe"))
+}
+
+fn windows_wrapper_xml_path() -> PathBuf {
+    windows_service_root().join(format!("{WINDOWS_SERVICE_NAME}.xml"))
+}
+
+fn windows_wrapper_log_dir() -> PathBuf {
+    windows_service_root().join(WINDOWS_WINSW_LOG_DIR)
+}
+
+fn windows_winsw_asset_name() -> &'static str {
+    if cfg!(target_arch = "x86") {
+        "WinSW-x86.exe"
+    } else {
+        "WinSW-x64.exe"
+    }
+}
+
+fn windows_winsw_download_url() -> String {
+    format!(
+        "https://github.com/winsw/winsw/releases/download/{}/{}",
+        WINDOWS_WINSW_VERSION,
+        windows_winsw_asset_name()
+    )
+}
+
+fn xml_unescape(input: &str) -> String {
+    input
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
+}
+
+fn xml_tag_value(content: &str, tag: &str) -> Option<String> {
+    let start_tag = format!("<{tag}>");
+    let end_tag = format!("</{tag}>");
+    let start = content.find(&start_tag)? + start_tag.len();
+    let end = content[start..].find(&end_tag)? + start;
+    Some(xml_unescape(&content[start..end]))
+}
+
+fn xml_env_value(content: &str, name: &str) -> Option<String> {
+    let needle = format!(r#"name="{}" value=""#, xml_escape(name));
+    let start = content.find(&needle)? + needle.len();
+    let end = content[start..].find('"')? + start;
+    Some(xml_unescape(&content[start..end]))
+}
+
+fn resolve_windows_wrapper_config_path() -> Option<PathBuf> {
+    let xml_path = windows_wrapper_xml_path();
+    let content = std::fs::read_to_string(&xml_path).ok()?;
+    let value = xml_env_value(&content, "MICROCLAW_CONFIG")?;
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+fn render_windows_service_xml(ctx: &ServiceContext) -> String {
+    let mut items = vec![
+        "<service>".to_string(),
+        format!("  <id>{WINDOWS_SERVICE_NAME}</id>"),
+        format!(
+            "  <name>{}</name>",
+            xml_escape(WINDOWS_SERVICE_DISPLAY_NAME)
+        ),
+        format!(
+            "  <description>{}</description>",
+            xml_escape(WINDOWS_SERVICE_DESCRIPTION)
+        ),
+        format!(
+            "  <executable>{}</executable>",
+            xml_escape(&ctx.exe_path.to_string_lossy())
+        ),
+        "  <arguments>start</arguments>".to_string(),
+        format!(
+            "  <workingdirectory>{}</workingdirectory>",
+            xml_escape(&ctx.working_dir.to_string_lossy())
+        ),
+        "  <stoptimeout>15 sec</stoptimeout>".to_string(),
+        "  <stopparentprocessfirst>true</stopparentprocessfirst>".to_string(),
+        "  <startmode>Automatic</startmode>".to_string(),
+        "  <onfailure action=\"restart\" delay=\"5 sec\"/>".to_string(),
+        "  <onfailure action=\"restart\" delay=\"15 sec\"/>".to_string(),
+        "  <resetfailure>1 hour</resetfailure>".to_string(),
+        format!(
+            "  <logpath>{}</logpath>",
+            xml_escape(&windows_wrapper_log_dir().to_string_lossy())
+        ),
+        "  <log mode=\"append\">".to_string(),
+        "  </log>".to_string(),
+    ];
+
+    for (key, value) in &ctx.service_env {
+        items.push(format!(
+            "  <env name=\"{}\" value=\"{}\" />",
+            xml_escape(key),
+            xml_escape(value)
+        ));
+    }
+
+    items.push("</service>".to_string());
+    items.join("\n")
+}
+
+fn ensure_windows_winsw(wrapper_exe: &Path) -> Result<()> {
+    let parent = wrapper_exe
+        .parent()
+        .ok_or_else(|| anyhow!("Invalid WinSW destination path"))?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create {}", parent.display()))?;
+
+    let client = Client::builder()
+        .user_agent("microclaw-gateway")
+        .build()
+        .context("Failed to build HTTP client for WinSW download")?;
+    let response = client
+        .get(windows_winsw_download_url())
+        .send()
+        .context("Failed to download WinSW")?
+        .error_for_status()
+        .context("Failed to download WinSW")?;
+    let bytes = response.bytes().context("Failed to read WinSW download")?;
+    std::fs::write(wrapper_exe, bytes.as_ref())
+        .with_context(|| format!("Failed to write {}", wrapper_exe.display()))?;
+    Ok(())
+}
+
+fn windows_service_missing(output: &std::process::Output) -> bool {
+    if output.status.code() == Some(1060) {
+        return true;
+    }
+
+    let detail = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_lowercase();
+
+    detail.contains("1060") || detail.contains("does not exist as an installed service")
+}
+
+fn windows_service_text(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn parse_windows_runtime_status(query_output: &str, qc_output: &str) -> WindowsRuntimeStatus {
+    let query = parse_colon_key_values(query_output);
+    let qc = parse_colon_key_values(qc_output);
+    let (state_code, state) = parse_numbered_state(query.get("STATE"));
+    let (start_type_code, start_type) = parse_numbered_state(qc.get("START_TYPE"));
+    WindowsRuntimeStatus {
+        installed: !query.is_empty() || !qc.is_empty(),
+        state,
+        state_code,
+        pid: query.get("PID").and_then(|v| v.parse::<i64>().ok()),
+        start_type,
+        start_type_code,
+        binary_path_name: qc.get("BINARY_PATH_NAME").cloned(),
+        service_start_name: qc.get("SERVICE_START_NAME").cloned(),
+        display_name: qc.get("DISPLAY_NAME").cloned(),
+    }
+}
+
+fn wait_for_windows_service_state(expected_state: i64, timeout_secs: u64) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        let output = run_command("sc.exe", &["queryex", WINDOWS_SERVICE_NAME])?;
+        if windows_service_missing(&output) {
+            return Err(anyhow!("Gateway service is not installed"));
+        }
+        let runtime = parse_windows_runtime_status(&windows_service_text(&output), "");
+        if runtime.state_code == Some(expected_state) {
+            return Ok(());
+        }
+
+        if started.elapsed() >= Duration::from_secs(timeout_secs) {
+            return Err(anyhow!(
+                "Timed out waiting for Windows service to reach state {}",
+                expected_state
+            ));
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn wait_for_windows_service_removed(timeout_secs: u64) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        let output = run_command("sc.exe", &["queryex", WINDOWS_SERVICE_NAME])?;
+        if windows_service_missing(&output) {
+            return Ok(());
+        }
+        if started.elapsed() >= Duration::from_secs(timeout_secs) {
+            return Err(anyhow!(
+                "Timed out waiting for Windows service '{}' to be removed",
+                WINDOWS_SERVICE_NAME
+            ));
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn windows_wrapper_exists() -> bool {
+    windows_wrapper_exe_path().exists()
+}
+
+fn install_windows(ctx: &ServiceContext, opts: &InstallOptions) -> Result<()> {
+    assert_command_exists("sc.exe")?;
+
+    let Some(config_path) = ctx.config_path.as_ref() else {
+        return Err(anyhow!(
+            "Windows gateway service requires an explicit config file. Run `microclaw setup` first, then run `microclaw gateway install` from that directory or set MICROCLAW_CONFIG."
+        ));
+    };
+
+    let wrapper_exe = windows_wrapper_exe_path();
+    let wrapper_xml = windows_wrapper_xml_path();
+    let service_root = windows_service_root();
+    let wrapper_logs = windows_wrapper_log_dir();
+    let existing = run_command("sc.exe", &["queryex", WINDOWS_SERVICE_NAME])?;
+    let service_exists = !windows_service_missing(&existing);
+
+    if service_exists && !opts.force {
+        println!(
+            "Gateway service already installed at {}. Use --force to reinstall.",
+            wrapper_xml.display()
+        );
+        return Ok(());
+    }
+
+    if service_exists {
+        let _ = stop_windows();
+        uninstall_windows()?;
+    }
+
+    std::fs::create_dir_all(&service_root)
+        .with_context(|| format!("Failed to create {}", service_root.display()))?;
+    std::fs::create_dir_all(&wrapper_logs)
+        .with_context(|| format!("Failed to create {}", wrapper_logs.display()))?;
+    std::fs::create_dir_all(&ctx.runtime_logs_dir)
+        .with_context(|| format!("Failed to create {}", ctx.runtime_logs_dir.display()))?;
+
+    ensure_windows_winsw(&wrapper_exe)?;
+    std::fs::write(&wrapper_xml, render_windows_service_xml(ctx))
+        .with_context(|| format!("Failed to write {}", wrapper_xml.display()))?;
+
+    ensure_success(
+        run_command_path(&wrapper_exe, &["install"])?,
+        &wrapper_exe.display().to_string(),
+        &["install"],
+    )?;
+
+    start_windows()?;
+    println!(
+        "Installed and started gateway service: {} (config: {})",
+        wrapper_xml.display(),
+        config_path.display()
+    );
+    Ok(())
+}
+
+fn uninstall_windows() -> Result<()> {
+    assert_command_exists("sc.exe")?;
+
+    let wrapper_exe = windows_wrapper_exe_path();
+    let wrapper_xml = windows_wrapper_xml_path();
+    let output = run_command("sc.exe", &["queryex", WINDOWS_SERVICE_NAME])?;
+    if windows_service_missing(&output) {
+        if wrapper_xml.exists() {
+            let _ = std::fs::remove_file(&wrapper_xml);
+        }
+        if wrapper_exe.exists() {
+            let _ = std::fs::remove_file(&wrapper_exe);
+        }
+        println!("Gateway service is not installed");
+        return Ok(());
+    }
+
+    let _ = stop_windows();
+    if windows_wrapper_exists() {
+        ensure_success(
+            run_command_path(&wrapper_exe, &["uninstall"])?,
+            &wrapper_exe.display().to_string(),
+            &["uninstall"],
+        )?;
+    } else {
+        ensure_success(
+            run_command("sc.exe", &["delete", WINDOWS_SERVICE_NAME])?,
+            "sc.exe",
+            &["delete", WINDOWS_SERVICE_NAME],
+        )?;
+    }
+    wait_for_windows_service_removed(30)?;
+
+    if wrapper_xml.exists() {
+        std::fs::remove_file(&wrapper_xml)
+            .with_context(|| format!("Failed to remove {}", wrapper_xml.display()))?;
+    }
+    if wrapper_exe.exists() {
+        std::fs::remove_file(&wrapper_exe)
+            .with_context(|| format!("Failed to remove {}", wrapper_exe.display()))?;
+    }
+
+    println!("Uninstalled gateway service");
+    Ok(())
+}
+
+fn start_windows() -> Result<()> {
+    assert_command_exists("sc.exe")?;
+    let output = run_command("sc.exe", &["start", WINDOWS_SERVICE_NAME])?;
+    let detail = windows_service_text(&output);
+    if !output.status.success()
+        && !detail.contains("1056")
+        && !detail.to_lowercase().contains("already running")
+    {
+        return Err(anyhow!("Failed to start service: {}", detail.trim()));
+    }
+    wait_for_windows_service_state(WINDOWS_SERVICE_STATE_RUNNING, 30)?;
+    println!("Gateway service started");
+    Ok(())
+}
+
+fn stop_windows() -> Result<()> {
+    assert_command_exists("sc.exe")?;
+    let output = run_command("sc.exe", &["stop", WINDOWS_SERVICE_NAME])?;
+    let detail = windows_service_text(&output);
+    if windows_service_missing(&output) {
+        return Ok(());
+    }
+    if !output.status.success()
+        && !detail.contains("1062")
+        && !detail
+            .to_lowercase()
+            .contains("service has not been started")
+    {
+        return Err(anyhow!("Failed to stop service: {}", detail.trim()));
+    }
+    wait_for_windows_service_state(WINDOWS_SERVICE_STATE_STOPPED, 30)?;
+    println!("Gateway service stopped");
+    Ok(())
+}
+
+fn restart_windows() -> Result<()> {
+    let _ = stop_windows();
+    start_windows()?;
+    println!("Gateway service restarted");
+    Ok(())
+}
+
+fn audit_windows_wrapper(ctx: &ServiceContext, runtime: &WindowsRuntimeStatus) -> Vec<String> {
+    let xml_path = windows_wrapper_xml_path();
+    let content = match std::fs::read_to_string(&xml_path) {
+        Ok(c) => c,
+        Err(err) => {
+            return vec![format!(
+                "Failed to read WinSW XML for drift audit ({}): {}",
+                xml_path.display(),
+                err
+            )]
+        }
+    };
+
+    let mut issues = Vec::new();
+    if runtime.start_type_code != Some(2) {
+        issues.push("Windows service is not configured for automatic start".to_string());
+    }
+
+    let expected_wrapper = windows_wrapper_exe_path().to_string_lossy().to_string();
+    if runtime
+        .binary_path_name
+        .as_deref()
+        .map(|v| !v.contains(&expected_wrapper))
+        .unwrap_or(true)
+    {
+        issues.push("Service binary path does not match the expected WinSW wrapper".to_string());
+    }
+
+    let expected_exec = ctx.exe_path.to_string_lossy().to_string();
+    if xml_tag_value(&content, "executable").as_deref() != Some(expected_exec.as_str()) {
+        issues.push("Service executable does not match current microclaw binary".to_string());
+    }
+    let expected_working_dir = ctx.working_dir.to_string_lossy().to_string();
+    if xml_tag_value(&content, "workingdirectory").as_deref() != Some(expected_working_dir.as_str())
+    {
+        issues.push("Service working directory does not match current directory".to_string());
+    }
+    let expected_log_dir = windows_wrapper_log_dir().to_string_lossy().to_string();
+    if xml_tag_value(&content, "logpath").as_deref() != Some(expected_log_dir.as_str()) {
+        issues.push("WinSW log path does not match expected directory".to_string());
+    }
+    if xml_env_value(&content, "MICROCLAW_GATEWAY").as_deref() != Some("1") {
+        issues.push("Service is missing MICROCLAW_GATEWAY=1".to_string());
+    }
+    if let Some(config_path) = &ctx.config_path {
+        let expected_config = config_path.to_string_lossy().to_string();
+        if xml_env_value(&content, "MICROCLAW_CONFIG").as_deref() != Some(expected_config.as_str())
+        {
+            issues.push("Service MICROCLAW_CONFIG differs from current config path".to_string());
+        }
+    }
+
+    issues
+}
+
+fn print_windows_status_text(
+    runtime: &WindowsRuntimeStatus,
+    issues: &[String],
+    raw_query: Option<&str>,
+    raw_qc: Option<&str>,
+    deep: bool,
+) {
+    println!("Gateway service: windows/winsw");
+    println!(
+        "  installed: {}",
+        if runtime.installed { "yes" } else { "no" }
+    );
+    println!(
+        "  state: {}",
+        runtime
+            .state
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    if let Some(pid) = runtime.pid {
+        if pid > 0 {
+            println!("  pid: {}", pid);
+        }
+    }
+    if let Some(start_type) = &runtime.start_type {
+        println!("  start_type: {}", start_type);
+    }
+    if let Some(start_name) = &runtime.service_start_name {
+        println!("  service_account: {}", start_name);
+    }
+
+    if issues.is_empty() {
+        println!("  drift_audit: clean");
+    } else {
+        println!("  drift_audit: {} issue(s)", issues.len());
+        for issue in issues {
+            println!("    - {}", issue);
+        }
+    }
+
+    if deep {
+        if let Some(raw) = raw_query {
+            println!("\n-- sc.exe queryex --");
+            println!("{}", raw.trim_end());
+        }
+        if let Some(raw) = raw_qc {
+            println!("\n-- sc.exe qc --");
+            println!("{}", raw.trim_end());
+        }
+    }
+}
+
+fn status_windows(ctx: &ServiceContext, opts: &StatusOptions) -> Result<()> {
+    assert_command_exists("sc.exe")?;
+
+    let query = run_command("sc.exe", &["queryex", WINDOWS_SERVICE_NAME])?;
+    if windows_service_missing(&query) {
+        let issues = vec!["Service is not installed".to_string()];
+        if opts.json {
+            let value = json!({
+                "platform": "windows",
+                "service": WINDOWS_SERVICE_NAME,
+                "running": false,
+                "installed": false,
+                "drift_issues": issues,
+            });
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        } else {
+            let deep_query = if opts.deep {
+                Some(windows_service_text(&query))
+            } else {
+                None
+            };
+            print_windows_status_text(
+                &WindowsRuntimeStatus::default(),
+                &issues,
+                deep_query.as_deref(),
+                None,
+                opts.deep,
+            );
+        }
+        return Err(anyhow!("Gateway service is not installed"));
+    }
+
+    let qc = run_command("sc.exe", &["qc", WINDOWS_SERVICE_NAME])?;
+    let query_text = windows_service_text(&query);
+    let qc_text = windows_service_text(&qc);
+    let runtime = parse_windows_runtime_status(&query_text, &qc_text);
+    let issues = audit_windows_wrapper(ctx, &runtime);
+    let running = runtime.state_code == Some(WINDOWS_SERVICE_STATE_RUNNING);
+
+    if opts.json {
+        let value = json!({
+            "platform": "windows",
+            "service": WINDOWS_SERVICE_NAME,
+            "running": running,
+            "installed": runtime.installed,
+            "state": runtime.state,
+            "state_code": runtime.state_code,
+            "pid": runtime.pid,
+            "start_type": runtime.start_type,
+            "start_type_code": runtime.start_type_code,
+            "binary_path_name": runtime.binary_path_name,
+            "service_start_name": runtime.service_start_name,
+            "display_name": runtime.display_name,
+            "wrapper_xml_path": windows_wrapper_xml_path(),
+            "wrapper_log_dir": windows_wrapper_log_dir(),
+            "drift_issues": issues,
+            "deep_query": if opts.deep { Some(query_text.clone()) } else { None },
+            "deep_qc": if opts.deep { Some(qc_text.clone()) } else { None },
+        });
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        print_windows_status_text(
+            &runtime,
+            &issues,
+            if opts.deep { Some(&query_text) } else { None },
+            if opts.deep { Some(&qc_text) } else { None },
+            opts.deep,
+        );
     }
 
     if running {
@@ -1287,11 +1963,47 @@ mod tests {
 
     #[test]
     fn test_resolve_runtime_logs_dir_fallback() {
-        let dir = resolve_runtime_logs_dir(Path::new("/tmp/microclaw"));
+        let dir = resolve_runtime_logs_dir(Path::new("/tmp/microclaw"), None);
         assert!(
             dir.ends_with("runtime/logs") || dir.ends_with("microclaw.data/runtime/logs"),
             "unexpected logs dir: {}",
             dir.display()
+        );
+    }
+
+    #[test]
+    fn test_render_windows_service_xml_contains_required_fields() {
+        let xml = render_windows_service_xml(&test_ctx());
+        let normalized = xml.replace('\\', "/");
+        assert!(xml.contains(&format!("<id>{WINDOWS_SERVICE_NAME}</id>")));
+        assert!(xml.contains("<arguments>start</arguments>"));
+        assert!(xml.contains("MICROCLAW_GATEWAY"));
+        assert!(xml.contains("MICROCLAW_CONFIG"));
+        assert!(xml.contains("<onfailure action=\"restart\" delay=\"5 sec\"/>"));
+        assert!(normalized.contains("winsw-logs"));
+    }
+
+    #[test]
+    fn test_parse_windows_runtime_status() {
+        let runtime = parse_windows_runtime_status(
+            "SERVICE_NAME: MicroClawGateway\n        STATE              : 4  RUNNING\n        PID                : 4242\n",
+            "SERVICE_NAME: MicroClawGateway\n        DISPLAY_NAME       : MicroClaw Gateway\n        START_TYPE         : 2   AUTO_START\n        BINARY_PATH_NAME   : C:\\ProgramData\\MicroClaw\\gateway\\MicroClawGateway.exe\n        SERVICE_START_NAME : LocalSystem\n",
+        );
+        assert!(runtime.installed);
+        assert_eq!(runtime.state_code, Some(4));
+        assert_eq!(runtime.state.as_deref(), Some("RUNNING"));
+        assert_eq!(runtime.pid, Some(4242));
+        assert_eq!(runtime.start_type_code, Some(2));
+        assert_eq!(runtime.start_type.as_deref(), Some("AUTO_START"));
+        assert_eq!(runtime.service_start_name.as_deref(), Some("LocalSystem"));
+    }
+
+    #[test]
+    fn test_xml_env_value_round_trip() {
+        let xml = r#"<service><env name="MICROCLAW_CONFIG" value="C:\Users\alice\microclaw.config.yaml" /></service>"#;
+        assert_eq!(
+            xml_env_value(xml, "MICROCLAW_CONFIG").as_deref(),
+            Some(r#"C:\Users\alice\microclaw.config.yaml"#)
         );
     }
 }
