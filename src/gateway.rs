@@ -289,17 +289,22 @@ fn parse_log_lines(lines: Option<usize>) -> Result<usize> {
 fn build_context() -> Result<ServiceContext> {
     let exe_path = std::env::current_exe().context("Failed to resolve current binary path")?;
     let current_dir = std::env::current_dir().context("Failed to resolve current directory")?;
-    let mut working_dir = current_dir.clone();
-    let mut config_path = resolve_config_path(&current_dir);
     #[cfg(target_os = "windows")]
-    if config_path.is_none() {
-        if let Some(launch) = resolve_windows_installed_service_launch_info() {
-            if let Some(installed_working_dir) = launch.working_dir {
-                working_dir = installed_working_dir;
+    let (working_dir, config_path) = {
+        let mut working_dir = current_dir.clone();
+        let mut config_path = resolve_config_path(&current_dir);
+        if config_path.is_none() {
+            if let Some(launch) = resolve_windows_installed_service_launch_info() {
+                if let Some(installed_working_dir) = launch.working_dir {
+                    working_dir = installed_working_dir;
+                }
+                config_path = launch.config_path;
             }
-            config_path = launch.config_path;
         }
-    }
+        (working_dir, config_path)
+    };
+    #[cfg(not(target_os = "windows"))]
+    let (working_dir, config_path) = (current_dir.clone(), resolve_config_path(&current_dir));
     let runtime_logs_dir = resolve_runtime_logs_dir(&working_dir, config_path.as_deref());
     let service_env = build_service_env(config_path.as_ref());
 
