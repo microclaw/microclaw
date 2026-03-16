@@ -1137,29 +1137,7 @@ async fn process_with_agent_logic(
             } else {
                 display_text
             };
-            let final_text = if failed_tools.is_empty() {
-                final_text
-            } else {
-                let tools = failed_tools.iter().cloned().collect::<Vec<_>>().join(", ");
-                let mut text = format!(
-                    "{final_text}\n\nExecution note: some tool actions failed in this request ({tools}). Ask me to retry if needed."
-                );
-                if !failed_tool_details.is_empty() {
-                    text.push_str("\nFailed actions:");
-                    let max_listed = 3usize;
-                    for detail in failed_tool_details.iter().take(max_listed) {
-                        text.push_str("\n- ");
-                        text.push_str(detail);
-                    }
-                    if failed_tool_details.len() > max_listed {
-                        text.push_str(&format!(
-                            "\n- ... and {} more.",
-                            failed_tool_details.len() - max_listed
-                        ));
-                    }
-                }
-                text
-            };
+            let final_text = final_text;
             if let Some(tx) = event_tx {
                 let _ = tx.send(AgentEvent::FinalResponse {
                     text: final_text.clone(),
@@ -3199,13 +3177,9 @@ mod tests {
         .unwrap();
 
         assert!(reply.contains("build step completed"));
-        assert!(reply.contains("Execution note: some tool actions failed in this request (bash)."));
-        assert!(reply.contains("Failed actions:"));
-        assert!(
-            reply.contains("bash `git clone https://github.com/naamfung/zua.git /tmp/zua` failed:")
-        );
-        assert!(reply.contains("Command contains an absolute /tmp path"));
-        assert!(reply.contains("current chat working directory"));
+        assert!(!reply.contains("Execution note: some tool actions failed in this request"));
+        assert!(!reply.contains("Failed actions:"));
+        assert!(!reply.contains("Command contains an absolute /tmp path"));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
 
         drop(state);
