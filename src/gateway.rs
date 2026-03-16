@@ -937,6 +937,7 @@ fn cleanup_legacy_windows_wrapper_artifacts() -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn resolve_windows_installed_service_launch_info() -> Option<WindowsServiceLaunchInfo> {
     let output = run_command("sc.exe", &["qc", WINDOWS_SERVICE_NAME]).ok()?;
     if windows_service_missing(&output) {
