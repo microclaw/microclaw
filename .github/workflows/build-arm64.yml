@@ -19,21 +19,18 @@ jobs:
         with:
           targets: aarch64-unknown-linux-gnu
 
+      - name: Patch Cargo.toml for rustls
+        run: |
+          # Replace native-tls with rustls
+          sed -i 's/tokio-native-tls = "0.3"/tokio-rustls = "0.26"/' Cargo.toml
+          sed -i 's/native-tls = "0.2"/rustls = "0.23"/' Cargo.toml
+          sed -i 's/reqwest = { version = "0.12", features = \["json", "blocking"\] }/reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"] }/' Cargo.toml
+
       - name: Install cross
         run: cargo install cross
 
-      - name: Install ARM64 OpenSSL
-        run: |
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev:arm64 pkg-config
-
       - name: Build ARM64
-        run: |
-          export OPENSSL_DIR=/usr/aarch64-linux-gnu
-          export PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig
-          export PKG_CONFIG_ALLOW_CROSS=1
-          cross build --release --target aarch64-unknown-linux-gnu
+        run: cross build --release --target aarch64-unknown-linux-gnu
 
       - name: Create release archive
         run: |
