@@ -2365,6 +2365,11 @@ mod tests {
         }
     }
 
+    fn unique_test_chat_id() -> i64 {
+        static NEXT_TEST_CHAT_ID: AtomicUsize = AtomicUsize::new(10_000);
+        NEXT_TEST_CHAT_ID.fetch_add(1, Ordering::Relaxed) as i64
+    }
+
     #[tokio::test]
     async fn test_send_stream_then_stream_done() {
         let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
@@ -4814,10 +4819,12 @@ commands:
         seed_test_api_key(&web_state, "ws-kill-secret").await;
         let app = build_router(web_state.clone());
         let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+        let chat_id = unique_test_chat_id();
+        let session_key = format!("chat:{chat_id}");
+        let session_key_for_db = session_key.clone();
 
         call_blocking(web_state.app_state.db.clone(), move |db| {
-            db.resolve_or_create_chat_id("web", "main", Some("main"), "web")
-                .map(|_| ())
+            db.upsert_chat(chat_id, Some(&session_key_for_db), "web")
         })
         .await
         .unwrap();
@@ -4827,9 +4834,9 @@ commands:
             .uri("/api/send_stream")
             .header("authorization", "Bearer ws-kill-secret")
             .header("content-type", "application/json")
-            .body(Body::from(
-                r#"{"session_key":"main","sender_name":"u","message":"slow"}"#,
-            ))
+            .body(Body::from(format!(
+                r#"{{"session_key":"{session_key}","sender_name":"u","message":"slow"}}"#
+            )))
             .unwrap();
         let send_resp = app.oneshot(send_req).await.unwrap();
         assert_eq!(send_resp.status(), StatusCode::OK);
@@ -4870,7 +4877,7 @@ commands:
                 "type": "req",
                 "id": "kill-1",
                 "method": "sessions_kill",
-                "params": { "sessionKey": "main" }
+                "params": { "sessionKey": session_key }
             })
             .to_string(),
         ))
