@@ -10,27 +10,17 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main
+    runs-on: ubuntu-24.04-arm64
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          . "$HOME/.cargo/env"
-          rustup target add aarch64-unknown-linux-gnu
-
       - name: Build
-        run: |
-          . "$HOME/.cargo/env"
-          cargo build --release --target aarch64-unknown-linux-gnu
+        run: cargo build --release
 
       - name: Create release archive
         run: |
           mkdir -p release
-          cp target/aarch64-unknown-linux-gnu/release/microclaw release/
+          cp target/release/microclaw release/
           cd release
           tar czf microclaw-aarch64-unknown-linux-gnu.tar.gz microclaw
           sha256sum microclaw-aarch64-unknown-linux-gnu.tar.gz > SHA256SUMS
