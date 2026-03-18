@@ -38,12 +38,12 @@ impl Tool for ReadFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read_file".into(),
-            description: "Read the contents of a file at the given path. Returns the file content with line numbers.".into(),
+            description: "Read the contents of a file at the given path. Returns the file content with line numbers. Prefer paths relative to the current chat working directory; do not invent machine-specific absolute paths unless the user or a tool already provided them.".into(),
             input_schema: schema_object(
                 json!({
                     "path": {
                         "type": "string",
-                        "description": "The file path to read"
+                        "description": "The file path to read, usually relative to the current chat working directory"
                     },
                     "offset": {
                         "type": "integer",
@@ -107,6 +107,19 @@ impl Tool for ReadFileTool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_read_file_definition_prefers_relative_paths() {
+        let tool = ReadFileTool::new(".");
+        let def = tool.definition();
+        assert!(def
+            .description
+            .contains("Prefer paths relative to the current chat working directory"));
+        assert_eq!(
+            def.input_schema["properties"]["path"]["description"].as_str(),
+            Some("The file path to read, usually relative to the current chat working directory")
+        );
+    }
 
     #[tokio::test]
     async fn test_read_file_success() {

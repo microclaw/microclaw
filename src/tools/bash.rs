@@ -159,7 +159,7 @@ impl Tool for BashTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "bash".into(),
-            description: "Execute a bash command and return the output. IMPORTANT: You must CALL this tool (not write it as text) to run a command. Use for running shell commands, scripts, or system operations. Use relative paths or the current chat working directory's tmp/ subdirectory instead of absolute /tmp paths.".into(),
+            description: "Execute a bash command and return the output. IMPORTANT: You must CALL this tool (not write it as text) to run a command. Use for running shell commands, scripts, or system operations. Prefer relative paths rooted in the current chat working directory, and use its tmp/ subdirectory instead of absolute /tmp paths. Do not invent machine-specific absolute paths like /home/... or /Users/... unless the user or a tool already provided them.".into(),
             input_schema: schema_object(
                 json!({
                     "command": {
@@ -419,7 +419,10 @@ mod tests {
         assert_eq!(tool.name(), "bash");
         let def = tool.definition();
         assert_eq!(def.name, "bash");
-        assert!(!def.description.is_empty());
+        assert!(def
+            .description
+            .contains("Prefer relative paths rooted in the current chat working directory"));
+        assert!(def.description.contains("/home/... or /Users/..."));
         assert!(def.input_schema["properties"]["command"].is_object());
     }
 

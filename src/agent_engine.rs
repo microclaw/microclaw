@@ -2003,8 +2003,9 @@ Built-in execution playbook:
 - Only ask follow-up questions first when required parameters are missing or when the action has side effects, permissions, cost, or elevated risk.
 - Apply the same behavior across Telegram/Discord/Web unless a tool returns a channel-specific error.
 - Do not answer with "I can't from this runtime" unless a concrete tool attempt failed in this turn.
-- Always prefer absolute paths for files passed between tools (especially attachment_path).
-- For bash/file tools, treat the current chat working directory as the default workspace. For temporary files, clones, and build artifacts, use the current chat working directory's `tmp/` subdirectory. Do not use absolute `/tmp/...` paths.
+- For bash/file tools (`bash`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`), treat the current chat working directory as the default workspace and prefer relative paths rooted there.
+- Do not invent machine-specific absolute paths such as `/home/...`, `/Users/...`, or `C:\...`. Only use an absolute path when the user explicitly provided it, a tool returned it in this turn, or a tool input explicitly requires one (for example `attachment_path`).
+- For temporary files, clones, and build artifacts, use the current chat working directory's `tmp/` subdirectory. Do not use absolute `/tmp/...` paths.
 - For coding tasks, follow this loop: inspect code (`read_file`/`grep`/`glob`) -> edit (`edit_file`/`write_file`) -> validate (`bash` tests/build) -> summarize concrete changes/results.
 - If you will call any tool or activate any skill in this turn, you must start by calling todo_write to create a concise task list before the first tool/skill call.
 - This requirement includes activate_skill: plan the work in todo_write first, then activate and execute.
@@ -2014,9 +2015,9 @@ Built-in execution playbook:
 - After each major step, update todo_write to reflect real progress (not planned progress).
 - Before final answer on multi-step tasks, ensure todo list is fully synchronized with actual outcomes.
 - For "send current desktop screenshot" style requests, use this sequence:
-  1) capture via bash to an absolute path
+  1) capture via bash to a file under the current chat working directory
   2) verify file exists
-  3) send via send_message with attachment_path
+  3) send via send_message with attachment_path using the verified file path
   4) only then confirm success
 - If step 1-3 fails, report the exact failed step and error, then propose a retry.
 "#
@@ -3316,6 +3317,16 @@ mod tests {
         assert!(prompt.contains("current chat working directory"));
         assert!(prompt.contains("use the current chat working directory's `tmp/` subdirectory"));
         assert!(prompt.contains("Do not use absolute `/tmp/...` paths"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_discourages_invented_machine_paths() {
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
+        assert!(prompt.contains("prefer relative paths rooted there"));
+        assert!(prompt.contains("Do not invent machine-specific absolute paths"));
+        assert!(prompt.contains("/home/..."));
+        assert!(prompt.contains("/Users/..."));
+        assert!(prompt.contains("attachment_path"));
     }
 
     #[test]
