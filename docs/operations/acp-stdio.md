@@ -10,6 +10,8 @@ microclaw acp
 
 Use ACP mode when another local tool wants to treat MicroClaw as a sessioned chat runtime over stdio instead of using a chat adapter or the Web API.
 
+This document is about MicroClaw acting as an ACP **server**. It is separate from ACP-backed subagent execution via `sessions_spawn(runtime="acp")`.
+
 Typical cases:
 
 - local editor or IDE integrations

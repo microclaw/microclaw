@@ -171,6 +171,9 @@ fn default_subagent_max_tokens_per_run() -> i64 {
 fn default_subagent_orchestrate_max_workers() -> usize {
     5
 }
+fn default_subagent_acp_auto_approve() -> bool {
+    true
+}
 fn default_a2a_enabled() -> bool {
     false
 }
@@ -264,6 +267,32 @@ pub struct ResolvedLlmProviderProfile {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubagentAcpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default = "default_subagent_acp_auto_approve")]
+    pub auto_approve: bool,
+}
+
+impl Default for SubagentAcpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            auto_approve: default_subagent_acp_auto_approve(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubagentConfig {
     #[serde(default = "default_subagent_max_concurrent")]
     pub max_concurrent: usize,
@@ -285,6 +314,8 @@ pub struct SubagentConfig {
     pub max_tokens_per_run: i64,
     #[serde(default = "default_subagent_orchestrate_max_workers")]
     pub orchestrate_max_workers: usize,
+    #[serde(default)]
+    pub acp: SubagentAcpConfig,
 }
 
 impl Default for SubagentConfig {
@@ -300,6 +331,7 @@ impl Default for SubagentConfig {
             announce_relay_interval_secs: default_subagent_announce_relay_interval_secs(),
             max_tokens_per_run: default_subagent_max_tokens_per_run(),
             orchestrate_max_workers: default_subagent_orchestrate_max_workers(),
+            acp: SubagentAcpConfig::default(),
         }
     }
 }
@@ -1396,6 +1428,29 @@ Use operator password + API keys for Web auth."
         }
         self.subagents.orchestrate_max_workers =
             self.subagents.orchestrate_max_workers.clamp(1, 12);
+        self.subagents.acp.command = self.subagents.acp.command.trim().to_string();
+        self.subagents.acp.args = self
+            .subagents
+            .acp
+            .args
+            .drain(..)
+            .map(|arg| arg.trim().to_string())
+            .filter(|arg| !arg.is_empty())
+            .collect();
+        self.subagents.acp.env = self
+            .subagents
+            .acp
+            .env
+            .drain()
+            .filter_map(|(key, value)| {
+                let normalized = key.trim().to_string();
+                if normalized.is_empty() {
+                    None
+                } else {
+                    Some((normalized, value))
+                }
+            })
+            .collect();
         self.tool_timeout_overrides = self
             .tool_timeout_overrides
             .drain()
@@ -2803,6 +2858,37 @@ openai_compat_body_overrides_by_model:
             Some(&serde_json::json!(0.1))
         );
         assert!(!model_params.contains_key(""));
+    }
+
+    #[test]
+    fn test_post_deserialize_normalizes_subagent_acp_config() {
+        let yaml = r#"
+telegram_bot_token: tok
+bot_username: bot
+api_key: key
+subagents:
+  acp:
+    enabled: true
+    command: "  codex  "
+    args: ["  --model  ", " ", "gpt-5.4"]
+    env:
+      " OPENAI_API_KEY ": abc
+      "   ": ignored
+"#;
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+
+        assert!(config.subagents.acp.enabled);
+        assert_eq!(config.subagents.acp.command, "codex");
+        assert_eq!(
+            config.subagents.acp.args,
+            vec!["--model".to_string(), "gpt-5.4".to_string()]
+        );
+        assert_eq!(
+            config.subagents.acp.env.get("OPENAI_API_KEY"),
+            Some(&"abc".to_string())
+        );
+        assert!(!config.subagents.acp.env.contains_key("   "));
     }
 
     #[test]

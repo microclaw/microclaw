@@ -23,6 +23,38 @@ use microclaw_storage::db::{
 const MAX_SUB_AGENT_ITERATIONS: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
+enum SubagentExecutionRuntime {
+    Native,
+    Acp,
+}
+
+impl SubagentExecutionRuntime {
+    fn from_input(input: &serde_json::Value) -> Result<Self, String> {
+        match input
+            .get("runtime")
+            .and_then(|v| v.as_str())
+            .unwrap_or("native")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "" | "native" => Ok(Self::Native),
+            "acp" => Ok(Self::Acp),
+            other => Err(format!(
+                "Unsupported subagent runtime '{other}'. Expected 'native' or 'acp'."
+            )),
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Acp => "acp",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 struct SubagentRuntimeMeta {
     depth: i64,
     token_budget_remaining: Option<i64>,
@@ -61,7 +93,7 @@ fn compute_child_token_budget(
     Ok(desired.clamp(2_000, configured_max))
 }
 
-fn normalize_subagent_artifact_payload(raw_text: &str) -> (String, String) {
+pub(crate) fn normalize_subagent_artifact_payload(raw_text: &str) -> (String, String) {
     let text = raw_text.trim();
     let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
     let mut summary = String::new();
@@ -197,7 +229,7 @@ async fn log_subagent_event(
     .await;
 }
 
-async fn is_cancelled(
+pub(crate) async fn is_cancelled(
     db: Arc<Database>,
     run_id: &str,
     local_flag: &Arc<AtomicBool>,
@@ -218,6 +250,7 @@ struct RunSubAgentTaskParams {
     channel_registry: Arc<ChannelRegistry>,
     auth_context: ToolAuthContext,
     run_id: String,
+    runtime: SubagentExecutionRuntime,
     depth: i64,
     run_token_budget: i64,
     task: String,
@@ -234,12 +267,28 @@ async fn run_sub_agent_task(
         channel_registry,
         auth_context,
         run_id,
+        runtime,
         depth,
         run_token_budget,
         task,
         context,
         local_cancel,
     } = params;
+    if matches!(runtime, SubagentExecutionRuntime::Acp) {
+        return crate::acp_subagent::run_acp_subagent_task(
+            crate::acp_subagent::AcpSubagentTaskParams {
+                config,
+                db,
+                auth_context,
+                run_id,
+                task,
+                context,
+                local_cancel,
+            },
+        )
+        .await;
+    }
+
     let llm = crate::llm::create_provider(&config);
     let allow_session_tools = depth < config.subagents.max_spawn_depth as i64;
     let tools = ToolRegistry::new_sub_agent(
@@ -571,6 +620,11 @@ impl Tool for SessionsSpawnTool {
                         "type": "string",
                         "description": "Optional extra context passed to the sub-agent"
                     },
+                    "runtime": {
+                        "type": "string",
+                        "enum": ["native", "acp"],
+                        "description": "Execution backend for the sub-agent. Defaults to native."
+                    },
                     "chat_id": {
                         "type": "integer",
                         "description": "Target chat id. Defaults to current chat."
@@ -613,6 +667,10 @@ impl Tool for SessionsSpawnTool {
             .unwrap_or("")
             .trim()
             .to_string();
+        let execution_runtime = match SubagentExecutionRuntime::from_input(&input) {
+            Ok(v) => v,
+            Err(e) => return ToolResult::error(e),
+        };
         let parent_meta = subagent_runtime_meta_from_input(&input);
         let parent_depth = parent_meta.map(|m| m.depth).unwrap_or(0);
         let parent_budget_remaining = parent_meta.and_then(|m| m.token_budget_remaining);
@@ -685,8 +743,28 @@ impl Tool for SessionsSpawnTool {
         }
 
         let run_id = format!("subrun-{}", uuid::Uuid::new_v4());
-        let provider = self.config.llm_provider.clone();
-        let model = self.config.model.clone();
+        let (provider, model) = match execution_runtime {
+            SubagentExecutionRuntime::Native => {
+                (self.config.llm_provider.clone(), self.config.model.clone())
+            }
+            SubagentExecutionRuntime::Acp => {
+                if !self.config.subagents.acp.enabled {
+                    return ToolResult::error(
+                        "ACP runtime is disabled. Set `subagents.acp.enabled: true` and configure `subagents.acp.command` first."
+                            .into(),
+                    );
+                }
+                if self.config.subagents.acp.command.trim().is_empty() {
+                    return ToolResult::error(
+                        "ACP runtime is enabled but `subagents.acp.command` is empty.".into(),
+                    );
+                }
+                (
+                    crate::acp_subagent::acp_runtime_provider().to_string(),
+                    crate::acp_subagent::acp_runtime_model(&self.config),
+                )
+            }
+        };
 
         let run_id_for_insert = run_id.clone();
         let task_for_insert = task.clone();
@@ -715,7 +793,10 @@ impl Tool for SessionsSpawnTool {
             self.db.clone(),
             &run_id,
             "accepted",
-            Some(format!("depth={child_depth}")),
+            Some(format!(
+                "depth={child_depth} runtime={}",
+                execution_runtime.as_str()
+            )),
         )
         .await;
 
@@ -777,6 +858,7 @@ impl Tool for SessionsSpawnTool {
                 channel_registry: subagent_channel_registry,
                 auth_context: auth_async,
                 run_id: run_id_async.clone(),
+                runtime: execution_runtime,
                 depth: child_depth,
                 run_token_budget: child_token_budget,
                 task: task_async,
@@ -895,6 +977,7 @@ impl Tool for SessionsSpawnTool {
                 "run_id": run_id,
                 "chat_id": chat_id,
                 "depth": child_depth,
+                "runtime": execution_runtime.as_str(),
                 "token_budget": child_token_budget,
                 "parent_run_id": parent_run_id,
             })
@@ -1939,6 +2022,36 @@ mod tests {
             .await;
         assert!(result.is_error);
         assert!(result.content.contains("task"));
+    }
+
+    #[tokio::test]
+    async fn test_sessions_spawn_rejects_unknown_runtime() {
+        let tool =
+            SessionsSpawnTool::new(&test_config(), test_db(), Arc::new(ChannelRegistry::new()));
+        let result = tool
+            .execute(json!({
+                "task": "run",
+                "runtime": "mystery",
+                "__microclaw_auth": {"caller_channel":"web", "caller_chat_id": 1}
+            }))
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("Unsupported subagent runtime"));
+    }
+
+    #[tokio::test]
+    async fn test_sessions_spawn_rejects_disabled_acp_runtime() {
+        let tool =
+            SessionsSpawnTool::new(&test_config(), test_db(), Arc::new(ChannelRegistry::new()));
+        let result = tool
+            .execute(json!({
+                "task": "run",
+                "runtime": "acp",
+                "__microclaw_auth": {"caller_channel":"web", "caller_chat_id": 1}
+            }))
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("ACP runtime is disabled"));
     }
 
     #[tokio::test]
