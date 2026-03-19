@@ -364,7 +364,7 @@ impl ResolvedSubagentAcpTargetConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SubagentAcpConfig {
     #[serde(flatten)]
     pub default_target: SubagentAcpTargetConfig,
@@ -372,16 +372,6 @@ pub struct SubagentAcpConfig {
     pub default_target_name: Option<String>,
     #[serde(default)]
     pub targets: HashMap<String, SubagentAcpTargetConfig>,
-}
-
-impl Default for SubagentAcpConfig {
-    fn default() -> Self {
-        Self {
-            default_target: SubagentAcpTargetConfig::default(),
-            default_target_name: None,
-            targets: HashMap::new(),
-        }
-    }
 }
 
 impl SubagentAcpConfig {
