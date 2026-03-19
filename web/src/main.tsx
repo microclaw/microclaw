@@ -55,6 +55,29 @@ type ThinkExtraction = {
   thinkSegments: string[]
 }
 
+const THINK_TAGS = ['think', 'thought', 'thinking', 'reasoning'] as const
+
+function stripAgentProtocolBlocks(text: string): string {
+  if (!text) return ''
+
+  let out = text
+  const pairedTagPatterns = [
+    /<tool_call>[\s\S]*?<\/tool_call>/g,
+    /<function(?:=[^>\n]*)?>[\s\S]*?<\/function>/g,
+    /<parameter(?:=[^>\n]*)?>[\s\S]*?<\/parameter>/g,
+  ]
+
+  for (const pattern of pairedTagPatterns) {
+    out = out.replace(pattern, '')
+  }
+
+  return out
+    .replace(/<tool_call>[\s\S]*$/g, '')
+    .replace(/<function(?:=[^>\n]*)?>[\s\S]*$/g, '')
+    .replace(/<parameter(?:=[^>\n]*)?>[\s\S]*$/g, '')
+    .replace(/<\/?(?:tool_call|function|parameter)(?:=[^>\n]*)?>/g, '')
+}
+
 function extractThinkSegments(text: string): ThinkExtraction {
   if (!text) return { visibleText: '', thinkSegments: [] }
 
@@ -63,28 +86,37 @@ function extractThinkSegments(text: string): ThinkExtraction {
   let index = 0
 
   while (index < text.length) {
-    const start = text.indexOf('<think>', index)
-    if (start < 0) {
+    const next = THINK_TAGS
+      .map((tag) => ({ tag, start: text.indexOf(`<${tag}>`, index) }))
+      .filter((entry) => entry.start >= 0)
+      .sort((a, b) => a.start - b.start)[0]
+
+    if (!next) {
       visibleText += text.slice(index)
       break
     }
 
-    visibleText += text.slice(index, start)
-    const contentStart = start + '<think>'.length
-    const end = text.indexOf('</think>', contentStart)
+    visibleText += text.slice(index, next.start)
+    const openTag = `<${next.tag}>`
+    const closeTag = `</${next.tag}>`
+    const contentStart = next.start + openTag.length
+    const end = text.indexOf(closeTag, contentStart)
 
     if (end < 0) {
-      const tail = text.slice(contentStart).trim()
+      const tail = stripAgentProtocolBlocks(text.slice(contentStart)).trim()
       if (tail) thinkSegments.push(tail)
       break
     }
 
-    const segment = text.slice(contentStart, end).trim()
+    const segment = stripAgentProtocolBlocks(text.slice(contentStart, end)).trim()
     if (segment) thinkSegments.push(segment)
-    index = end + '</think>'.length
+    index = end + closeTag.length
   }
 
-  return { visibleText, thinkSegments }
+  return {
+    visibleText: stripAgentProtocolBlocks(visibleText),
+    thinkSegments,
+  }
 }
 
 function collectThinkText(parts: readonly { type: string; text?: string }[] | undefined): string {
