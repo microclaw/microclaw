@@ -8,8 +8,8 @@ set -euo pipefail
 # 2. Build web/dist
 # 3. cargo build --release
 # 4. Create a tar.gz of the binary
-# 5. Create a GitHub release and upload the tarball
-# 6. Update the homebrew-tap Formula with new version + sha256
+# 5. Create/update the GitHub release metadata
+# 6. Wait for CI release assets and update the homebrew-tap Formula with the official sha256
 # 7. Push tap changes
 # -------------------------------------------------------------------
 
@@ -172,7 +172,7 @@ tar -czf "$TARBALL_PATH" -C target/release microclaw
 echo "Created tarball: $TARBALL_PATH"
 
 SHA256=$(shasum -a 256 "$TARBALL_PATH" | awk '{print $1}')
-echo "SHA256: $SHA256"
+echo "Local tarball SHA256: $SHA256"
 
 # --- Git commit + push ---
 git add .
@@ -190,6 +190,4 @@ echo "Release commit pushed: $(git rev-parse HEAD)"
   --github-repo "$GITHUB_REPO" \
   --new-version "$NEW_VERSION" \
   --tag "$TAG" \
-  --tarball-path "$TARBALL_PATH" \
-  --tarball-name "$TARBALL_NAME" \
-  --sha256 "$SHA256"
+  --tarball-name "$TARBALL_NAME"

@@ -6,7 +6,7 @@ usage() {
 Usage:
   scripts/release_finalize.sh --repo-dir <path> --tap-dir <path> --tap-repo <owner/repo> \
     --formula-path <path> --github-repo <owner/repo> --new-version <version> --tag <tag> \
-    --tarball-path <path> --tarball-name <name> --sha256 <sha256>
+    --tarball-name <name>
 EOF
 }
 
@@ -127,6 +127,81 @@ wait_for_ci_success() {
   return 1
 }
 
+wait_for_release_assets_success() {
+  local github_repo="$1"
+  local tag="$2"
+  local timeout_seconds="${RELEASE_ASSETS_WAIT_TIMEOUT_SECONDS:-7200}"
+  local interval_seconds="${RELEASE_ASSETS_WAIT_INTERVAL_SECONDS:-20}"
+  local elapsed=0
+
+  echo "Waiting for Release Assets workflow on tag: $tag"
+  while [ "$elapsed" -lt "$timeout_seconds" ]; do
+    local runs_json
+    runs_json="$(
+      gh run list \
+        --repo "$github_repo" \
+        --workflow "Release Assets" \
+        --branch "$tag" \
+        --json databaseId,status,conclusion,createdAt,url
+    )"
+
+    local run_id
+    run_id="$(jq -r 'sort_by(.createdAt) | reverse | .[0].databaseId // empty' <<<"$runs_json")"
+
+    if [ -z "$run_id" ]; then
+      echo "Release Assets run not found yet for tag $tag."
+      sleep "$interval_seconds"
+      elapsed=$((elapsed + interval_seconds))
+      continue
+    fi
+
+    local status
+    local conclusion
+    local url
+    status="$(jq -r 'sort_by(.createdAt) | reverse | .[0].status' <<<"$runs_json")"
+    conclusion="$(jq -r 'sort_by(.createdAt) | reverse | .[0].conclusion // empty' <<<"$runs_json")"
+    url="$(jq -r 'sort_by(.createdAt) | reverse | .[0].url // empty' <<<"$runs_json")"
+
+    if [ "$status" = "completed" ] && [ "$conclusion" = "success" ]; then
+      echo "Release Assets workflow succeeded. Run id: $run_id"
+      return 0
+    fi
+
+    if [ "$status" = "completed" ]; then
+      echo "Release Assets workflow failed for tag $tag: ${conclusion:-unknown} ${url:-}" >&2
+      return 1
+    fi
+
+    echo "Release Assets still running (${status:-unknown}). Slept ${elapsed}s/${timeout_seconds}s."
+    sleep "$interval_seconds"
+    elapsed=$((elapsed + interval_seconds))
+  done
+
+  echo "Timed out waiting for Release Assets workflow after ${timeout_seconds}s." >&2
+  return 1
+}
+
+release_asset_sha256() {
+  local github_repo="$1"
+  local tag="$2"
+  local asset_name="$3"
+  local digest
+
+  digest="$(
+    gh release view "$tag" \
+      --repo "$github_repo" \
+      --json assets \
+      | jq -r --arg asset_name "$asset_name" '.assets[] | select(.name == $asset_name) | .digest'
+  )"
+
+  if [ -z "$digest" ] || [ "$digest" = "null" ]; then
+    echo "Unable to find digest for release asset: $asset_name" >&2
+    return 1
+  fi
+
+  echo "${digest#sha256:}"
+}
+
 previous_release_tag() {
   local current_tag="$1"
   git tag --list 'v*' --sort=-version:refname | awk -v current="$current_tag" '$0 != current { print; exit }'
@@ -156,9 +231,7 @@ FORMULA_PATH=""
 GITHUB_REPO=""
 NEW_VERSION=""
 TAG=""
-TARBALL_PATH=""
 TARBALL_NAME=""
-SHA256=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -169,9 +242,7 @@ while [ "$#" -gt 0 ]; do
     --github-repo) GITHUB_REPO="$2"; shift 2 ;;
     --new-version) NEW_VERSION="$2"; shift 2 ;;
     --tag) TAG="$2"; shift 2 ;;
-    --tarball-path) TARBALL_PATH="$2"; shift 2 ;;
     --tarball-name) TARBALL_NAME="$2"; shift 2 ;;
-    --sha256) SHA256="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -181,7 +252,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-for required in REPO_DIR TAP_DIR TAP_REPO FORMULA_PATH GITHUB_REPO NEW_VERSION TAG TARBALL_PATH TARBALL_NAME SHA256; do
+for required in REPO_DIR TAP_DIR TAP_REPO FORMULA_PATH GITHUB_REPO NEW_VERSION TAG TARBALL_NAME; do
   if [ -z "${!required}" ]; then
     echo "Missing required argument: $required" >&2
     usage >&2
@@ -192,7 +263,6 @@ done
 require_cmd gh
 require_cmd git
 require_cmd jq
-require_cmd shasum
 
 if ! gh auth status >/dev/null 2>&1; then
   echo "GitHub CLI not authenticated. Run: gh auth login" >&2
@@ -230,19 +300,25 @@ trap 'rm -f "$RELEASE_NOTES_FILE"' EXIT
 write_generated_release_notes "$GITHUB_REPO" "$TAG" "$PREV_TAG" "$RELEASE_NOTES_FILE"
 
 if gh release view "$TAG" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
-  echo "Release $TAG exists. Updating notes and uploading/overwriting asset."
+  echo "Release $TAG exists. Updating release notes."
   gh release edit "$TAG" \
     --repo "$GITHUB_REPO" \
     -t "$TAG" \
     --notes-file "$RELEASE_NOTES_FILE"
-  gh release upload "$TAG" "$TARBALL_PATH" --repo "$GITHUB_REPO" --clobber
 else
-  echo "Release $TAG does not exist. Creating release with generated notes and uploading asset."
-  gh release create "$TAG" "$TARBALL_PATH" \
+  echo "Release $TAG does not exist. Creating release with generated notes."
+  gh release create "$TAG" \
     --repo "$GITHUB_REPO" \
     -t "$TAG" \
     --notes-file "$RELEASE_NOTES_FILE"
 fi
+
+if ! wait_for_release_assets_success "$GITHUB_REPO" "$TAG"; then
+  exit 1
+fi
+
+OFFICIAL_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$TARBALL_NAME")"
+echo "Official release asset SHA256: $OFFICIAL_SHA256"
 
 echo "Resetting tap workspace: $TAP_DIR"
 rm -rf "$TAP_DIR"
@@ -258,7 +334,7 @@ class Microclaw < Formula
   desc "Agentic AI assistant for Telegram - web search, scheduling, memory, tool execution"
   homepage "https://github.com/$GITHUB_REPO"
   url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$TARBALL_NAME"
-  sha256 "$SHA256"
+  sha256 "$OFFICIAL_SHA256"
   license "MIT"
 
   def install
