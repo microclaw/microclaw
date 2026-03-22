@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: microclaw
-    command: ["microclaw", "start"]
+    command: ["start"]
     stdin_open: true
     tty: true
     init: true

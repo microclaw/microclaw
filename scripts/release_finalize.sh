@@ -6,7 +6,7 @@ usage() {
 Usage:
   scripts/release_finalize.sh --repo-dir <path> --tap-dir <path> --tap-repo <owner/repo> \
     --formula-path <path> --github-repo <owner/repo> --new-version <version> --tag <tag> \
-    --tarball-path <path> --tarball-name <name> --sha256 <sha256>
+    --tarball-name <name>
 EOF
 }
 
@@ -51,7 +51,7 @@ wait_for_ci_success() {
   local timeout_seconds="${CI_WAIT_TIMEOUT_SECONDS:-6000}"
   local interval_seconds="${CI_WAIT_INTERVAL_SECONDS:-20}"
   local elapsed=0
-  local required_jobs_json='["Web And Docs Build","Rust (ubuntu-latest)","Rust (macos-latest)","Stability Smoke"]'
+  local required_jobs_json='["Web And Docs Build","Docker Build","Security Audit","Rust (ubuntu-latest)","Rust (macos-latest)","Stability Smoke"]'
   local required_job_count
 
   required_job_count="$(jq -r 'length' <<<"$required_jobs_json")"
@@ -127,6 +127,120 @@ wait_for_ci_success() {
   return 1
 }
 
+wait_for_release_asset_ready() {
+  local github_repo="$1"
+  local tag="$2"
+  local asset_name="$3"
+  local timeout_seconds="${RELEASE_ASSETS_WAIT_TIMEOUT_SECONDS:-7200}"
+  local interval_seconds="${RELEASE_ASSETS_WAIT_INTERVAL_SECONDS:-20}"
+  local elapsed=0
+
+  echo "Waiting for release asset on tag: $tag ($asset_name)"
+  while [ "$elapsed" -lt "$timeout_seconds" ]; do
+    local digest
+    digest="$(
+      gh release view "$tag" \
+        --repo "$github_repo" \
+        --json assets \
+        | jq -r --arg asset_name "$asset_name" '.assets[] | select(.name == $asset_name) | .digest'
+    )"
+
+    if [ -n "$digest" ] && [ "$digest" != "null" ]; then
+      echo "Release asset is available: $asset_name"
+      return 0
+    fi
+
+    local runs_json
+    runs_json="$(
+      gh run list \
+        --repo "$github_repo" \
+        --workflow "Release Assets" \
+        --branch "$tag" \
+        --json databaseId,status,conclusion,createdAt,url
+    )"
+
+    local run_id
+    run_id="$(jq -r 'sort_by(.createdAt) | reverse | .[0].databaseId // empty' <<<"$runs_json")"
+
+    if [ -z "$run_id" ]; then
+      echo "Release Assets run not found yet for tag $tag."
+      sleep "$interval_seconds"
+      elapsed=$((elapsed + interval_seconds))
+      continue
+    fi
+
+    local jobs_json
+    jobs_json="$(
+      gh run view "$run_id" \
+        --repo "$github_repo" \
+        --json jobs
+    )"
+
+    local failed_job
+    failed_job="$(
+      jq -r '
+        .jobs
+        | map(select(
+            (.name | startswith("Build "))
+            or .name == "Upload to GitHub Release"
+            or .name == "Verify CI Passed"
+          ))
+        | map(select(
+            .conclusion == "failure"
+            or .conclusion == "cancelled"
+            or .conclusion == "timed_out"
+            or .conclusion == "action_required"
+            or .conclusion == "startup_failure"
+            or .conclusion == "stale"
+          ))
+        | first
+        | if . == null then empty else "\(.name) \(.url)" end
+      ' <<<"$jobs_json"
+    )"
+
+    if [ -n "$failed_job" ]; then
+      echo "Release asset build failed for tag $tag: $failed_job" >&2
+      return 1
+    fi
+
+    local run_status
+    run_status="$(jq -r 'sort_by(.createdAt) | reverse | .[0].status' <<<"$runs_json")"
+    echo "Release asset not ready yet (${run_status:-unknown}). Slept ${elapsed}s/${timeout_seconds}s."
+    sleep "$interval_seconds"
+    elapsed=$((elapsed + interval_seconds))
+  done
+
+  echo "Timed out waiting for release asset after ${timeout_seconds}s: $asset_name" >&2
+  return 1
+}
+
+release_asset_sha256() {
+  local github_repo="$1"
+  local tag="$2"
+  local asset_name="$3"
+  local digest
+
+  digest="$(
+    gh release view "$tag" \
+      --repo "$github_repo" \
+      --json assets \
+      | jq -r --arg asset_name "$asset_name" '.assets[] | select(.name == $asset_name) | .digest'
+  )"
+
+  if [ -z "$digest" ] || [ "$digest" = "null" ]; then
+    echo "Unable to find digest for release asset: $asset_name" >&2
+    return 1
+  fi
+
+  echo "${digest#sha256:}"
+}
+
+homebrew_macos_asset_name() {
+  local version="$1"
+  local arch="$2"
+  echo "microclaw-${version}-${arch}-apple-darwin.tar.gz"
+}
+
 previous_release_tag() {
   local current_tag="$1"
   git tag --list 'v*' --sort=-version:refname | awk -v current="$current_tag" '$0 != current { print; exit }'
@@ -156,9 +270,7 @@ FORMULA_PATH=""
 GITHUB_REPO=""
 NEW_VERSION=""
 TAG=""
-TARBALL_PATH=""
 TARBALL_NAME=""
-SHA256=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -169,9 +281,7 @@ while [ "$#" -gt 0 ]; do
     --github-repo) GITHUB_REPO="$2"; shift 2 ;;
     --new-version) NEW_VERSION="$2"; shift 2 ;;
     --tag) TAG="$2"; shift 2 ;;
-    --tarball-path) TARBALL_PATH="$2"; shift 2 ;;
     --tarball-name) TARBALL_NAME="$2"; shift 2 ;;
-    --sha256) SHA256="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -181,7 +291,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-for required in REPO_DIR TAP_DIR TAP_REPO FORMULA_PATH GITHUB_REPO NEW_VERSION TAG TARBALL_PATH TARBALL_NAME SHA256; do
+for required in REPO_DIR TAP_DIR TAP_REPO FORMULA_PATH GITHUB_REPO NEW_VERSION TAG TARBALL_NAME; do
   if [ -z "${!required}" ]; then
     echo "Missing required argument: $required" >&2
     usage >&2
@@ -192,7 +302,6 @@ done
 require_cmd gh
 require_cmd git
 require_cmd jq
-require_cmd shasum
 
 if ! gh auth status >/dev/null 2>&1; then
   echo "GitHub CLI not authenticated. Run: gh auth login" >&2
@@ -230,19 +339,38 @@ trap 'rm -f "$RELEASE_NOTES_FILE"' EXIT
 write_generated_release_notes "$GITHUB_REPO" "$TAG" "$PREV_TAG" "$RELEASE_NOTES_FILE"
 
 if gh release view "$TAG" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
-  echo "Release $TAG exists. Updating notes and uploading/overwriting asset."
+  echo "Release $TAG exists. Updating release notes."
   gh release edit "$TAG" \
     --repo "$GITHUB_REPO" \
     -t "$TAG" \
     --notes-file "$RELEASE_NOTES_FILE"
-  gh release upload "$TAG" "$TARBALL_PATH" --repo "$GITHUB_REPO" --clobber
 else
-  echo "Release $TAG does not exist. Creating release with generated notes and uploading asset."
-  gh release create "$TAG" "$TARBALL_PATH" \
+  echo "Release $TAG does not exist. Creating release with generated notes."
+  gh release create "$TAG" \
     --repo "$GITHUB_REPO" \
     -t "$TAG" \
     --notes-file "$RELEASE_NOTES_FILE"
 fi
+
+if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$TARBALL_NAME"; then
+  exit 1
+fi
+
+HOMEBREW_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64")"
+HOMEBREW_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64")"
+
+if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME"; then
+  exit 1
+fi
+
+if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBALL_NAME"; then
+  exit 1
+fi
+
+HOMEBREW_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME")"
+HOMEBREW_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBALL_NAME")"
+echo "Official Homebrew arm64 SHA256: $HOMEBREW_ARM64_SHA256"
+echo "Official Homebrew x86_64 SHA256: $HOMEBREW_X86_64_SHA256"
 
 echo "Resetting tap workspace: $TAP_DIR"
 rm -rf "$TAP_DIR"
@@ -257,9 +385,17 @@ cat > "$FORMULA_PATH" << RUBY
 class Microclaw < Formula
   desc "Agentic AI assistant for Telegram - web search, scheduling, memory, tool execution"
   homepage "https://github.com/$GITHUB_REPO"
-  url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$TARBALL_NAME"
-  sha256 "$SHA256"
   license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$HOMEBREW_ARM64_TARBALL_NAME"
+      sha256 "$HOMEBREW_ARM64_SHA256"
+    else
+      url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$HOMEBREW_X86_64_TARBALL_NAME"
+      sha256 "$HOMEBREW_X86_64_SHA256"
+    end
+  end
 
   def install
     bin.install "microclaw"

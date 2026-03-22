@@ -203,6 +203,34 @@ fn subagents_orchestrate_max_workers_key() -> &'static str {
     "SUBAGENTS_ORCHESTRATE_MAX_WORKERS"
 }
 
+fn subagents_acp_enabled_key() -> &'static str {
+    "SUBAGENTS_ACP_ENABLED"
+}
+
+fn subagents_acp_command_key() -> &'static str {
+    "SUBAGENTS_ACP_COMMAND"
+}
+
+fn subagents_acp_args_key() -> &'static str {
+    "SUBAGENTS_ACP_ARGS"
+}
+
+fn subagents_acp_env_json_key() -> &'static str {
+    "SUBAGENTS_ACP_ENV_JSON"
+}
+
+fn subagents_acp_auto_approve_key() -> &'static str {
+    "SUBAGENTS_ACP_AUTO_APPROVE"
+}
+
+fn subagents_acp_default_target_key() -> &'static str {
+    "SUBAGENTS_ACP_DEFAULT_TARGET"
+}
+
+fn subagents_acp_targets_json_key() -> &'static str {
+    "SUBAGENTS_ACP_TARGETS_JSON"
+}
+
 fn telegram_llm_provider_key() -> &'static str {
     "TELEGRAM_LLM_PROVIDER"
 }
@@ -1341,6 +1369,76 @@ impl SetupApp {
                     secret: false,
                 },
                 Field {
+                    key: subagents_acp_enabled_key().into(),
+                    label: "ACP subagent runtime enabled (true/false)".into(),
+                    value: existing
+                        .get(subagents_acp_enabled_key())
+                        .cloned()
+                        .unwrap_or_else(|| "false".into()),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: subagents_acp_command_key().into(),
+                    label: "ACP default command (optional)".into(),
+                    value: existing
+                        .get(subagents_acp_command_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: subagents_acp_args_key().into(),
+                    label: "ACP default args (csv or JSON array, optional)".into(),
+                    value: existing
+                        .get(subagents_acp_args_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: subagents_acp_env_json_key().into(),
+                    label: "ACP default env JSON (optional)".into(),
+                    value: existing
+                        .get(subagents_acp_env_json_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: true,
+                },
+                Field {
+                    key: subagents_acp_auto_approve_key().into(),
+                    label: "ACP default auto-approve permissions (true/false)".into(),
+                    value: existing
+                        .get(subagents_acp_auto_approve_key())
+                        .cloned()
+                        .unwrap_or_else(|| "true".into()),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: subagents_acp_default_target_key().into(),
+                    label: "ACP named default target (optional)".into(),
+                    value: existing
+                        .get(subagents_acp_default_target_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: false,
+                },
+                Field {
+                    key: subagents_acp_targets_json_key().into(),
+                    label: "ACP named targets JSON (optional)".into(),
+                    value: existing
+                        .get(subagents_acp_targets_json_key())
+                        .cloned()
+                        .unwrap_or_default(),
+                    required: false,
+                    secret: true,
+                },
+                Field {
                     key: telegram_bot_count_key().into(),
                     label: format!("Telegram bot count (1-{MAX_BOT_SLOTS})"),
                     value: existing
@@ -1588,8 +1686,9 @@ impl SetupApp {
                 },
                 Field {
                     key: "HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED".into(),
-                    label: "Require explicit user confirmation for high-risk tools (true/false)"
-                        .into(),
+                    label:
+                        "Require explicit confirmation before running high-risk tools (true/false)"
+                            .into(),
                     value: existing
                         .get("HIGH_RISK_TOOL_USER_CONFIRMATION_REQUIRED")
                         .cloned()
@@ -2083,6 +2182,44 @@ impl SetupApp {
                         subagents_orchestrate_max_workers_key().into(),
                         config.subagents.orchestrate_max_workers.to_string(),
                     );
+                    map.insert(
+                        subagents_acp_enabled_key().into(),
+                        config.subagents.acp.default_target.enabled.to_string(),
+                    );
+                    if !config.subagents.acp.default_target.command.is_empty() {
+                        map.insert(
+                            subagents_acp_command_key().into(),
+                            config.subagents.acp.default_target.command.clone(),
+                        );
+                    }
+                    if !config.subagents.acp.default_target.args.is_empty() {
+                        let args_json =
+                            serde_json::to_string(&config.subagents.acp.default_target.args).ok();
+                        if let Some(args_json) = args_json {
+                            map.insert(subagents_acp_args_key().into(), args_json);
+                        }
+                    }
+                    if !config.subagents.acp.default_target.env.is_empty() {
+                        let env_json =
+                            serde_json::to_string(&config.subagents.acp.default_target.env).ok();
+                        if let Some(env_json) = env_json {
+                            map.insert(subagents_acp_env_json_key().into(), env_json);
+                        }
+                    }
+                    map.insert(
+                        subagents_acp_auto_approve_key().into(),
+                        config.subagents.acp.default_target.auto_approve.to_string(),
+                    );
+                    if let Some(default_target) = config.subagents.acp.default_target_name.clone() {
+                        map.insert(subagents_acp_default_target_key().into(), default_target);
+                    }
+                    if !config.subagents.acp.targets.is_empty() {
+                        let targets_json =
+                            serde_json::to_string(&config.subagents.acp.targets).ok();
+                        if let Some(targets_json) = targets_json {
+                            map.insert(subagents_acp_targets_json_key().into(), targets_json);
+                        }
+                    }
                     let telegram_bot_token = if !config.telegram_bot_token.trim().is_empty() {
                         config.telegram_bot_token
                     } else if let Some(ch_cfg) = config.channels.get("telegram") {
@@ -4345,6 +4482,8 @@ impl SetupApp {
         for key in [
             subagents_announce_to_chat_key(),
             subagents_thread_bound_routing_enabled_key(),
+            subagents_acp_enabled_key(),
+            subagents_acp_auto_approve_key(),
         ] {
             let raw = self.field_value(key);
             if raw.is_empty() {
@@ -4357,6 +4496,32 @@ impl SetupApp {
                     "{key} must be true/false (or 1/0)"
                 )));
             }
+        }
+
+        let acp_args_raw = self.field_value(subagents_acp_args_key());
+        if !acp_args_raw.is_empty() {
+            parse_string_list_field(&acp_args_raw)?;
+        }
+        let acp_env_raw = self.field_value(subagents_acp_env_json_key());
+        if !acp_env_raw.trim().is_empty() {
+            serde_json::from_str::<HashMap<String, String>>(acp_env_raw.trim()).map_err(|e| {
+                MicroClawError::Config(format!(
+                    "{} must be valid JSON object: {e}",
+                    subagents_acp_env_json_key()
+                ))
+            })?;
+        }
+        let acp_targets_raw = self.field_value(subagents_acp_targets_json_key());
+        if !acp_targets_raw.trim().is_empty() {
+            serde_json::from_str::<HashMap<String, crate::config::SubagentAcpTargetConfig>>(
+                acp_targets_raw.trim(),
+            )
+            .map_err(|e| {
+                MicroClawError::Config(format!(
+                    "{} must be valid JSON object: {e}",
+                    subagents_acp_targets_json_key()
+                ))
+            })?;
         }
 
         let embedding_dim_raw = self.field_value("EMBEDDING_DIM");
@@ -4942,6 +5107,8 @@ impl SetupApp {
             "SUBAGENTS_ANNOUNCE_RELAY_INTERVAL_SECS" => "15".into(),
             "SUBAGENTS_MAX_TOKENS_PER_RUN" => "400000".into(),
             "SUBAGENTS_ORCHESTRATE_MAX_WORKERS" => "5".into(),
+            "SUBAGENTS_ACP_ENABLED" => "false".into(),
+            "SUBAGENTS_ACP_AUTO_APPROVE" => "true".into(),
             _ if key == telegram_bot_count_key() => TELEGRAM_DEFAULT_BOT_COUNT.to_string(),
             _ if key.starts_with("TELEGRAM_BOT") => {
                 if key.ends_with("_ENABLED") {
@@ -5050,7 +5217,14 @@ impl SetupApp {
             | "SUBAGENTS_THREAD_BOUND_ROUTING_ENABLED"
             | "SUBAGENTS_ANNOUNCE_RELAY_INTERVAL_SECS"
             | "SUBAGENTS_MAX_TOKENS_PER_RUN"
-            | "SUBAGENTS_ORCHESTRATE_MAX_WORKERS" => "Sub-agents",
+            | "SUBAGENTS_ORCHESTRATE_MAX_WORKERS"
+            | "SUBAGENTS_ACP_ENABLED"
+            | "SUBAGENTS_ACP_COMMAND"
+            | "SUBAGENTS_ACP_ARGS"
+            | "SUBAGENTS_ACP_ENV_JSON"
+            | "SUBAGENTS_ACP_AUTO_APPROVE"
+            | "SUBAGENTS_ACP_DEFAULT_TARGET"
+            | "SUBAGENTS_ACP_TARGETS_JSON" => "Sub-agents",
             "ENABLED_CHANNELS"
             | "WEB_HOOKS_TOKEN"
             | "WEB_HOOKS_DEFAULT_SESSION_KEY"
@@ -5191,6 +5365,34 @@ impl SetupApp {
             "SUBAGENTS_ORCHESTRATE_MAX_WORKERS" => (
                 "Worker cap used by subagents_orchestrate fan-out.",
                 "Example: 5",
+            ),
+            "SUBAGENTS_ACP_ENABLED" => (
+                "Enable ACP-backed external subagent execution for sessions_spawn(runtime=\"acp\").",
+                "Example: true or false",
+            ),
+            "SUBAGENTS_ACP_COMMAND" => (
+                "Default ACP worker command used when no named target is selected.",
+                "Example: codex",
+            ),
+            "SUBAGENTS_ACP_ARGS" => (
+                "Default ACP worker args as csv or JSON array.",
+                "Example: [\"--model\",\"gpt-5.4\"]",
+            ),
+            "SUBAGENTS_ACP_ENV_JSON" => (
+                "Default ACP worker env vars as JSON object.",
+                "Example: {\"OPENAI_API_KEY\":\"sk-...\"}",
+            ),
+            "SUBAGENTS_ACP_AUTO_APPROVE" => (
+                "Whether the default ACP target auto-approves ACP permission requests.",
+                "Example: true or false",
+            ),
+            "SUBAGENTS_ACP_DEFAULT_TARGET" => (
+                "Named ACP target to use by default when runtime_target is omitted.",
+                "Example: codex-fast",
+            ),
+            "SUBAGENTS_ACP_TARGETS_JSON" => (
+                "Named ACP worker definitions as JSON object keyed by target name.",
+                "Example: {\"codex-fast\":{\"enabled\":true,\"command\":\"codex\",\"args\":[\"--model\",\"gpt-5.4\"]}}",
             ),
             "DATA_DIR" => (
                 "Root directory for runtime data (DB, sessions, memory, skills).",
@@ -5960,6 +6162,38 @@ fn save_config_yaml(
         subagents_orchestrate_max_workers_key(),
         5,
     )?;
+    let subagents_acp_enabled = parse_boolish(&get(subagents_acp_enabled_key()), false)?;
+    let subagents_acp_command = get(subagents_acp_command_key()).trim().to_string();
+    let subagents_acp_args = parse_string_list_field(&get(subagents_acp_args_key()))?;
+    let subagents_acp_env_raw = get(subagents_acp_env_json_key());
+    let subagents_acp_env = if subagents_acp_env_raw.trim().is_empty() {
+        HashMap::new()
+    } else {
+        serde_json::from_str::<HashMap<String, String>>(subagents_acp_env_raw.trim()).map_err(
+            |e| {
+                MicroClawError::Config(format!(
+                    "{} must be valid JSON object: {e}",
+                    subagents_acp_env_json_key()
+                ))
+            },
+        )?
+    };
+    let subagents_acp_auto_approve = parse_boolish(&get(subagents_acp_auto_approve_key()), true)?;
+    let subagents_acp_default_target = get(subagents_acp_default_target_key()).trim().to_string();
+    let subagents_acp_targets_raw = get(subagents_acp_targets_json_key());
+    let subagents_acp_targets = if subagents_acp_targets_raw.trim().is_empty() {
+        HashMap::new()
+    } else {
+        serde_json::from_str::<HashMap<String, crate::config::SubagentAcpTargetConfig>>(
+            subagents_acp_targets_raw.trim(),
+        )
+        .map_err(|e| {
+            MicroClawError::Config(format!(
+                "{} must be valid JSON object: {e}",
+                subagents_acp_targets_json_key()
+            ))
+        })?
+    };
     let telegram_token = if !get("TELEGRAM_BOT_TOKEN").trim().is_empty() {
         get("TELEGRAM_BOT_TOKEN")
     } else {
@@ -6534,6 +6768,53 @@ fn save_config_yaml(
         "  orchestrate_max_workers: {}\n",
         subagents_orchestrate_max_workers
     ));
+    if subagents_acp_enabled
+        || !subagents_acp_command.is_empty()
+        || !subagents_acp_args.is_empty()
+        || !subagents_acp_env.is_empty()
+        || !subagents_acp_auto_approve
+        || !subagents_acp_default_target.is_empty()
+        || !subagents_acp_targets.is_empty()
+    {
+        yaml.push_str("  acp:\n");
+        yaml.push_str(&format!("    enabled: {}\n", subagents_acp_enabled));
+        if !subagents_acp_command.is_empty() {
+            yaml.push_str(&format!(
+                "    command: {}\n",
+                yaml_double_quoted(&subagents_acp_command)
+            ));
+        }
+        if !subagents_acp_args.is_empty() {
+            yaml.push_str("    args:\n");
+            for arg in &subagents_acp_args {
+                yaml.push_str(&format!("      - {}\n", yaml_double_quoted(arg)));
+            }
+        }
+        if !subagents_acp_env.is_empty() {
+            yaml.push_str("    env:\n");
+            let yaml_env = serde_yaml::to_value(&subagents_acp_env).map_err(|e| {
+                MicroClawError::Config(format!("Failed to render ACP env config: {e}"))
+            })?;
+            append_yaml_value(&mut yaml, 6, &yaml_env);
+        }
+        yaml.push_str(&format!(
+            "    auto_approve: {}\n",
+            subagents_acp_auto_approve
+        ));
+        if !subagents_acp_default_target.is_empty() {
+            yaml.push_str(&format!(
+                "    default_target: {}\n",
+                yaml_double_quoted(&subagents_acp_default_target)
+            ));
+        }
+        if !subagents_acp_targets.is_empty() {
+            yaml.push_str("    targets:\n");
+            let yaml_targets = serde_yaml::to_value(&subagents_acp_targets).map_err(|e| {
+                MicroClawError::Config(format!("Failed to render ACP targets config: {e}"))
+            })?;
+            append_yaml_value(&mut yaml, 6, &yaml_targets);
+        }
+    }
     yaml.push('\n');
 
     yaml.push_str(
@@ -8320,6 +8601,10 @@ llm_providers:
             SetupApp::section_for_key(subagents_run_timeout_secs_key()),
             "Sub-agents"
         );
+        assert_eq!(
+            SetupApp::section_for_key(subagents_acp_targets_json_key()),
+            "Sub-agents"
+        );
     }
 
     #[test]
@@ -8380,6 +8665,19 @@ subagents:
   announce_relay_interval_secs: 30
   max_tokens_per_run: 240000
   orchestrate_max_workers: 6
+  acp:
+    enabled: true
+    command: codex
+    args: ["--model", "gpt-5.4"]
+    env:
+      OPENAI_API_KEY: key
+    auto_approve: false
+    default_target: codex-fast
+    targets:
+      codex-fast:
+        enabled: true
+        command: codex
+        args: ["--model", "gpt-5.4"]
 "#,
         )
         .unwrap();
@@ -8407,6 +8705,24 @@ subagents:
             app.field_value(subagents_orchestrate_max_workers_key()),
             "6"
         );
+        assert_eq!(app.field_value(subagents_acp_enabled_key()), "true");
+        assert_eq!(app.field_value(subagents_acp_command_key()), "codex");
+        assert_eq!(
+            app.field_value(subagents_acp_args_key()),
+            "[\"--model\",\"gpt-5.4\"]"
+        );
+        assert_eq!(
+            app.field_value(subagents_acp_env_json_key()),
+            "{\"OPENAI_API_KEY\":\"key\"}"
+        );
+        assert_eq!(app.field_value(subagents_acp_auto_approve_key()), "false");
+        assert_eq!(
+            app.field_value(subagents_acp_default_target_key()),
+            "codex-fast"
+        );
+        assert!(app
+            .field_value(subagents_acp_targets_json_key())
+            .contains("\"codex-fast\""));
 
         std::env::set_current_dir(old_cwd).unwrap();
         let _ = std::fs::remove_file(temp.join("microclaw.config.yaml"));
@@ -9134,6 +9450,26 @@ subagents:
         );
         values.insert(subagents_max_tokens_per_run_key().into(), "240000".into());
         values.insert(subagents_orchestrate_max_workers_key().into(), "6".into());
+        values.insert(subagents_acp_enabled_key().into(), "true".into());
+        values.insert(subagents_acp_command_key().into(), "codex".into());
+        values.insert(
+            subagents_acp_args_key().into(),
+            r#"["--model","gpt-5.4"]"#.into(),
+        );
+        values.insert(
+            subagents_acp_env_json_key().into(),
+            r#"{"OPENAI_API_KEY":"key"}"#.into(),
+        );
+        values.insert(subagents_acp_auto_approve_key().into(), "false".into());
+        values.insert(
+            subagents_acp_default_target_key().into(),
+            "codex-fast".into(),
+        );
+        values.insert(
+            subagents_acp_targets_json_key().into(),
+            r#"{"codex-fast":{"enabled":true,"command":"codex","args":["--model","gpt-5.4"],"auto_approve":false}}"#
+                .into(),
+        );
 
         save_config_yaml(&yaml_path, &values).unwrap();
         let s = fs::read_to_string(&yaml_path).unwrap();
@@ -9148,6 +9484,18 @@ subagents:
         assert!(s.contains("  announce_relay_interval_secs: 30\n"));
         assert!(s.contains("  max_tokens_per_run: 240000\n"));
         assert!(s.contains("  orchestrate_max_workers: 6\n"));
+        assert!(s.contains("  acp:\n"));
+        assert!(s.contains("    enabled: true\n"));
+        assert!(s.contains("    command: \"codex\"\n"));
+        assert!(s.contains("    args:\n"));
+        assert!(s.contains("      - \"--model\"\n"));
+        assert!(s.contains("      - \"gpt-5.4\"\n"));
+        assert!(s.contains("    env:\n"));
+        assert!(s.contains("      OPENAI_API_KEY: key\n"));
+        assert!(s.contains("    auto_approve: false\n"));
+        assert!(s.contains("    default_target: \"codex-fast\"\n"));
+        assert!(s.contains("    targets:\n"));
+        assert!(s.contains("      codex-fast:\n"));
 
         let _ = fs::remove_file(&yaml_path);
     }

@@ -5,7 +5,7 @@ import path from 'node:path';
 const ROOT = process.cwd();
 
 function read(file) {
-  return fs.readFileSync(path.join(ROOT, file), 'utf8');
+  return fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r\n?/g, '\n');
 }
 
 function normalizeGeneratedContent(text) {

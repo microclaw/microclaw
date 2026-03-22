@@ -395,6 +395,7 @@ fn build_report() -> DoctorReport {
     );
 
     check_config(&mut report);
+    check_acp_subagent_config(&mut report);
     check_web_fetch_validation(&mut report);
     check_path(&mut report);
     check_shell(&mut report);
@@ -417,6 +418,7 @@ fn build_sandbox_report() -> DoctorReport {
         None,
     );
     check_config(&mut report);
+    check_acp_subagent_config(&mut report);
     check_web_fetch_validation(&mut report);
     check_sandbox_config(&mut report);
     check_docker_runtime(&mut report);
@@ -658,6 +660,86 @@ fn check_web_fetch_validation(report: &mut DoctorReport) {
             format!("{} source(s) configured", feed_sync.sources.len()),
             None,
         );
+    }
+}
+
+fn check_acp_subagent_config(report: &mut DoctorReport) {
+    let config = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+    if !config.subagents.acp.default_target.enabled {
+        report.push(
+            "subagents.acp.runtime",
+            "ACP subagent runtime",
+            CheckStatus::Miss,
+            "ACP-backed subagent runtime is disabled".to_string(),
+            Some(
+                "Set subagents.acp.enabled: true and configure subagents.acp.command or subagents.acp.targets."
+                    .to_string(),
+            ),
+        );
+        return;
+    }
+
+    match config.subagents.acp.resolve_target(None) {
+        Ok(target) => {
+            let command_ok = if target.command.contains(std::path::MAIN_SEPARATOR)
+                || target.command.starts_with('.')
+            {
+                Path::new(&target.command).is_file()
+            } else {
+                command_exists(&target.command)
+            };
+            report.push(
+                "subagents.acp.runtime",
+                "ACP subagent runtime",
+                if command_ok {
+                    CheckStatus::Pass
+                } else {
+                    CheckStatus::Fail
+                },
+                format!(
+                    "selected target={} command={} auto_approve={}",
+                    target.name.as_deref().unwrap_or("default"),
+                    target.command,
+                    target.auto_approve
+                ),
+                if command_ok {
+                    None
+                } else {
+                    Some(
+                        "Install the ACP worker command or point subagents.acp.command / target.command to a valid executable."
+                            .to_string(),
+                    )
+                },
+            );
+            if target.auto_approve {
+                report.push(
+                    "subagents.acp.permissions",
+                    "ACP permission mode",
+                    CheckStatus::Warn,
+                    format!(
+                        "target '{}' auto-approves ACP permission requests",
+                        target.name.as_deref().unwrap_or("default")
+                    ),
+                    Some(
+                        "Set subagents.acp.auto_approve: false (or target-specific auto_approve: false) if you need a stricter policy."
+                            .to_string(),
+                    ),
+                );
+            }
+        }
+        Err(err) => report.push(
+            "subagents.acp.runtime",
+            "ACP subagent runtime",
+            CheckStatus::Fail,
+            err,
+            Some(
+                "Configure a valid default ACP command or choose a named target via subagents.acp.default_target."
+                    .to_string(),
+            ),
+        ),
     }
 }
 

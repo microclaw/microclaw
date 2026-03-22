@@ -38,12 +38,12 @@ impl Tool for EditFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "edit_file".into(),
-            description: "Edit a file by replacing an exact string match with new content. The old_string must be unique in the file.".into(),
+            description: "Edit a file by replacing an exact string match with new content. The old_string must be unique in the file. Prefer paths relative to the current chat working directory; do not invent machine-specific absolute paths unless the user or a tool already provided them.".into(),
             input_schema: schema_object(
                 json!({
                     "path": {
                         "type": "string",
-                        "description": "The file path to edit"
+                        "description": "The file path to edit, usually relative to the current chat working directory"
                     },
                     "old_string": {
                         "type": "string",
@@ -115,6 +115,19 @@ impl Tool for EditFileTool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_edit_file_definition_prefers_relative_paths() {
+        let tool = EditFileTool::new(".");
+        let def = tool.definition();
+        assert!(def
+            .description
+            .contains("Prefer paths relative to the current chat working directory"));
+        assert_eq!(
+            def.input_schema["properties"]["path"]["description"].as_str(),
+            Some("The file path to edit, usually relative to the current chat working directory")
+        );
+    }
 
     fn setup_file(content: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("microclaw_ef_{}", uuid::Uuid::new_v4()));

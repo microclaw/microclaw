@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -134,7 +135,7 @@ struct WebLimits {
 impl Default for WebLimits {
     fn default() -> Self {
         Self {
-            max_inflight_per_session: 2,
+            max_inflight_per_session: 10,
             max_requests_per_window: 8,
             rate_window: Duration::from_secs(10),
             run_history_limit: 512,
@@ -1059,7 +1060,17 @@ async fn api_health(
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     metrics_http_inc(&state).await;
-    require_scope(&state, &headers, AuthScope::Read).await?;
+    let authenticated = require_scope(&state, &headers, AuthScope::Read)
+        .await
+        .is_ok();
+    let basic = json!({
+        "ok": true,
+        "version": env!("CARGO_PKG_VERSION"),
+        "web_enabled": state.app_state.config.web_enabled,
+    });
+    if !authenticated {
+        return Ok(Json(basic));
+    }
     let since_24h = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
     let task_summary_24h = call_blocking(state.app_state.db.clone(), move |db| {
         db.get_task_run_summary_since(Some(&since_24h))
@@ -1124,11 +1135,24 @@ async fn api_health(
     })))
 }
 
+async fn api_health_root(State(state): State<WebState>) -> Json<serde_json::Value> {
+    metrics_http_inc(&state).await;
+    Json(json!({
+        "ok": true,
+        "version": env!("CARGO_PKG_VERSION"),
+        "web_enabled": state.app_state.config.web_enabled,
+    }))
+}
+
 fn map_chat_to_session(registry: &ChannelRegistry, chat: ChatSummary) -> SessionItem {
     let source = session_source_for_chat(registry, &chat.chat_type, chat.chat_title.as_deref());
 
     let fallback = format!("{}:{}", source, chat.chat_id);
-    let mut label = chat.chat_title.clone().unwrap_or_else(|| fallback.clone());
+    let mut label = chat
+        .session_label
+        .clone()
+        .or_else(|| chat.chat_title.clone())
+        .unwrap_or_else(|| fallback.clone());
 
     if label.starts_with("private:")
         || label.starts_with("group:")
@@ -1715,22 +1739,30 @@ async fn send_and_store_response_with_events(
         chat_id,
         chat_type: "web",
     };
-    let response = if let Some(tx) = event_tx {
-        process_with_agent_with_events(&state.app_state, request_ctx, None, None, Some(tx))
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    } else {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
-        let result =
-            process_with_agent_with_events(&state.app_state, request_ctx, None, None, Some(&tx))
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        drop(tx);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    let saw_send_message_tool = Arc::new(AtomicBool::new(false));
+    let saw_send_message_tool_forward = saw_send_message_tool.clone();
+    let state_for_events = state.clone();
+    let upstream_event_tx = event_tx.cloned();
+    let forward_task = tokio::spawn(async move {
         while let Some(evt) = rx.recv().await {
-            metrics_apply_agent_event(&state, &evt).await;
+            if matches!(&evt, AgentEvent::ToolStart { name, .. } if name == "send_message") {
+                saw_send_message_tool_forward.store(true, Ordering::SeqCst);
+            }
+            if let Some(tx) = &upstream_event_tx {
+                let _ = tx.send(evt);
+            } else {
+                metrics_apply_agent_event(&state_for_events, &evt).await;
+            }
         }
-        result?
-    };
+    });
+    let response =
+        process_with_agent_with_events(&state.app_state, request_ctx, None, None, Some(&tx))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    drop(tx);
+    let _ = forward_task.await;
+    let response = response?;
 
     let after_usage = call_blocking(state.app_state.db.clone(), move |db| {
         db.get_llm_usage_summary(Some(chat_id))
@@ -1743,16 +1775,26 @@ async fn send_and_store_response_with_events(
         m.llm_output_tokens += (after.output_tokens - before.output_tokens).max(0);
     }
 
-    let bot_username = state.app_state.config.bot_username_for_channel("web");
-    deliver_and_store_bot_message(
-        &state.app_state.channel_registry,
-        state.app_state.db.clone(),
-        &bot_username,
-        chat_id,
-        &response,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if saw_send_message_tool.load(Ordering::SeqCst) {
+        if !response.is_empty() {
+            info!(
+                target: "web",
+                chat_id,
+                "Web: suppressing final response storage because send_message already delivered output"
+            );
+        }
+    } else if !response.is_empty() {
+        let bot_username = state.app_state.config.bot_username_for_channel("web");
+        deliver_and_store_bot_message(
+            &state.app_state.channel_registry,
+            state.app_state.db.clone(),
+            &bot_username,
+            chat_id,
+            &response,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    }
 
     Ok(Json(json!({
         "ok": true,
@@ -1912,6 +1954,7 @@ async fn favicon_file() -> impl IntoResponse {
 fn build_router(web_state: WebState) -> Router {
     Router::new()
         .route("/", get(index_or_ws))
+        .route("/health", get(api_health_root))
         .route("/assets/*file", get(asset_file))
         .route("/icon.png", get(icon_file))
         .route("/favicon.ico", get(favicon_file))
@@ -2072,6 +2115,26 @@ mod tests {
         }
     }
 
+    struct ThinkingLlm;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ThinkingLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            _messages: Vec<microclaw_core::llm_types::Message>,
+            _tools: Option<Vec<microclaw_core::llm_types::ToolDefinition>>,
+        ) -> Result<microclaw_core::llm_types::MessagesResponse, MicroClawError> {
+            Ok(microclaw_core::llm_types::MessagesResponse {
+                content: vec![ResponseContentBlock::Text {
+                    text: "<thinking>internal</thinking>Visible".into(),
+                }],
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            })
+        }
+    }
+
     struct ToolFlowLlm {
         calls: AtomicUsize,
     }
@@ -2100,6 +2163,41 @@ mod tests {
             Ok(microclaw_core::llm_types::MessagesResponse {
                 content: vec![ResponseContentBlock::Text {
                     text: "after tool".into(),
+                }],
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            })
+        }
+    }
+
+    struct SendMessageThenAnswerLlm {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for SendMessageThenAnswerLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            _messages: Vec<microclaw_core::llm_types::Message>,
+            _tools: Option<Vec<microclaw_core::llm_types::ToolDefinition>>,
+        ) -> Result<microclaw_core::llm_types::MessagesResponse, MicroClawError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                return Ok(microclaw_core::llm_types::MessagesResponse {
+                    content: vec![ResponseContentBlock::ToolUse {
+                        id: "tool_send_1".into(),
+                        name: "send_message".into(),
+                        input: json!({"text": "tool reply"}),
+                        thought_signature: None,
+                    }],
+                    stop_reason: Some("tool_use".into()),
+                    usage: None,
+                });
+            }
+            Ok(microclaw_core::llm_types::MessagesResponse {
+                content: vec![ResponseContentBlock::Text {
+                    text: "final reply".into(),
                 }],
                 stop_reason: Some("end_turn".into()),
                 usage: None,
@@ -2267,6 +2365,11 @@ mod tests {
         }
     }
 
+    fn unique_test_chat_id() -> i64 {
+        static NEXT_TEST_CHAT_ID: AtomicUsize = AtomicUsize::new(10_000);
+        NEXT_TEST_CHAT_ID.fetch_add(1, Ordering::Relaxed) as i64
+    }
+
     #[tokio::test]
     async fn test_send_stream_then_stream_done() {
         let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
@@ -2301,6 +2404,52 @@ mod tests {
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("event: delta"));
         assert!(text.contains("event: done"));
+    }
+
+    #[tokio::test]
+    async fn test_send_stream_send_message_tool_does_not_store_final_response_twice() {
+        let web_state = test_web_state(
+            Box::new(SendMessageThenAnswerLlm {
+                calls: AtomicUsize::new(0),
+            }),
+            WebLimits::default(),
+        );
+        let db = web_state.app_state.db.clone();
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/send_stream")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"main","sender_name":"u","message":"hi"}"#,
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let run_id = v.get("run_id").and_then(|x| x.as_str()).unwrap();
+
+        let req2 = Request::builder()
+            .method("GET")
+            .uri(format!("/api/stream?run_id={run_id}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp2 = app.oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let _ = axum::body::to_bytes(resp2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let rows = call_blocking(db, move |d| d.get_all_messages(1))
+            .await
+            .unwrap();
+        let bot_rows: Vec<_> = rows.into_iter().filter(|m| m.is_from_bot).collect();
+        assert_eq!(bot_rows.len(), 1);
+        assert_eq!(bot_rows[0].content, "tool reply");
     }
 
     #[tokio::test]
@@ -2615,7 +2764,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auth_failure_requires_header() {
+    async fn test_api_health_is_public_but_minimal_without_auth() {
         let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
         call_blocking(web_state.app_state.db.clone(), |db| {
             db.upsert_auth_password_hash(&make_password_hash("passw0rd!"))
@@ -2630,7 +2779,33 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert!(json.get("scheduler").is_none());
+        assert!(json.get("reflector").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_root_health_alias_is_public() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        call_blocking(web_state.app_state.db.clone(), |db| {
+            db.upsert_auth_password_hash(&make_password_hash("passw0rd!"))
+        })
+        .await
+        .unwrap();
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -3486,6 +3661,51 @@ mod tests {
         assert!(has_auto_approve);
         assert!(has_fetch_content_disabled);
         assert!(has_fetch_url_disabled);
+    }
+
+    #[tokio::test]
+    async fn test_config_self_check_warns_for_acp_runtime_risks() {
+        let mut cfg = test_config_template();
+        cfg.subagents.acp.default_target.enabled = true;
+        cfg.subagents.acp.default_target.command = "definitely-missing-acp-command".into();
+        cfg.subagents.acp.default_target.auto_approve = true;
+        cfg.subagents.acp.default_target_name = Some("worker".into());
+        cfg.subagents.acp.targets.insert(
+            "worker".into(),
+            crate::config::SubagentAcpTargetConfig {
+                enabled: true,
+                command: "also-missing-worker-command".into(),
+                auto_approve: false,
+                ..crate::config::SubagentAcpTargetConfig::default()
+            },
+        );
+        let state = test_state_with_config(Box::new(DummyLlm), cfg);
+        let web_state = test_web_state_from_app_state(state, WebLimits::default());
+        let app = build_router(web_state);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/config/self_check")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let warnings = json
+            .get("warnings")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        assert!(warnings.iter().any(|w| {
+            w.get("code").and_then(|v| v.as_str()) == Some("acp_target_command_missing")
+        }));
+        assert!(warnings.iter().any(|w| {
+            w.get("code").and_then(|v| v.as_str()) == Some("acp_named_target_command_missing")
+        }));
     }
 
     #[tokio::test]
@@ -4406,6 +4626,374 @@ commands:
                 "method={method}"
             );
         }
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_bridge_supports_mission_control_session_methods() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-session-secret").await;
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+
+        let app = build_router(web_state.clone());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("authorization", "Bearer ws-session-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"main","sender_name":"u","message":"seed"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-session-secret" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        for (request_id, method, params) in [
+            (
+                "setting-1",
+                "session_setLabel",
+                json!({"sessionKey":"main","label":"Ops"}),
+            ),
+            (
+                "send-1",
+                "sessions_send",
+                json!({"sessionKey":"main","message":"continue"}),
+            ),
+            (
+                "spawn-1",
+                "sessions_spawn",
+                json!({"task":"spawn from mission control","label":"worker"}),
+            ),
+            ("delete-1", "session_delete", json!({"sessionKey":"main"})),
+        ] {
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "req",
+                    "id": request_id,
+                    "method": method,
+                    "params": params
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            let res = loop {
+                let candidate = recv_ws_json(&mut ws).await;
+                if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                    continue;
+                }
+                if candidate.get("id").and_then(|v| v.as_str()) != Some(request_id) {
+                    continue;
+                }
+                break candidate;
+            };
+            assert_eq!(
+                res.get("ok").and_then(|v| v.as_bool()),
+                Some(true),
+                "{method}"
+            );
+            if method == "sessions_send" {
+                let mut saw_final = false;
+                for _ in 0..12 {
+                    let candidate = recv_ws_json(&mut ws).await;
+                    if candidate.get("type").and_then(|v| v.as_str()) != Some("event") {
+                        continue;
+                    }
+                    if candidate.get("event").and_then(|v| v.as_str()) != Some("chat") {
+                        continue;
+                    }
+                    if candidate.pointer("/payload/state").and_then(|v| v.as_str()) != Some("final")
+                    {
+                        continue;
+                    }
+                    assert_eq!(
+                        candidate
+                            .pointer("/payload/sessionKey")
+                            .and_then(|v| v.as_str()),
+                        Some("main")
+                    );
+                    saw_final = true;
+                    break;
+                }
+                assert!(saw_final, "sessions_send should emit a final chat event");
+            }
+        }
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_session_settings_persist_and_enable_thinking_output() {
+        let mut cfg = test_config_template();
+        cfg.show_thinking = false;
+        let web_state = test_web_state_from_app_state(
+            test_state_with_config(Box::new(ThinkingLlm), cfg),
+            WebLimits::default(),
+        );
+        seed_test_api_key(&web_state, "ws-settings-secret").await;
+        let app = build_router(web_state.clone());
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+
+        let plain_req = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("authorization", "Bearer ws-settings-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"plain","sender_name":"u","message":"before"}"#,
+            ))
+            .unwrap();
+        let plain_resp = app.clone().oneshot(plain_req).await.unwrap();
+        assert_eq!(plain_resp.status(), StatusCode::OK);
+        let plain_body = axum::body::to_bytes(plain_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let plain_json: serde_json::Value = serde_json::from_slice(&plain_body).unwrap();
+        assert_eq!(
+            plain_json.get("response").and_then(|v| v.as_str()),
+            Some("Visible")
+        );
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-settings-secret" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        for (request_id, method, params) in [
+            (
+                "label-1",
+                "session_setLabel",
+                json!({"sessionKey":"main","label":"Ops"}),
+            ),
+            (
+                "thinking-1",
+                "session_setThinking",
+                json!({"sessionKey":"main","level":"high"}),
+            ),
+        ] {
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "req",
+                    "id": request_id,
+                    "method": method,
+                    "params": params
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            let res = loop {
+                let candidate = recv_ws_json(&mut ws).await;
+                if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                    continue;
+                }
+                if candidate.get("id").and_then(|v| v.as_str()) != Some(request_id) {
+                    continue;
+                }
+                break candidate;
+            };
+            assert_eq!(res.get("ok").and_then(|v| v.as_bool()), Some(true));
+            assert_eq!(
+                res.get("payload")
+                    .and_then(|p| p.get("applied"))
+                    .and_then(|v| v.as_bool()),
+                Some(true)
+            );
+        }
+
+        let send_req = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("authorization", "Bearer ws-settings-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"main","sender_name":"u","message":"after"}"#,
+            ))
+            .unwrap();
+        let send_resp = app.clone().oneshot(send_req).await.unwrap();
+        assert_eq!(send_resp.status(), StatusCode::OK);
+        let send_body = axum::body::to_bytes(send_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let send_json: serde_json::Value = serde_json::from_slice(&send_body).unwrap();
+        assert_eq!(
+            send_json.get("response").and_then(|v| v.as_str()),
+            Some("<thinking>internal</thinking>Visible")
+        );
+
+        let sessions_req = Request::builder()
+            .method("GET")
+            .uri("/api/sessions")
+            .header("authorization", "Bearer ws-settings-secret")
+            .body(Body::empty())
+            .unwrap();
+        let sessions_resp = app.oneshot(sessions_req).await.unwrap();
+        assert_eq!(sessions_resp.status(), StatusCode::OK);
+        let sessions_body = axum::body::to_bytes(sessions_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let sessions_json: serde_json::Value = serde_json::from_slice(&sessions_body).unwrap();
+        let sessions = sessions_json
+            .get("sessions")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert!(sessions.iter().any(|session| {
+            session.get("session_key").and_then(|v| v.as_str()) == Some("main")
+                && session.get("label").and_then(|v| v.as_str()) == Some("Ops")
+        }));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_sessions_kill_aborts_active_stream_run() {
+        let web_state = test_web_state(Box::new(SlowLlm { sleep_ms: 1_500 }), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-kill-secret").await;
+        let app = build_router(web_state.clone());
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+        let chat_id = unique_test_chat_id();
+        let session_key = format!("chat:{chat_id}");
+        let session_key_for_db = session_key.clone();
+
+        call_blocking(web_state.app_state.db.clone(), move |db| {
+            db.upsert_chat(chat_id, Some(&session_key_for_db), "web")
+        })
+        .await
+        .unwrap();
+
+        let send_req = Request::builder()
+            .method("POST")
+            .uri("/api/send_stream")
+            .header("authorization", "Bearer ws-kill-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(
+                r#"{{"session_key":"{session_key}","sender_name":"u","message":"slow"}}"#
+            )))
+            .unwrap();
+        let send_resp = app.oneshot(send_req).await.unwrap();
+        assert_eq!(send_resp.status(), StatusCode::OK);
+        let send_body = axum::body::to_bytes(send_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let send_json: serde_json::Value = serde_json::from_slice(&send_body).unwrap();
+        let run_id = send_json
+            .get("run_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-kill-secret" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "kill-1",
+                "method": "sessions_kill",
+                "params": { "sessionKey": session_key }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let kill_res = loop {
+            let candidate = recv_ws_json(&mut ws).await;
+            if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                continue;
+            }
+            if candidate.get("id").and_then(|v| v.as_str()) != Some("kill-1") {
+                continue;
+            }
+            break candidate;
+        };
+        assert_eq!(
+            kill_res
+                .get("payload")
+                .and_then(|p| p.get("terminated"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            kill_res
+                .get("payload")
+                .and_then(|p| p.get("activeAborted"))
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        for _ in 0..20 {
+            let status = web_state.run_hub.status(&run_id, "", true).await.unwrap();
+            if status.0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let (_, replay, done, _, _) = web_state
+            .run_hub
+            .subscribe_with_replay(&run_id, None, "", true)
+            .await
+            .unwrap();
+        assert!(done);
+        assert!(replay.iter().any(|evt| {
+            evt.event == "done" && evt.data.contains(crate::run_control::STOPPED_TEXT)
+        }));
 
         server.abort();
     }

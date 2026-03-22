@@ -1,12 +1,12 @@
 ---
 name: apple-calendar
-description: Query and manage Apple Calendar on macOS via `icalBuddy` (read) and AppleScript (`osascript`) for event creation. Use when users ask about upcoming events or adding calendar events.
+description: "Query and manage Apple Calendar on macOS via `icalBuddy` (read) and AppleScript (`osascript`) for event creation. Use when users ask about upcoming events, scheduling, calendar lookups, adding calendar events, or checking what's on their agenda. Triggers on mentions of calendar, events, schedule, meetings, or appointments."
 license: Proprietary. LICENSE.txt has complete terms
-compatibility:
-  os:
-    - darwin
-  deps:
-    - icalBuddy
+platforms:
+  - darwin
+deps:
+  - icalBuddy
+  - osascript
 ---
 
 # Apple Calendar

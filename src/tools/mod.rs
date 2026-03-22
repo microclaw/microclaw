@@ -453,8 +453,10 @@ impl ToolRegistry {
         {
             return ToolResult::error(msg).with_error_type("execution_policy_blocked");
         }
-        if let Some(blocked) = require_high_risk_approval(name, auth, &input) {
-            return blocked;
+        if self.config.high_risk_tool_user_confirmation_required {
+            if let Some(blocked) = require_high_risk_approval(name, auth, &input) {
+                return blocked;
+            }
         }
 
         tracing::debug!(
@@ -711,6 +713,57 @@ mod tests {
             .await;
         assert!(!approved.is_error);
         assert_eq!(approved.content, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_high_risk_tool_confirmation_flag_false_hard_disables_web_approval_gate() {
+        let mut config = crate::config::Config::test_defaults();
+        config.high_risk_tool_user_confirmation_required = false;
+        let registry = ToolRegistry {
+            config,
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            tools: vec![Box::new(DummyTool {
+                tool_name: "bash".into(),
+            })],
+        };
+        let auth = ToolAuthContext {
+            caller_channel: "web".into(),
+            caller_chat_id: 1,
+            control_chat_ids: vec![],
+            env_files: vec![],
+        };
+
+        let result = registry.execute_with_auth("bash", json!({}), &auth).await;
+        assert!(!result.is_error);
+        assert_eq!(result.content, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_high_risk_tool_confirmation_flag_false_hard_disables_control_chat_approval_gate()
+    {
+        let mut config = crate::config::Config::test_defaults();
+        config.high_risk_tool_user_confirmation_required = false;
+        let registry = ToolRegistry {
+            config,
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            tools: vec![Box::new(DummyTool {
+                tool_name: "bash".into(),
+            })],
+        };
+        let auth = ToolAuthContext {
+            caller_channel: "telegram".into(),
+            caller_chat_id: 123,
+            control_chat_ids: vec![123],
+            env_files: vec![],
+        };
+
+        let result = registry.execute_with_auth("bash", json!({}), &auth).await;
+        assert!(!result.is_error);
+        assert_eq!(result.content, "ok");
     }
 
     #[tokio::test]

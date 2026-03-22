@@ -155,6 +155,61 @@ brew tap microclaw/tap
 brew install microclaw
 ```
 
+### Docker image
+
+Release tags publish an official container image to:
+
+- `ghcr.io/microclaw/microclaw:latest`
+- `ghcr.io/microclaw/microclaw:<version>`
+- `docker.io/microclaw/microclaw:latest` when Docker Hub publishing credentials are configured for the repository
+
+For first-time pulls from GHCR, you may need:
+
+```sh
+docker login ghcr.io
+```
+
+Use your GitHub username and a Personal Access Token with `read:packages`.
+
+Quickest way to try the image:
+
+```sh
+docker pull ghcr.io/microclaw/microclaw:latest
+docker run --rm -it \
+  -p 127.0.0.1:10961:10961 \
+  ghcr.io/microclaw/microclaw:latest
+```
+
+Recommended for real use: keep config and runtime data on the host:
+
+```sh
+mkdir -p data tmp
+chmod a+r microclaw.config.yaml
+chmod -R a+rwX data tmp
+
+docker run --rm -it \
+  -p 127.0.0.1:10961:10961 \
+  -v "$(pwd)/microclaw.config.yaml:/app/microclaw.config.yaml:ro" \
+  -v "$(pwd)/data:/home/microclaw/.microclaw" \
+  -v "$(pwd)/tmp:/app/tmp" \
+  ghcr.io/microclaw/microclaw:latest
+```
+
+Why mount them:
+
+- `microclaw.config.yaml`: keep configuration outside the container
+- `data/`: persist sessions, memory, skills, database, and runtime state
+- `tmp/`: provide a writable temp directory for container-side work
+
+The image entrypoint is `microclaw`, so you can override the command directly:
+
+```sh
+docker run --rm ghcr.io/microclaw/microclaw:latest doctor
+docker run --rm ghcr.io/microclaw/microclaw:latest version
+```
+
+If startup fails with `Permission denied (os error 13)`, re-check the `chmod` commands above and verify the mounted paths exist.
+
 ### From source
 
 ```sh
@@ -667,7 +722,27 @@ Mission Control / OpenClaw-style WebSocket bridge:
 1. Connect to `ws://127.0.0.1:10961/`
 2. Wait for `connect.challenge`
 3. Send a `connect` frame with your operator API key in `params.auth.token`
-4. Use `chat.send` and consume live `chat` events (`delta` / `final` / `error`)
+4. Use bridge methods such as `chat.send`, `sessions_send`, `sessions_kill`, `sessions_spawn`, and `session_set*`
+5. Consume live `chat` events (`delta` / `final` / `error`)
+
+Current bridge methods:
+
+- `health`
+- `status`
+- `chat.send`
+- `chat.history`
+- `session_delete`
+- `sessions_send`
+- `sessions_kill`
+- `sessions_spawn`
+- `session_setThinking`
+- `session_setVerbose`
+- `session_setReasoning`
+- `session_setLabel`
+- `agents.list`
+- `models.list`
+- `config.get`
+- `node.list`
 
 Example connect frame:
 
@@ -698,6 +773,60 @@ Example chat send frame:
   }
 }
 ```
+
+Example session spawn frame:
+
+```json
+{
+  "type": "req",
+  "id": "spawn-1",
+  "method": "sessions_spawn",
+  "params": {
+    "task": "Summarize the current repo",
+    "label": "Ops"
+  }
+}
+```
+
+Example session label update:
+
+```json
+{
+  "type": "req",
+  "id": "label-1",
+  "method": "session_setLabel",
+  "params": {
+    "sessionKey": "ops-bot",
+    "label": "Ops"
+  }
+}
+```
+
+Behavior notes:
+
+- The bridge is mounted at `GET /` for WebSocket upgrades, not `/ws`.
+- `sessions_send` returns a `runId` immediately and then emits `chat` events, including a terminal `final` state for normal messages.
+- `sessions_spawn` can create a new async session and persist an initial label.
+- `session_set*` updates only the provided field and preserves previously stored session settings.
+- `sessions_send` control payloads are acknowledged, but not yet enforced as runtime controls.
+
+Local gateway smoke tests:
+
+```sh
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call health
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call status
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call session_setLabel \
+  --params '{"sessionKey":"ops-bot","label":"Ops"}'
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions_send \
+  --params '{"sessionKey":"ops-bot","message":"status summary"}'
+```
+
+`microclaw gateway call` resolves connection settings from:
+
+- `MICROCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_URL`, `GATEWAY_URL`
+- `MICROCLAW_GATEWAY_HOST`, `OPENCLAW_GATEWAY_HOST`, `GATEWAY_HOST`
+- `MICROCLAW_GATEWAY_PORT`, `OPENCLAW_GATEWAY_PORT`, `GATEWAY_PORT`
+- `MICROCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_TOKEN`, `GATEWAY_TOKEN`, `MICROCLAW_API_KEY`
 
 Example:
 ```sh
@@ -968,8 +1097,9 @@ microclaw gateway uninstall
 Notes:
 - macOS uses `launchd` user agents.
 - Linux uses `systemd --user`.
+- Windows uses a native Windows Service hosted directly by `microclaw.exe`. Run gateway service commands from an elevated terminal, and make sure `microclaw.config.yaml` already exists before `microclaw gateway install`.
 - Runtime logs are written to `<data_dir>/runtime/logs/`.
-- Gateway service stdout/stderr files are `microclaw-gateway.log` and `microclaw-gateway.error.log`.
+- macOS launchd stdout/stderr files are `microclaw-gateway.log` and `microclaw-gateway.error.log`.
 - Logs older than 30 days are deleted automatically.
 
 ### 6. Run as an ACP stdio server (optional)

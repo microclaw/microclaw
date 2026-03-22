@@ -1,9 +1,10 @@
 use super::*;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use futures_util::{SinkExt, StreamExt};
+use microclaw_storage::db::SessionSettings;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as TokioMutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const PROTOCOL_VERSION: u64 = 3;
 const TICK_INTERVAL_MS: u64 = 15_000;
@@ -79,6 +80,82 @@ struct ChatHistoryParams {
     session_key: String,
     #[serde(default)]
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDeleteParams {
+    session_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionsSendParams {
+    session_key: String,
+    message: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionSettingParams {
+    session_key: String,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionsSpawnParams {
+    task: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    run_timeout_seconds: Option<u64>,
+}
+
+fn setting_value(
+    extra: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        extra
+            .get(*key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn build_session_settings_update(method: &str, params: &SessionSettingParams) -> SessionSettings {
+    let mut settings = SessionSettings::default();
+    match method {
+        "session_setLabel" => {
+            settings.label = setting_value(&params.extra, &["label", "value"]);
+        }
+        "session_setThinking" => {
+            settings.thinking_level = setting_value(&params.extra, &["level", "value"]);
+        }
+        "session_setVerbose" => {
+            settings.verbose_level = setting_value(&params.extra, &["level", "value"]);
+        }
+        "session_setReasoning" => {
+            settings.reasoning_level = setting_value(&params.extra, &["level", "value"]);
+        }
+        _ => {}
+    }
+    settings
+}
+
+fn session_settings_payload(settings: &SessionSettings) -> serde_json::Value {
+    json!({
+        "label": settings.label,
+        "thinkingLevel": settings.thinking_level,
+        "verboseLevel": settings.verbose_level,
+        "reasoningLevel": settings.reasoning_level,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -419,6 +496,14 @@ async fn process_connect_frame(
                     "status",
                     "chat.send",
                     "chat.history",
+                    "session_delete",
+                    "sessions_send",
+                    "sessions_kill",
+                    "sessions_spawn",
+                    "session_setThinking",
+                    "session_setVerbose",
+                    "session_setReasoning",
+                    "session_setLabel",
                     "agents.list",
                     "models.list",
                     "config.get",
@@ -708,6 +793,349 @@ async fn handle_request_frame(
                 session_key,
             );
         }
+        "session_delete" => {
+            if !identity.allows(AuthScope::Write) {
+                let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
+                return Ok(());
+            }
+            let params = match serde_json::from_value::<SessionDeleteParams>(params) {
+                Ok(v) => v,
+                Err(err) => {
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid session_delete params: {err}"),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            let session_key = normalize_session_key(Some(&params.session_key));
+            let chat_id = match resolve_chat_id_for_session_key_read(state, &session_key).await {
+                Ok(chat_id) => chat_id,
+                Err((_, msg)) => {
+                    let _ = send_error_response(sender, &id, "NOT_FOUND", &msg).await;
+                    return Ok(());
+                }
+            };
+            let deleted = call_blocking(state.app_state.db.clone(), move |db| {
+                db.delete_chat_data(chat_id)
+            })
+            .await
+            .map_err(|err| {
+                warn!(target: "web", "session_delete db error: {err}");
+            })?;
+            let res = ResponseFrame {
+                kind: "res",
+                id: &id,
+                ok: true,
+                payload: Some(json!({
+                    "ok": true,
+                    "deleted": deleted,
+                    "sessionKey": session_key,
+                })),
+                error: None,
+            };
+            let _ = send_json(sender, &res).await;
+        }
+        "sessions_send" => {
+            if !identity.allows(AuthScope::Write) {
+                let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
+                return Ok(());
+            }
+            let params = match serde_json::from_value::<SessionsSendParams>(params) {
+                Ok(v) => v,
+                Err(err) => {
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid sessions_send params: {err}"),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            let session_key = normalize_session_key(Some(&params.session_key));
+            if matches!(
+                params.message.get("type").and_then(|v| v.as_str()),
+                Some("control")
+            ) {
+                let action = params
+                    .message
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("noop");
+                let res = ResponseFrame {
+                    kind: "res",
+                    id: &id,
+                    ok: true,
+                    payload: Some(json!({
+                        "ok": true,
+                        "sessionKey": session_key,
+                        "action": action,
+                        "applied": false,
+                        "reason": "control messages are acknowledged but not yet enforced",
+                    })),
+                    error: None,
+                };
+                let _ = send_json(sender, &res).await;
+                return Ok(());
+            }
+
+            let message = match params.message {
+                serde_json::Value::String(text) => text,
+                other => other.to_string(),
+            };
+            let send_body = SendRequest {
+                session_key: Some(session_key.clone()),
+                sender_name: Some("ws-user".to_string()),
+                message,
+            };
+            let resp = match stream::start_stream_run_with_actor(
+                state.clone(),
+                send_body,
+                identity.actor.clone(),
+                "/",
+            )
+            .await
+            {
+                Ok(resp) => resp,
+                Err((_, msg)) => {
+                    let _ = send_error_response(sender, &id, "UNAVAILABLE", &msg).await;
+                    return Ok(());
+                }
+            };
+            let run_id = resp
+                .0
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let res = ResponseFrame {
+                kind: "res",
+                id: &id,
+                ok: true,
+                payload: Some(json!({
+                    "ok": true,
+                    "runId": run_id,
+                    "sessionKey": session_key,
+                    "status": "started",
+                })),
+                error: None,
+            };
+            let _ = send_json(sender, &res).await;
+            spawn_chat_event_forwarder(
+                state.clone(),
+                sender.clone(),
+                identity.actor.clone(),
+                is_admin,
+                run_id,
+                session_key,
+            );
+        }
+        "sessions_kill" => {
+            if !identity.allows(AuthScope::Write) {
+                let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
+                return Ok(());
+            }
+            let params = match serde_json::from_value::<SessionDeleteParams>(params) {
+                Ok(v) => v,
+                Err(err) => {
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid sessions_kill params: {err}"),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            let session_key = normalize_session_key(Some(&params.session_key));
+            let chat_id = match resolve_chat_id_for_session_key_read(state, &session_key).await {
+                Ok(chat_id) => chat_id,
+                Err((_, msg)) => {
+                    let _ = send_error_response(sender, &id, "NOT_FOUND", &msg).await;
+                    return Ok(());
+                }
+            };
+            let channel = call_blocking(state.app_state.db.clone(), move |db| {
+                db.get_chat_channel(chat_id)
+            })
+            .await
+            .map_err(|err| {
+                warn!(target: "web", "sessions_kill db error: {err}");
+            })?
+            .unwrap_or_else(|| "web".to_string());
+            let aborted = crate::run_control::abort_runs(&channel, chat_id).await;
+            let res = ResponseFrame {
+                kind: "res",
+                id: &id,
+                ok: true,
+                payload: Some(json!({
+                    "ok": true,
+                    "sessionKey": session_key,
+                    "terminated": aborted > 0,
+                    "activeAborted": aborted,
+                    "channel": channel,
+                })),
+                error: None,
+            };
+            let _ = send_json(sender, &res).await;
+        }
+        "sessions_spawn" => {
+            if !identity.allows(AuthScope::Write) {
+                let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
+                return Ok(());
+            }
+            let params = match serde_json::from_value::<SessionsSpawnParams>(params) {
+                Ok(v) => v,
+                Err(err) => {
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid sessions_spawn params: {err}"),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            if params.task.trim().is_empty() {
+                let _ =
+                    send_error_response(sender, &id, "INVALID_REQUEST", "task is required").await;
+                return Ok(());
+            }
+            let session_key = format!("spawn:{}", uuid::Uuid::new_v4().simple());
+            let spawn_chat_id = match resolve_chat_id_for_session_key(state, &session_key).await {
+                Ok(chat_id) => chat_id,
+                Err((_, msg)) => {
+                    let _ = send_error_response(sender, &id, "UNAVAILABLE", &msg).await;
+                    return Ok(());
+                }
+            };
+            if params.label.is_some() {
+                let settings = SessionSettings {
+                    label: params.label.clone(),
+                    ..SessionSettings::default()
+                };
+                if let Err(err) = call_blocking(state.app_state.db.clone(), move |db| {
+                    db.save_session_settings(spawn_chat_id, &settings)
+                })
+                .await
+                {
+                    let _ = send_error_response(sender, &id, "UNAVAILABLE", &err.to_string()).await;
+                    return Ok(());
+                }
+            }
+            let send_body = SendRequest {
+                session_key: Some(session_key.clone()),
+                sender_name: Some("ws-user".to_string()),
+                message: params.task,
+            };
+            let resp = match stream::start_stream_run_with_actor(
+                state.clone(),
+                send_body,
+                identity.actor.clone(),
+                "/",
+            )
+            .await
+            {
+                Ok(resp) => resp,
+                Err((_, msg)) => {
+                    let _ = send_error_response(sender, &id, "UNAVAILABLE", &msg).await;
+                    return Ok(());
+                }
+            };
+            let run_id = resp
+                .0
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let res = ResponseFrame {
+                kind: "res",
+                id: &id,
+                ok: true,
+                payload: Some(json!({
+                    "ok": true,
+                    "run_id": run_id,
+                    "sessionId": session_key,
+                    "session_id": session_key,
+                    "label": params.label,
+                    "model": params.model,
+                    "runTimeoutSeconds": params.run_timeout_seconds,
+                })),
+                error: None,
+            };
+            let _ = send_json(sender, &res).await;
+        }
+        "session_setThinking"
+        | "session_setVerbose"
+        | "session_setReasoning"
+        | "session_setLabel" => {
+            if !identity.allows(AuthScope::Write) {
+                let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
+                return Ok(());
+            }
+            let params = match serde_json::from_value::<SessionSettingParams>(params) {
+                Ok(v) => v,
+                Err(err) => {
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid session setting params: {err}"),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            let session_key = normalize_session_key(Some(&params.session_key));
+            let chat_id = match resolve_chat_id_for_session_key(state, &session_key).await {
+                Ok(chat_id) => chat_id,
+                Err((_, msg)) => {
+                    let _ = send_error_response(sender, &id, "UNAVAILABLE", &msg).await;
+                    return Ok(());
+                }
+            };
+            let settings = build_session_settings_update(&method, &params);
+            let settings_to_save = settings.clone();
+            if let Err(err) = call_blocking(state.app_state.db.clone(), move |db| {
+                db.save_session_settings(chat_id, &settings_to_save)
+            })
+            .await
+            {
+                let _ = send_error_response(sender, &id, "UNAVAILABLE", &err.to_string()).await;
+                return Ok(());
+            }
+            let stored = match call_blocking(state.app_state.db.clone(), move |db| {
+                db.load_session_settings(chat_id)
+            })
+            .await
+            {
+                Ok(v) => v.unwrap_or_default(),
+                Err(err) => {
+                    let _ = send_error_response(sender, &id, "UNAVAILABLE", &err.to_string()).await;
+                    return Ok(());
+                }
+            };
+            let res = ResponseFrame {
+                kind: "res",
+                id: &id,
+                ok: true,
+                payload: Some(json!({
+                    "ok": true,
+                    "sessionKey": session_key,
+                    "applied": true,
+                    "settings": session_settings_payload(&stored),
+                })),
+                error: None,
+            };
+            let _ = send_json(sender, &res).await;
+        }
         _ => {
             let _ = send_error_response(
                 sender,
@@ -919,7 +1347,34 @@ async fn send_json<T: Serialize>(sender: &SharedSender, value: &T) -> Result<(),
         .send(Message::Text(text))
         .await
         .map_err(|err| {
-            info!(target: "web", "websocket send failed: {err}");
+            if is_expected_closed_socket_error(&err.to_string()) {
+                debug!(target: "web", "websocket closed before send completed: {err}");
+            } else {
+                info!(target: "web", "websocket send failed: {err}");
+            }
         })
         .map_err(|_| ())
+}
+
+fn is_expected_closed_socket_error(err: &str) -> bool {
+    let normalized = err.to_ascii_lowercase();
+    normalized.contains("sending after closing is not allowed")
+        || normalized.contains("already closed")
+        || normalized.contains("connection closed normally")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_expected_closed_socket_error;
+
+    #[test]
+    fn test_expected_closed_socket_errors_are_downgraded() {
+        assert!(is_expected_closed_socket_error(
+            "WebSocket protocol error: Sending after closing is not allowed"
+        ));
+        assert!(is_expected_closed_socket_error(
+            "connection closed normally"
+        ));
+        assert!(!is_expected_closed_socket_error("tls handshake failed"));
+    }
 }

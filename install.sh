@@ -200,11 +200,18 @@ install_from_archive() {
   fi
 
   chmod +x "$bin_path"
+  local target_path tmp_target
+  target_path="$install_dir/$BIN_NAME"
+  tmp_target="$install_dir/.${BIN_NAME}.tmp.$$"
   if [ -w "$install_dir" ]; then
-    cp "$bin_path" "$install_dir/$BIN_NAME"
+    cp "$bin_path" "$tmp_target"
+    chmod +x "$tmp_target"
+    mv -f "$tmp_target" "$target_path"
   else
     if need_cmd sudo; then
-      sudo cp "$bin_path" "$install_dir/$BIN_NAME"
+      sudo cp "$bin_path" "$tmp_target"
+      sudo chmod +x "$tmp_target"
+      sudo mv -f "$tmp_target" "$target_path"
     else
       err "No write permission for $install_dir and sudo not available"
       return 1

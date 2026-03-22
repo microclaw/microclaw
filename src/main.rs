@@ -118,6 +118,7 @@ fn handle_upgrade_cli() -> anyhow::Result<()> {
     let status = match std::env::consts::OS {
         "windows" => {
             let script_url = format!("https://raw.githubusercontent.com/{repo}/main/install.ps1");
+            let current_pid = std::process::id();
             ProcessCommand::new("powershell")
                 .args([
                     "-NoProfile",
@@ -125,8 +126,12 @@ fn handle_upgrade_cli() -> anyhow::Result<()> {
                     "Bypass",
                     "-Command",
                     &format!(
-                        "& ([ScriptBlock]::Create((iwr '{}' -UseBasicParsing).Content)) -SkipRun",
-                        script_url
+                        "$script = (iwr '{url}' -UseBasicParsing).Content; \
+                         $scriptPath = Join-Path $env:TEMP ('microclaw-install-' + [guid]::NewGuid().ToString() + '.ps1'); \
+                         Set-Content -Path $scriptPath -Value $script; \
+                         Start-Process powershell -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $scriptPath, '-SkipRun', '-WaitForPid', '{pid}')",
+                        url = script_url,
+                        pid = current_pid
                     ),
                 ])
                 .status()
@@ -152,7 +157,11 @@ fn handle_upgrade_cli() -> anyhow::Result<()> {
         );
     }
 
-    println!("Upgrade completed. Re-run `microclaw version` to verify.");
+    if std::env::consts::OS == "windows" {
+        println!("Upgrade started in the background. Wait a few seconds, then re-run `microclaw version` to verify.");
+    } else {
+        println!("Upgrade completed. Re-run `microclaw version` to verify.");
+    }
     Ok(())
 }
 

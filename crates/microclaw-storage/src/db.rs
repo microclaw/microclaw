@@ -45,9 +45,18 @@ pub struct StoredMessage {
 pub struct ChatSummary {
     pub chat_id: i64,
     pub chat_title: Option<String>,
+    pub session_label: Option<String>,
     pub chat_type: String,
     pub last_message_time: String,
     pub last_message_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionSettings {
+    pub label: Option<String>,
+    pub thinking_level: Option<String>,
+    pub verbose_level: Option<String>,
+    pub reasoning_level: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -183,7 +192,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 18;
+const SCHEMA_VERSION_CURRENT: i64 = 19;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -442,6 +451,18 @@ fn ensure_sessions_schema(conn: &Connection) -> Result<(), MicroClawError> {
     }
     if !table_has_column(conn, "sessions", "fork_point")? {
         conn.execute("ALTER TABLE sessions ADD COLUMN fork_point INTEGER", [])?;
+    }
+    if !table_has_column(conn, "sessions", "label")? {
+        conn.execute("ALTER TABLE sessions ADD COLUMN label TEXT", [])?;
+    }
+    if !table_has_column(conn, "sessions", "thinking_level")? {
+        conn.execute("ALTER TABLE sessions ADD COLUMN thinking_level TEXT", [])?;
+    }
+    if !table_has_column(conn, "sessions", "verbose_level")? {
+        conn.execute("ALTER TABLE sessions ADD COLUMN verbose_level TEXT", [])?;
+    }
+    if !table_has_column(conn, "sessions", "reasoning_level")? {
+        conn.execute("ALTER TABLE sessions ADD COLUMN reasoning_level TEXT", [])?;
     }
     if table_has_column(conn, "sessions", "parent_session_key")? {
         conn.execute(
@@ -828,6 +849,11 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         set_schema_version(conn, 18)?;
         version = 18;
     }
+    if version < 19 {
+        ensure_sessions_schema(conn)?;
+        set_schema_version(conn, 19)?;
+        version = 19;
+    }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
     }
@@ -930,6 +956,11 @@ impl Database {
                 chat_id INTEGER PRIMARY KEY,
                 messages_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                label TEXT,
+                thinking_level TEXT,
+                verbose_level TEXT,
+                reasoning_level TEXT,
+                skill_envs_json TEXT,
                 parent_session_key TEXT,
                 fork_point INTEGER
             );
@@ -1292,6 +1323,7 @@ impl Database {
             "SELECT
                 c.chat_id,
                 c.chat_title,
+                s.label,
                 c.chat_type,
                 c.last_message_time,
                 (
@@ -1302,6 +1334,7 @@ impl Database {
                     LIMIT 1
                 ) AS last_message_preview
              FROM chats c
+             LEFT JOIN sessions s ON s.chat_id = c.chat_id
              WHERE c.chat_type = ?1
              ORDER BY c.last_message_time DESC
              LIMIT ?2",
@@ -1311,9 +1344,10 @@ impl Database {
                 Ok(ChatSummary {
                     chat_id: row.get(0)?,
                     chat_title: row.get(1)?,
-                    chat_type: row.get(2)?,
-                    last_message_time: row.get(3)?,
-                    last_message_preview: row.get(4)?,
+                    session_label: row.get(2)?,
+                    chat_type: row.get(3)?,
+                    last_message_time: row.get(4)?,
+                    last_message_preview: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1326,6 +1360,7 @@ impl Database {
             "SELECT
                 c.chat_id,
                 c.chat_title,
+                s.label,
                 c.chat_type,
                 c.last_message_time,
                 (
@@ -1336,6 +1371,7 @@ impl Database {
                     LIMIT 1
                 ) AS last_message_preview
              FROM chats c
+             LEFT JOIN sessions s ON s.chat_id = c.chat_id
              ORDER BY c.last_message_time DESC
              LIMIT ?1",
         )?;
@@ -1344,9 +1380,10 @@ impl Database {
                 Ok(ChatSummary {
                     chat_id: row.get(0)?,
                     chat_title: row.get(1)?,
-                    chat_type: row.get(2)?,
-                    last_message_time: row.get(3)?,
-                    last_message_preview: row.get(4)?,
+                    session_label: row.get(2)?,
+                    chat_type: row.get(3)?,
+                    last_message_time: row.get(4)?,
+                    last_message_preview: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -2014,6 +2051,68 @@ impl Database {
         );
         match result {
             Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_session_settings(
+        &self,
+        chat_id: i64,
+        settings: &SessionSettings,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO sessions (
+                chat_id,
+                messages_json,
+                updated_at,
+                label,
+                thinking_level,
+                verbose_level,
+                reasoning_level
+             )
+             VALUES (?1, '[]', ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(chat_id) DO UPDATE SET
+                updated_at = excluded.updated_at,
+                label = COALESCE(excluded.label, sessions.label),
+                thinking_level = COALESCE(excluded.thinking_level, sessions.thinking_level),
+                verbose_level = COALESCE(excluded.verbose_level, sessions.verbose_level),
+                reasoning_level = COALESCE(excluded.reasoning_level, sessions.reasoning_level)",
+            params![
+                chat_id,
+                now,
+                settings.label,
+                settings.thinking_level,
+                settings.verbose_level,
+                settings.reasoning_level
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_session_settings(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<SessionSettings>, MicroClawError> {
+        let conn = self.lock_conn();
+        let result = conn.query_row(
+            "SELECT label, thinking_level, verbose_level, reasoning_level
+             FROM sessions
+             WHERE chat_id = ?1",
+            params![chat_id],
+            |row| {
+                Ok(SessionSettings {
+                    label: row.get::<_, Option<String>>(0)?,
+                    thinking_level: row.get::<_, Option<String>>(1)?,
+                    verbose_level: row.get::<_, Option<String>>(2)?,
+                    reasoning_level: row.get::<_, Option<String>>(3)?,
+                })
+            },
+        );
+        match result {
+            Ok(settings) => Ok(Some(settings)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -4459,6 +4558,10 @@ mod tests {
         assert!(has_confidence && has_source && has_last_seen && has_archived);
         assert!(table_has_column(&conn, "sessions", "parent_session_key").unwrap());
         assert!(table_has_column(&conn, "sessions", "fork_point").unwrap());
+        assert!(table_has_column(&conn, "sessions", "label").unwrap());
+        assert!(table_has_column(&conn, "sessions", "thinking_level").unwrap());
+        assert!(table_has_column(&conn, "sessions", "verbose_level").unwrap());
+        assert!(table_has_column(&conn, "sessions", "reasoning_level").unwrap());
         assert!(table_has_column(&conn, "scheduled_tasks", "timezone").unwrap());
 
         let session_parent_index_exists: i64 = conn
@@ -4610,6 +4713,10 @@ mod tests {
             );
             assert!(table_has_column(&conn, "sessions", "parent_session_key").unwrap());
             assert!(table_has_column(&conn, "sessions", "fork_point").unwrap());
+            assert!(table_has_column(&conn, "sessions", "label").unwrap());
+            assert!(table_has_column(&conn, "sessions", "thinking_level").unwrap());
+            assert!(table_has_column(&conn, "sessions", "verbose_level").unwrap());
+            assert!(table_has_column(&conn, "sessions", "reasoning_level").unwrap());
             assert!(table_has_column(&conn, "scheduled_tasks", "timezone").unwrap());
             assert!(table_has_column(&conn, "api_keys", "expires_at").unwrap());
             assert!(table_has_column(&conn, "api_keys", "rotated_from_key_id").unwrap());
@@ -5256,6 +5363,26 @@ mod tests {
         db.save_session(100, json2).unwrap();
         let (loaded_json2, _) = db.load_session(100).unwrap().unwrap();
         assert_eq!(loaded_json2, json2);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_save_and_load_session_settings() {
+        let (db, dir) = test_db();
+        let settings = SessionSettings {
+            label: Some("Ops".into()),
+            thinking_level: Some("high".into()),
+            verbose_level: Some("full".into()),
+            reasoning_level: Some("stream".into()),
+        };
+        db.save_session_settings(100, &settings).unwrap();
+
+        let loaded = db.load_session_settings(100).unwrap().unwrap();
+        assert_eq!(loaded.label.as_deref(), Some("Ops"));
+        assert_eq!(loaded.thinking_level.as_deref(), Some("high"));
+        assert_eq!(loaded.verbose_level.as_deref(), Some("full"));
+        assert_eq!(loaded.reasoning_level.as_deref(), Some("stream"));
 
         cleanup(&dir);
     }

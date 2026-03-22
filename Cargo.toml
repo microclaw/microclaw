@@ -13,7 +13,7 @@ resolver = "2"
 
 [package]
 name = "microclaw"
-version = "0.1.16"
+version = "0.1.27"
 edition = "2021"
 license = "MIT"
 default-run = "microclaw"
@@ -82,3 +82,6 @@ shellexpand = "3.1.2"
 
 [dev-dependencies]
 tower = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8.0"

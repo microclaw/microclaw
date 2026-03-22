@@ -27,6 +27,64 @@ If a hook times out or crashes, runtime skips the hook and continues.
 - Create branch: `POST /api/sessions/fork`
 - Deleting parent session does not cascade to children.
 
+## ACP Subagent Runtime
+
+- Symptom: `sessions_spawn(runtime="acp")` returns `ACP runtime is disabled`
+  - Set `subagents.acp.enabled: true`
+  - Set `subagents.acp.command` to an ACP-compatible agent executable, or add at least one enabled target under `subagents.acp.targets`
+
+- Symptom: ACP run is accepted but later fails quickly
+  - Verify the selected ACP command starts and speaks ACP over stdio
+  - Check `subagents_log` for the run and inspect stderr included in the failure
+  - Confirm the chat working directory contains the repo/context the external agent expects
+
+- Symptom: `sessions_spawn(runtime="acp")` returns unknown target or multiple target errors
+  - Pass `runtime_target` when using named ACP workers
+  - Or set `subagents.acp.default_target` so plain `runtime="acp"` has a stable default
+  - Verify target names under `subagents.acp.targets`
+
+- Operational notes:
+  - ACP-backed subagents reuse the normal `subagent_runs` lifecycle and announce path
+  - ACP file and terminal operations are scoped to the chat working directory
+  - `subagents_log` now records ACP permission, plan, tool-call, file, and terminal events
+  - ACP permission requests are still operator-configurable and may be auto-approved, so keep the feature operator-controlled
+
+## Gateway Bridge Issues
+
+- Symptom: Mission Control / OpenClaw operator cannot connect
+  - The compatibility bridge is served from `GET /` with WebSocket upgrade, not `/ws`.
+  - Verify the web listener first: `GET /api/health`.
+  - Check service state: `microclaw gateway status --json --deep`
+
+- Symptom: local gateway RPC returns unauthorized
+  - Export one of `MICROCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_TOKEN`, `GATEWAY_TOKEN`, or `MICROCLAW_API_KEY`.
+  - WebSocket `connect` requires a valid operator token; mutating RPC methods require `operator.write`.
+
+- Quick smoke checks:
+
+```sh
+MICROCLAW_GATEWAY_TOKEN=... microclaw gateway call health
+MICROCLAW_GATEWAY_TOKEN=... microclaw gateway call status
+MICROCLAW_GATEWAY_TOKEN=... microclaw gateway call sessions_send \
+  --params '{"sessionKey":"main","message":"status summary"}'
+```
+
+- Supported bridge methods:
+  - `health`, `status`, `chat.send`, `chat.history`
+  - `session_delete`, `sessions_send`, `sessions_kill`, `sessions_spawn`
+  - `session_setThinking`, `session_setVerbose`, `session_setReasoning`, `session_setLabel`
+  - `agents.list`, `models.list`, `config.get`, `node.list`
+
+- Session-control notes:
+  - `sessions_send` emits live `chat` events and a terminal `final` state for normal messages.
+  - `sessions_spawn` can create a new session and persist an initial label.
+  - `session_set*` writes only the provided field and preserves the rest of the stored session settings.
+  - Session labels and settings are persisted in the `sessions` table and flow back into session listings / bridge payloads.
+  - `sessions_send` control payloads are acknowledged today, but not yet enforced as runtime controls.
+
+- Symptom: logs show send failures after operator disconnect
+  - Messages such as `sending after closing is not allowed`, `already closed`, or `connection closed normally` are downgraded as expected closed-socket noise.
+
 ## Metrics Issues
 
 - Check snapshot: `GET /api/metrics`

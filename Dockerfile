@@ -1,9 +1,22 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: Build tools
-FROM rust:1.88-slim-bookworm AS chef
+ARG NODE_VERSION=20
+ARG RUST_VERSION=1.93.1
 
-# Install build dependencies
+# Stage 1: Build embedded web assets so the binary does not depend on checked-in dist files.
+FROM node:${NODE_VERSION}-bookworm-slim AS web-builder
+
+WORKDIR /usr/src/microclaw/web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web ./
+RUN npm run build
+
+# Stage 2: Build tools
+FROM rust:${RUST_VERSION}-slim-bookworm AS chef
+
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
@@ -13,46 +26,39 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /usr/src/microclaw
 
-# Install cargo-chef to improve dependency layer caching
 RUN cargo install cargo-chef --locked
 
-# Stage 2: Prepare dependency recipe
+# Stage 3: Prepare dependency recipe
 FROM chef AS planner
 
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
-# Stage 3: Build
+# Stage 4: Build
 FROM chef AS builder
 
 COPY --from=planner /usr/src/microclaw/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
+COPY --from=web-builder /usr/src/microclaw/web/dist ./web/dist
 
-# Build the binary in release mode
 RUN cargo build --release --locked --bin microclaw
 
-# Stage 4: Run
+# Stage 5: Run
 FROM debian:bookworm-slim
 
-# Install runtime certificates and libraries
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Run as non-root by default
 RUN useradd --create-home --home-dir /home/microclaw --uid 10001 --shell /usr/sbin/nologin microclaw
 
 WORKDIR /app
 
-# Copy the compiled binary
 COPY --from=builder /usr/src/microclaw/target/release/microclaw /usr/local/bin/
-
-# Copy necessary runtime directories
-COPY --from=builder /usr/src/microclaw/web ./web
 COPY --from=builder /usr/src/microclaw/skills ./skills
 COPY --from=builder /usr/src/microclaw/scripts ./scripts
 
@@ -60,6 +66,9 @@ RUN mkdir -p /home/microclaw/.microclaw /app/tmp \
     && chown -R microclaw:microclaw /home/microclaw /app
 
 ENV HOME=/home/microclaw
+EXPOSE 10961
+
 USER microclaw
 
-CMD ["microclaw"]
+ENTRYPOINT ["microclaw"]
+CMD ["start"]

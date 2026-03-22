@@ -60,6 +60,45 @@ fn list_available_soul_files(config: &crate::config::Config) -> Vec<String> {
     out
 }
 
+fn command_available(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty() {
+        return false;
+    }
+    if command.contains(std::path::MAIN_SEPARATOR) || command.starts_with('.') {
+        return std::path::Path::new(command).is_file();
+    }
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    #[cfg(target_os = "windows")]
+    let candidates: Vec<String> = {
+        let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+        let ext_list: Vec<String> = exts
+            .split(';')
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut out = vec![command.to_string()];
+        let lower = command.to_ascii_lowercase();
+        if !ext_list.iter().any(|ext| lower.ends_with(ext)) {
+            for ext in ext_list {
+                out.push(format!("{command}{ext}"));
+            }
+        }
+        out
+    };
+    #[cfg(not(target_os = "windows"))]
+    let candidates: Vec<String> = vec![command.to_string()];
+
+    for base in std::env::split_paths(&path_var) {
+        for candidate in &candidates {
+            if base.join(candidate).is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn merge_yaml_value(
     target: &mut serde_yaml::Value,
     incoming: &serde_yaml::Value,
@@ -253,6 +292,81 @@ pub(super) async fn api_config_self_check(
                 "High-risk tool confirmation is disabled; risky actions can execute without an explicit user approval boundary."
                     .to_string(),
         });
+    }
+    if state.app_state.config.subagents.acp.default_target.enabled {
+        let acp = &state.app_state.config.subagents.acp;
+        if let Some(default_target) = acp.default_target_name.as_deref() {
+            if !acp.targets.contains_key(default_target) {
+                warnings.push(ConfigWarning {
+                    code: "acp_default_target_missing",
+                    severity: "high",
+                    message: format!(
+                        "subagents.acp.default_target '{}' does not match any configured target.",
+                        default_target
+                    ),
+                });
+            }
+        }
+        match acp.resolve_target(None) {
+            Ok(target) => {
+                if target.auto_approve {
+                    warnings.push(ConfigWarning {
+                        code: "acp_target_auto_approve_enabled",
+                        severity: "high",
+                        message: format!(
+                            "ACP subagent runtime auto-approves permission requests for target '{}'.",
+                            target.name.as_deref().unwrap_or("default")
+                        ),
+                    });
+                }
+                if !command_available(&target.command) {
+                    warnings.push(ConfigWarning {
+                        code: "acp_target_command_missing",
+                        severity: "high",
+                        message: format!(
+                            "ACP subagent command '{}' for target '{}' is not executable from this host.",
+                            target.command,
+                            target.name.as_deref().unwrap_or("default")
+                        ),
+                    });
+                }
+            }
+            Err(err) => warnings.push(ConfigWarning {
+                code: "acp_runtime_misconfigured",
+                severity: "high",
+                message: err,
+            }),
+        }
+        for (name, target) in state
+            .app_state
+            .config
+            .subagents
+            .acp
+            .targets
+            .iter()
+            .filter(|(_, target)| target.enabled)
+        {
+            if !command_available(&target.command) {
+                warnings.push(ConfigWarning {
+                    code: "acp_named_target_command_missing",
+                    severity: "high",
+                    message: format!(
+                        "ACP named target '{}' command '{}' is not executable from this host.",
+                        name, target.command
+                    ),
+                });
+            }
+            if target.auto_approve {
+                warnings.push(ConfigWarning {
+                    code: "acp_named_target_auto_approve_enabled",
+                    severity: "high",
+                    message: format!(
+                        "ACP named target '{}' auto-approves permission requests.",
+                        name
+                    ),
+                });
+            }
+        }
     }
     if mount_allowlist_status
         .as_ref()

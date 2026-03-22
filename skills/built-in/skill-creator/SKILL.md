@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Claude's capabilities with specialized knowledge, workflows, or tool integrations.
+description: "Guide for creating effective skills with YAML frontmatter, structured SKILL.md content, and bundled resources. Use when users want to create a new skill, write a SKILL.md, update an existing skill, define trigger conditions, structure skill content sections, or package a skill for distribution. Triggers on mentions of create skill, new skill, skill file, skill template, write a skill, or SKILL.md."
 license: Complete terms in LICENSE.txt
 ---
 

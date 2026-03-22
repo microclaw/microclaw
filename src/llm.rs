@@ -107,21 +107,31 @@ fn sanitize_messages(messages: Vec<Message>) -> Vec<Message> {
 
 #[derive(Default)]
 struct SseEventParser {
-    pending: String,
+    pending: Vec<u8>,
     data_lines: Vec<String>,
 }
 
 impl SseEventParser {
-    fn push_chunk(&mut self, chunk: &str) -> Vec<String> {
-        self.pending.push_str(chunk);
+    fn decode_line(line: Vec<u8>) -> String {
+        match String::from_utf8(line) {
+            Ok(line) => line,
+            Err(err) => String::from_utf8_lossy(&err.into_bytes()).into_owned(),
+        }
+    }
+
+    fn push_chunk(&mut self, chunk: impl AsRef<[u8]>) -> Vec<String> {
+        self.pending.extend_from_slice(chunk.as_ref());
         let mut events = Vec::new();
 
-        while let Some(pos) = self.pending.find('\n') {
-            let mut line = self.pending[..pos].to_string();
-            self.pending = self.pending[pos + 1..].to_string();
-            if line.ends_with('\r') {
+        while let Some(pos) = self.pending.iter().position(|b| *b == b'\n') {
+            let mut line = self.pending.drain(..=pos).collect::<Vec<_>>();
+            if line.last() == Some(&b'\n') {
                 line.pop();
             }
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            let line = Self::decode_line(line);
             if let Some(event_data) = self.handle_line(&line) {
                 events.push(event_data);
             }
@@ -134,9 +144,10 @@ impl SseEventParser {
         let mut events = Vec::new();
         if !self.pending.is_empty() {
             let mut line = std::mem::take(&mut self.pending);
-            if line.ends_with('\r') {
+            if line.last() == Some(&b'\r') {
                 line.pop();
             }
+            let line = Self::decode_line(line);
             if let Some(event_data) = self.handle_line(&line) {
                 events.push(event_data);
             }
@@ -316,7 +327,7 @@ impl AnthropicProvider {
                 Ok(c) => c,
                 Err(_) => break,
             };
-            for data in sse.push_chunk(&String::from_utf8_lossy(&chunk)) {
+            for data in sse.push_chunk(chunk.as_ref()) {
                 if data == "[DONE]" {
                     break 'outer;
                 }
@@ -1559,7 +1570,7 @@ impl LlmProvider for OpenAiProvider {
                 Ok(c) => c,
                 Err(_) => break,
             };
-            for data in sse.push_chunk(&String::from_utf8_lossy(&chunk)) {
+            for data in sse.push_chunk(chunk.as_ref()) {
                 if data == "[DONE]" {
                     break 'outer;
                 }
@@ -3723,6 +3734,17 @@ mod tests {
         assert!(events.is_empty());
         let tail = parser.finish();
         assert_eq!(tail, vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn test_sse_event_parser_preserves_split_utf8_bytes() {
+        let mut parser = SseEventParser::default();
+        let raw = "data: 主要\n\n".as_bytes();
+        let split = raw.iter().position(|b| *b >= 0x80).unwrap() + 1;
+        let head = parser.push_chunk(&raw[..split]);
+        assert!(head.is_empty());
+        let tail = parser.push_chunk(&raw[split..]);
+        assert_eq!(tail, vec!["主要".to_string()]);
     }
 
     #[test]

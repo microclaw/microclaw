@@ -9,6 +9,7 @@ Each release should have:
 - green required CI jobs
 - generated release notes
 - packaged binaries for supported platforms
+- official container images for Linux (`linux/amd64`, `linux/arm64`)
 - upgrade notes when migrations or config changes are involved
 - rollback instructions recorded in the PR or release checklist
 
@@ -35,6 +36,7 @@ Release candidates should satisfy:
 - `node scripts/generate_docs_artifacts.mjs --check`
 - security dependency audit
 - release asset packaging smoke
+- container image build/publish smoke
 
 ## Rollback Standard
 
