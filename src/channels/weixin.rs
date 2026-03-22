@@ -118,15 +118,93 @@ pub struct WeixinChannelConfig {
 struct WeixinWebhookPayload {
     #[serde(default)]
     account_id: String,
+    #[serde(default)]
     from_user_id: String,
+    #[serde(default)]
     text: String,
     #[serde(default)]
-    message_id: String,
+    message_id: Option<FlexibleId>,
     #[serde(default)]
     timestamp_ms: Option<i64>,
     #[serde(default)]
     timestamp: Option<String>,
     #[serde(default)]
+    context_token: String,
+    #[serde(default)]
+    item_list: Vec<WeixinWebhookMessageItem>,
+    #[serde(default)]
+    message: Option<WeixinWebhookMessage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum FlexibleId {
+    String(String),
+    Integer(i64),
+    Unsigned(u64),
+}
+
+impl FlexibleId {
+    fn as_string(&self) -> String {
+        match self {
+            Self::String(value) => value.clone(),
+            Self::Integer(value) => value.to_string(),
+            Self::Unsigned(value) => value.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct WeixinWebhookTextItem {
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct WeixinWebhookVoiceItem {
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct WeixinWebhookFileItem {
+    #[serde(default)]
+    file_name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct WeixinWebhookMessageItem {
+    #[serde(default)]
+    r#type: i32,
+    #[serde(default)]
+    text_item: Option<WeixinWebhookTextItem>,
+    #[serde(default)]
+    voice_item: Option<WeixinWebhookVoiceItem>,
+    #[serde(default)]
+    file_item: Option<WeixinWebhookFileItem>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct WeixinWebhookMessage {
+    #[serde(default)]
+    from_user_id: String,
+    #[serde(default)]
+    message_id: Option<FlexibleId>,
+    #[serde(default)]
+    create_time_ms: Option<i64>,
+    #[serde(default)]
+    context_token: String,
+    #[serde(default)]
+    item_list: Vec<WeixinWebhookMessageItem>,
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedWeixinInbound {
+    sender: String,
+    text: String,
+    message_id: String,
+    timestamp_ms: Option<i64>,
+    timestamp: Option<String>,
     context_token: String,
 }
 
@@ -197,6 +275,129 @@ fn parse_csv(raw: &str) -> Vec<String> {
         .filter(|v| !v.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn summarize_weixin_item(item: &WeixinWebhookMessageItem) -> Option<String> {
+    match item.r#type {
+        1 => item
+            .text_item
+            .as_ref()
+            .map(|text| text.text.trim().to_string())
+            .filter(|text| !text.is_empty()),
+        2 => Some("[image]".to_string()),
+        3 => item
+            .voice_item
+            .as_ref()
+            .map(|voice| voice.text.trim().to_string())
+            .filter(|text| !text.is_empty())
+            .or_else(|| Some("[voice]".to_string())),
+        4 => item
+            .file_item
+            .as_ref()
+            .map(|file| file.file_name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .map(|name| format!("[file: {name}]"))
+            .or_else(|| Some("[file]".to_string())),
+        5 => Some("[video]".to_string()),
+        _ => None,
+    }
+}
+
+fn summarize_weixin_items(items: &[WeixinWebhookMessageItem]) -> String {
+    items
+        .iter()
+        .filter_map(summarize_weixin_item)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_weixin_inbound(payload: &WeixinWebhookPayload) -> Option<NormalizedWeixinInbound> {
+    let nested = payload.message.as_ref();
+    let sender = payload
+        .from_user_id
+        .trim()
+        .to_string()
+        .if_empty_then(|| Some(nested?.from_user_id.trim().to_string()))?;
+    let text = {
+        let direct = payload.text.trim();
+        if !direct.is_empty() {
+            direct.to_string()
+        } else if !payload.item_list.is_empty() {
+            summarize_weixin_items(&payload.item_list)
+        } else if let Some(message) = nested {
+            summarize_weixin_items(&message.item_list)
+        } else {
+            String::new()
+        }
+    };
+    if text.trim().is_empty() {
+        return None;
+    }
+    let message_id = payload
+        .message_id
+        .as_ref()
+        .map(FlexibleId::as_string)
+        .or_else(|| {
+            nested.and_then(|message| message.message_id.as_ref().map(FlexibleId::as_string))
+        })
+        .unwrap_or_default();
+    let timestamp_ms = payload
+        .timestamp_ms
+        .or_else(|| nested.and_then(|message| message.create_time_ms));
+    let context_token = if !payload.context_token.trim().is_empty() {
+        payload.context_token.trim().to_string()
+    } else {
+        nested
+            .map(|message| message.context_token.trim().to_string())
+            .filter(|token| !token.is_empty())
+            .unwrap_or_default()
+    };
+    Some(NormalizedWeixinInbound {
+        sender,
+        text,
+        message_id,
+        timestamp_ms,
+        timestamp: payload.timestamp.clone(),
+        context_token,
+    })
+}
+
+fn provided_weixin_webhook_token(headers: &HeaderMap) -> String {
+    if let Some(token) = headers
+        .get("x-openclaw-weixin-webhook-token")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return token.to_string();
+    }
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string()
+}
+
+trait EmptyStringFallback {
+    fn if_empty_then<F>(self, fallback: F) -> Option<String>
+    where
+        F: FnOnce() -> Option<String>;
+}
+
+impl EmptyStringFallback for String {
+    fn if_empty_then<F>(self, fallback: F) -> Option<String>
+    where
+        F: FnOnce() -> Option<String>,
+    {
+        if self.trim().is_empty() {
+            fallback()
+        } else {
+            Some(self)
+        }
+    }
 }
 
 pub fn build_weixin_runtime_contexts(config: &crate::config::Config) -> Vec<WeixinRuntimeContext> {
@@ -449,29 +650,25 @@ async fn weixin_webhook_handler(
     let Some(runtime_ctx) = select_runtime_context(&runtime_contexts, &payload.account_id) else {
         return axum::http::StatusCode::NOT_FOUND;
     };
-    let provided_token = headers
-        .get("x-openclaw-weixin-webhook-token")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .unwrap_or("");
+    let provided_token = provided_weixin_webhook_token(&headers);
     if !runtime_ctx.webhook_token.trim().is_empty()
         && runtime_ctx.webhook_token.trim() != provided_token
     {
         return axum::http::StatusCode::FORBIDDEN;
     }
 
-    let sender = payload.from_user_id.trim();
-    let text = payload.text.trim();
-    if sender.is_empty() || text.is_empty() {
+    let Some(normalized) = normalize_weixin_inbound(&payload) else {
         return axum::http::StatusCode::BAD_REQUEST;
-    }
+    };
+    let sender = normalized.sender.trim();
+    let text = normalized.text.trim();
     if !runtime_ctx.allowed_user_ids.is_empty()
         && !runtime_ctx.allowed_user_ids.iter().any(|id| id == sender)
     {
         return axum::http::StatusCode::FORBIDDEN;
     }
 
-    cache_context_token(&runtime_ctx.channel_name, sender, &payload.context_token);
+    cache_context_token(&runtime_ctx.channel_name, sender, &normalized.context_token);
 
     let external_chat_id = sender.to_string();
     let chat_id = call_blocking(app_state.db.clone(), {
@@ -493,18 +690,18 @@ async fn weixin_webhook_handler(
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
     }
 
-    let inbound_message_id = if payload.message_id.trim().is_empty() {
+    let inbound_message_id = if normalized.message_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
-        payload.message_id.clone()
+        normalized.message_id.clone()
     };
-    let inbound_ts_ms = payload.timestamp_ms.or_else(|| {
-        payload
+    let inbound_ts_ms = normalized.timestamp_ms.or_else(|| {
+        normalized
             .timestamp
             .as_deref()
             .and_then(parse_epoch_ms_from_str)
             .or_else(|| {
-                payload
+                normalized
                     .timestamp
                     .as_deref()
                     .and_then(parse_epoch_ms_from_seconds_str)
@@ -641,10 +838,13 @@ mod tests {
     use std::fs;
 
     use super::{
-        build_weixin_runtime_contexts, cache_context_token, select_runtime_context, WeixinAdapter,
-        CHANNEL_KEY,
+        build_weixin_runtime_contexts, cache_context_token, normalize_weixin_inbound,
+        provided_weixin_webhook_token, select_runtime_context, FlexibleId, WeixinAdapter,
+        WeixinWebhookMessage, WeixinWebhookMessageItem, WeixinWebhookPayload,
+        WeixinWebhookTextItem, WeixinWebhookVoiceItem, CHANNEL_KEY,
     };
     use crate::config::Config;
+    use axum::http::{HeaderMap, HeaderValue};
     use microclaw_channels::channel_adapter::ChannelAdapter;
 
     #[test]
@@ -758,5 +958,102 @@ openclaw-weixin:
         assert!(payload.contains("\"text\":\"hello\""));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_normalize_weixin_inbound_accepts_nested_upstream_message() {
+        let payload = WeixinWebhookPayload {
+            account_id: "main".to_string(),
+            from_user_id: String::new(),
+            text: String::new(),
+            message_id: None,
+            timestamp_ms: None,
+            timestamp: None,
+            context_token: String::new(),
+            item_list: Vec::new(),
+            message: Some(WeixinWebhookMessage {
+                from_user_id: "alice@im.wechat".to_string(),
+                message_id: Some(FlexibleId::Integer(42)),
+                create_time_ms: Some(123_456),
+                context_token: "ctx-nested".to_string(),
+                item_list: vec![
+                    WeixinWebhookMessageItem {
+                        r#type: 2,
+                        ..Default::default()
+                    },
+                    WeixinWebhookMessageItem {
+                        r#type: 3,
+                        voice_item: Some(WeixinWebhookVoiceItem {
+                            text: "voice transcript".to_string(),
+                        }),
+                        ..Default::default()
+                    },
+                    WeixinWebhookMessageItem {
+                        r#type: 1,
+                        text_item: Some(WeixinWebhookTextItem {
+                            text: "hello".to_string(),
+                        }),
+                        ..Default::default()
+                    },
+                ],
+            }),
+        };
+
+        let normalized = normalize_weixin_inbound(&payload).unwrap();
+        assert_eq!(normalized.sender, "alice@im.wechat");
+        assert_eq!(normalized.message_id, "42");
+        assert_eq!(normalized.timestamp_ms, Some(123_456));
+        assert_eq!(normalized.context_token, "ctx-nested");
+        assert_eq!(normalized.text, "[image]\nvoice transcript\nhello");
+    }
+
+    #[test]
+    fn test_normalize_weixin_inbound_prefers_explicit_root_fields() {
+        let payload = WeixinWebhookPayload {
+            account_id: "main".to_string(),
+            from_user_id: "root@im.wechat".to_string(),
+            text: "root text".to_string(),
+            message_id: Some(FlexibleId::String("msg-root".to_string())),
+            timestamp_ms: Some(777),
+            timestamp: Some("2026-03-22T12:00:00Z".to_string()),
+            context_token: "ctx-root".to_string(),
+            item_list: Vec::new(),
+            message: Some(WeixinWebhookMessage {
+                from_user_id: "nested@im.wechat".to_string(),
+                message_id: Some(FlexibleId::Unsigned(100)),
+                create_time_ms: Some(1000),
+                context_token: "ctx-nested".to_string(),
+                item_list: vec![WeixinWebhookMessageItem {
+                    r#type: 1,
+                    text_item: Some(WeixinWebhookTextItem {
+                        text: "nested text".to_string(),
+                    }),
+                    ..Default::default()
+                }],
+            }),
+        };
+
+        let normalized = normalize_weixin_inbound(&payload).unwrap();
+        assert_eq!(normalized.sender, "root@im.wechat");
+        assert_eq!(normalized.text, "root text");
+        assert_eq!(normalized.message_id, "msg-root");
+        assert_eq!(normalized.timestamp_ms, Some(777));
+        assert_eq!(normalized.context_token, "ctx-root");
+    }
+
+    #[test]
+    fn test_provided_weixin_webhook_token_accepts_bearer_fallback() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer bridge-token"),
+        );
+        assert_eq!(provided_weixin_webhook_token(&headers), "bridge-token");
+
+        headers.insert(
+            "x-openclaw-weixin-webhook-token",
+            HeaderValue::from_static("header-token"),
+        );
+        assert_eq!(provided_weixin_webhook_token(&headers), "header-token");
     }
 }

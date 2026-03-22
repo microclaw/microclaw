@@ -45,6 +45,7 @@ Headers:
 
 - `Content-Type: application/json`
 - `x-openclaw-weixin-webhook-token: <token>` when `webhook_token` is configured
+- `Authorization: Bearer <token>` is also accepted as a fallback
 
 Body:
 
@@ -68,7 +69,30 @@ Fields:
 - `timestamp_ms` or `timestamp`: optional startup-guard timestamp.
 - `context_token`: strongly recommended and required for later replies to the same user.
 
-Current scope is text ingress. The bridge can ignore non-text Weixin items or convert them into text summaries before posting.
+MicroClaw also accepts a more upstream-like nested shape:
+
+```json
+{
+  "account_id": "main",
+  "message": {
+    "from_user_id": "alice@im.wechat",
+    "message_id": 42,
+    "create_time_ms": 1740000000000,
+    "context_token": "ctx-123",
+    "item_list": [
+      { "type": 1, "text_item": { "text": "hello" } }
+    ]
+  }
+}
+```
+
+For `item_list`, MicroClaw currently normalizes:
+
+- text -> plain text
+- voice with transcript -> transcript text
+- image -> `[image]`
+- file -> `[file]` or `[file: <name>]`
+- video -> `[video]`
 
 ## Outbound Command Contract
 
@@ -101,6 +125,14 @@ Example payload:
 }
 ```
 
+If you want a minimal starting point, use:
+
+```yaml
+send_command: WEIXIN_BRIDGE_URL=http://127.0.0.1:8788/send WEIXIN_BRIDGE_TOKEN=replace-me node examples/openclaw-weixin/send-command-http-forward.mjs
+```
+
+That helper simply forwards `MICROCLAW_WEIXIN_PAYLOAD` to your local sidecar over HTTP.
+
 ## Context Token Behavior
 
 Weixin replies require a `context_token`. MicroClaw caches the latest token per `channel + user`.
@@ -116,6 +148,11 @@ The npm package can still provide the Node-side login and long-polling flow. The
 
 - package inbound updates -> MicroClaw webhook payload above
 - MicroClaw `send_command` env payload -> package send-message logic
+
+Starter files:
+
+- `examples/openclaw-weixin/README.md`
+- `examples/openclaw-weixin/send-command-http-forward.mjs`
 
 The package metadata and protocol description live at:
 
