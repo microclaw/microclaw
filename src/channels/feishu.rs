@@ -1330,6 +1330,140 @@ pub(crate) fn system_prompt_extension(caller_channel: &str) -> Option<&'static s
     }
 }
 
+// ---------------------------------------------------------------------------
+// ACK Reaction (已读标记)
+// ---------------------------------------------------------------------------
+
+const FEISHU_ACK_REACTIONS_ZH_CN: &[&str] = &[
+    "OK", "JIAYI", "APPLAUSE", "THUMBSUP", "MUSCLE", "SMILE", "DONE",
+];
+const FEISHU_ACK_REACTIONS_ZH_TW: &[&str] = &[
+    "OK",
+    "JIAYI",
+    "APPLAUSE",
+    "THUMBSUP",
+    "FINGERHEART",
+    "SMILE",
+    "DONE",
+];
+const FEISHU_ACK_REACTIONS_EN: &[&str] = &[
+    "OK",
+    "THUMBSUP",
+    "THANKS",
+    "MUSCLE",
+    "FINGERHEART",
+    "APPLAUSE",
+    "SMILE",
+    "DONE",
+];
+const FEISHU_ACK_REACTIONS_JA: &[&str] = &[
+    "OK",
+    "THUMBSUP",
+    "THANKS",
+    "MUSCLE",
+    "FINGERHEART",
+    "APPLAUSE",
+    "SMILE",
+    "DONE",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeishuAckLocale {
+    ZhCn,
+    ZhTw,
+    En,
+    Ja,
+}
+
+fn is_japanese_kana(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3040..=0x309F | // Hiragana
+        0x30A0..=0x30FF | // Katakana
+        0x31F0..=0x31FF // Katakana Phonetic Extensions
+    )
+}
+
+fn is_cjk_han(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF | // CJK Extension A
+        0x4E00..=0x9FFF // CJK Unified Ideographs
+    )
+}
+
+fn is_traditional_only_han(ch: char) -> bool {
+    matches!(
+        ch,
+        '奮' | '鬥'
+            | '強'
+            | '體'
+            | '國'
+            | '臺'
+            | '萬'
+            | '與'
+            | '為'
+            | '這'
+            | '學'
+            | '機'
+            | '開'
+            | '裡'
+    )
+}
+
+fn is_simplified_only_han(ch: char) -> bool {
+    matches!(
+        ch,
+        '奋' | '斗'
+            | '强'
+            | '体'
+            | '国'
+            | '台'
+            | '万'
+            | '与'
+            | '为'
+            | '这'
+            | '学'
+            | '机'
+            | '开'
+            | '里'
+    )
+}
+
+fn detect_feishu_ack_locale(text: &str) -> FeishuAckLocale {
+    if text.chars().any(is_japanese_kana) {
+        return FeishuAckLocale::Ja;
+    }
+    if text.chars().any(is_traditional_only_han) {
+        return FeishuAckLocale::ZhTw;
+    }
+    if text.chars().any(is_simplified_only_han) {
+        return FeishuAckLocale::ZhCn;
+    }
+    if text.chars().any(is_cjk_han) {
+        return FeishuAckLocale::ZhCn;
+    }
+    FeishuAckLocale::En
+}
+
+fn pick_uniform_index(len: usize, seed: &str) -> usize {
+    debug_assert!(len > 0);
+    // Simple hash-based selection using message text as seed
+    let hash: u64 = seed.bytes().fold(0u64, |acc, b| acc.wrapping_mul(33).wrapping_add(b as u64));
+    (hash as usize) % len
+}
+
+fn random_feishu_ack_reaction(text: &str) -> &'static str {
+    let locale = detect_feishu_ack_locale(text);
+    let pool = match locale {
+        FeishuAckLocale::ZhCn => FEISHU_ACK_REACTIONS_ZH_CN,
+        FeishuAckLocale::ZhTw => FEISHU_ACK_REACTIONS_ZH_TW,
+        FeishuAckLocale::En => FEISHU_ACK_REACTIONS_EN,
+        FeishuAckLocale::Ja => FEISHU_ACK_REACTIONS_JA,
+    };
+    pool[pick_uniform_index(pool.len(), text)]
+}
+
 fn normalize_reaction_alias(input: &str) -> String {
     input
         .chars()
@@ -2440,6 +2574,40 @@ async fn handle_feishu_event(
     {
         return;
     }
+
+    // Send ACK reaction (已读标记)
+    let ack_http_client = http_client.clone();
+    let ack_base_url = base_url.to_string();
+    let ack_app_id = feishu_cfg.app_id.clone();
+    let ack_app_secret = feishu_cfg.app_secret.clone();
+    let ack_message_id = message_id.to_string();
+    let ack_text = text.clone();
+    tokio::spawn(async move {
+        // Send ACK reaction with locale-aware emoji
+        let emoji = random_feishu_ack_reaction(&ack_text);
+        let token = match get_token(
+            &ack_http_client,
+            &ack_base_url,
+            &ack_app_id,
+            &ack_app_secret,
+        )
+        .await
+        {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        if let Err(e) = send_feishu_reaction(
+            &ack_http_client,
+            &ack_base_url,
+            &token,
+            &ack_message_id,
+            emoji,
+        )
+        .await
+        {
+            warn!("Feishu: ACK reaction failed for {}: {}", ack_message_id, e);
+        }
+    });
 
     // Group mentions: direct @bot and @all are treated as mention signals.
     let mention_flags = if !is_dm {
