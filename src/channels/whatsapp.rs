@@ -8,7 +8,10 @@ use serde::Deserialize;
 use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
-use crate::agent_engine::{should_suppress_user_error, AgentEvent, AgentRequestContext};
+use crate::agent_engine::{
+    should_suppress_final_channel_response, should_suppress_user_error, AgentEvent,
+    AgentRequestContext,
+};
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_str, should_drop_pre_start_message,
     should_drop_recent_duplicate_message,
@@ -674,22 +677,25 @@ async fn handle_whatsapp_message(
     {
         Ok(response) => {
             drop(event_tx);
-            let mut used_send_message_tool = false;
+            let mut tool_delivered_user_output = false;
             while let Some(event) = event_rx.recv().await {
-                if let AgentEvent::ToolStart { name, .. } = event {
-                    if name == "send_message" {
-                        used_send_message_tool = true;
+                if let AgentEvent::ToolResult {
+                    delivered_user_output,
+                    is_error,
+                    ..
+                } = event
+                {
+                    if delivered_user_output && !is_error {
+                        tool_delivered_user_output = true;
                     }
                 }
             }
 
-            if used_send_message_tool {
-                if !response.is_empty() {
-                    info!(
-                        "WhatsApp: suppressing final response for chat {} because send_message already delivered output",
-                        chat_id
-                    );
-                }
+            if should_suppress_final_channel_response(&response, tool_delivered_user_output) {
+                info!(
+                    "WhatsApp: no final response for chat {} because a tool already delivered the user-visible output",
+                    chat_id
+                );
             } else if !response.is_empty() {
                 if let Err(e) = send_whatsapp_text(
                     &reqwest::Client::new(),

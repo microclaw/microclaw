@@ -8,6 +8,7 @@ use serde::Deserialize;
 use tracing::{error, info};
 
 use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::should_suppress_final_channel_response;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_str, parse_epoch_ms_from_str,
@@ -462,11 +463,16 @@ async fn process_signal_webhook_message(
     {
         Ok(response) => {
             drop(event_tx);
-            let mut used_send_message_tool = false;
+            let mut tool_delivered_user_output = false;
             while let Some(event) = event_rx.recv().await {
-                if let AgentEvent::ToolStart { name, .. } = event {
-                    if name == "send_message" {
-                        used_send_message_tool = true;
+                if let AgentEvent::ToolResult {
+                    delivered_user_output,
+                    is_error,
+                    ..
+                } = event
+                {
+                    if delivered_user_output && !is_error {
+                        tool_delivered_user_output = true;
                     }
                 }
             }
@@ -474,13 +480,11 @@ async fn process_signal_webhook_message(
                 runtime_ctx.channel_name.clone(),
                 runtime_ctx.send_command.clone(),
             );
-            if used_send_message_tool {
-                if !response.is_empty() {
-                    info!(
-                        "Signal: suppressing final response for chat {} because send_message already delivered output",
-                        chat_id
-                    );
-                }
+            if should_suppress_final_channel_response(&response, tool_delivered_user_output) {
+                info!(
+                    "Signal: no final response for chat {} because a tool already delivered the user-visible output",
+                    chat_id
+                );
             } else if !response.is_empty() {
                 if let Err(e) = adapter.send_text(&sender, &response).await {
                     error!("Signal: failed to send response: {e}");

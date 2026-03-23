@@ -1,6 +1,5 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,7 +15,10 @@ use serde_json::json;
 use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info, warn};
 
-use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
+use crate::agent_engine::{
+    process_with_agent_with_events, should_suppress_final_channel_response, AgentEvent,
+    AgentRequestContext,
+};
 use crate::chat_commands::handle_chat_command;
 use crate::config::{Config, WorkingDirIsolation};
 use crate::runtime::AppState;
@@ -1740,14 +1742,21 @@ async fn send_and_store_response_with_events(
         chat_type: "web",
     };
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
-    let saw_send_message_tool = Arc::new(AtomicBool::new(false));
-    let saw_send_message_tool_forward = saw_send_message_tool.clone();
+    let delivered_user_output = Arc::new(tokio::sync::Mutex::new(false));
+    let delivered_user_output_forward = delivered_user_output.clone();
     let state_for_events = state.clone();
     let upstream_event_tx = event_tx.cloned();
     let forward_task = tokio::spawn(async move {
         while let Some(evt) = rx.recv().await {
-            if matches!(&evt, AgentEvent::ToolStart { name, .. } if name == "send_message") {
-                saw_send_message_tool_forward.store(true, Ordering::SeqCst);
+            if let AgentEvent::ToolResult {
+                delivered_user_output,
+                is_error,
+                ..
+            } = &evt
+            {
+                if *delivered_user_output && !*is_error {
+                    *delivered_user_output_forward.lock().await = true;
+                }
             }
             if let Some(tx) = &upstream_event_tx {
                 let _ = tx.send(evt);
@@ -1775,14 +1784,13 @@ async fn send_and_store_response_with_events(
         m.llm_output_tokens += (after.output_tokens - before.output_tokens).max(0);
     }
 
-    if saw_send_message_tool.load(Ordering::SeqCst) {
-        if !response.is_empty() {
-            info!(
-                target: "web",
-                chat_id,
-                "Web: suppressing final response storage because send_message already delivered output"
-            );
-        }
+    let delivered_user_output = *delivered_user_output.lock().await;
+    if should_suppress_final_channel_response(&response, delivered_user_output) {
+        info!(
+            target: "web",
+            chat_id,
+            "Web: no final response storage because a tool already delivered the user-visible output"
+        );
     } else if !response.is_empty() {
         let bot_username = state.app_state.config.bot_username_for_channel("web");
         deliver_and_store_bot_message(
@@ -2408,7 +2416,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_stream_send_message_tool_does_not_store_final_response_twice() {
+    async fn test_send_stream_send_message_tool_keeps_final_response() {
         let web_state = test_web_state(
             Box::new(SendMessageThenAnswerLlm {
                 calls: AtomicUsize::new(0),
@@ -2449,8 +2457,9 @@ mod tests {
             .await
             .unwrap();
         let bot_rows: Vec<_> = rows.into_iter().filter(|m| m.is_from_bot).collect();
-        assert_eq!(bot_rows.len(), 1);
+        assert_eq!(bot_rows.len(), 2);
         assert_eq!(bot_rows[0].content, "tool reply");
+        assert_eq!(bot_rows[1].content, "final reply");
     }
 
     #[tokio::test]

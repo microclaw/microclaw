@@ -161,7 +161,7 @@ impl Tool for SendMessageTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "send_message".into(),
-            description: "Send a message mid-conversation. Supports text for all channels, and attachments for Telegram/Discord/Slack/OpenClaw Weixin via attachment_path.".into(),
+            description: "Send a message mid-conversation. Supports text for all channels, and attachments on channels with native attachment delivery via attachment_path.".into(),
             input_schema: schema_object(
                 json!({
                     "chat_id": {
@@ -309,7 +309,12 @@ impl Tool for SendMessageTool {
                         );
                         return ToolResult::error(e);
                     }
-                    ToolResult::success("Attachment sent successfully.".into())
+                    ToolResult::success("Attachment sent successfully.".into()).with_metadata(
+                        json!({
+                            "delivered_user_output": true,
+                            "delivery_kind": "attachment",
+                        }),
+                    )
                 }
                 Err(e) => {
                     warn!(
@@ -338,7 +343,10 @@ impl Tool for SendMessageTool {
             {
                 Ok(_) => {
                     info!("send_message text sent: chat_id={}", chat_id);
-                    ToolResult::success("Message sent successfully.".into())
+                    ToolResult::success("Message sent successfully.".into()).with_metadata(json!({
+                        "delivered_user_output": true,
+                        "delivery_kind": "text",
+                    }))
                 }
                 Err(e) => {
                     warn!(
@@ -456,11 +464,55 @@ mod tests {
             }))
             .await;
         assert!(!result.is_error, "{}", result.content);
+        assert_eq!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("delivered_user_output"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("delivery_kind"))
+                .and_then(|v| v.as_str()),
+            Some("text")
+        );
 
         let all = db.get_all_messages(999).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].content, "hello web");
         assert!(all[0].is_from_bot);
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_feishu_reaction_protocol_text_is_blocked_without_attachment() {
+        let (db, dir) = test_db();
+        let tool = SendMessageTool::new(
+            test_registry(),
+            db,
+            "bot".into(),
+            std::collections::HashMap::new(),
+        );
+        let result = tool
+            .execute(json!({
+                "chat_id": 999,
+                "text": "reaction-only: THUMBSUP",
+                "__microclaw_auth": {
+                    "caller_chat_id": 999,
+                    "caller_channel": "feishu",
+                    "control_chat_ids": []
+                }
+            }))
+            .await;
+        assert!(result.is_error);
+        assert_eq!(
+            result.error_type.as_deref(),
+            Some("feishu_reaction_protocol_text")
+        );
         cleanup(&dir);
     }
 
@@ -597,6 +649,59 @@ mod tests {
             .await;
         assert!(result.is_error);
         assert!(result.content.contains("not supported for web"));
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_feishu_attachment_send_sets_delivery_metadata() {
+        let (db, dir) = test_db();
+        let chat_id = db
+            .resolve_or_create_chat_id("feishu", "oc_f_1", Some("feishu"), "private")
+            .unwrap();
+
+        let mut registry = ChannelRegistry::new();
+        registry.register(Arc::new(LocalOnlyAdapter {
+            name: "feishu".to_string(),
+        }));
+        let tool = SendMessageTool::new(
+            Arc::new(registry),
+            db,
+            "bot".into(),
+            std::collections::HashMap::new(),
+        );
+
+        let attachment = dir.join("sample.txt");
+        std::fs::write(&attachment, "hello").unwrap();
+
+        let result = tool
+            .execute(json!({
+                "chat_id": chat_id,
+                "text": "see attachment",
+                "attachment_path": attachment.to_string_lossy(),
+                "__microclaw_auth": {
+                    "caller_chat_id": chat_id,
+                    "caller_channel": "feishu",
+                    "control_chat_ids": []
+                }
+            }))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("delivered_user_output"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            result
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("delivery_kind"))
+                .and_then(|v| v.as_str()),
+            Some("attachment")
+        );
         cleanup(&dir);
     }
 }

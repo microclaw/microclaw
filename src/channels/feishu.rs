@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::should_suppress_final_channel_response;
 use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
@@ -1319,6 +1320,8 @@ Feishu reaction output protocol (optional, use only when appropriate):
 - When you choose a reaction, pick only from this supported set:
   `THUMBSUP`, `THUMBSDOWN`, `CLAP`, `THANKS`, `HEART`, `BROKENHEART`, `Fire`, `PARTY`, `SMILE`, `TearsofJoy`, `SOB`, `RAGE`, `FISTBUMP`, `ROCKET`, `100`, `LetMeSee`, `OK`, `LOVE`, `HAPPY`, `WINK`, `YEAH`, `STRONG`, `TOP`, `NO1`, `SPEECHLESS`.
 - For normal Feishu replies/reactions, do NOT call `send_message`; return the final assistant text directly so channel reaction parsing can run.
+- You may still call `send_message` for additional outbound actions that final text cannot perform, such as sending files or extra side-effect messages.
+- If you use `send_message` for an additional outbound action, still return the final Feishu reply/reaction as normal assistant text when the user expects a textual reply.
 - Never output raw protocol text through `send_message` (for example `reaction-only: ...`, `reaction: ...`, `[reaction: ...]`, or lone tokens like `THUMBSUP`).
 "#;
 
@@ -2796,7 +2799,7 @@ async fn handle_feishu_message(
         let progress_reply_to = message_id.to_string();
 
         struct ProgressState {
-            used_send_message_tool: bool,
+            tool_delivered_user_output: bool,
         }
 
         let (progress_done_tx, progress_done_rx) = tokio::sync::oneshot::channel::<ProgressState>();
@@ -2805,7 +2808,7 @@ async fn handle_feishu_message(
             let mut status_msg_id: Option<String> = None;
             let mut lines: Vec<String> = Vec::new();
             let mut dirty = false;
-            let mut used_send_message_tool = false;
+            let mut tool_delivered_user_output = false;
             // Feishu: max 20 edits per message; reserve 1 for the final status
             const MAX_EDITS: u32 = 19;
             let mut edit_count: u32 = 0;
@@ -2824,13 +2827,14 @@ async fn handle_feishu_message(
                     }
                     Ok(Some(AgentEvent::ToolResult {
                         name,
+                        delivered_user_output,
                         is_error,
                         preview,
                         duration_ms,
                         ..
                     })) => {
-                        if name == "send_message" && !is_error {
-                            used_send_message_tool = true;
+                        if delivered_user_output && !is_error {
+                            tool_delivered_user_output = true;
                         }
                         if is_error {
                             lines.push(format!(
@@ -2912,7 +2916,7 @@ async fn handle_feishu_message(
             }
 
             let _ = progress_done_tx.send(ProgressState {
-                used_send_message_tool,
+                tool_delivered_user_output,
             });
         });
 
@@ -2932,9 +2936,9 @@ async fn handle_feishu_message(
             Ok(response) => {
                 drop(event_tx);
                 let _ = progress_handle.await;
-                let used_send_message_tool = progress_done_rx
+                let tool_delivered_user_output = progress_done_rx
                     .await
-                    .map(|s| s.used_send_message_tool)
+                    .map(|s| s.tool_delivered_user_output)
                     .unwrap_or(false);
                 let (visible_response, thinking_text) =
                     split_feishu_visible_and_thinking(&response);
@@ -2962,18 +2966,14 @@ async fn handle_feishu_message(
                     .await;
                 }
 
-                if used_send_message_tool {
-                    if !visible_response.is_empty() {
-                        info!(
-                            "Feishu: suppressing final response for chat {} because send_message already delivered output",
-                            chat_id
-                        );
-                    } else {
-                        info!(
-                            "Feishu: no final response for chat {} because send_message tool handled output",
-                            chat_id
-                        );
-                    }
+                if should_suppress_final_channel_response(
+                    &visible_response,
+                    tool_delivered_user_output,
+                ) {
+                    info!(
+                        "Feishu: no final response for chat {} because a tool already delivered the user-visible output",
+                        chat_id
+                    );
                 } else if !visible_response.is_empty() {
                     if reaction_plan.reaction_only {
                         if sent_reaction {
@@ -3123,11 +3123,16 @@ async fn handle_feishu_message(
         {
             Ok(response) => {
                 drop(event_tx);
-                let mut used_send_message_tool = false;
+                let mut tool_delivered_user_output = false;
                 while let Some(event) = event_rx.recv().await {
-                    if let AgentEvent::ToolResult { name, is_error, .. } = event {
-                        if name == "send_message" && !is_error {
-                            used_send_message_tool = true;
+                    if let AgentEvent::ToolResult {
+                        delivered_user_output,
+                        is_error,
+                        ..
+                    } = event
+                    {
+                        if delivered_user_output && !is_error {
+                            tool_delivered_user_output = true;
                         }
                     }
                 }
@@ -3157,18 +3162,14 @@ async fn handle_feishu_message(
                     .await;
                 }
 
-                if used_send_message_tool {
-                    if !visible_response.is_empty() {
-                        info!(
-                            "Feishu: suppressing final response for chat {} because send_message already delivered output",
-                            chat_id
-                        );
-                    } else {
-                        info!(
-                            "Feishu: no final response for chat {} because send_message tool handled output",
-                            chat_id
-                        );
-                    }
+                if should_suppress_final_channel_response(
+                    &visible_response,
+                    tool_delivered_user_output,
+                ) {
+                    info!(
+                        "Feishu: no final response for chat {} because a tool already delivered the user-visible output",
+                        chat_id
+                    );
                 } else if !visible_response.is_empty() {
                     if reaction_plan.reaction_only {
                         if sent_reaction {

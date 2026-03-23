@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::should_suppress_final_channel_response;
 use crate::agent_engine::{AgentEvent, AgentRequestContext};
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_str, parse_epoch_ms_from_str,
@@ -1917,22 +1918,25 @@ async fn process_weixin_inbound_message(
                 .await;
             }
             drop(event_tx);
-            let mut used_send_message_tool = false;
+            let mut tool_delivered_user_output = false;
             while let Some(event) = event_rx.recv().await {
-                if let AgentEvent::ToolStart { name, .. } = event {
-                    if name == "send_message" {
-                        used_send_message_tool = true;
+                if let AgentEvent::ToolResult {
+                    delivered_user_output,
+                    is_error,
+                    ..
+                } = event
+                {
+                    if delivered_user_output && !is_error {
+                        tool_delivered_user_output = true;
                     }
                 }
             }
             let adapter = WeixinAdapter::from_runtime(&runtime_ctx);
-            if used_send_message_tool {
-                if !response.is_empty() {
-                    info!(
-                        "OpenClaw Weixin: suppressing final response for chat {} because send_message already delivered output",
-                        chat_id
-                    );
-                }
+            if should_suppress_final_channel_response(&response, tool_delivered_user_output) {
+                info!(
+                    "OpenClaw Weixin: no final response for chat {} because a tool already delivered the user-visible output",
+                    chat_id
+                );
             } else if !response.is_empty() {
                 if let Err(e) = adapter.send_text(sender, &response).await {
                     error!("OpenClaw Weixin: failed to send response: {e}");

@@ -10,6 +10,7 @@ use tokio_native_tls::TlsConnector as TokioTlsConnector;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::should_suppress_final_channel_response;
 use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
@@ -535,22 +536,25 @@ async fn handle_irc_message(
     {
         Ok(response) => {
             drop(event_tx);
-            let mut used_send_message_tool = false;
+            let mut tool_delivered_user_output = false;
             while let Some(event) = event_rx.recv().await {
-                if let AgentEvent::ToolStart { name, .. } = event {
-                    if name == "send_message" {
-                        used_send_message_tool = true;
+                if let AgentEvent::ToolResult {
+                    delivered_user_output,
+                    is_error,
+                    ..
+                } = event
+                {
+                    if delivered_user_output && !is_error {
+                        tool_delivered_user_output = true;
                     }
                 }
             }
 
-            if used_send_message_tool {
-                if !response.is_empty() {
-                    info!(
-                        "IRC: suppressing final response for chat {} because send_message already delivered output",
-                        chat_id
-                    );
-                }
+            if should_suppress_final_channel_response(&response, tool_delivered_user_output) {
+                info!(
+                    "IRC: no final response for chat {} because a tool already delivered the user-visible output",
+                    chat_id
+                );
             } else if !response.is_empty() {
                 if let Err(e) = adapter.send_text(&response_target, &response).await {
                     error!("IRC: failed to send response: {e}");

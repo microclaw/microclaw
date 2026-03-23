@@ -10,7 +10,8 @@ use teloxide::types::{ChatAction, InputFile, MessageId, ParseMode, ThreadId};
 use tracing::{debug, error, info, warn};
 
 use crate::agent_engine::{
-    process_with_agent_with_events, should_suppress_user_error, AgentEvent, AgentRequestContext,
+    process_with_agent_with_events, should_suppress_final_channel_response,
+    should_suppress_user_error, AgentEvent, AgentRequestContext,
 };
 use crate::channels::startup_guard::{
     mark_channel_started, should_drop_pre_start_message, should_drop_recent_duplicate_message,
@@ -1141,27 +1142,25 @@ async fn handle_message(
             }
 
             if !used_streaming {
-                let mut used_send_message_tool = false;
+                let mut tool_delivered_user_output = false;
                 while let Some(event) = event_rx.recv().await {
-                    if let AgentEvent::ToolStart { name, .. } = event {
-                        if name == "send_message" {
-                            used_send_message_tool = true;
+                    if let AgentEvent::ToolResult {
+                        delivered_user_output,
+                        is_error,
+                        ..
+                    } = event
+                    {
+                        if delivered_user_output && !is_error {
+                            tool_delivered_user_output = true;
                         }
                     }
                 }
 
-                if used_send_message_tool {
-                    if !response.is_empty() {
-                        info!(
-                            "Suppressing final response for chat {} because send_message already delivered output",
-                            chat_id
-                        );
-                    } else {
-                        info!(
-                            "Agent returned empty final response for chat {}; likely delivered via send_message tool",
-                            chat_id
-                        );
-                    }
+                if should_suppress_final_channel_response(&response, tool_delivered_user_output) {
+                    info!(
+                        "Agent returned empty final response for chat {}; a tool already delivered the user-visible output",
+                        chat_id
+                    );
                 } else if !response.is_empty() {
                     send_response(&bot, msg.chat.id, &response, msg.thread_id).await;
 

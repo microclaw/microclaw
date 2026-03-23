@@ -130,6 +130,7 @@ async fn start_stream_run_internal(
                             status_code,
                             bytes,
                             error_type,
+                            delivered_user_output,
                         } => {
                             super::metrics_apply_agent_event(
                                 &state_for_events,
@@ -141,6 +142,7 @@ async fn start_stream_run_internal(
                                     status_code,
                                     bytes,
                                     error_type: error_type.clone(),
+                                    delivered_user_output,
                                 },
                             )
                             .await;
@@ -155,7 +157,8 @@ async fn start_stream_run_internal(
                                         "duration_ms": duration_ms,
                                         "status_code": status_code,
                                         "bytes": bytes,
-                                        "error_type": error_type
+                                        "error_type": error_type,
+                                        "delivered_user_output": delivered_user_output
                                     })
                                     .to_string(),
                                     run_history_limit,

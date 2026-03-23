@@ -46,6 +46,7 @@ pub enum AgentEvent {
         status_code: Option<i32>,
         bytes: usize,
         error_type: Option<String>,
+        delivered_user_output: bool,
     },
     TextDelta {
         delta: String,
@@ -53,6 +54,20 @@ pub enum AgentEvent {
     FinalResponse {
         text: String,
     },
+}
+
+fn tool_result_delivered_user_output(metadata: Option<&Value>) -> bool {
+    metadata
+        .and_then(|meta| meta.get("delivered_user_output"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub fn should_suppress_final_channel_response(
+    final_text: &str,
+    tool_delivered_user_output: bool,
+) -> bool {
+    tool_delivered_user_output && final_text.trim().is_empty()
 }
 
 #[async_trait]
@@ -1291,14 +1306,6 @@ async fn process_with_agent_logic(
                         });
                         continue;
                     }
-                    if name == "send_message" && context.caller_channel.starts_with("feishu") {
-                        tool_results.push(ContentBlock::ToolResult {
-                            tool_use_id: id.clone(),
-                            content: "send_message is disabled for feishu runtime turns; return final assistant text directly so channel reaction/text delivery can be handled correctly.".to_string(),
-                            is_error: Some(true),
-                        });
-                        continue;
-                    }
                     let mut effective_input = input.clone();
                     if let Ok(hook_outcome) = state
                         .hooks
@@ -1587,6 +1594,9 @@ async fn process_with_agent_logic(
                             status_code: result.status_code,
                             bytes: result.bytes,
                             error_type: result.error_type.clone(),
+                            delivered_user_output: tool_result_delivered_user_output(
+                                result.metadata.as_ref(),
+                            ),
                         });
                     }
                     if result.is_error {
