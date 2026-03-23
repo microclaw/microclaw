@@ -4673,20 +4673,20 @@ commands:
         for (request_id, method, params) in [
             (
                 "setting-1",
-                "session_setLabel",
+                "sessions.setLabel",
                 json!({"sessionKey":"main","label":"Ops"}),
             ),
             (
                 "send-1",
-                "sessions_send",
+                "sessions.send",
                 json!({"sessionKey":"main","message":"continue"}),
             ),
             (
                 "spawn-1",
-                "sessions_spawn",
+                "sessions.spawn",
                 json!({"task":"spawn from mission control","label":"worker"}),
             ),
-            ("delete-1", "session_delete", json!({"sessionKey":"main"})),
+            ("delete-1", "sessions.delete", json!({"sessionKey":"main"})),
         ] {
             ws.send(tokio_tungstenite::tungstenite::Message::Text(
                 json!({
@@ -4714,7 +4714,7 @@ commands:
                 Some(true),
                 "{method}"
             );
-            if method == "sessions_send" {
+            if method == "sessions.send" {
                 let mut saw_final = false;
                 for _ in 0..12 {
                     let candidate = recv_ws_json(&mut ws).await;
@@ -4740,6 +4740,172 @@ commands:
                 assert!(saw_final, "sessions_send should emit a final chat event");
             }
         }
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_sessions_list_returns_filtered_sessions() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-list-secret").await;
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+
+        let app = build_router(web_state.clone());
+
+        // Seed a session that should NOT be returned
+        let req1 = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("authorization", "Bearer ws-list-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"other:123","sender_name":"u","message":"seed"}"#,
+            ))
+            .unwrap();
+        app.clone().oneshot(req1).await.unwrap();
+
+        // Seed a session that SHOULD be returned
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("authorization", "Bearer ws-list-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"chatclaw:microclaw:456","sender_name":"u","message":"seed"}"#,
+            ))
+            .unwrap();
+        app.clone().oneshot(req2).await.unwrap();
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-list-secret" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "list-1",
+                "method": "sessions.list",
+                "params": {
+                    "agentId": "chatclaw:microclaw"
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let res = loop {
+            let candidate = recv_ws_json(&mut ws).await;
+            if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                continue;
+            }
+            if candidate.get("id").and_then(|v| v.as_str()) != Some("list-1") {
+                continue;
+            }
+            break candidate;
+        };
+
+        assert_eq!(res.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+        let sessions = res
+            .pointer("/payload/sessions")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].get("session_key").and_then(|v| v.as_str()),
+            Some("chatclaw:microclaw:456")
+        );
+
+        // Test with search term
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "list-search",
+                "method": "sessions.list",
+                "params": {
+                    "search": "123"
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let res_search = loop {
+            let candidate = recv_ws_json(&mut ws).await;
+            if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                continue;
+            }
+            if candidate.get("id").and_then(|v| v.as_str()) != Some("list-search") {
+                continue;
+            }
+            break candidate;
+        };
+
+        assert_eq!(res_search.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+        let sessions_search = res_search
+            .pointer("/payload/sessions")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(sessions_search.len(), 1);
+        assert_eq!(
+            sessions_search[0]
+                .get("session_key")
+                .and_then(|v| v.as_str()),
+            Some("other:123")
+        );
+
+        // Test without filter
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "list-2",
+                "method": "sessions.list",
+                "params": {}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let res2 = loop {
+            let candidate = recv_ws_json(&mut ws).await;
+            if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                continue;
+            }
+            if candidate.get("id").and_then(|v| v.as_str()) != Some("list-2") {
+                continue;
+            }
+            break candidate;
+        };
+
+        assert_eq!(res2.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+        let sessions2 = res2
+            .pointer("/payload/sessions")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        // Since we seeded two sessions, it should return both without filter
+        assert_eq!(sessions2.len(), 2);
 
         server.abort();
     }
@@ -4800,12 +4966,12 @@ commands:
         for (request_id, method, params) in [
             (
                 "label-1",
-                "session_setLabel",
+                "sessions.setLabel",
                 json!({"sessionKey":"main","label":"Ops"}),
             ),
             (
                 "thinking-1",
-                "session_setThinking",
+                "sessions.setThinking",
                 json!({"sessionKey":"main","level":"high"}),
             ),
         ] {
@@ -4946,7 +5112,7 @@ commands:
             json!({
                 "type": "req",
                 "id": "kill-1",
-                "method": "sessions_kill",
+                "method": "sessions.kill",
                 "params": { "sessionKey": session_key }
             })
             .to_string(),

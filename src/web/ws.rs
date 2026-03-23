@@ -97,6 +97,15 @@ struct SessionsSendParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionsListParams {
+    #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
+    search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionSettingParams {
     session_key: String,
     #[serde(flatten)]
@@ -132,16 +141,16 @@ fn setting_value(
 fn build_session_settings_update(method: &str, params: &SessionSettingParams) -> SessionSettings {
     let mut settings = SessionSettings::default();
     match method {
-        "session_setLabel" => {
+        "sessions.setLabel" => {
             settings.label = setting_value(&params.extra, &["label", "value"]);
         }
-        "session_setThinking" => {
+        "sessions.setThinking" => {
             settings.thinking_level = setting_value(&params.extra, &["level", "value"]);
         }
-        "session_setVerbose" => {
+        "sessions.setVerbose" => {
             settings.verbose_level = setting_value(&params.extra, &["level", "value"]);
         }
-        "session_setReasoning" => {
+        "sessions.setReasoning" => {
             settings.reasoning_level = setting_value(&params.extra, &["level", "value"]);
         }
         _ => {}
@@ -496,14 +505,15 @@ async fn process_connect_frame(
                     "status",
                     "chat.send",
                     "chat.history",
-                    "session_delete",
-                    "sessions_send",
-                    "sessions_kill",
-                    "sessions_spawn",
-                    "session_setThinking",
-                    "session_setVerbose",
-                    "session_setReasoning",
-                    "session_setLabel",
+                    "sessions.delete",
+                    "sessions.send",
+                    "sessions.kill",
+                    "sessions.spawn",
+                    "sessions.setThinking",
+                    "sessions.setVerbose",
+                    "sessions.setReasoning",
+                    "sessions.setLabel",
+                    "sessions.list",
                     "agents.list",
                     "models.list",
                     "config.get",
@@ -793,7 +803,71 @@ async fn handle_request_frame(
                 session_key,
             );
         }
-        "session_delete" => {
+        "sessions.list" => {
+            if !identity.allows(AuthScope::Read) {
+                let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
+                return Ok(());
+            }
+
+            let params = match serde_json::from_value::<SessionsListParams>(params) {
+                Ok(v) => v,
+                Err(err) => {
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid sessions.list params: {err}"),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+
+            let chats = match call_blocking(state.app_state.db.clone(), |db| {
+                db.get_recent_chats(400)
+            })
+            .await
+            {
+                Ok(chats) => chats,
+                Err(err) => {
+                    let _ =
+                        send_error_response(sender, &id, "INTERNAL_SERVER_ERROR", &err.to_string())
+                            .await;
+                    return Ok(());
+                }
+            };
+
+            let sessions = chats
+                .into_iter()
+                .map(|c| map_chat_to_session(&state.app_state.channel_registry, c))
+                .filter(|s| {
+                    if let Some(ref agent_id) = params.agent_id {
+                        if !s.session_key.starts_with(agent_id) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref search_term) = params.search {
+                        if !search_term.is_empty() && !s.session_key.contains(search_term) {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .collect::<Vec<_>>();
+
+            let res = ResponseFrame {
+                kind: "res",
+                id: &id,
+                ok: true,
+                payload: Some(json!({
+                    "ok": true,
+                    "sessions": sessions,
+                })),
+                error: None,
+            };
+            let _ = send_json(sender, &res).await;
+        }
+        "sessions.delete" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -839,7 +913,7 @@ async fn handle_request_frame(
             };
             let _ = send_json(sender, &res).await;
         }
-        "sessions_send" => {
+        "sessions.send" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -935,7 +1009,7 @@ async fn handle_request_frame(
                 session_key,
             );
         }
-        "sessions_kill" => {
+        "sessions.kill" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -985,7 +1059,7 @@ async fn handle_request_frame(
             };
             let _ = send_json(sender, &res).await;
         }
-        "sessions_spawn" => {
+        "sessions.spawn" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -1072,10 +1146,10 @@ async fn handle_request_frame(
             };
             let _ = send_json(sender, &res).await;
         }
-        "session_setThinking"
-        | "session_setVerbose"
-        | "session_setReasoning"
-        | "session_setLabel" => {
+        "sessions.setThinking"
+        | "sessions.setVerbose"
+        | "sessions.setReasoning"
+        | "sessions.setLabel" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
