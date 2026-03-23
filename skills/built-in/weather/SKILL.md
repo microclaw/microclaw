@@ -1,34 +1,58 @@
 ---
 name: weather
-description: "Get current weather conditions and short forecasts using `wttr.in` (no API key required). Use when users ask for weather, temperature, forecast, or conditions for a city, region, or location. Triggers on mentions of weather, forecast, temperature, rain, sunny, or climate."
-license: Proprietary. LICENSE.txt has complete terms
-compatibility: "Requires curl. Works on macOS, Linux, and Windows."
+description: Get current weather and forecasts (no API key required).
+source: clawhub:steipete/weather
+version: 1.0.0
+updated_at: 2026-03-22T03:57:44.409Z
+homepage: https://wttr.in/:help
+metadata:
+  clawdbot:
+    requires:
+      bins:
+        - curl
 ---
 
 # Weather
 
-Use this skill for quick weather lookups without API keys.
+Two free services, no API keys needed.
 
-## Current weather
+## wttr.in (primary)
 
+Quick one-liner:
 ```bash
-curl -s "wttr.in/San+Francisco?format=3"
+curl -s "wttr.in/London?format=3"
+# Output: London: Partly cloudy +8C
 ```
 
-## Compact format
-
+Compact format:
 ```bash
-curl -s "wttr.in/San+Francisco?format=%l:+%c+%t+%h+%w"
+curl -s "wttr.in/London?format=%l:+%c+%t+%h+%w"
+# Output: London: Partly cloudy +8C 71% 5 km/h
 ```
 
-## Multi-day forecast
-
+Full forecast:
 ```bash
-curl -s "wttr.in/San+Francisco?m"
+curl -s "wttr.in/London?T"
 ```
 
-## Usage guidance
+Format codes: `%c` condition, `%t` temp, `%h` humidity, `%w` wind, `%l` location, `%m` moon
 
-- URL-encode spaces with `+`.
-- Use `?m` for metric and `?u` for US units.
-- For ambiguous place names, clarify state/country first.
+Tips:
+- URL-encode spaces: `wttr.in/New+York`
+- Airport codes: `wttr.in/JFK`
+- Units: `?m` (metric) `?u` (USCS)
+- Today only: `?1`
+- Current only: `?0`
+- PNG: `curl -s "wttr.in/Berlin.png" -o /tmp/weather.png`
+
+## Open-Meteo (fallback, JSON)
+
+Free, no key, good for programmatic use:
+
+```bash
+curl -s "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true"
+```
+
+Find coordinates for a city, then query. Returns JSON with temp, windspeed, weathercode.
+
+Docs: https://open-meteo.com/en/docs

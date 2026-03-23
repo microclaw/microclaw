@@ -567,6 +567,19 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
         .map(|p| normalize_platform(&p))
         .filter(|p| !p.is_empty())
         .collect();
+    if let Some(meta) = fm
+        .metadata
+        .openclaw
+        .as_ref()
+        .or(fm.metadata.clawdbot.as_ref())
+    {
+        platforms.extend(
+            meta.os
+                .iter()
+                .map(|p| normalize_platform(p))
+                .filter(|p| !p.is_empty()),
+        );
+    }
     platforms.sort();
     platforms.dedup();
 
@@ -577,6 +590,22 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
         .map(|d| d.trim().to_string())
         .filter(|d| !d.is_empty())
         .collect();
+    if let Some(meta) = fm
+        .metadata
+        .openclaw
+        .as_ref()
+        .or(fm.metadata.clawdbot.as_ref())
+    {
+        if let Some(requires) = &meta.requires {
+            deps.extend(
+                requires
+                    .bins
+                    .iter()
+                    .map(|d| d.trim().to_string())
+                    .filter(|d| !d.is_empty()),
+            );
+        }
+    }
     deps.sort();
     deps.dedup();
 
@@ -888,6 +917,25 @@ Use this skill to interact with Outline.
         assert!(result.is_some());
         let (meta, _body) = result.unwrap();
         assert_eq!(meta.env_file.as_deref(), Some(".env"));
+    }
+
+    #[test]
+    fn test_parse_skill_md_includes_clawdbot_metadata_requirements() {
+        let content = r#"---
+name: weather
+description: Get current weather and forecasts (no API key required).
+metadata:
+  clawdbot:
+    os: [linux]
+    requires:
+      bins: [curl]
+---
+Use this skill.
+"#;
+        let dir = PathBuf::from("/tmp/skills/weather");
+        let (meta, _body) = parse_skill_md(content, &dir).unwrap();
+        assert_eq!(meta.platforms, vec!["linux"]);
+        assert_eq!(meta.deps, vec!["curl"]);
     }
 
     #[test]

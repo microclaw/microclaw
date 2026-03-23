@@ -410,7 +410,7 @@ MicroClaw supports the [Anthropic Agent Skills](https://github.com/anthropics/sk
 - `apple-notes` -- manage Apple Notes via `memo`
 - `apple-reminders` -- manage Apple Reminders via `remindctl`
 - `apple-calendar` -- query/create Calendar events via `icalBuddy` + `osascript`
-- `weather` -- quick weather lookup via `wttr.in`
+- `weather` -- built-in copy of ClawHub `steipete/weather` via `wttr.in` + Open-Meteo
 
 **Adding a skill:** Create a subdirectory under `<data_dir>/skills/` with a `SKILL.md` file containing YAML frontmatter and markdown instructions.
 

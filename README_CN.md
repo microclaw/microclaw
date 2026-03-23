@@ -384,7 +384,7 @@ MicroClaw 支持 [Anthropic Agent Skills](https://github.com/anthropics/skills) 
 - `apple-notes` -- 通过 `memo` 管理 Apple Notes
 - `apple-reminders` -- 通过 `remindctl` 管理 Apple Reminders
 - `apple-calendar` -- 通过 `icalBuddy` + `osascript` 查询/创建日历事件
-- `weather` -- 通过 `wttr.in` 快速查询天气
+- `weather` -- 内置 ClawHub `steipete/weather`，通过 `wttr.in` + Open-Meteo 查询天气
 
 **添加技能：** 在 `<data_dir>/skills/` 下创建子目录，放入包含 YAML frontmatter（`name` 和 `description`）和 markdown 指令的 `SKILL.md` 文件。
 

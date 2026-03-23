@@ -96,6 +96,8 @@ struct SkillFrontmatter {
     deps: Vec<String>,
     #[serde(default)]
     compatibility: SkillCompatibility,
+    #[serde(default)]
+    metadata: SkillFrontmatterMetadata,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -104,6 +106,28 @@ struct SkillCompatibility {
     os: Vec<String>,
     #[serde(default)]
     deps: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SkillFrontmatterMetadata {
+    #[serde(default)]
+    openclaw: Option<OpenClawMetadata>,
+    #[serde(default)]
+    clawdbot: Option<OpenClawMetadata>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpenClawMetadata {
+    #[serde(default)]
+    os: Vec<String>,
+    #[serde(default)]
+    requires: Option<RequiresMetadata>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RequiresMetadata {
+    #[serde(default)]
+    bins: Vec<String>,
 }
 
 fn parse_frontmatter(content: &str) -> Option<SkillFrontmatter> {
@@ -118,6 +142,14 @@ fn skill_skip_reason(content: &str) -> Option<String> {
     let fm = parse_frontmatter(content)?;
     let mut supported = fm.platforms;
     supported.extend(fm.compatibility.os);
+    if let Some(meta) = fm
+        .metadata
+        .openclaw
+        .as_ref()
+        .or(fm.metadata.clawdbot.as_ref())
+    {
+        supported.extend(meta.os.iter().cloned());
+    }
     supported.sort();
     supported.dedup();
     if !platform_allowed(&supported) {
@@ -130,6 +162,16 @@ fn skill_skip_reason(content: &str) -> Option<String> {
 
     let mut deps = fm.deps;
     deps.extend(fm.compatibility.deps);
+    if let Some(meta) = fm
+        .metadata
+        .openclaw
+        .as_ref()
+        .or(fm.metadata.clawdbot.as_ref())
+    {
+        if let Some(requires) = &meta.requires {
+            deps.extend(requires.bins.iter().cloned());
+        }
+    }
     deps.sort();
     deps.dedup();
     let missing: Vec<String> = deps.into_iter().filter(|d| !command_exists(d)).collect();
@@ -312,6 +354,27 @@ description: x
 compatibility:
   os: [darwin]
   deps: [curl]
+---
+body
+"#;
+        let reason = skill_skip_reason(content);
+        if cfg!(target_os = "macos") && command_exists("curl") {
+            assert!(reason.is_none());
+        } else {
+            assert!(reason.is_some());
+        }
+    }
+
+    #[test]
+    fn test_skill_skip_reason_parses_metadata_requires() {
+        let content = r#"---
+name: x
+description: x
+metadata:
+  clawdbot:
+    os: [darwin]
+    requires:
+      bins: [curl]
 ---
 body
 "#;
