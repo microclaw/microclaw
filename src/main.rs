@@ -230,7 +230,7 @@ Options:
 
 Notes:
   - Native mode supports QR login, polling, text, and file/image/video attachment delivery.
-  - Bridge mode remains available through `channels.openclaw-weixin.send_command`."#
+  - OpenClaw Weixin is now native-only in MicroClaw; no Node bridge is required."#
     );
 }
 

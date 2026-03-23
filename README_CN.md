@@ -433,8 +433,8 @@ cp mcp.hapi-bridge.example.json <data_dir>/mcp.d/hapi-bridge.json
 
 详细操作可见：`docs/operations/hapi-bridge.md`。
 
-如果你要接入 OpenClaw Weixin 原生 Rust 模式，或继续兼容 `@tencent-weixin/openclaw-weixin` bridge，请看：
-`docs/operations/openclaw-weixin-bridge.md`。
+如果你要接入 OpenClaw Weixin 原生 Rust 模式，请看：
+`docs/operations/openclaw-weixin.md`。
 
 ### 在 macOS 上接入 Peekaboo MCP（桌面自动化）
 
