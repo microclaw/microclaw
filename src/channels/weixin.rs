@@ -499,6 +499,21 @@ fn weixin_state_root(data_root: &Path) -> PathBuf {
     data_root.join(CHANNEL_KEY)
 }
 
+fn candidate_state_roots(state_root: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![state_root.to_path_buf()];
+    if let Some(runtime_dir) = state_root.parent() {
+        if runtime_dir.file_name().and_then(|name| name.to_str()) == Some("runtime") {
+            if let Some(data_root) = runtime_dir.parent() {
+                let fallback = weixin_state_root(data_root);
+                if fallback != state_root {
+                    roots.push(fallback);
+                }
+            }
+        }
+    }
+    roots
+}
+
 fn account_file_path(state_root: &Path, local_account_key: &str) -> PathBuf {
     state_root
         .join("accounts")
@@ -568,6 +583,18 @@ fn load_account_data(state_root: &Path, local_account_key: &str) -> Option<Store
     let path = account_file_path(state_root, local_account_key);
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
+}
+
+fn load_account_data_from_candidates(
+    state_root: &Path,
+    local_account_key: &str,
+) -> Option<(PathBuf, StoredWeixinAccount)> {
+    for root in candidate_state_roots(state_root) {
+        if let Some(account) = load_account_data(&root, local_account_key) {
+            return Some((root, account));
+        }
+    }
+    None
 }
 
 fn save_account_data(
@@ -1636,24 +1663,39 @@ impl WeixinAdapter {
     }
 
     fn load_native_account(&self) -> Result<NativeWeixinAccount, String> {
-        let stored =
-            load_account_data(&self.state_root, &self.local_account_key).ok_or_else(|| {
-                format!(
-                    "No Weixin credentials found for '{}'. Run `microclaw weixin login{}` first.",
-                    self.name,
-                    if self.local_account_key == "default" {
-                        "".to_string()
-                    } else {
-                        format!(" --account {}", self.local_account_key)
-                    }
-                )
-            })?;
+        let Some((resolved_root, stored)) =
+            load_account_data_from_candidates(&self.state_root, &self.local_account_key)
+        else {
+            let searched = candidate_state_roots(&self.state_root)
+                .into_iter()
+                .map(|root| account_file_path(&root, &self.local_account_key))
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "No Weixin credentials found for '{}'. Run `microclaw weixin login{}` first. Searched: {}",
+                self.name,
+                if self.local_account_key == "default" {
+                    "".to_string()
+                } else {
+                    format!(" --account {}", self.local_account_key)
+                },
+                searched
+            ));
+        };
         let token = stored.token.trim();
         if token.is_empty() {
             return Err(format!(
                 "Stored Weixin credentials for '{}' are incomplete. Run login again.",
                 self.name
             ));
+        }
+        if resolved_root != self.state_root {
+            info!(
+                "Weixin credentials for '{}' loaded from fallback state root {}",
+                self.name,
+                resolved_root.display()
+            );
         }
         let base_url = if stored.base_url.trim().is_empty() {
             self.base_url.clone()
@@ -2556,5 +2598,28 @@ weixin:
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_account_data_from_runtime_fallback_root() {
+        let data_root = unique_temp_dir();
+        let primary_root = data_root.join("runtime").join(CHANNEL_KEY);
+        let fallback_root = data_root.join(CHANNEL_KEY);
+        let account = StoredWeixinAccount {
+            token: "bot-token".to_string(),
+            base_url: DEFAULT_BASE_URL.to_string(),
+            remote_account_id: "bot@im.bot".to_string(),
+            user_id: "user@im.wechat".to_string(),
+            saved_at: "2026-03-24T00:00:00Z".to_string(),
+            context_tokens: HashMap::new(),
+        };
+        save_account_data(&fallback_root, "default", &account).unwrap();
+
+        let loaded = load_account_data_from_candidates(&primary_root, "default")
+            .map(|(_, account)| account)
+            .unwrap();
+        assert_eq!(loaded.token, "bot-token");
+
+        let _ = fs::remove_dir_all(data_root);
     }
 }
