@@ -287,7 +287,7 @@ For a deeper dive into the architecture and design decisions, read: **[Building 
 | `write_memory` | Write persistent AGENTS.md memory |
 | `web_search` | Search the web via DuckDuckGo (returns titles, URLs, snippets) |
 | `web_fetch` | Fetch a URL and return plain text (HTML stripped, max 20KB) |
-| `send_message` | Send mid-conversation messages; supports attachments for Telegram/Discord via `attachment_path` + optional `caption` |
+| `send_message` | Send mid-conversation messages; supports attachments for Telegram/Discord/Slack/Weixin via `attachment_path` + optional `caption` |
 | `schedule_task` | Schedule a recurring (cron) or one-time task |
 | `list_scheduled_tasks` | List all active/paused tasks for a chat |
 | `pause_scheduled_task` | Pause a scheduled task |
@@ -365,7 +365,7 @@ When built with `--features sqlite-vec` and embedding config is set, structured-
 MicroClaw now stores a channel-scoped identity for chats:
 
 - `internal chat_id`: SQLite primary key used by sessions/messages/tasks
-- `channel + external_chat_id`: source chat identity from Telegram/Discord/Slack/Feishu/IRC/Web
+- `channel + external_chat_id`: source chat identity from Telegram/Discord/Slack/Feishu/Weixin/IRC/Web
 
 This avoids collisions when different channels can have the same numeric id. Legacy rows are migrated automatically on startup.
 
@@ -499,6 +499,9 @@ cp mcp.hapi-bridge.example.json <data_dir>/mcp.d/hapi-bridge.json
 ```
 
 Detailed ops guide: `docs/operations/hapi-bridge.md`.
+
+Weixin native guide:
+`docs/operations/weixin.md`.
 
 Example:
 

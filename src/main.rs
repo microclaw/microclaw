@@ -67,6 +67,8 @@ enum MainCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Manage Weixin native login state
+    Weixin(WeixinCommand),
     /// Manage Web UI configurations
     Web(WebCommand),
     /// Re-embed active memories (requires `sqlite-vec` feature)
@@ -94,6 +96,33 @@ struct SetupCommand {
 struct WebCommand {
     #[command(subcommand)]
     action: Option<WebAction>,
+}
+
+#[derive(Debug, Args)]
+struct WeixinCommand {
+    #[command(subcommand)]
+    action: Option<WeixinAction>,
+}
+
+#[derive(Debug, Subcommand)]
+enum WeixinAction {
+    /// Login via QR code and persist native credentials
+    Login {
+        #[arg(long, value_name = "ACCOUNT")]
+        account: Option<String>,
+        #[arg(long, value_name = "URL")]
+        base_url: Option<String>,
+    },
+    /// Show stored native credential and sync status
+    Status {
+        #[arg(long, value_name = "ACCOUNT")]
+        account: Option<String>,
+    },
+    /// Remove stored native credentials and sync cursor
+    Logout {
+        #[arg(long, value_name = "ACCOUNT")]
+        account: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -181,6 +210,60 @@ Notes:
   - Existing Web login sessions are revoked automatically.
   - Restart is not required."#
     );
+}
+
+fn print_weixin_help() {
+    println!(
+        r#"Manage Weixin Native State
+
+Usage:
+  microclaw weixin [login|status|logout] [options]
+
+Commands:
+  login           Login via QR code and persist native credentials
+  status          Show stored native credential and sync status
+  logout          Remove stored native credentials and sync cursor
+
+Options:
+  --account <id>  Select configured account id (defaults to the channel default account)
+  --base-url <u>  Override base URL for login only
+
+Notes:
+  - Native mode supports QR login, polling, text, and file/image/video attachment delivery.
+  - Weixin is native-only in MicroClaw; no Node bridge is required."#
+    );
+}
+
+async fn handle_weixin_cli(action: Option<WeixinAction>) -> anyhow::Result<()> {
+    let Some(action) = action else {
+        print_weixin_help();
+        return Ok(());
+    };
+
+    let config = Config::load()?;
+    match action {
+        WeixinAction::Login { account, base_url } => {
+            let message = microclaw::channels::weixin::login_via_cli(
+                &config,
+                account.as_deref(),
+                base_url.as_deref(),
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            println!("{message}");
+        }
+        WeixinAction::Status { account } => {
+            let message = microclaw::channels::weixin::status_via_cli(&config, account.as_deref())
+                .map_err(anyhow::Error::msg)?;
+            println!("{message}");
+        }
+        WeixinAction::Logout { account } => {
+            let message = microclaw::channels::weixin::logout_via_cli(&config, account.as_deref())
+                .map_err(anyhow::Error::msg)?;
+            println!("{message}");
+        }
+    }
+    Ok(())
 }
 
 fn make_password_hash(password: &str) -> anyhow::Result<String> {
@@ -534,6 +617,10 @@ async fn main() -> anyhow::Result<()> {
             hooks::handle_hooks_cli(&args).await?;
             return Ok(());
         }
+        Some(MainCommand::Weixin(weixin)) => {
+            handle_weixin_cli(weixin.action).await?;
+            return Ok(());
+        }
         Some(MainCommand::Reembed) => {
             return reembed_memories().await;
         }
@@ -803,5 +890,14 @@ mod tests {
     fn cli_parses_upgrade_command() {
         let cli = Cli::parse_from(["microclaw", "upgrade"]);
         assert!(matches!(cli.command, Some(MainCommand::Upgrade)));
+    }
+
+    #[test]
+    fn cli_parses_weixin_status_command() {
+        let cli = Cli::parse_from(["microclaw", "weixin", "status", "--account", "ops"]);
+        match cli.command {
+            Some(MainCommand::Weixin(_)) => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

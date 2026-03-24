@@ -287,7 +287,7 @@ sqlite3 <data_dir>/runtime/microclaw.db "SELECT id, chat_id, chat_channel, exter
 | `write_memory`          | 写入持久化 AGENTS.md 记忆                                                            |
 | `web_search`            | 通过 DuckDuckGo 搜索（返回标题、URL、摘要）                                          |
 | `web_fetch`             | 抓取 URL 并返回纯文本（去 HTML，最大 20KB）                                          |
-| `send_message`          | 会话中发送消息；支持 Telegram/Discord 附件发送（`attachment_path` + 可选 `caption`） |
+| `send_message`          | 会话中发送消息；支持 Telegram/Discord/Slack/Weixin 附件发送（`attachment_path` + 可选 `caption`） |
 | `schedule_task`         | 创建循环（cron）或一次性定时任务                                                     |
 | `list_scheduled_tasks`  | 列出聊天的所有活跃/暂停任务                                                          |
 | `pause_scheduled_task`  | 暂停定时任务                                                                         |
@@ -339,7 +339,7 @@ MicroClaw 通过 `AGENTS.md` 文件维护持久化记忆：
 MicroClaw 现在会保存“按渠道隔离”的聊天身份：
 
 - `internal chat_id`：SQLite 内部主键（用于 sessions/messages/tasks）
-- `channel + external_chat_id`：来自 Telegram/Discord/Slack/飞书/IRC/Web 的源聊天身份
+- `channel + external_chat_id`：来自 Telegram/Discord/Slack/飞书/Weixin/IRC/Web 的源聊天身份
 
 这样可避免不同渠道使用相同数字 id 时发生冲突。历史数据会在启动时自动迁移补齐。
 
@@ -432,6 +432,9 @@ cp mcp.hapi-bridge.example.json <data_dir>/mcp.d/hapi-bridge.json
 这样可以在不改 MicroClaw 核心 agent loop 的情况下，通过外部桥接服务扩展远程终端能力。
 
 详细操作可见：`docs/operations/hapi-bridge.md`。
+
+如果你要接入 Weixin 原生 Rust 模式，请看：
+`docs/operations/weixin.md`。
 
 ### 在 macOS 上接入 Peekaboo MCP（桌面自动化）
 

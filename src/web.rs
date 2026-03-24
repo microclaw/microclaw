@@ -1901,6 +1901,7 @@ pub async fn start_web_server(state: Arc<AppState>) {
     router = crate::channels::signal::register_signal_webhook(router, state.clone());
     router = crate::channels::dingtalk::register_dingtalk_webhook(router, state.clone());
     router = crate::channels::qq::register_qq_webhook(router, state.clone());
+    router = crate::channels::weixin::register_weixin_webhook(router, state.clone());
 
     let addr = format!("{}:{}", state.config.web_host, state.config.web_port);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
