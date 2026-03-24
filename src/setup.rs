@@ -309,6 +309,10 @@ fn trim_channel_prefix<'a>(channel: &str, label: &'a str) -> &'a str {
     trimmed
 }
 
+fn dynamic_channel_uses_minimal_setup(channel: &str) -> bool {
+    channel == "weixin"
+}
+
 fn effective_dynamic_slot_field_value<F>(
     channel: &str,
     slot: usize,
@@ -3938,6 +3942,9 @@ impl SetupApp {
                     if !self.channel_enabled(ch) {
                         return false;
                     }
+                    if dynamic_channel_uses_minimal_setup(ch) {
+                        return false;
+                    }
                     if key == dynamic_account_id_field_key(ch)
                         || key == dynamic_accounts_json_field_key(ch)
                     {
@@ -4304,6 +4311,9 @@ impl SetupApp {
 
         for ch in DYNAMIC_CHANNELS {
             if self.channel_enabled(ch.name) {
+                if dynamic_channel_uses_minimal_setup(ch.name) {
+                    continue;
+                }
                 let bot_count_key = dynamic_bot_count_field_key(ch.name);
                 let bot_count = parse_bot_count(&self.field_value(&bot_count_key), &bot_count_key)?;
                 let mut seen_any = false;
@@ -6418,6 +6428,9 @@ fn save_config_yaml(
         .iter()
         .map(|ch| {
             let selected = channel_selected(ch.name);
+            if dynamic_channel_uses_minimal_setup(ch.name) {
+                return (ch, selected);
+            }
             let bot_count = parse_bot_count(
                 &get(&dynamic_bot_count_field_key(ch.name)),
                 &dynamic_bot_count_field_key(ch.name),
@@ -6601,6 +6614,11 @@ fn save_config_yaml(
 
     for (ch, include) in &dynamic_channel_include {
         if !include {
+            continue;
+        }
+        if dynamic_channel_uses_minimal_setup(ch.name) {
+            yaml.push_str(&format!("  {}:\n", ch.name));
+            yaml.push_str(&format!("    enabled: {}\n", channel_selected(ch.name)));
             continue;
         }
         let bot_count_key = dynamic_bot_count_field_key(ch.name);
@@ -9930,16 +9948,14 @@ sandbox:
     }
 
     #[test]
-    fn test_save_config_yaml_includes_weixin_defaults_when_selected() {
+    fn test_save_config_yaml_keeps_weixin_minimal_when_selected() {
         let yaml_path = std::env::temp_dir().join(format!(
-            "microclaw_setup_weixin_defaults_test_{}.yaml",
+            "microclaw_setup_weixin_minimal_test_{}.yaml",
             Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
 
         let mut values = HashMap::new();
         values.insert("ENABLED_CHANNELS".into(), "weixin".into());
-        values.insert(dynamic_bot_count_field_key("weixin"), "1".into());
-        values.insert(dynamic_slot_id_field_key("weixin", 1), "main".into());
         values.insert("LLM_PROVIDER".into(), "anthropic".into());
         values.insert("LLM_API_KEY".into(), "key".into());
 
@@ -9948,11 +9964,11 @@ sandbox:
         assert!(s.contains("\nchannels:\n"));
         assert!(s.contains("  weixin:\n"));
         assert!(s.contains("    enabled: true\n"));
-        assert!(s.contains("    default_account: \"main\"\n"));
-        assert!(s.contains("      main:\n"));
-        assert!(s.contains("        base_url: https://ilinkai.weixin.qq.com\n"));
-        assert!(s.contains("        cdn_base_url: https://novac2c.cdn.weixin.qq.com/c2c\n"));
-        assert!(s.contains("        webhook_path: /weixin/messages\n"));
+        assert!(!s.contains("default_account:"));
+        assert!(!s.contains("accounts:"));
+        assert!(!s.contains("    base_url:"));
+        assert!(!s.contains("    cdn_base_url:"));
+        assert!(!s.contains("    webhook_path:"));
 
         let _ = fs::remove_file(&yaml_path);
     }
@@ -10163,24 +10179,10 @@ sandbox:
     }
 
     #[test]
-    fn test_validate_local_accepts_weixin_with_default_urls() {
+    fn test_validate_local_accepts_minimal_weixin() {
         let mut app = SetupApp::new();
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
             field.value = "weixin".to_string();
-        }
-        if let Some(field) = app
-            .fields
-            .iter_mut()
-            .find(|f| f.key == dynamic_bot_count_field_key("weixin"))
-        {
-            field.value = "1".to_string();
-        }
-        if let Some(field) = app
-            .fields
-            .iter_mut()
-            .find(|f| f.key == dynamic_slot_id_field_key("weixin", 1))
-        {
-            field.value = "main".to_string();
         }
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_PROVIDER") {
             field.value = "anthropic".to_string();
@@ -10191,6 +10193,34 @@ sandbox:
 
         let result = app.validate_local();
         assert!(result.is_ok(), "validate_local failed: {result:?}");
+    }
+
+    #[test]
+    fn test_weixin_setup_fields_hidden_when_enabled() {
+        let mut app = SetupApp::new();
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
+            field.value = "weixin".to_string();
+        }
+        app.ensure_selected_visible();
+
+        let visible_keys: Vec<String> = app
+            .visible_field_indices()
+            .iter()
+            .map(|idx| app.fields[*idx].key.clone())
+            .collect();
+
+        assert!(!visible_keys
+            .iter()
+            .any(|k| k == &dynamic_bot_count_field_key("weixin")));
+        assert!(!visible_keys
+            .iter()
+            .any(|k| k == &dynamic_slot_id_field_key("weixin", 1)));
+        assert!(!visible_keys
+            .iter()
+            .any(|k| k == &dynamic_slot_field_key("weixin", 1, "base_url")));
+        assert!(!visible_keys
+            .iter()
+            .any(|k| k == &dynamic_slot_field_key("weixin", 1, "cdn_base_url")));
     }
 
     #[test]
