@@ -4433,7 +4433,7 @@ commands:
                 "id": "send-1",
                 "method": "chat.send",
                 "params": {
-                    "sessionKey": "main",
+                    "key": "main",
                     "message": "hello over ws",
                     "idempotencyKey": "idem-ws-1"
                 }
@@ -4463,7 +4463,7 @@ commands:
                     if state == Some("final") {
                         saw_final = true;
                         assert_eq!(
-                            msg.pointer("/payload/sessionKey").and_then(|v| v.as_str()),
+                            msg.pointer("/payload/key").and_then(|v| v.as_str()),
                             Some("main")
                         );
                     }
@@ -4516,7 +4516,7 @@ commands:
                 "id": "send-1",
                 "method": "chat.send",
                 "params": {
-                    "sessionKey": "main",
+                    "key": "main",
                     "message": "history please",
                     "idempotencyKey": "idem-ws-2"
                 }
@@ -4539,7 +4539,7 @@ commands:
                 "id": "history-1",
                 "method": "chat.history",
                 "params": {
-                    "sessionKey": "main",
+                    "key": "main",
                     "limit": 10
                 }
             })
@@ -4675,19 +4675,19 @@ commands:
             (
                 "setting-1",
                 "sessions.setLabel",
-                json!({"sessionKey":"main","label":"Ops"}),
+                json!({"key":"main","label":"Ops"}),
             ),
             (
                 "send-1",
                 "sessions.send",
-                json!({"sessionKey":"main","message":"continue"}),
+                json!({"key":"main","message":"continue"}),
             ),
             (
                 "spawn-1",
                 "sessions.spawn",
                 json!({"task":"spawn from mission control","label":"worker"}),
             ),
-            ("delete-1", "sessions.delete", json!({"sessionKey":"main"})),
+            ("delete-1", "sessions.delete", json!({"key":"main"})),
         ] {
             ws.send(tokio_tungstenite::tungstenite::Message::Text(
                 json!({
@@ -4731,7 +4731,7 @@ commands:
                     }
                     assert_eq!(
                         candidate
-                            .pointer("/payload/sessionKey")
+                            .pointer("/payload/key")
                             .and_then(|v| v.as_str()),
                         Some("main")
                     );
@@ -4968,12 +4968,12 @@ commands:
             (
                 "label-1",
                 "sessions.setLabel",
-                json!({"sessionKey":"main","label":"Ops"}),
+                json!({"key":"main","label":"Ops"}),
             ),
             (
                 "thinking-1",
                 "sessions.setThinking",
-                json!({"sessionKey":"main","level":"high"}),
+                json!({"key":"main","level":"high"}),
             ),
         ] {
             ws.send(tokio_tungstenite::tungstenite::Message::Text(
@@ -5114,7 +5114,7 @@ commands:
                 "type": "req",
                 "id": "kill-1",
                 "method": "sessions.kill",
-                "params": { "sessionKey": session_key }
+                "params": { "key": session_key }
             })
             .to_string(),
         ))

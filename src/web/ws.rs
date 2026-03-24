@@ -68,6 +68,7 @@ struct ConnectAuth {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatSendParams {
+    #[serde(rename = "key")]
     session_key: String,
     message: String,
     #[serde(default)]
@@ -77,6 +78,7 @@ struct ChatSendParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatHistoryParams {
+    #[serde(rename = "key")]
     session_key: String,
     #[serde(default)]
     limit: Option<usize>,
@@ -85,12 +87,14 @@ struct ChatHistoryParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionDeleteParams {
+    #[serde(rename = "key")]
     session_key: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionsSendParams {
+    #[serde(rename = "key")]
     session_key: String,
     message: serde_json::Value,
 }
@@ -107,6 +111,7 @@ struct SessionsListParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionSettingParams {
+    #[serde(rename = "key")]
     session_key: String,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
@@ -227,6 +232,7 @@ struct ChatAckPayload {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatHistoryPayload {
+    #[serde(rename = "key")]
     session_key: String,
     messages: Vec<ChatMessage>,
 }
@@ -304,6 +310,7 @@ struct ChatMessageContent {
 #[serde(rename_all = "camelCase")]
 struct ChatEventPayload {
     run_id: String,
+    #[serde(rename = "key")]
     session_key: String,
     seq: u64,
     state: &'static str,
@@ -907,7 +914,7 @@ async fn handle_request_frame(
                 payload: Some(json!({
                     "ok": true,
                     "deleted": deleted,
-                    "sessionKey": session_key,
+                    "key": session_key,
                 })),
                 error: None,
             };
@@ -947,7 +954,7 @@ async fn handle_request_frame(
                     ok: true,
                     payload: Some(json!({
                         "ok": true,
-                        "sessionKey": session_key,
+                        "key": session_key,
                         "action": action,
                         "applied": false,
                         "reason": "control messages are acknowledged but not yet enforced",
@@ -994,7 +1001,7 @@ async fn handle_request_frame(
                 payload: Some(json!({
                     "ok": true,
                     "runId": run_id,
-                    "sessionKey": session_key,
+                    "key": session_key,
                     "status": "started",
                 })),
                 error: None,
@@ -1050,7 +1057,7 @@ async fn handle_request_frame(
                 ok: true,
                 payload: Some(json!({
                     "ok": true,
-                    "sessionKey": session_key,
+                    "key": session_key,
                     "terminated": aborted > 0,
                     "activeAborted": aborted,
                     "channel": channel,
@@ -1136,8 +1143,8 @@ async fn handle_request_frame(
                 payload: Some(json!({
                     "ok": true,
                     "run_id": run_id,
-                    "sessionId": session_key,
-                    "session_id": session_key,
+
+                    "key": session_key,
                     "label": params.label,
                     "model": params.model,
                     "runTimeoutSeconds": params.run_timeout_seconds,
@@ -1202,7 +1209,7 @@ async fn handle_request_frame(
                 ok: true,
                 payload: Some(json!({
                     "ok": true,
-                    "sessionKey": session_key,
+                    "key": session_key,
                     "applied": true,
                     "settings": session_settings_payload(&stored),
                 })),
