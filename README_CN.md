@@ -596,7 +596,7 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 1. 连接 `ws://127.0.0.1:10961/`
 2. 等待 `connect.challenge`
 3. 发送 `connect` 帧，并在 `params.auth.token` 中带上 operator API key
-4. 可调用 `chat.send`、`sessions_send`、`sessions_kill`、`sessions_spawn`、`session_set*` 等方法
+4. 可调用 `chat.send`、`sessions.send`、`sessions.kill`、`sessions.spawn`、`sessions.set*` 等方法
 5. 消费实时 `chat` 事件（`delta` / `final` / `error`）
 
 当前 bridge 方法：
@@ -605,14 +605,15 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 - `status`
 - `chat.send`
 - `chat.history`
-- `session_delete`
-- `sessions_send`
-- `sessions_kill`
-- `sessions_spawn`
-- `session_setThinking`
-- `session_setVerbose`
-- `session_setReasoning`
-- `session_setLabel`
+- `sessions.delete`
+- `sessions.send`
+- `sessions.kill`
+- `sessions.spawn`
+- `sessions.setThinking`
+- `sessions.setVerbose`
+- `sessions.setReasoning`
+- `sessions.setLabel`
+- `sessions.list`
 - `agents.list`
 - `models.list`
 - `config.get`
@@ -654,7 +655,7 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 {
   "type": "req",
   "id": "spawn-1",
-  "method": "sessions_spawn",
+  "method": "sessions.spawn",
   "params": {
     "task": "请总结当前仓库",
     "label": "Ops"
@@ -668,7 +669,7 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 {
   "type": "req",
   "id": "label-1",
-  "method": "session_setLabel",
+  "method": "sessions.setLabel",
   "params": {
     "sessionKey": "ops-bot",
     "label": "Ops"
@@ -679,19 +680,19 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 行为说明：
 
 - bridge 的 WebSocket 路径是根路径 `GET /`，不是 `/ws`。
-- `sessions_send` 会立即返回 `runId`，随后持续发送 `chat` 事件，并在普通消息完成后发出终态 `final`。
-- `sessions_spawn` 会创建新的异步会话，并可先持久化初始标签。
-- `session_set*` 只更新当前请求提供的字段，不会覆盖其它已存储的 session 设置。
-- `sessions_send` 的 control payload 当前会被确认接收，但还不会真的改变运行时控制状态。
+- `sessions.send` 会立即返回 `runId`，随后持续发送 `chat` 事件，并在普通消息完成后发出终态 `final`。
+- `sessions.spawn` 会创建新的异步会话，并可先持久化初始标签。
+- `sessions.set*` 只更新当前请求提供的字段，不会覆盖其它已存储的 session 设置。
+- `sessions.send` 的 control payload 当前会被确认接收，但还不会真的改变运行时控制状态。
 
 本地 gateway 冒烟测试：
 
 ```sh
 MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call health
 MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call status
-MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call session_setLabel \
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions.setLabel \
   --params '{"sessionKey":"ops-bot","label":"Ops"}'
-MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions_send \
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions.send \
   --params '{"sessionKey":"ops-bot","message":"请给出状态摘要"}'
 ```
 

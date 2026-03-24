@@ -65,22 +65,22 @@ If a hook times out or crashes, runtime skips the hook and continues.
 ```sh
 MICROCLAW_GATEWAY_TOKEN=... microclaw gateway call health
 MICROCLAW_GATEWAY_TOKEN=... microclaw gateway call status
-MICROCLAW_GATEWAY_TOKEN=... microclaw gateway call sessions_send \
+MICROCLAW_GATEWAY_TOKEN=... microclaw gateway call sessions.send \
   --params '{"sessionKey":"main","message":"status summary"}'
 ```
 
 - Supported bridge methods:
   - `health`, `status`, `chat.send`, `chat.history`
-  - `session_delete`, `sessions_send`, `sessions_kill`, `sessions_spawn`
-  - `session_setThinking`, `session_setVerbose`, `session_setReasoning`, `session_setLabel`
+  - `sessions.delete`, `sessions.send`, `sessions.kill`, `sessions.spawn`, `sessions.list`
+  - `sessions.setThinking`, `sessions.setVerbose`, `sessions.setReasoning`, `sessions.setLabel`
   - `agents.list`, `models.list`, `config.get`, `node.list`
 
 - Session-control notes:
-  - `sessions_send` emits live `chat` events and a terminal `final` state for normal messages.
-  - `sessions_spawn` can create a new session and persist an initial label.
-  - `session_set*` writes only the provided field and preserves the rest of the stored session settings.
+  - `sessions.send` emits live `chat` events and a terminal `final` state for normal messages.
+  - `sessions.spawn` can create a new session and persist an initial label.
+  - `sessions.set*` writes only the provided field and preserves the rest of the stored session settings.
   - Session labels and settings are persisted in the `sessions` table and flow back into session listings / bridge payloads.
-  - `sessions_send` control payloads are acknowledged today, but not yet enforced as runtime controls.
+  - `sessions.send` control payloads are acknowledged today, but not yet enforced as runtime controls.
 
 - Symptom: logs show send failures after operator disconnect
   - Messages such as `sending after closing is not allowed`, `already closed`, or `connection closed normally` are downgraded as expected closed-socket noise.

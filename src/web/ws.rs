@@ -879,7 +879,7 @@ async fn handle_request_frame(
                         sender,
                         &id,
                         "INVALID_REQUEST",
-                        &format!("invalid session_delete params: {err}"),
+                        &format!("invalid sessions.delete params: {err}"),
                     )
                     .await;
                     return Ok(());
@@ -898,7 +898,7 @@ async fn handle_request_frame(
             })
             .await
             .map_err(|err| {
-                warn!(target: "web", "session_delete db error: {err}");
+                warn!(target: "web", "sessions.delete db error: {err}");
             })?;
             let res = ResponseFrame {
                 kind: "res",
@@ -925,7 +925,7 @@ async fn handle_request_frame(
                         sender,
                         &id,
                         "INVALID_REQUEST",
-                        &format!("invalid sessions_send params: {err}"),
+                        &format!("invalid sessions.send params: {err}"),
                     )
                     .await;
                     return Ok(());
@@ -1021,7 +1021,7 @@ async fn handle_request_frame(
                         sender,
                         &id,
                         "INVALID_REQUEST",
-                        &format!("invalid sessions_kill params: {err}"),
+                        &format!("invalid sessions.kill params: {err}"),
                     )
                     .await;
                     return Ok(());
@@ -1040,7 +1040,7 @@ async fn handle_request_frame(
             })
             .await
             .map_err(|err| {
-                warn!(target: "web", "sessions_kill db error: {err}");
+                warn!(target: "web", "sessions.kill db error: {err}");
             })?
             .unwrap_or_else(|| "web".to_string());
             let aborted = crate::run_control::abort_runs(&channel, chat_id).await;
@@ -1071,7 +1071,7 @@ async fn handle_request_frame(
                         sender,
                         &id,
                         "INVALID_REQUEST",
-                        &format!("invalid sessions_spawn params: {err}"),
+                        &format!("invalid sessions.spawn params: {err}"),
                     )
                     .await;
                     return Ok(());

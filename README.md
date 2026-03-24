@@ -725,7 +725,7 @@ Mission Control / OpenClaw-style WebSocket bridge:
 1. Connect to `ws://127.0.0.1:10961/`
 2. Wait for `connect.challenge`
 3. Send a `connect` frame with your operator API key in `params.auth.token`
-4. Use bridge methods such as `chat.send`, `sessions_send`, `sessions_kill`, `sessions_spawn`, and `session_set*`
+4. Use bridge methods such as `chat.send`, `sessions.send`, `sessions.kill`, `sessions.spawn`, and `sessions.set*`
 5. Consume live `chat` events (`delta` / `final` / `error`)
 
 Current bridge methods:
@@ -734,14 +734,15 @@ Current bridge methods:
 - `status`
 - `chat.send`
 - `chat.history`
-- `session_delete`
-- `sessions_send`
-- `sessions_kill`
-- `sessions_spawn`
-- `session_setThinking`
-- `session_setVerbose`
-- `session_setReasoning`
-- `session_setLabel`
+- `sessions.delete`
+- `sessions.send`
+- `sessions.kill`
+- `sessions.spawn`
+- `sessions.setThinking`
+- `sessions.setVerbose`
+- `sessions.setReasoning`
+- `sessions.setLabel`
+- `sessions.list`
 - `agents.list`
 - `models.list`
 - `config.get`
@@ -783,7 +784,7 @@ Example session spawn frame:
 {
   "type": "req",
   "id": "spawn-1",
-  "method": "sessions_spawn",
+  "method": "sessions.spawn",
   "params": {
     "task": "Summarize the current repo",
     "label": "Ops"
@@ -797,7 +798,7 @@ Example session label update:
 {
   "type": "req",
   "id": "label-1",
-  "method": "session_setLabel",
+  "method": "sessions.setLabel",
   "params": {
     "sessionKey": "ops-bot",
     "label": "Ops"
@@ -808,19 +809,19 @@ Example session label update:
 Behavior notes:
 
 - The bridge is mounted at `GET /` for WebSocket upgrades, not `/ws`.
-- `sessions_send` returns a `runId` immediately and then emits `chat` events, including a terminal `final` state for normal messages.
-- `sessions_spawn` can create a new async session and persist an initial label.
-- `session_set*` updates only the provided field and preserves previously stored session settings.
-- `sessions_send` control payloads are acknowledged, but not yet enforced as runtime controls.
+- `sessions.send` returns a `runId` immediately and then emits `chat` events, including a terminal `final` state for normal messages.
+- `sessions.spawn` can create a new async session and persist an initial label.
+- `sessions.set*` updates only the provided field and preserves previously stored session settings.
+- `sessions.send` control payloads are acknowledged, but not yet enforced as runtime controls.
 
 Local gateway smoke tests:
 
 ```sh
 MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call health
 MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call status
-MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call session_setLabel \
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions.setLabel \
   --params '{"sessionKey":"ops-bot","label":"Ops"}'
-MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions_send \
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions.send \
   --params '{"sessionKey":"ops-bot","message":"status summary"}'
 ```
 
