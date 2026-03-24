@@ -13,16 +13,50 @@ Native support includes:
 - text replies via `sendmessage`
 - image, video, and file attachment replies via native CDN upload
 
-## Config
+## Quick Start
 
-Single-account example:
+The default setup only needs Weixin to be enabled:
 
 ```yaml
 channels:
   weixin:
     enabled: true
-    base_url: https://ilinkai.weixin.qq.com
-    cdn_base_url: https://novac2c.cdn.weixin.qq.com/c2c
+```
+
+`microclaw setup` writes the default Weixin endpoints automatically:
+
+- `base_url: https://ilinkai.weixin.qq.com`
+- `cdn_base_url: https://novac2c.cdn.weixin.qq.com/c2c`
+
+For a normal single-account deployment, you do not need to set them manually.
+
+Then login once:
+
+```sh
+microclaw weixin login
+```
+
+Then start MicroClaw:
+
+```sh
+microclaw start
+```
+
+By default, native Weixin runtime state is stored under:
+
+- `~/.microclaw/runtime/weixin/accounts/<account>.json`
+- `~/.microclaw/runtime/weixin/sync/<account>.txt`
+
+If you override `data_dir`, the effective path becomes `<data_dir>/runtime/weixin/...`.
+
+## Optional Advanced Config
+
+Single-account example with overrides:
+
+```yaml
+channels:
+  weixin:
+    enabled: true
     allowed_user_ids: "alice@im.wechat,bob@im.wechat"
 ```
 
@@ -41,7 +75,7 @@ channels:
         allowed_user_ids: "ops-user@im.wechat"
 ```
 
-Per-account overrides support:
+Supported optional overrides:
 
 - `base_url`
 - `cdn_base_url`
@@ -49,6 +83,8 @@ Per-account overrides support:
 - `webhook_token`
 - `bot_username`
 - `model`
+- `provider_preset`
+- `webhook_path`
 
 ## Native CLI
 
@@ -74,11 +110,6 @@ microclaw weixin logout
 microclaw weixin logout --account ops
 ```
 
-Native credentials are stored under:
-
-- `<data_dir>/runtime/weixin/accounts/<account>.json`
-- `<data_dir>/runtime/weixin/sync/<account>.txt`
-
 ## Runtime Behavior
 
 - Polling starts automatically on `microclaw start` once credentials exist for that account.
@@ -91,7 +122,7 @@ Native credentials are stored under:
 
 The native runtime uses long polling, but MicroClaw still accepts compatible webhook payloads for interoperability or controlled external forwarding.
 
-Send `POST` requests to the configured `webhook_path`.
+Send `POST` requests to the configured `webhook_path` when you explicitly enable webhook forwarding.
 
 Headers:
 

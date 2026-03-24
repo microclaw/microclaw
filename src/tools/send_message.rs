@@ -161,7 +161,7 @@ impl Tool for SendMessageTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "send_message".into(),
-            description: "Send a message mid-conversation. Supports text for all channels, and attachments for Telegram/Discord/Slack/OpenClaw Weixin via attachment_path.".into(),
+            description: "Send a message mid-conversation. Supports text for all channels, and attachments for Telegram/Discord/Slack/Weixin via attachment_path.".into(),
             input_schema: schema_object(
                 json!({
                     "chat_id": {

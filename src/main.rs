@@ -67,7 +67,7 @@ enum MainCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Manage OpenClaw Weixin native login state
+    /// Manage Weixin native login state
     Weixin(WeixinCommand),
     /// Manage Web UI configurations
     Web(WebCommand),
@@ -214,7 +214,7 @@ Notes:
 
 fn print_weixin_help() {
     println!(
-        r#"Manage OpenClaw Weixin Native State
+        r#"Manage Weixin Native State
 
 Usage:
   microclaw weixin [login|status|logout] [options]
@@ -230,7 +230,7 @@ Options:
 
 Notes:
   - Native mode supports QR login, polling, text, and file/image/video attachment delivery.
-  - OpenClaw Weixin is now native-only in MicroClaw; no Node bridge is required."#
+  - Weixin is native-only in MicroClaw; no Node bridge is required."#
     );
 }
 

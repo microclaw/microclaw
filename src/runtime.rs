@@ -677,7 +677,7 @@ pub async fn run(
             weixin_runtimes,
             |channel_state, runtime_ctx| async move {
                 info!(
-                    "Starting OpenClaw Weixin adapter '{}'",
+                    "Starting Weixin adapter '{}'",
                     runtime_ctx.channel_name
                 );
                 crate::channels::weixin::start_weixin_bot(channel_state, runtime_ctx).await;
@@ -749,7 +749,7 @@ pub async fn run(
         Ok(())
     } else {
         Err(anyhow!(
-            "No channel is enabled. Configure channels.<name>.enabled (or legacy channel settings) for Telegram, Discord, Slack, Feishu, Matrix, WhatsApp, iMessage, Email, Nostr, Signal, DingTalk, QQ, OpenClaw Weixin, IRC, or web."
+            "No channel is enabled. Configure channels.<name>.enabled (or legacy channel settings) for Telegram, Discord, Slack, Feishu, Matrix, WhatsApp, iMessage, Email, Nostr, Signal, DingTalk, QQ, Weixin, IRC, or web."
         ))
     }
 }
