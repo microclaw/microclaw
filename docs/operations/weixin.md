@@ -76,8 +76,8 @@ microclaw weixin logout --account ops
 
 Native credentials are stored under:
 
-- `<data_dir>/weixin/accounts/<account>.json`
-- `<data_dir>/weixin/sync/<account>.txt`
+- `<data_dir>/runtime/weixin/accounts/<account>.json`
+- `<data_dir>/runtime/weixin/sync/<account>.txt`
 
 ## Runtime Behavior
 
