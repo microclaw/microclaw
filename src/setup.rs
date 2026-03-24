@@ -6632,10 +6632,11 @@ fn save_config_yaml(
                 &get(&dynamic_slot_soul_path_field_key(ch.name, slot)),
                 &souls_dir,
             );
-            let has_any =
-                ch.fields.iter().any(|f| {
-                    !effective_dynamic_slot_field_value(ch.name, slot, f, &get).is_empty()
-                }) || !soul_path.is_empty();
+            let has_any = ch
+                .fields
+                .iter()
+                .any(|f| !effective_dynamic_slot_field_value(ch.name, slot, f, get).is_empty())
+                || !soul_path.is_empty();
             if !has_any {
                 continue;
             }
@@ -6649,7 +6650,7 @@ fn save_config_yaml(
             let mut account = serde_json::Map::new();
             account.insert("enabled".into(), serde_json::Value::Bool(enabled));
             for f in ch.fields {
-                let v = effective_dynamic_slot_field_value(ch.name, slot, f, &get);
+                let v = effective_dynamic_slot_field_value(ch.name, slot, f, get);
                 if v.trim().is_empty() {
                     continue;
                 }

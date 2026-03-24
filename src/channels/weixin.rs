@@ -11,6 +11,7 @@ use axum::http::HeaderMap;
 use axum::{Json, Router};
 use base64::Engine as _;
 use ecb::Encryptor as EcbEncryptor;
+use qrcode::QrCode;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
@@ -1273,7 +1274,7 @@ fn summarize_weixin_item(item: &WeixinWebhookMessageItem) -> Option<String> {
                 .map(|reference| reference.title.trim().to_string())
                 .filter(|title| !title.is_empty())
             {
-                return Some(format!("[引用: {reference}]\n{text}"));
+                return Some(format!("[quoted: {reference}]\n{text}"));
             }
             Some(text)
         }
@@ -2140,13 +2141,14 @@ async fn do_qr_login(runtime: &WeixinRuntimeContext) -> Result<StoredWeixinAccou
     let client = reqwest::Client::new();
     let qr = fetch_qrcode(&client, &runtime.base_url).await?;
     eprintln!();
-    eprintln!("使用微信扫描以下二维码完成连接：");
+    eprintln!("Scan this QR code with Weixin to complete login:");
     eprintln!();
-    eprintln!("{}", qr.qrcode_img_content);
+    if let Some(rendered_qr) = render_terminal_qr(&qr.qrcode_img_content) {
+        eprintln!("{rendered_qr}");
+    }
     eprintln!();
-    eprintln!(
-        "若终端无法直接显示二维码图片，请将上面的内容复制到浏览器打开，或用其他设备展示后再扫码。"
-    );
+    eprintln!("QR link: {}", qr.qrcode_img_content);
+    eprintln!("If the QR code does not render correctly in your terminal, open the link above in a browser or display it on another device and scan it there.");
     eprintln!();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(480);
@@ -2157,16 +2159,19 @@ async fn do_qr_login(runtime: &WeixinRuntimeContext) -> Result<StoredWeixinAccou
             "wait" => {}
             "scaned" => {
                 if !scanned_logged {
-                    eprintln!("已扫码，请在微信中确认。");
+                    eprintln!("QR code scanned. Confirm the login in Weixin.");
                     scanned_logged = true;
                 }
             }
             "expired" => {
-                return Err("二维码已过期，请重新执行登录。".to_string());
+                return Err("QR code expired. Run the login command again.".to_string());
             }
             "confirmed" => {
                 if status.bot_token.trim().is_empty() || status.ilink_bot_id.trim().is_empty() {
-                    return Err("登录确认后未返回完整 bot 凭据。".to_string());
+                    return Err(
+                        "Login was confirmed, but the server did not return a complete bot credential set."
+                            .to_string(),
+                    );
                 }
                 return Ok(StoredWeixinAccount {
                     token: status.bot_token.trim().to_string(),
@@ -2192,7 +2197,49 @@ async fn do_qr_login(runtime: &WeixinRuntimeContext) -> Result<StoredWeixinAccou
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    Err("登录超时。".to_string())
+    Err("Login timed out.".to_string())
+}
+
+fn render_terminal_qr(value: &str) -> Option<String> {
+    let data = value.trim();
+    if data.is_empty() {
+        return None;
+    }
+    let code = QrCode::new(data.as_bytes()).ok()?;
+    let width = code.width();
+    let quiet = 2usize;
+    let size = width + quiet * 2;
+    let mut out = String::new();
+
+    for y in (0..size).step_by(2) {
+        out.push_str("  ");
+        for x in 0..size {
+            let top = qr_dark(&code, x, y, quiet);
+            let bottom = qr_dark(&code, x, y + 1, quiet);
+            out.push(match (top, bottom) {
+                (true, true) => '█',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (false, false) => ' ',
+            });
+        }
+        out.push('\n');
+    }
+
+    Some(out)
+}
+
+fn qr_dark(code: &QrCode, x: usize, y: usize, quiet: usize) -> bool {
+    let width = code.width();
+    if x < quiet || y < quiet {
+        return false;
+    }
+    let x = x - quiet;
+    let y = y - quiet;
+    if x >= width || y >= width {
+        return false;
+    }
+    code[(x, y)] == qrcode::Color::Dark
 }
 
 pub async fn login_via_cli(
@@ -2467,6 +2514,13 @@ weixin:
             HeaderValue::from_static("header-token"),
         );
         assert_eq!(provided_weixin_webhook_token(&headers), "header-token");
+    }
+
+    #[test]
+    fn test_render_terminal_qr_generates_block_output() {
+        let rendered = render_terminal_qr("https://example.com/qr").unwrap();
+        assert!(rendered.contains('█') || rendered.contains('▀') || rendered.contains('▄'));
+        assert!(rendered.lines().count() > 5);
     }
 
     #[test]
