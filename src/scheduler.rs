@@ -62,6 +62,51 @@ fn resolve_task_timezone(task_timezone: &str, default_timezone: &str) -> chrono_
     default_timezone.parse().unwrap_or(chrono_tz::Tz::UTC)
 }
 
+fn is_retryable_delivery_rate_limit(error_text: &str) -> bool {
+    let lower = error_text.to_ascii_lowercase();
+    lower.contains("rate limit")
+        || lower.contains("429")
+        || lower.contains("too many requests")
+        || lower.contains("too many request")
+        || lower.contains("too many")
+        || lower.contains("频控")
+        || lower.contains("限流")
+        || lower.contains("请求过于频繁")
+}
+
+async fn deliver_scheduler_message_with_backoff(
+    state: &Arc<AppState>,
+    bot_username: &str,
+    chat_id: i64,
+    text: &str,
+) -> Result<(), String> {
+    let mut attempt = 0u32;
+    let max_attempts = 3u32;
+    loop {
+        match deliver_and_store_bot_message(
+            &state.channel_registry,
+            state.db.clone(),
+            bot_username,
+            chat_id,
+            text,
+        )
+        .await
+        {
+            Ok(()) => return Ok(()),
+            Err(err) if attempt + 1 < max_attempts && is_retryable_delivery_rate_limit(&err) => {
+                attempt += 1;
+                let delay = Duration::from_secs(2u64.pow(attempt));
+                warn!(
+                    "Scheduler: delivery for chat {} hit rate limit, retrying in {:?} (attempt {}/{})",
+                    chat_id, delay, attempt, max_attempts
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 async fn run_due_tasks(state: &Arc<AppState>) {
     let now = Utc::now().to_rfc3339();
     let tasks = match call_blocking(state.db.clone(), move |db| db.claim_due_tasks(&now, 200)).await
@@ -112,35 +157,53 @@ async fn run_due_tasks(state: &Arc<AppState>) {
             Ok(response) => {
                 if !response.is_empty() {
                     let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
-                    let _ = deliver_and_store_bot_message(
-                        &state.channel_registry,
-                        state.db.clone(),
+                    if let Err(delivery_err) = deliver_scheduler_message_with_backoff(
+                        state,
                         &bot_username,
                         task.chat_id,
                         &response,
                     )
-                    .await;
-                }
-                let summary = if response.len() > 200 {
-                    format!("{}...", &response[..floor_char_boundary(&response, 200)])
+                    .await
+                    {
+                        error!(
+                            "Scheduler: task #{} generated a reply but delivery failed: {}",
+                            task.id, delivery_err
+                        );
+                        (false, Some(format!("Delivery error: {delivery_err}")))
+                    } else {
+                        let summary = if response.len() > 200 {
+                            format!("{}...", &response[..floor_char_boundary(&response, 200)])
+                        } else {
+                            response
+                        };
+                        (true, Some(summary))
+                    }
                 } else {
-                    response
-                };
-                (true, Some(summary))
+                    (true, None)
+                }
             }
             Err(e) => {
                 error!("Scheduler: task #{} failed: {e}", task.id);
                 let err_text = format!("Scheduled task #{} failed: {e}", task.id);
                 let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
-                let _ = deliver_and_store_bot_message(
-                    &state.channel_registry,
-                    state.db.clone(),
+                let summary = match deliver_scheduler_message_with_backoff(
+                    state,
                     &bot_username,
                     task.chat_id,
                     &err_text,
                 )
-                .await;
-                (false, Some(format!("Error: {e}")))
+                .await
+                {
+                    Ok(()) => format!("Error: {e}"),
+                    Err(delivery_err) => {
+                        warn!(
+                            "Scheduler: failed to notify chat {} about task #{} failure: {}",
+                            task.chat_id, task.id, delivery_err
+                        );
+                        format!("Error: {e}; delivery error: {delivery_err}")
+                    }
+                };
+                (false, Some(summary))
             }
         };
 
@@ -714,5 +777,15 @@ mod tests {
         let arr = parse_reflector_json_array(raw).expect("should parse");
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["content"], "y");
+    }
+
+    #[test]
+    fn test_is_retryable_delivery_rate_limit_recognizes_common_errors() {
+        assert!(is_retryable_delivery_rate_limit(
+            "HTTP 429: rate limit exceeded"
+        ));
+        assert!(is_retryable_delivery_rate_limit("Too many requests"));
+        assert!(is_retryable_delivery_rate_limit("请求过于频繁，请稍后重试"));
+        assert!(!is_retryable_delivery_rate_limit("permission denied"));
     }
 }

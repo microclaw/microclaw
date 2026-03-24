@@ -161,7 +161,7 @@ impl Tool for SendMessageTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "send_message".into(),
-            description: "Send a message mid-conversation. Supports text for all channels, and attachments for Telegram/Discord/Slack/Weixin via attachment_path.".into(),
+            description: "Send a message mid-conversation. Supports text for all channels, and attachments for Telegram/Discord/Slack/Feishu/Weixin via attachment_path.".into(),
             input_schema: schema_object(
                 json!({
                     "chat_id": {
@@ -213,7 +213,8 @@ impl Tool for SendMessageTool {
         }
 
         if let Some(auth) = auth_context_from_input(&input) {
-            if auth.caller_channel.starts_with("feishu")
+            if (auth.caller_channel.starts_with("feishu")
+                || auth.caller_channel.starts_with("lark"))
                 && attachment_path.is_none()
                 && Self::is_feishu_reaction_protocol_like_text(&text)
             {
@@ -597,6 +598,42 @@ mod tests {
             .await;
         assert!(result.is_error);
         assert!(result.content.contains("not supported for web"));
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_feishu_reaction_guard_allows_attachment_send() {
+        let (db, dir) = test_db();
+        let chat_id = db
+            .resolve_or_create_chat_id("feishu", "chat-1", Some("feishu"), "feishu_dm")
+            .unwrap();
+
+        let attachment = dir.join("sample.txt");
+        std::fs::write(&attachment, "hello").unwrap();
+
+        let mut registry = ChannelRegistry::new();
+        registry.register(Arc::new(LocalOnlyAdapter {
+            name: "feishu".to_string(),
+        }));
+        let tool = SendMessageTool::new(
+            Arc::new(registry),
+            db,
+            "bot".into(),
+            std::collections::HashMap::new(),
+        );
+        let result = tool
+            .execute(json!({
+                "chat_id": chat_id,
+                "text": "reaction-only: 👍",
+                "attachment_path": attachment.to_string_lossy(),
+                "__microclaw_auth": {
+                    "caller_chat_id": chat_id,
+                    "caller_channel": "feishu",
+                    "control_chat_ids": []
+                }
+            }))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
         cleanup(&dir);
     }
 }
