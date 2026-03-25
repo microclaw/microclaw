@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyInit};
-use aes::Aes128;
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyInit};
+use aes::{Aes128, Aes192, Aes256};
 use axum::http::HeaderMap;
 use axum::{Json, Router};
 use base64::Engine as _;
+use ecb::Decryptor as EcbDecryptor;
 use ecb::Encryptor as EcbEncryptor;
 use qrcode::QrCode;
 use serde::{Deserialize, Serialize};
@@ -376,6 +377,7 @@ struct NormalizedWeixinInbound {
     timestamp_ms: Option<i64>,
     timestamp: Option<String>,
     context_token: String,
+    items: Vec<WeixinWebhookMessageItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -701,12 +703,155 @@ fn encrypt_aes_ecb(plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, String> {
     Ok(cipher.encrypt_padded_vec_mut::<Pkcs7>(plaintext))
 }
 
+fn decrypt_aes_ecb(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, String> {
+    match key.len() {
+        16 => {
+            let cipher = EcbDecryptor::<Aes128>::new_from_slice(key)
+                .map_err(|e| format!("Failed to initialize AES-128-ECB decryptor: {e}"))?;
+            cipher
+                .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+                .map_err(|e| format!("Failed to decrypt AES-128-ECB payload: {e}"))
+        }
+        24 => {
+            let cipher = EcbDecryptor::<Aes192>::new_from_slice(key)
+                .map_err(|e| format!("Failed to initialize AES-192-ECB decryptor: {e}"))?;
+            cipher
+                .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+                .map_err(|e| format!("Failed to decrypt AES-192-ECB payload: {e}"))
+        }
+        32 => {
+            let cipher = EcbDecryptor::<Aes256>::new_from_slice(key)
+                .map_err(|e| format!("Failed to initialize AES-256-ECB decryptor: {e}"))?;
+            cipher
+                .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+                .map_err(|e| format!("Failed to decrypt AES-256-ECB payload: {e}"))
+        }
+        other => Err(format!("Unsupported AES key length: {other}")),
+    }
+}
+
+fn sanitize_upload_file_name(name: &str, fallback: &str) -> String {
+    let sanitized: String = name
+        .trim()
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => c,
+            _ => '_',
+        })
+        .collect();
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn parse_declared_len(raw: &str) -> Option<u64> {
+    raw.trim().parse::<u64>().ok()
+}
+
+fn hex_decode(raw: &str) -> Option<Vec<u8>> {
+    let trimmed = raw.trim();
+    if trimmed.len() % 2 != 0 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(trimmed.len() / 2);
+    let mut chars = trimmed.as_bytes().chunks_exact(2);
+    for chunk in &mut chars {
+        let text = std::str::from_utf8(chunk).ok()?;
+        bytes.push(u8::from_str_radix(text, 16).ok()?);
+    }
+    Some(bytes)
+}
+
+fn decode_weixin_aes_key_candidates(raw: &str) -> Vec<Vec<u8>> {
+    let mut keys = Vec::new();
+    let mut push_candidate = |candidate: Vec<u8>| {
+        if matches!(candidate.len(), 16 | 24 | 32)
+            && !keys.iter().any(|existing| existing == &candidate)
+        {
+            keys.push(candidate);
+        }
+    };
+
+    if let Some(bytes) = hex_decode(raw) {
+        push_candidate(bytes);
+    }
+
+    for decoded in [
+        base64::engine::general_purpose::STANDARD.decode(raw.trim()),
+        base64::engine::general_purpose::URL_SAFE.decode(raw.trim()),
+    ] {
+        let Ok(bytes) = decoded else {
+            continue;
+        };
+        push_candidate(bytes.clone());
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            if let Some(hex_bytes) = hex_decode(text) {
+                push_candidate(hex_bytes);
+            }
+            if let Ok(nested_b64) = base64::engine::general_purpose::STANDARD.decode(text.trim()) {
+                push_candidate(nested_b64);
+            }
+            if let Ok(nested_b64) = base64::engine::general_purpose::URL_SAFE.decode(text.trim()) {
+                push_candidate(nested_b64);
+            }
+        }
+    }
+
+    let raw_bytes = raw.trim().as_bytes().to_vec();
+    if matches!(raw_bytes.len(), 16 | 24 | 32) {
+        push_candidate(raw_bytes);
+    }
+    keys
+}
+
+fn normalize_file_bytes_for_extension<'a>(file_name: &str, bytes: &'a [u8]) -> Option<&'a [u8]> {
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("pdf") => bytes
+            .windows(5)
+            .take(1024)
+            .position(|window| window == b"%PDF-")
+            .map(|offset| &bytes[offset..]),
+        Some("png") => bytes
+            .starts_with(&[0x89, b'P', b'N', b'G'])
+            .then_some(bytes),
+        Some("jpg") | Some("jpeg") => bytes.starts_with(&[0xFF, 0xD8, 0xFF]).then_some(bytes),
+        Some("gif") => bytes.starts_with(b"GIF8").then_some(bytes),
+        Some("webp") => {
+            (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP")).then_some(bytes)
+        }
+        Some("zip") | Some("docx") | Some("xlsx") | Some("pptx") => {
+            bytes.starts_with(b"PK\x03\x04").then_some(bytes)
+        }
+        Some("mp4") | Some("mov") => {
+            (bytes.len() > 12 && bytes.get(4..8) == Some(b"ftyp")).then_some(bytes)
+        }
+        Some("txt") | Some("md") | Some("csv") | Some("json") | Some("yaml") | Some("yml") => {
+            std::str::from_utf8(bytes).ok().map(|_| bytes)
+        }
+        _ => Some(bytes),
+    }
+}
+
 fn build_cdn_upload_url(cdn_base_url: &str, upload_param: &str, filekey: &str) -> String {
     format!(
         "{}/upload?encrypted_query_param={}&filekey={}",
         ensure_trailing_slash(cdn_base_url).trim_end_matches('/'),
         urlencoding::encode(upload_param),
         urlencoding::encode(filekey)
+    )
+}
+
+fn build_cdn_download_url(cdn_base_url: &str, encrypted_query_param: &str) -> String {
+    format!(
+        "{}/download?encrypted_query_param={}",
+        ensure_trailing_slash(cdn_base_url).trim_end_matches('/'),
+        urlencoding::encode(encrypted_query_param)
     )
 }
 
@@ -941,6 +1086,93 @@ async fn upload_cdn_ciphertext(
     }
 
     Err(last_error)
+}
+
+async fn download_cdn_media(
+    client: &reqwest::Client,
+    cdn_base_url: &str,
+    file_name: &str,
+    media: &WeixinCdnMedia,
+) -> Result<Vec<u8>, String> {
+    let encrypted_query_param = media.encrypt_query_param.trim();
+    if encrypted_query_param.is_empty() {
+        return Err("Weixin media is missing encrypt_query_param".to_string());
+    }
+    let url = build_cdn_download_url(cdn_base_url, encrypted_query_param);
+    let response = client
+        .get(&url)
+        .timeout(Duration::from_millis(DEFAULT_API_TIMEOUT_MS))
+        .send()
+        .await
+        .map_err(|e| format!("Weixin CDN download request failed: {e}"))?;
+    let status = response.status();
+    let payload = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed reading Weixin CDN response bytes: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Weixin CDN download HTTP {}: {}",
+            status.as_u16(),
+            String::from_utf8_lossy(&payload)
+        ));
+    }
+    if media.aes_key.trim().is_empty() {
+        if let Some(normalized) = normalize_file_bytes_for_extension(file_name, &payload) {
+            return Ok(normalized.to_vec());
+        }
+        return Err(format!(
+            "Weixin CDN payload does not match expected file signature for '{}'",
+            file_name
+        ));
+    }
+    let key_candidates = decode_weixin_aes_key_candidates(&media.aes_key);
+    if key_candidates.is_empty() {
+        return Err("Failed to decode Weixin media aes_key as hex or base64".to_string());
+    }
+    let key_lengths = key_candidates
+        .iter()
+        .map(|key| key.len().to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    info!(
+        "Weixin: CDN download candidate keys file={} encrypt_type={} raw_aes_key_len={} candidate_key_lens={} payload_bytes={}",
+        file_name,
+        media.encrypt_type,
+        media.aes_key.trim().len(),
+        key_lengths,
+        payload.len()
+    );
+
+    if let Some(normalized) = normalize_file_bytes_for_extension(file_name, &payload) {
+        return Ok(normalized.to_vec());
+    }
+
+    let mut first_successful_decrypt: Option<Vec<u8>> = None;
+    for key in key_candidates {
+        if let Ok(decrypted) = decrypt_aes_ecb(&payload, &key) {
+            if let Some(normalized) = normalize_file_bytes_for_extension(file_name, &decrypted) {
+                return Ok(normalized.to_vec());
+            }
+            if first_successful_decrypt.is_none() {
+                first_successful_decrypt = Some(decrypted);
+            }
+        }
+    }
+
+    if Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some()
+    {
+        return Err(format!(
+            "Weixin CDN payload could not be validated for '{}'",
+            file_name
+        ));
+    }
+
+    first_successful_decrypt
+        .ok_or_else(|| "Failed to decrypt Weixin CDN payload with provided aes_key".to_string())
 }
 
 async fn fetch_qrcode(client: &reqwest::Client, base_url: &str) -> Result<QrCodeResponse, String> {
@@ -1344,6 +1576,13 @@ impl EmptyStringFallback for String {
 
 fn normalize_weixin_inbound(payload: &WeixinWebhookPayload) -> Option<NormalizedWeixinInbound> {
     let nested = payload.message.as_ref();
+    let items = if !payload.item_list.is_empty() {
+        payload.item_list.clone()
+    } else {
+        nested
+            .map(|message| message.item_list.clone())
+            .unwrap_or_default()
+    };
     let sender = payload
         .from_user_id
         .trim()
@@ -1353,10 +1592,8 @@ fn normalize_weixin_inbound(payload: &WeixinWebhookPayload) -> Option<Normalized
         let direct = payload.text.trim();
         if !direct.is_empty() {
             direct.to_string()
-        } else if !payload.item_list.is_empty() {
-            summarize_weixin_items(&payload.item_list)
-        } else if let Some(message) = nested {
-            summarize_weixin_items(&message.item_list)
+        } else if !items.is_empty() {
+            summarize_weixin_items(&items)
         } else {
             String::new()
         }
@@ -1390,6 +1627,7 @@ fn normalize_weixin_inbound(payload: &WeixinWebhookPayload) -> Option<Normalized
         timestamp_ms,
         timestamp: payload.timestamp.clone(),
         context_token,
+        items,
     })
 }
 
@@ -1416,6 +1654,7 @@ fn normalize_polled_message(message: &WeixinWireMessage) -> Option<NormalizedWei
         timestamp_ms: message.create_time_ms,
         timestamp: None,
         context_token: message.context_token.trim().to_string(),
+        items: message.item_list.clone(),
     })
 }
 
@@ -1742,30 +1981,266 @@ impl ChannelAdapter for WeixinAdapter {
     }
 }
 
+async fn build_weixin_file_note(
+    config: &Config,
+    runtime_ctx: &WeixinRuntimeContext,
+    external_chat_id: &str,
+    inbound_message_id: &str,
+    item_index: usize,
+    file_item: &WeixinWebhookFileItem,
+) -> String {
+    let file_name = if file_item.file_name.trim().is_empty() {
+        "weixin-file.bin".to_string()
+    } else {
+        file_item.file_name.trim().to_string()
+    };
+    let declared_bytes = parse_declared_len(&file_item.len);
+    let declared_bytes_display = declared_bytes
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    info!(
+        "Weixin: inbound file item channel={} sender={} message_id={} item_index={} filename={} declared_bytes={} has_media={} has_aes_key={} raw_aes_key_len={} encrypt_type={}",
+        runtime_ctx.channel_name,
+        external_chat_id,
+        inbound_message_id,
+        item_index,
+        file_name,
+        declared_bytes_display,
+        file_item.media.is_some(),
+        file_item
+            .media
+            .as_ref()
+            .map(|media| !media.aes_key.trim().is_empty())
+            .unwrap_or(false),
+        file_item
+            .media
+            .as_ref()
+            .map(|media| media.aes_key.trim().len())
+            .unwrap_or(0),
+        file_item
+            .media
+            .as_ref()
+            .map(|media| media.encrypt_type)
+            .unwrap_or_default()
+    );
+
+    let Some(media) = file_item.media.as_ref() else {
+        warn!(
+            "Weixin: file item missing media metadata channel={} sender={} message_id={} item_index={} filename={}",
+            runtime_ctx.channel_name,
+            external_chat_id,
+            inbound_message_id,
+            item_index,
+            file_name
+        );
+        return format!(
+            "[document] filename={} bytes={} media=missing",
+            file_name, declared_bytes_display
+        );
+    };
+
+    let max_bytes = config
+        .max_document_size_mb
+        .saturating_mul(1024)
+        .saturating_mul(1024);
+    if let Some(size) = declared_bytes {
+        if size > max_bytes {
+            warn!(
+                "Weixin: skipping oversized inbound file channel={} sender={} message_id={} item_index={} filename={} declared_bytes={} max_bytes={}",
+                runtime_ctx.channel_name,
+                external_chat_id,
+                inbound_message_id,
+                item_index,
+                file_name,
+                size,
+                max_bytes
+            );
+            return format!(
+                "[document] filename={} bytes={} skipped=size_limit(max_mb={})",
+                file_name, size, config.max_document_size_mb
+            );
+        }
+    }
+
+    let client = reqwest::Client::new();
+    match download_cdn_media(&client, &runtime_ctx.cdn_base_url, &file_name, media).await {
+        Ok(bytes) => {
+            if (bytes.len() as u64) > max_bytes {
+                warn!(
+                    "Weixin: downloaded inbound file exceeds size limit channel={} sender={} message_id={} item_index={} filename={} actual_bytes={} max_bytes={}",
+                    runtime_ctx.channel_name,
+                    external_chat_id,
+                    inbound_message_id,
+                    item_index,
+                    file_name,
+                    bytes.len(),
+                    max_bytes
+                );
+                return format!(
+                    "[document] filename={} bytes={} skipped=size_limit(max_mb={})",
+                    file_name,
+                    bytes.len(),
+                    config.max_document_size_mb
+                );
+            }
+
+            let dir = Path::new(&config.working_dir)
+                .join("uploads")
+                .join(runtime_ctx.channel_name.replace('/', "_"))
+                .join(external_chat_id);
+            if let Err(err) = std::fs::create_dir_all(&dir) {
+                error!(
+                    "Weixin: failed to create upload dir {}: {err}",
+                    dir.display()
+                );
+                return format!(
+                    "[document] filename={} bytes={} save_failed=create_dir",
+                    file_name,
+                    bytes.len()
+                );
+            }
+
+            let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+            let safe_message_id = sanitize_upload_file_name(inbound_message_id, "message");
+            let safe_name = sanitize_upload_file_name(&file_name, "weixin-file.bin");
+            let path = dir.join(format!(
+                "{}-{}-{}-{}",
+                ts, safe_message_id, item_index, safe_name
+            ));
+            match tokio::fs::write(&path, &bytes).await {
+                Ok(()) => {
+                    info!(
+                        "Weixin: saved inbound file channel={} sender={} message_id={} item_index={} path={} bytes={}",
+                        runtime_ctx.channel_name,
+                        external_chat_id,
+                        inbound_message_id,
+                        item_index,
+                        path.display(),
+                        bytes.len()
+                    );
+                    format!(
+                        "[document] filename={} bytes={} saved_path={}",
+                        file_name,
+                        bytes.len(),
+                        path.display()
+                    )
+                }
+                Err(err) => {
+                    error!(
+                        "Weixin: failed to save inbound file {}: {err}",
+                        path.display()
+                    );
+                    format!(
+                        "[document] filename={} bytes={} save_failed=write",
+                        file_name,
+                        bytes.len()
+                    )
+                }
+            }
+        }
+        Err(err) => {
+            let media_json = serde_json::to_string(media).unwrap_or_default();
+            warn!(
+                "Weixin: failed to download inbound file channel={} sender={} message_id={} item_index={} filename={} encrypt_type={} raw_aes_key_len={} media_json={} error={}",
+                runtime_ctx.channel_name,
+                external_chat_id,
+                inbound_message_id,
+                item_index,
+                file_name,
+                media.encrypt_type,
+                media.aes_key.trim().len(),
+                truncate_for_log(&media_json, 300),
+                truncate_for_log(&err, 300)
+            );
+            format!(
+                "[document] filename={} bytes={} download_failed={}",
+                file_name, declared_bytes_display, err
+            )
+        }
+    }
+}
+
+async fn enrich_weixin_inbound_text(
+    config: &Config,
+    runtime_ctx: &WeixinRuntimeContext,
+    external_chat_id: &str,
+    inbound_message_id: &str,
+    base_text: &str,
+    items: &[WeixinWebhookMessageItem],
+) -> String {
+    let mut notes = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        if item.r#type != 4 {
+            continue;
+        }
+        let Some(file_item) = item.file_item.as_ref() else {
+            warn!(
+                "Weixin: file item missing file_item payload channel={} sender={} message_id={} item_index={}",
+                runtime_ctx.channel_name,
+                external_chat_id,
+                inbound_message_id,
+                index
+            );
+            continue;
+        };
+        notes.push(
+            build_weixin_file_note(
+                config,
+                runtime_ctx,
+                external_chat_id,
+                inbound_message_id,
+                index,
+                file_item,
+            )
+            .await,
+        );
+    }
+
+    if notes.is_empty() {
+        return base_text.to_string();
+    }
+    let notes_text = notes.join("\n");
+    if base_text.trim().is_empty() {
+        notes_text
+    } else {
+        format!("{}\n{}", base_text.trim(), notes_text)
+    }
+}
+
 async fn process_weixin_inbound_message(
     app_state: Arc<AppState>,
     runtime_ctx: WeixinRuntimeContext,
     normalized: NormalizedWeixinInbound,
 ) {
-    let sender = normalized.sender.trim();
-    let text = normalized.text.trim();
-    if sender.is_empty() || text.is_empty() {
+    let NormalizedWeixinInbound {
+        sender,
+        text,
+        message_id,
+        timestamp_ms,
+        timestamp,
+        context_token,
+        items,
+    } = normalized;
+    let sender = sender.trim().to_string();
+    let command_text = text.trim().to_string();
+    if sender.is_empty() || command_text.is_empty() {
         return;
     }
     if !runtime_ctx.allowed_user_ids.is_empty()
-        && !runtime_ctx.allowed_user_ids.iter().any(|id| id == sender)
+        && !runtime_ctx.allowed_user_ids.iter().any(|id| id == &sender)
     {
         return;
     }
 
-    if let Err(err) = persist_context_token(&runtime_ctx, sender, &normalized.context_token) {
+    if let Err(err) = persist_context_token(&runtime_ctx, &sender, &context_token) {
         warn!(
             "Weixin: failed to persist context token for {}: {}",
             sender, err
         );
     }
 
-    let external_chat_id = sender.to_string();
+    let external_chat_id = sender.clone();
     let chat_id = call_blocking(app_state.db.clone(), {
         let channel_name = runtime_ctx.channel_name.clone();
         let title = format!("weixin-{external_chat_id}");
@@ -1786,26 +2261,17 @@ async fn process_weixin_inbound_message(
         return;
     }
 
-    let inbound_message_id = if normalized.message_id.trim().is_empty() {
+    let inbound_message_id = if message_id.trim().is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
-        normalized.message_id.clone()
+        message_id.clone()
     };
-    info!(
-        "Weixin: received message chat_id={} message_id={} sender={} text={}",
-        chat_id,
-        inbound_message_id,
-        sender,
-        truncate_for_log(text, 300)
-    );
-    let inbound_ts_ms = normalized.timestamp_ms.or_else(|| {
-        normalized
-            .timestamp
+    let inbound_ts_ms = timestamp_ms.or_else(|| {
+        timestamp
             .as_deref()
             .and_then(parse_epoch_ms_from_str)
             .or_else(|| {
-                normalized
-                    .timestamp
+                timestamp
                     .as_deref()
                     .and_then(parse_epoch_ms_from_seconds_str)
             })
@@ -1821,21 +2287,40 @@ async fn process_weixin_inbound_message(
         return;
     }
 
-    if is_slash_command(text) {
+    let text = enrich_weixin_inbound_text(
+        &app_state.config,
+        &runtime_ctx,
+        &external_chat_id,
+        &inbound_message_id,
+        &command_text,
+        &items,
+    )
+    .await;
+    info!(
+        "Weixin: received message chat_id={} message_id={} sender={} text={}",
+        chat_id,
+        inbound_message_id,
+        sender,
+        truncate_for_log(&text, 300)
+    );
+
+    if is_slash_command(&command_text) {
         let adapter = WeixinAdapter::from_runtime(&runtime_ctx);
         if let Some(reply) = handle_chat_command(
             &app_state,
             chat_id,
             &runtime_ctx.channel_name,
-            text,
-            Some(sender),
+            &command_text,
+            Some(&sender),
         )
         .await
         {
-            let _ = adapter.send_text(sender, &reply).await;
+            let _ = adapter.send_text(&sender, &reply).await;
             return;
         }
-        let _ = adapter.send_text(sender, &unknown_command_response()).await;
+        let _ = adapter
+            .send_text(&sender, &unknown_command_response())
+            .await;
         return;
     }
 
@@ -1868,8 +2353,8 @@ async fn process_weixin_inbound_message(
             &reqwest::Client::new(),
             &runtime_ctx,
             account,
-            sender,
-            Some(&normalized.context_token),
+            &sender,
+            Some(&context_token),
         )
         .await
     } else {
@@ -1935,7 +2420,7 @@ async fn process_weixin_inbound_message(
                 let _ = send_typing(
                     &reqwest::Client::new(),
                     &account,
-                    sender,
+                    &sender,
                     &typing_ticket,
                     TYPING_STATUS_CANCEL,
                 )
@@ -1959,7 +2444,7 @@ async fn process_weixin_inbound_message(
                     );
                 }
             } else if !response.is_empty() {
-                if let Err(e) = adapter.send_text(sender, &response).await {
+                if let Err(e) = adapter.send_text(&sender, &response).await {
                     error!("Weixin: failed to send response: {e}");
                 }
                 let bot_msg = StoredMessage {
@@ -1975,7 +2460,7 @@ async fn process_weixin_inbound_message(
             } else {
                 let _ = adapter
                     .send_text(
-                        sender,
+                        &sender,
                         "I couldn't produce a visible reply after an automatic retry. Please try again.",
                     )
                     .await;
@@ -1987,7 +2472,7 @@ async fn process_weixin_inbound_message(
                 let _ = send_typing(
                     &reqwest::Client::new(),
                     &account,
-                    sender,
+                    &sender,
                     &typing_ticket,
                     TYPING_STATUS_CANCEL,
                 )
@@ -2358,16 +2843,27 @@ pub fn logout_via_cli(config: &Config, account_id: Option<&str>) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::net::SocketAddr;
 
     use super::*;
     use crate::config::Config;
     use axum::http::{HeaderMap, HeaderValue};
+    use axum::{routing::get, Router};
     use microclaw_channels::channel_adapter::ChannelAdapter;
 
     fn unique_temp_dir() -> PathBuf {
         let root = std::env::temp_dir().join(format!("mc_weixin_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    async fn spawn_test_server(app: Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (addr, handle)
     }
 
     #[test]
@@ -2510,6 +3006,7 @@ weixin:
         assert_eq!(normalized.timestamp_ms, Some(123_456));
         assert_eq!(normalized.context_token, "ctx-nested");
         assert_eq!(normalized.text, "[image]\nvoice transcript\nhello");
+        assert_eq!(normalized.items.len(), 3);
     }
 
     #[test]
@@ -2592,6 +3089,133 @@ weixin:
                 .as_deref(),
             Some("ctx-b")
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_enrich_weixin_inbound_text_downloads_and_saves_file() {
+        let plaintext = b"%PDF-1.4\nmock pdf\n".to_vec();
+        let aes_key = *uuid::Uuid::new_v4().as_bytes();
+        let ciphertext = encrypt_aes_ecb(&plaintext, &aes_key).unwrap();
+        let response_body = ciphertext.clone();
+        let app = Router::new().route(
+            "/download",
+            get(move || {
+                let response_body = response_body.clone();
+                async move { response_body }
+            }),
+        );
+        let (addr, handle) = spawn_test_server(app).await;
+
+        let root = unique_temp_dir();
+        let mut cfg = Config::test_defaults();
+        cfg.working_dir = root.to_string_lossy().to_string();
+        cfg.max_document_size_mb = 10;
+        let runtime = WeixinRuntimeContext {
+            channel_name: CHANNEL_KEY.to_string(),
+            account_id: String::new(),
+            local_account_key: "default".to_string(),
+            allowed_user_ids: Vec::new(),
+            webhook_token: String::new(),
+            bot_username: "bot".to_string(),
+            model: None,
+            base_url: DEFAULT_BASE_URL.to_string(),
+            cdn_base_url: format!("http://{}", addr),
+            state_root: root.clone(),
+        };
+
+        let text = enrich_weixin_inbound_text(
+            &cfg,
+            &runtime,
+            "alice@im.wechat",
+            "wx-msg-1",
+            "[file: shuangpin.pdf]",
+            &[WeixinWebhookMessageItem {
+                r#type: 4,
+                file_item: Some(WeixinWebhookFileItem {
+                    file_name: "shuangpin.pdf".to_string(),
+                    len: plaintext.len().to_string(),
+                    media: Some(WeixinCdnMedia {
+                        encrypt_query_param: "enc-token".to_string(),
+                        aes_key: hex_encode(&aes_key),
+                        encrypt_type: 1,
+                    }),
+                }),
+                ..Default::default()
+            }],
+        )
+        .await;
+
+        handle.abort();
+
+        let saved_path = text
+            .split("saved_path=")
+            .nth(1)
+            .and_then(|value| value.lines().next())
+            .expect("saved_path missing in enriched text");
+        assert_eq!(fs::read(saved_path).unwrap(), plaintext);
+        assert!(text.contains("[document] filename=shuangpin.pdf"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_enrich_weixin_inbound_text_rejects_invalid_pdf_payload() {
+        let ciphertext = vec![0x11; 64];
+        let response_body = ciphertext.clone();
+        let app = Router::new().route(
+            "/download",
+            get(move || {
+                let response_body = response_body.clone();
+                async move { response_body }
+            }),
+        );
+        let (addr, handle) = spawn_test_server(app).await;
+
+        let root = unique_temp_dir();
+        let mut cfg = Config::test_defaults();
+        cfg.working_dir = root.to_string_lossy().to_string();
+        cfg.max_document_size_mb = 10;
+        let runtime = WeixinRuntimeContext {
+            channel_name: CHANNEL_KEY.to_string(),
+            account_id: String::new(),
+            local_account_key: "default".to_string(),
+            allowed_user_ids: Vec::new(),
+            webhook_token: String::new(),
+            bot_username: "bot".to_string(),
+            model: None,
+            base_url: DEFAULT_BASE_URL.to_string(),
+            cdn_base_url: format!("http://{}", addr),
+            state_root: root.clone(),
+        };
+
+        let text = enrich_weixin_inbound_text(
+            &cfg,
+            &runtime,
+            "alice@im.wechat",
+            "wx-msg-2",
+            "[file: broken.pdf]",
+            &[WeixinWebhookMessageItem {
+                r#type: 4,
+                file_item: Some(WeixinWebhookFileItem {
+                    file_name: "broken.pdf".to_string(),
+                    len: "64".to_string(),
+                    media: Some(WeixinCdnMedia {
+                        encrypt_query_param: "enc-token".to_string(),
+                        aes_key: "00112233445566778899aabbccddeeff".to_string(),
+                        encrypt_type: 1,
+                    }),
+                }),
+                ..Default::default()
+            }],
+        )
+        .await;
+
+        handle.abort();
+
+        assert!(text.contains("download_failed="));
+        assert!(!text.contains("saved_path="));
 
         let _ = fs::remove_dir_all(root);
     }

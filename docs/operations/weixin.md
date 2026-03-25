@@ -165,7 +165,7 @@ For `item_list`, MicroClaw currently normalizes:
 - text -> plain text
 - voice with transcript -> transcript text
 - image -> `[image]`
-- file -> `[file]` or `[file: <name>]`
+- file -> `[file]` or `[file: <name>]`, and when `file_item.media` is present MicroClaw downloads the payload into `<working_dir>/uploads/weixin.../<user>/...` and appends a `[document] ... saved_path=...` note
 - video -> `[video]`
 
 ## Context Token Behavior
