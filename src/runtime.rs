@@ -676,10 +676,7 @@ pub async fn run(
             state.clone(),
             weixin_runtimes,
             |channel_state, runtime_ctx| async move {
-                info!(
-                    "Starting Weixin adapter '{}'",
-                    runtime_ctx.channel_name
-                );
+                info!("Starting Weixin adapter '{}'", runtime_ctx.channel_name);
                 crate::channels::weixin::start_weixin_bot(channel_state, runtime_ctx).await;
             },
         );

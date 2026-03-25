@@ -68,7 +68,7 @@ struct ConnectAuth {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatSendParams {
-    #[serde(rename = "key")]
+    #[serde(rename = "key", alias = "sessionKey", alias = "session_key")]
     session_key: String,
     message: String,
     #[serde(default)]
@@ -78,7 +78,7 @@ struct ChatSendParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatHistoryParams {
-    #[serde(rename = "key")]
+    #[serde(rename = "key", alias = "sessionKey", alias = "session_key")]
     session_key: String,
     #[serde(default)]
     limit: Option<usize>,
@@ -87,14 +87,14 @@ struct ChatHistoryParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionDeleteParams {
-    #[serde(rename = "key")]
+    #[serde(rename = "key", alias = "sessionKey", alias = "session_key")]
     session_key: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionsSendParams {
-    #[serde(rename = "key")]
+    #[serde(rename = "key", alias = "sessionKey", alias = "session_key")]
     session_key: String,
     message: serde_json::Value,
 }
@@ -111,7 +111,7 @@ struct SessionsListParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionSettingParams {
-    #[serde(rename = "key")]
+    #[serde(rename = "key", alias = "sessionKey", alias = "session_key")]
     session_key: String,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
@@ -146,21 +146,36 @@ fn setting_value(
 fn build_session_settings_update(method: &str, params: &SessionSettingParams) -> SessionSettings {
     let mut settings = SessionSettings::default();
     match method {
-        "sessions.setLabel" => {
+        "sessions.setLabel" | "session_setLabel" => {
             settings.label = setting_value(&params.extra, &["label", "value"]);
         }
-        "sessions.setThinking" => {
+        "sessions.setThinking" | "session_setThinking" => {
             settings.thinking_level = setting_value(&params.extra, &["level", "value"]);
         }
-        "sessions.setVerbose" => {
+        "sessions.setVerbose" | "session_setVerbose" => {
             settings.verbose_level = setting_value(&params.extra, &["level", "value"]);
         }
-        "sessions.setReasoning" => {
+        "sessions.setReasoning" | "session_setReasoning" => {
             settings.reasoning_level = setting_value(&params.extra, &["level", "value"]);
         }
         _ => {}
     }
     settings
+}
+
+fn session_matches_search(session: &SessionItem, search_term: &str) -> bool {
+    let needle = search_term.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        return true;
+    }
+
+    session.session_key.to_ascii_lowercase().contains(&needle)
+        || session.label.to_ascii_lowercase().contains(&needle)
+        || session
+            .last_message_preview
+            .as_deref()
+            .map(|preview| preview.to_ascii_lowercase().contains(&needle))
+            .unwrap_or(false)
 }
 
 fn session_settings_payload(settings: &SessionSettings) -> serde_json::Value {
@@ -234,6 +249,8 @@ struct ChatAckPayload {
 struct ChatHistoryPayload {
     #[serde(rename = "key")]
     session_key: String,
+    #[serde(rename = "sessionKey")]
+    legacy_session_key: String,
     messages: Vec<ChatMessage>,
 }
 
@@ -312,6 +329,8 @@ struct ChatEventPayload {
     run_id: String,
     #[serde(rename = "key")]
     session_key: String,
+    #[serde(rename = "sessionKey")]
+    legacy_session_key: String,
     seq: u64,
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -719,6 +738,7 @@ async fn handle_request_frame(
                 }
             }
             let payload = ChatHistoryPayload {
+                legacy_session_key: session_key.clone(),
                 session_key,
                 messages: messages
                     .into_iter()
@@ -854,11 +874,24 @@ async fn handle_request_frame(
                         }
                     }
                     if let Some(ref search_term) = params.search {
-                        if !search_term.is_empty() && !s.session_key.contains(search_term) {
+                        if !session_matches_search(s, search_term) {
                             return false;
                         }
                     }
                     true
+                })
+                .map(|session| {
+                    let session_key = session.session_key;
+                    json!({
+                        "key": session_key.clone(),
+                        "sessionKey": session_key.clone(),
+                        "session_key": session_key,
+                        "label": session.label,
+                        "chat_id": session.chat_id,
+                        "chat_type": session.chat_type,
+                        "last_message_time": session.last_message_time,
+                        "last_message_preview": session.last_message_preview,
+                    })
                 })
                 .collect::<Vec<_>>();
 
@@ -874,7 +907,7 @@ async fn handle_request_frame(
             };
             let _ = send_json(sender, &res).await;
         }
-        "sessions.delete" => {
+        "sessions.delete" | "session_delete" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -914,13 +947,14 @@ async fn handle_request_frame(
                 payload: Some(json!({
                     "ok": true,
                     "deleted": deleted,
-                    "key": session_key,
+                    "key": session_key.clone(),
+                    "sessionKey": session_key,
                 })),
                 error: None,
             };
             let _ = send_json(sender, &res).await;
         }
-        "sessions.send" => {
+        "sessions.send" | "sessions_send" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -954,7 +988,8 @@ async fn handle_request_frame(
                     ok: true,
                     payload: Some(json!({
                         "ok": true,
-                        "key": session_key,
+                        "key": session_key.clone(),
+                        "sessionKey": session_key,
                         "action": action,
                         "applied": false,
                         "reason": "control messages are acknowledged but not yet enforced",
@@ -1001,7 +1036,8 @@ async fn handle_request_frame(
                 payload: Some(json!({
                     "ok": true,
                     "runId": run_id,
-                    "key": session_key,
+                    "key": session_key.clone(),
+                    "sessionKey": session_key,
                     "status": "started",
                 })),
                 error: None,
@@ -1016,7 +1052,7 @@ async fn handle_request_frame(
                 session_key,
             );
         }
-        "sessions.kill" => {
+        "sessions.kill" | "sessions_kill" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -1057,7 +1093,8 @@ async fn handle_request_frame(
                 ok: true,
                 payload: Some(json!({
                     "ok": true,
-                    "key": session_key,
+                    "key": session_key.clone(),
+                    "sessionKey": session_key,
                     "terminated": aborted > 0,
                     "activeAborted": aborted,
                     "channel": channel,
@@ -1066,7 +1103,7 @@ async fn handle_request_frame(
             };
             let _ = send_json(sender, &res).await;
         }
-        "sessions.spawn" => {
+        "sessions.spawn" | "sessions_spawn" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -1143,8 +1180,10 @@ async fn handle_request_frame(
                 payload: Some(json!({
                     "ok": true,
                     "run_id": run_id,
-
-                    "key": session_key,
+                    "key": session_key.clone(),
+                    "sessionKey": session_key.clone(),
+                    "sessionId": session_key.clone(),
+                    "session_id": session_key,
                     "label": params.label,
                     "model": params.model,
                     "runTimeoutSeconds": params.run_timeout_seconds,
@@ -1156,7 +1195,11 @@ async fn handle_request_frame(
         "sessions.setThinking"
         | "sessions.setVerbose"
         | "sessions.setReasoning"
-        | "sessions.setLabel" => {
+        | "sessions.setLabel"
+        | "session_setThinking"
+        | "session_setVerbose"
+        | "session_setReasoning"
+        | "session_setLabel" => {
             if !identity.allows(AuthScope::Write) {
                 let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
                 return Ok(());
@@ -1209,7 +1252,8 @@ async fn handle_request_frame(
                 ok: true,
                 payload: Some(json!({
                     "ok": true,
-                    "key": session_key,
+                    "key": session_key.clone(),
+                    "sessionKey": session_key,
                     "applied": true,
                     "settings": session_settings_payload(&stored),
                 })),
@@ -1333,6 +1377,7 @@ async fn forward_run_event(
             Some(ChatEventPayload {
                 run_id: run_id.to_string(),
                 session_key: session_key.to_string(),
+                legacy_session_key: session_key.to_string(),
                 seq: *seq,
                 state: "delta",
                 message: Some(ChatEventMessage {
@@ -1357,6 +1402,7 @@ async fn forward_run_event(
             Some(ChatEventPayload {
                 run_id: run_id.to_string(),
                 session_key: session_key.to_string(),
+                legacy_session_key: session_key.to_string(),
                 seq: *seq,
                 state: "final",
                 message: Some(ChatEventMessage {
@@ -1374,6 +1420,7 @@ async fn forward_run_event(
             Some(ChatEventPayload {
                 run_id: run_id.to_string(),
                 session_key: session_key.to_string(),
+                legacy_session_key: session_key.to_string(),
                 seq: *seq,
                 state: "error",
                 message: None,

@@ -4550,6 +4550,16 @@ commands:
 
         let history = recv_ws_json(&mut ws).await;
         assert_eq!(history.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            history.pointer("/payload/key").and_then(|v| v.as_str()),
+            Some("main")
+        );
+        assert_eq!(
+            history
+                .pointer("/payload/sessionKey")
+                .and_then(|v| v.as_str()),
+            Some("main")
+        );
         let messages = history
             .pointer("/payload/messages")
             .and_then(|v| v.as_array())
@@ -4730,8 +4740,12 @@ commands:
                         continue;
                     }
                     assert_eq!(
+                        candidate.pointer("/payload/key").and_then(|v| v.as_str()),
+                        Some("main")
+                    );
+                    assert_eq!(
                         candidate
-                            .pointer("/payload/key")
+                            .pointer("/payload/sessionKey")
                             .and_then(|v| v.as_str()),
                         Some("main")
                     );
@@ -4831,6 +4845,14 @@ commands:
             .unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(
+            sessions[0].get("key").and_then(|v| v.as_str()),
+            Some("chatclaw:microclaw:456")
+        );
+        assert_eq!(
+            sessions[0].get("sessionKey").and_then(|v| v.as_str()),
+            Some("chatclaw:microclaw:456")
+        );
+        assert_eq!(
             sessions[0].get("session_key").and_then(|v| v.as_str()),
             Some("chatclaw:microclaw:456")
         );
@@ -4907,6 +4929,118 @@ commands:
             .unwrap();
         // Since we seeded two sessions, it should return both without filter
         assert_eq!(sessions2.len(), 2);
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_bridge_accepts_legacy_session_aliases() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-legacy-secret").await;
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-legacy-secret" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+
+        for (request_id, method, params) in [
+            (
+                "label-1",
+                "session_setLabel",
+                json!({"sessionKey":"main","label":"Legacy Ops"}),
+            ),
+            (
+                "send-1",
+                "sessions_send",
+                json!({"sessionKey":"main","message":"legacy continue"}),
+            ),
+            ("delete-1", "session_delete", json!({"sessionKey":"main"})),
+        ] {
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                json!({
+                    "type": "req",
+                    "id": request_id,
+                    "method": method,
+                    "params": params
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            let res = loop {
+                let candidate = recv_ws_json(&mut ws).await;
+                if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                    continue;
+                }
+                if candidate.get("id").and_then(|v| v.as_str()) != Some(request_id) {
+                    continue;
+                }
+                break candidate;
+            };
+            assert_eq!(
+                res.get("ok").and_then(|v| v.as_bool()),
+                Some(true),
+                "{method}"
+            );
+            assert_eq!(
+                res.pointer("/payload/key").and_then(|v| v.as_str()),
+                Some("main")
+            );
+            assert_eq!(
+                res.pointer("/payload/sessionKey").and_then(|v| v.as_str()),
+                Some("main")
+            );
+
+            if method == "sessions_send" {
+                let mut saw_final = false;
+                for _ in 0..12 {
+                    let candidate = recv_ws_json(&mut ws).await;
+                    if candidate.get("type").and_then(|v| v.as_str()) != Some("event") {
+                        continue;
+                    }
+                    if candidate.get("event").and_then(|v| v.as_str()) != Some("chat") {
+                        continue;
+                    }
+                    if candidate.pointer("/payload/state").and_then(|v| v.as_str()) != Some("final")
+                    {
+                        continue;
+                    }
+                    assert_eq!(
+                        candidate.pointer("/payload/key").and_then(|v| v.as_str()),
+                        Some("main")
+                    );
+                    assert_eq!(
+                        candidate
+                            .pointer("/payload/sessionKey")
+                            .and_then(|v| v.as_str()),
+                        Some("main")
+                    );
+                    saw_final = true;
+                    break;
+                }
+                assert!(
+                    saw_final,
+                    "legacy sessions_send should emit a final chat event"
+                );
+            }
+        }
 
         server.abort();
     }
