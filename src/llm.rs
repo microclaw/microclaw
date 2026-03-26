@@ -631,15 +631,24 @@ fn process_openai_stream_event(
 
             let entry = tool_calls.entry(index).or_default();
             if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                entry.id = id.to_string();
+                if !id.is_empty() {
+                    entry.id = id.to_string();
+                }
             }
             if let Some(function) = tc.get("function") {
                 if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
-                    entry.name = name.to_string();
+                    if !name.is_empty() {
+                        entry.name = name.to_string();
+                    }
                 }
                 if let Some(args) = function.get("arguments") {
                     match args {
-                        serde_json::Value::String(s) => entry.input_json.push_str(s),
+                        serde_json::Value::String(s) => {
+                            if !s.is_empty() {
+                                entry.input_json.push_str(s);
+                            }
+                        }
+                        serde_json::Value::Null => {}
                         other => entry.input_json.push_str(&other.to_string()),
                     }
                 }
@@ -688,6 +697,23 @@ fn parse_tool_input(input_json: &str) -> serde_json::Value {
         return json!({});
     }
     serde_json::from_str(trimmed).unwrap_or_else(|_| json!({}))
+}
+
+fn normalize_tool_input_for_request(input: &serde_json::Value) -> serde_json::Value {
+    match input {
+        serde_json::Value::Object(_) => input.clone(),
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return json!({});
+            }
+            match serde_json::from_str::<serde_json::Value>(trimmed) {
+                Ok(serde_json::Value::Object(map)) => serde_json::Value::Object(map),
+                _ => json!({}),
+            }
+        }
+        _ => json!({}),
+    }
 }
 
 fn minimax_tool_wrapper_regex() -> &'static Regex {
@@ -1952,12 +1978,13 @@ fn translate_messages_to_oai_with_reasoning(
                                 input,
                                 thought_signature,
                             } => {
+                                let arguments = normalize_tool_input_for_request(input);
                                 let mut tc = json!({
                                     "id": id,
                                     "type": "function",
                                     "function": {
                                         "name": name,
-                                        "arguments": serde_json::to_string(input).unwrap_or_default()
+                                        "arguments": serde_json::to_string(&arguments).unwrap_or_default()
                                     }
                                 });
                                 if let Some(sig) = thought_signature {
@@ -2143,11 +2170,12 @@ fn translate_messages_to_oai_responses_input(messages: &[Message]) -> Vec<serde_
                             id, name, input, ..
                         } = block
                         {
+                            let arguments = normalize_tool_input_for_request(input);
                             out.push(json!({
                                 "type": "function_call",
                                 "call_id": id,
                                 "name": name,
-                                "arguments": serde_json::to_string(input).unwrap_or_default(),
+                                "arguments": serde_json::to_string(&arguments).unwrap_or_default(),
                             }));
                         }
                     }
@@ -2508,6 +2536,23 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_messages_assistant_tool_use_normalizes_stringified_json_input() {
+        let msgs = vec![Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "web_search".into(),
+                input: json!("{\"query\":\"油价\"}"),
+                thought_signature: None,
+            }]),
+        }];
+
+        let out = translate_messages_to_oai("", &msgs);
+        let tc = out[0]["tool_calls"].as_array().unwrap();
+        assert_eq!(tc[0]["function"]["arguments"], "{\"query\":\"油价\"}");
+    }
+
+    #[test]
     fn test_translate_oai_response_tool_calls_legacy_function_thought_signature() {
         let raw = r#"{"choices":[{"message":{"content":null,"reasoning_content":null,"tool_calls":[{"id":"call_1","function":{"name":"bash","arguments":"{\"command\":\"ls\"}","thought_signature":"sig_legacy"}}]},"finish_reason":"tool_calls"}],"usage":null}"#;
         let oai: OaiResponse = serde_json::from_str(raw).unwrap();
@@ -2711,6 +2756,23 @@ mod tests {
         assert_eq!(out[0]["type"], "function_call");
         assert_eq!(out[1]["type"], "message");
         assert_eq!(out[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_translate_messages_to_oai_responses_normalizes_malformed_tool_input() {
+        let msgs = vec![Message {
+            role: "assistant".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "web_search".into(),
+                input: json!("{"),
+                thought_signature: None,
+            }]),
+        }];
+
+        let out = translate_messages_to_oai_responses_input(&msgs);
+        assert_eq!(out[0]["type"], "function_call");
+        assert_eq!(out[0]["arguments"], "{}");
     }
 
     // -----------------------------------------------------------------------
@@ -3163,6 +3225,65 @@ mod tests {
         assert_eq!(call.id, "call_1");
         assert_eq!(call.name, "weather");
         assert_eq!(call.input_json, r#"{"location":"Shanghai"}"#);
+    }
+
+    #[test]
+    fn test_process_openai_stream_event_ignores_minimax_malformed_trailing_tool_chunks() {
+        let first = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_ok","type":"function","function":{"name":"get_oil_price","arguments":""}}]}}]}"#;
+        let second = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"{"}}]}}]}"#;
+        let third = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"}"}}]}}]}"#;
+        let fourth = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":null}}]}}]}"#;
+        let mut text = String::new();
+        let mut reasoning_text = String::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+        let mut tool_calls = std::collections::BTreeMap::new();
+
+        for data in [first, second, third, fourth] {
+            process_openai_stream_event(
+                data,
+                None,
+                &mut text,
+                &mut reasoning_text,
+                &mut stop_reason,
+                &mut usage,
+                &mut tool_calls,
+            );
+        }
+
+        let call = tool_calls.get(&0).unwrap();
+        assert_eq!(call.id, "call_ok");
+        assert_eq!(call.name, "get_oil_price");
+        assert_eq!(call.input_json, "{}");
+    }
+
+    #[test]
+    fn test_process_openai_stream_event_ignores_qwen_malformed_trailing_tool_chunks() {
+        let first = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_ok","type":"function","function":{"name":"get_oil_price","arguments":""}}]}}]}"#;
+        let second = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":"{}"}}]}}]}"#;
+        let third = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":""}}]}}]}"#;
+        let mut text = String::new();
+        let mut reasoning_text = String::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+        let mut tool_calls = std::collections::BTreeMap::new();
+
+        for data in [first, second, third] {
+            process_openai_stream_event(
+                data,
+                None,
+                &mut text,
+                &mut reasoning_text,
+                &mut stop_reason,
+                &mut usage,
+                &mut tool_calls,
+            );
+        }
+
+        let call = tool_calls.get(&0).unwrap();
+        assert_eq!(call.id, "call_ok");
+        assert_eq!(call.name, "get_oil_price");
+        assert_eq!(call.input_json, "{}");
     }
 
     #[test]
