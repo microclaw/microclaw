@@ -3,7 +3,9 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
 
-use crate::config::ResolvedLlmProviderProfile;
+use crate::config::{
+    normalize_model_name, resolve_model_name_with_fallback, ResolvedLlmProviderProfile,
+};
 use crate::hooks::HookOutcome;
 use crate::memory_service::{build_db_memory_context, maybe_handle_explicit_memory_command};
 use crate::run_control;
@@ -288,13 +290,25 @@ async fn resolve_effective_provider_and_model(
                 .resolve_llm_provider_profile(&state.config.llm_provider)
         })
         .expect("default llm provider profile should always resolve");
-    let effective_model = {
+    let raw_model_override = {
         let overrides = state.llm_model_overrides.read().await;
-        overrides
-            .get(caller_channel)
-            .cloned()
-            .unwrap_or_else(|| profile.default_model.clone())
+        overrides.get(caller_channel).cloned()
     };
+    if raw_model_override
+        .as_deref()
+        .is_some_and(|model| normalize_model_name(model).is_none())
+    {
+        warn!(
+            "Ignoring invalid model override '{}' for channel '{}'",
+            raw_model_override.as_deref().unwrap_or_default(),
+            caller_channel
+        );
+    }
+    let effective_model = resolve_model_name_with_fallback(
+        &profile.provider,
+        raw_model_override.as_deref(),
+        Some(&profile.default_model),
+    );
     let session_settings = call_blocking(state.db.clone(), move |db| {
         db.load_session_settings(chat_id)
     })
@@ -1291,10 +1305,17 @@ async fn process_with_agent_logic(
                         });
                         continue;
                     }
-                    if name == "send_message" && context.caller_channel.starts_with("feishu") {
+                    let is_feishu_turn = context.caller_channel.starts_with("feishu")
+                        || context.caller_channel.starts_with("lark");
+                    let send_message_has_attachment = input
+                        .get("attachment_path")
+                        .and_then(|v| v.as_str())
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false);
+                    if name == "send_message" && is_feishu_turn && !send_message_has_attachment {
                         tool_results.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
-                            content: "send_message is disabled for feishu runtime turns; return final assistant text directly so channel reaction/text delivery can be handled correctly.".to_string(),
+                            content: "send_message text replies are disabled for Feishu runtime turns; return the final assistant text directly so channel reaction/text delivery can be handled correctly. If you need to send a file, call send_message with attachment_path.".to_string(),
                             is_error: Some(true),
                         });
                         continue;
@@ -2423,6 +2444,8 @@ mod tests {
     use crate::skills::SkillManager;
     use crate::tools::ToolRegistry;
     use crate::web::WebAdapter;
+    use microclaw_channels::channel::ConversationKind;
+    use microclaw_channels::channel_adapter::ChannelAdapter;
     use microclaw_channels::channel_adapter::ChannelRegistry;
     use microclaw_core::error::MicroClawError;
     use microclaw_core::llm_types::{
@@ -2430,6 +2453,7 @@ mod tests {
     };
     use microclaw_storage::db::{Database, StoredMessage};
     use serde_json::json;
+    use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -2637,6 +2661,43 @@ mod tests {
 
     fn test_state_with_llm(base_dir: &std::path::Path, llm: Box<dyn LlmProvider>) -> Arc<AppState> {
         test_state_with_llm_and_confirmation(base_dir, llm, false)
+    }
+
+    fn test_state_with_llm_and_registry(
+        base_dir: &std::path::Path,
+        llm: Box<dyn LlmProvider>,
+        channel_registry: Arc<ChannelRegistry>,
+    ) -> Arc<AppState> {
+        let runtime_dir = base_dir.join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let mut cfg = Config::test_defaults();
+        cfg.data_dir = base_dir.to_string_lossy().to_string();
+        cfg.working_dir = base_dir.join("tmp").to_string_lossy().to_string();
+        cfg.working_dir_isolation = WorkingDirIsolation::Shared;
+        cfg.web_port = 3900;
+        let db = Arc::new(Database::new(runtime_dir.to_str().unwrap()).unwrap());
+        let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
+        Arc::new(AppState {
+            config: cfg.clone(),
+            channel_registry: channel_registry.clone(),
+            db: db.clone(),
+            memory: MemoryManager::new(runtime_dir.to_str().unwrap()),
+            skills: SkillManager::from_skills_dir(&cfg.skills_data_dir()),
+            hooks: Arc::new(crate::hooks::HookManager::from_config(&cfg)),
+            llm,
+            llm_provider_overrides: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            llm_model_overrides: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            embedding: None,
+            memory_backend: memory_backend.clone(),
+            tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
+            metric_exporter: None,
+            trace_exporter: None,
+            log_exporter: None,
+        })
     }
 
     fn store_user_message(db: &Database, chat_id: i64, text: &str) {
@@ -2965,6 +3026,104 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct LocalOnlyFeishuAdapter;
+
+    #[async_trait::async_trait]
+    impl ChannelAdapter for LocalOnlyFeishuAdapter {
+        fn name(&self) -> &str {
+            "feishu"
+        }
+
+        fn chat_type_routes(&self) -> Vec<(&str, ConversationKind)> {
+            vec![("feishu_dm", ConversationKind::Private)]
+        }
+
+        fn is_local_only(&self) -> bool {
+            true
+        }
+
+        async fn send_text(&self, _external_chat_id: &str, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn send_attachment(
+            &self,
+            _external_chat_id: &str,
+            _file_path: &Path,
+            _caption: Option<&str>,
+        ) -> Result<String, String> {
+            Ok("attachment".to_string())
+        }
+    }
+
+    struct FeishuAttachmentSendMessageLlm {
+        calls: Arc<AtomicUsize>,
+        attachment_path: String,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for FeishuAttachmentSendMessageLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            let idx = self.calls.fetch_add(1, Ordering::SeqCst);
+            if idx == 0 {
+                return Ok(MessagesResponse {
+                    content: vec![ResponseContentBlock::ToolUse {
+                        id: "tool-send-attachment".to_string(),
+                        name: "send_message".to_string(),
+                        input: json!({
+                            "attachment_path": self.attachment_path,
+                            "caption": "archive ready"
+                        }),
+                        thought_signature: None,
+                    }],
+                    stop_reason: Some("tool_use".to_string()),
+                    usage: None,
+                });
+            }
+
+            let mut saw_success = false;
+            for msg in messages.iter().rev() {
+                if msg.role != "user" {
+                    continue;
+                }
+                if let microclaw_core::llm_types::MessageContent::Blocks(blocks) = &msg.content {
+                    for block in blocks {
+                        if let microclaw_core::llm_types::ContentBlock::ToolResult {
+                            content,
+                            is_error,
+                            ..
+                        } = block
+                        {
+                            if !is_error.unwrap_or(false)
+                                && content.contains("Attachment sent successfully")
+                            {
+                                saw_success = true;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text {
+                    text: if saw_success {
+                        "attachment delivered".to_string()
+                    } else {
+                        "attachment blocked".to_string()
+                    },
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: None,
+            })
+        }
+    }
+
     #[async_trait::async_trait]
     impl LlmProvider for HighRiskNeedsUserConfirmLlm {
         async fn send_message(
@@ -3203,6 +3362,58 @@ mod tests {
         assert!(!reply.contains("Failed actions:"));
         assert!(!reply.contains("Command contains an absolute /tmp path"));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_feishu_send_message_allows_attachment_tool_calls() {
+        let base_dir = std::env::temp_dir().join(format!(
+            "mc_agent_feishu_attachment_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let attachment_path = base_dir.join("sample.txt");
+        std::fs::write(&attachment_path, "hello").unwrap();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let llm = FeishuAttachmentSendMessageLlm {
+            calls: calls.clone(),
+            attachment_path: attachment_path.to_string_lossy().to_string(),
+        };
+        let mut registry = ChannelRegistry::new();
+        registry.register(Arc::new(WebAdapter));
+        registry.register(Arc::new(LocalOnlyFeishuAdapter));
+        let state = test_state_with_llm_and_registry(&base_dir, Box::new(llm), Arc::new(registry));
+        let chat_id = state
+            .db
+            .resolve_or_create_chat_id("feishu", "chat-feishu-1", Some("feishu"), "feishu_dm")
+            .unwrap();
+        store_user_message(&state.db, chat_id, "send the archive");
+
+        let reply = process_with_agent(
+            &state,
+            AgentRequestContext {
+                caller_channel: "feishu",
+                chat_id,
+                chat_type: "private",
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reply, "attachment delivered");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let all = state.db.get_all_messages(chat_id).unwrap();
+        assert!(
+            all.iter()
+                .any(|m| m.is_from_bot && m.content == "attachment"),
+            "expected attachment message in chat history"
+        );
 
         drop(state);
         let _ = std::fs::remove_dir_all(&base_dir);

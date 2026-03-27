@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
@@ -7,14 +8,15 @@ use tracing::{debug, error, warn};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use crate::codex_auth::{
     codex_config_default_openai_base_url, is_openai_codex_provider, is_qwen_portal_provider,
     refresh_openai_codex_auth_if_needed, resolve_openai_codex_auth, resolve_qwen_portal_auth,
 };
-use crate::config::Config;
 #[cfg(test)]
 use crate::config::WorkingDirIsolation;
+use crate::config::{resolve_model_name_with_fallback, Config};
 use crate::http_client::llm_user_agent;
 use microclaw_core::error::MicroClawError;
 use microclaw_core::llm_types::{
@@ -600,6 +602,7 @@ fn process_openai_stream_event(
 
     if let Some(piece) = delta
         .get("reasoning_content")
+        .or_else(|| delta.get("reasoning_details"))
         .and_then(extract_text_from_oai_value)
     {
         if !piece.is_empty() {
@@ -685,6 +688,120 @@ fn parse_tool_input(input_json: &str) -> serde_json::Value {
         return json!({});
     }
     serde_json::from_str(trimmed).unwrap_or_else(|_| json!({}))
+}
+
+fn minimax_tool_wrapper_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"</?(?:minimax:tool_call|invoke|parameter)>")
+            .expect("MiniMax tool wrapper regex must compile")
+    })
+}
+
+fn strip_minimax_tool_wrappers(text: &str) -> String {
+    minimax_tool_wrapper_regex()
+        .replace_all(text, " ")
+        .into_owned()
+}
+
+fn parse_raw_tool_use_block(input: &str, call_number: usize) -> Option<(StreamToolUseBlock, &str)> {
+    let rest = input.trim_start();
+    let prefix = "[tool_use:";
+    if !rest.starts_with(prefix) {
+        return None;
+    }
+
+    let mut cursor = prefix.len();
+    let after_prefix = &rest[cursor..];
+    let name_and_args = after_prefix.trim_start();
+    cursor += after_prefix.len().saturating_sub(name_and_args.len());
+
+    let open_paren_rel = name_and_args.find('(')?;
+    let name = name_and_args[..open_paren_rel].trim();
+    if name.is_empty() {
+        return None;
+    }
+    cursor += open_paren_rel + 1;
+
+    let mut depth = 1usize;
+    let mut in_string = false;
+    let mut escaping = false;
+    let mut close_paren_at: Option<usize> = None;
+
+    for (offset, ch) in rest[cursor..].char_indices() {
+        if in_string {
+            if escaping {
+                escaping = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaping = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close_paren_at = Some(cursor + offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let close_paren_at = close_paren_at?;
+    let args = rest[cursor..close_paren_at].trim();
+    let mut tail = &rest[close_paren_at + 1..];
+    tail = tail.trim_start();
+    if !tail.starts_with(']') {
+        return None;
+    }
+
+    Some((
+        StreamToolUseBlock {
+            id: format!("raw_tool_call_{call_number}"),
+            name: name.to_string(),
+            input_json: if args.is_empty() {
+                "{}".to_string()
+            } else {
+                args.to_string()
+            },
+            thought_signature: None,
+        },
+        &tail[1..],
+    ))
+}
+
+fn extract_raw_tool_use_blocks(text: &str) -> Option<Vec<StreamToolUseBlock>> {
+    let normalized = strip_minimax_tool_wrappers(text);
+    if !normalized.contains("[tool_use:") {
+        return None;
+    }
+
+    let mut calls = Vec::new();
+    let mut rest = normalized.as_str();
+    loop {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        let (call, tail) = parse_raw_tool_use_block(trimmed, calls.len() + 1)?;
+        calls.push(call);
+        rest = tail;
+    }
+
+    if calls.is_empty() {
+        None
+    } else {
+        Some(calls)
+    }
 }
 
 fn has_tool_use_block(content: &[ResponseContentBlock]) -> bool {
@@ -795,13 +912,10 @@ impl LlmProvider for AnthropicProvider {
         model_override: Option<&str>,
     ) -> Result<MessagesResponse, MicroClawError> {
         let messages = sanitize_messages(messages);
-        let model = model_override
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(&self.model);
+        let model = resolve_request_model("anthropic", &self.model, model_override);
 
         let request = MessagesRequest {
-            model: model.to_string(),
+            model,
             max_tokens: self.max_tokens,
             system: system.to_string(),
             messages,
@@ -875,12 +989,9 @@ impl LlmProvider for AnthropicProvider {
         model_override: Option<&str>,
     ) -> Result<MessagesResponse, MicroClawError> {
         let messages = sanitize_messages(messages);
-        let model = model_override
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(&self.model);
+        let model = resolve_request_model("anthropic", &self.model, model_override);
         let request = MessagesRequest {
-            model: model.to_string(),
+            model,
             max_tokens: self.max_tokens,
             system: system.to_string(),
             messages,
@@ -1083,6 +1194,14 @@ fn apply_openai_compat_body_overrides(
     apply_body_override_map(body, by_model.get(model));
 }
 
+fn resolve_request_model(
+    provider: &str,
+    configured_model: &str,
+    model_override: Option<&str>,
+) -> String {
+    resolve_model_name_with_fallback(provider, model_override, Some(configured_model))
+}
+
 fn has_visible_reply_runtime_guard(messages: &[Message]) -> bool {
     messages.iter().rev().any(|m| {
         if m.role != "user" {
@@ -1163,7 +1282,11 @@ struct OaiChoice {
 struct OaiMessage {
     #[serde(default, deserialize_with = "deserialize_optional_oai_text")]
     content: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_oai_text")]
+    #[serde(
+        default,
+        alias = "reasoning_details",
+        deserialize_with = "deserialize_optional_oai_text"
+    )]
     reasoning_content: Option<String>,
     tool_calls: Option<Vec<OaiToolCall>>,
 }
@@ -1317,13 +1440,10 @@ impl LlmProvider for OpenAiProvider {
         tools: Option<Vec<ToolDefinition>>,
         model_override: Option<&str>,
     ) -> Result<MessagesResponse, MicroClawError> {
-        let model = model_override
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(&self.model);
+        let model = resolve_request_model(&self.provider, &self.model, model_override);
         if self.is_openai_codex {
             return self
-                .send_codex_message(system, messages, tools, model)
+                .send_codex_message(system, messages, tools, &model)
                 .await;
         }
 
@@ -1438,13 +1558,10 @@ impl LlmProvider for OpenAiProvider {
         text_tx: Option<&UnboundedSender<String>>,
         model_override: Option<&str>,
     ) -> Result<MessagesResponse, MicroClawError> {
-        let model = model_override
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or(&self.model);
+        let model = resolve_request_model(&self.provider, &self.model, model_override);
         if self.is_openai_codex {
             let response = self
-                .send_codex_message(system, messages, tools, model)
+                .send_codex_message(system, messages, tools, &model)
                 .await?;
             if let Some(tx) = text_tx {
                 let text = response
@@ -1601,12 +1718,17 @@ impl LlmProvider for OpenAiProvider {
         }
 
         let mut content = Vec::new();
-        let combined_text =
+        let mut visible_text =
             combine_response_text_for_display(&text, &reasoning_text, self.show_thinking);
-        if !combined_text.is_empty() {
-            content.push(ResponseContentBlock::Text {
-                text: combined_text,
-            });
+        let mut raw_text_tool_calls = None;
+        if let Some(parsed_raw_calls) = extract_raw_tool_use_blocks(&visible_text) {
+            if tool_calls.is_empty() {
+                raw_text_tool_calls = Some(parsed_raw_calls);
+            }
+            visible_text.clear();
+        }
+        if !visible_text.is_empty() {
+            content.push(ResponseContentBlock::Text { text: visible_text });
         }
         for tool in tool_calls.values() {
             content.push(ResponseContentBlock::ToolUse {
@@ -1615,6 +1737,16 @@ impl LlmProvider for OpenAiProvider {
                 input: parse_tool_input(&tool.input_json),
                 thought_signature: tool.thought_signature.clone(),
             });
+        }
+        if let Some(parsed_raw_calls) = raw_text_tool_calls {
+            for tool in parsed_raw_calls {
+                content.push(ResponseContentBlock::ToolUse {
+                    id: tool.id,
+                    name: tool.name,
+                    input: parse_tool_input(&tool.input_json),
+                    thought_signature: tool.thought_signature,
+                });
+            }
         }
         if content.is_empty() {
             content.push(ResponseContentBlock::Text {
@@ -2199,8 +2331,19 @@ fn translate_oai_response_with_display_reasoning(
         tool_calls,
     } = choice.message;
 
-    let visible = message_content.unwrap_or_default();
+    let mut visible = message_content.unwrap_or_default();
     let reasoning = reasoning_content.unwrap_or_default();
+    let mut raw_text_tool_calls = None;
+    if let Some(parsed_raw_calls) = extract_raw_tool_use_blocks(&visible) {
+        let has_explicit_tool_calls = tool_calls
+            .as_ref()
+            .map(|calls| !calls.is_empty())
+            .unwrap_or(false);
+        if !has_explicit_tool_calls {
+            raw_text_tool_calls = Some(parsed_raw_calls);
+        }
+        visible.clear();
+    }
     let combined_text = combine_response_text_for_display(&visible, &reasoning, show_thinking);
     if !combined_text.is_empty() {
         content.push(ResponseContentBlock::Text {
@@ -2223,6 +2366,15 @@ fn translate_oai_response_with_display_reasoning(
                 name: tc.function.name,
                 input,
                 thought_signature,
+            });
+        }
+    } else if let Some(parsed_raw_calls) = raw_text_tool_calls {
+        for tc in parsed_raw_calls {
+            content.push(ResponseContentBlock::ToolUse {
+                id: tc.id,
+                name: tc.name,
+                input: parse_tool_input(&tc.input_json),
+                thought_signature: tc.thought_signature,
             });
         }
     }
@@ -2910,6 +3062,30 @@ mod tests {
     }
 
     #[test]
+    fn test_process_openai_stream_event_collects_reasoning_details_alias() {
+        let data = r#"{"choices":[{"delta":{"reasoning_details":"step-by-step"}}],"usage":null}"#;
+        let mut text = String::new();
+        let mut reasoning_text = String::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+        let mut tool_calls = std::collections::BTreeMap::new();
+
+        process_openai_stream_event(
+            data,
+            None,
+            &mut text,
+            &mut reasoning_text,
+            &mut stop_reason,
+            &mut usage,
+            &mut tool_calls,
+        );
+
+        assert!(text.is_empty());
+        assert_eq!(reasoning_text, "step-by-step");
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
     fn test_process_openai_stream_event_accepts_structured_delta_content() {
         let data = r#"{"choices":[{"delta":{"content":[{"type":"text","text":"Hello "},{"type":"text","text":"Gemini"}],"reasoning_content":[{"type":"text","text":"plan"},{"type":"text","text":" more"}]}}],"usage":null}"#;
         let mut text = String::new();
@@ -2987,6 +3163,30 @@ mod tests {
         assert_eq!(call.id, "call_1");
         assert_eq!(call.name, "weather");
         assert_eq!(call.input_json, r#"{"location":"Shanghai"}"#);
+    }
+
+    #[test]
+    fn test_extract_raw_tool_use_blocks_from_minimax_wrappers() {
+        let text = "<minimax:tool_call>\n<invoke>\n<parameter>\n[tool_use: bash({\"command\":\"uptime\"})]\n</parameter>\n</invoke>\n</minimax:tool_call>";
+        let calls = extract_raw_tool_use_blocks(text).expect("should parse raw tool calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "bash");
+        assert_eq!(calls[0].input_json, "{\"command\":\"uptime\"}");
+    }
+
+    #[test]
+    fn test_translate_oai_response_turns_raw_tool_text_into_tool_use() {
+        let raw = r#"{"choices":[{"message":{"content":"<minimax:tool_call>\n[tool_use: bash({\"command\":\"free -h\"})]\n</minimax:tool_call>","tool_calls":null},"finish_reason":"stop"}],"usage":null}"#;
+        let resp = translate_oai_response(serde_json::from_str(raw).unwrap());
+        assert_eq!(resp.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(resp.content.len(), 1);
+        match &resp.content[0] {
+            ResponseContentBlock::ToolUse { name, input, .. } => {
+                assert_eq!(name, "bash");
+                assert_eq!(input["command"], "free -h");
+            }
+            other => panic!("expected tool use, got {other:?}"),
+        }
     }
 
     #[test]

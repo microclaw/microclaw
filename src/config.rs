@@ -31,6 +31,32 @@ fn default_api_key() -> String {
 fn default_model() -> String {
     String::new()
 }
+pub fn default_model_for_provider_name(provider: &str) -> &'static str {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "anthropic" => "claude-sonnet-4-5-20250929",
+        "ollama" => "llama3.2",
+        "openai-codex" => "gpt-5.3-codex",
+        _ => "gpt-5.2",
+    }
+}
+pub fn normalize_model_name(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "*" {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+pub fn resolve_model_name_with_fallback(
+    provider: &str,
+    candidate: Option<&str>,
+    fallback: Option<&str>,
+) -> String {
+    candidate
+        .and_then(normalize_model_name)
+        .or_else(|| fallback.and_then(normalize_model_name))
+        .unwrap_or_else(|| default_model_for_provider_name(provider).to_string())
+}
 fn default_llm_user_agent() -> String {
     crate::http_client::default_llm_user_agent()
 }
@@ -840,7 +866,7 @@ impl Config {
         };
         let model_key = serde_yaml::Value::String("model".to_string());
         target.remove(&model_key);
-        if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+        if let Some(model) = model.and_then(normalize_model_name) {
             target.insert(model_key, serde_yaml::Value::String(model.to_string()));
         }
     }
@@ -891,9 +917,7 @@ impl Config {
         value
             .get("model")
             .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(ToOwned::to_owned)
+            .and_then(normalize_model_name)
     }
 
     fn channel_account_model_override(&self, channel: &str, account_id: &str) -> Option<String> {
@@ -1334,19 +1358,7 @@ impl Config {
     pub(crate) fn post_deserialize(&mut self) -> Result<(), MicroClawError> {
         self.llm_provider = self.llm_provider.trim().to_lowercase();
 
-        // Apply provider-specific default model if empty
-        if self.model.is_empty() {
-            self.model = match self.llm_provider.as_str() {
-                "anthropic" => "claude-sonnet-4-5-20250929".into(),
-                "ollama" => "llama3.2".into(),
-                "openai-codex" => "gpt-5.3-codex".into(),
-                _ => "gpt-5.2".into(),
-            };
-        }
-        self.model = self.model.trim().to_string();
-        if self.model.is_empty() {
-            self.model = "gpt-5.2".into();
-        }
+        self.model = resolve_model_name_with_fallback(&self.llm_provider, Some(&self.model), None);
         self.provider_presets =
             normalize_provider_profiles(std::mem::take(&mut self.provider_presets));
         self.llm_providers = normalize_provider_profiles(std::mem::take(&mut self.llm_providers));
@@ -1824,6 +1836,15 @@ Use operator password + API keys for Web auth."
                     show_thinking = v;
                 }
             }
+            default_model = resolve_model_name_with_fallback(
+                &provider,
+                Some(&default_model),
+                Some(&self.model),
+            );
+            models = models
+                .into_iter()
+                .filter_map(|model| normalize_model_name(&model))
+                .collect();
             if !models.iter().any(|m| m == &default_model) {
                 models.push(default_model.clone());
             }
@@ -1855,14 +1876,20 @@ Use operator password + API keys for Web auth."
             .llm_user_agent
             .clone()
             .unwrap_or_else(|| self.llm_user_agent.clone());
-        let default_model = profile
-            .default_model
-            .clone()
-            .unwrap_or_else(|| self.model.clone());
+        let default_model = resolve_model_name_with_fallback(
+            &provider,
+            profile.default_model.as_deref(),
+            Some(&self.model),
+        );
         let mut models = if profile.models.is_empty() {
             vec![default_model.clone()]
         } else {
-            profile.models.clone()
+            profile
+                .models
+                .clone()
+                .into_iter()
+                .filter_map(|model| normalize_model_name(&model))
+                .collect()
         };
         let show_thinking = profile.show_thinking.unwrap_or(self.show_thinking);
         if !models.iter().any(|m| m == &default_model) {
@@ -2014,13 +2041,11 @@ fn normalize_provider_profiles(
             profile.default_model = profile
                 .default_model
                 .as_ref()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty());
+                .and_then(|v| normalize_model_name(v));
             profile.models = profile
                 .models
                 .into_iter()
-                .map(|m| m.trim().to_string())
-                .filter(|m| !m.is_empty())
+                .filter_map(|m| normalize_model_name(&m))
                 .collect::<Vec<_>>();
             profile.models.sort();
             profile.models.dedup();
@@ -2303,6 +2328,31 @@ llm_providers:
             vec!["legacy-model".to_string(), "preset-model".to_string()]
         );
         assert!(profile.show_thinking);
+    }
+
+    #[test]
+    fn test_resolve_llm_provider_profile_ignores_wildcard_profile_model() {
+        let yaml = r#"
+telegram_bot_token: tok
+bot_username: bot
+api_key: key
+llm_provider: openai
+model: gpt-5.2
+llm_providers:
+  openai:
+    provider: openai
+    default_model: "*"
+    models: ["*", "gpt-5-mini"]
+"#;
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+
+        let profile = config.resolve_llm_provider_profile("openai").unwrap();
+        assert_eq!(profile.default_model, "gpt-5.2");
+        assert_eq!(
+            profile.models,
+            vec!["gpt-5-mini".to_string(), "gpt-5.2".to_string()]
+        );
     }
 
     #[test]
@@ -2698,6 +2748,14 @@ channels:
     fn test_post_deserialize_openai_default_model() {
         let yaml =
             "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nllm_provider: openai\n";
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.post_deserialize().unwrap();
+        assert_eq!(config.model, "gpt-5.2");
+    }
+
+    #[test]
+    fn test_post_deserialize_wildcard_model_falls_back_to_provider_default() {
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nllm_provider: openai\nmodel: '*'\n";
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
         assert_eq!(config.model, "gpt-5.2");

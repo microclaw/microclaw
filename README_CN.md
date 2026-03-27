@@ -287,7 +287,7 @@ sqlite3 <data_dir>/runtime/microclaw.db "SELECT id, chat_id, chat_channel, exter
 | `write_memory`          | 写入持久化 AGENTS.md 记忆                                                            |
 | `web_search`            | 通过 DuckDuckGo 搜索（返回标题、URL、摘要）                                          |
 | `web_fetch`             | 抓取 URL 并返回纯文本（去 HTML，最大 20KB）                                          |
-| `send_message`          | 会话中发送消息；支持 Telegram/Discord 附件发送（`attachment_path` + 可选 `caption`） |
+| `send_message`          | 会话中发送消息；支持 Telegram/Discord/Slack/Weixin 附件发送（`attachment_path` + 可选 `caption`） |
 | `schedule_task`         | 创建循环（cron）或一次性定时任务                                                     |
 | `list_scheduled_tasks`  | 列出聊天的所有活跃/暂停任务                                                          |
 | `pause_scheduled_task`  | 暂停定时任务                                                                         |
@@ -339,7 +339,7 @@ MicroClaw 通过 `AGENTS.md` 文件维护持久化记忆：
 MicroClaw 现在会保存“按渠道隔离”的聊天身份：
 
 - `internal chat_id`：SQLite 内部主键（用于 sessions/messages/tasks）
-- `channel + external_chat_id`：来自 Telegram/Discord/Slack/飞书/IRC/Web 的源聊天身份
+- `channel + external_chat_id`：来自 Telegram/Discord/Slack/飞书/Weixin/IRC/Web 的源聊天身份
 
 这样可避免不同渠道使用相同数字 id 时发生冲突。历史数据会在启动时自动迁移补齐。
 
@@ -432,6 +432,9 @@ cp mcp.hapi-bridge.example.json <data_dir>/mcp.d/hapi-bridge.json
 这样可以在不改 MicroClaw 核心 agent loop 的情况下，通过外部桥接服务扩展远程终端能力。
 
 详细操作可见：`docs/operations/hapi-bridge.md`。
+
+如果你要接入 Weixin 原生 Rust 模式，请看：
+`docs/operations/weixin.md`。
 
 ### 在 macOS 上接入 Peekaboo MCP（桌面自动化）
 
@@ -593,7 +596,7 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 1. 连接 `ws://127.0.0.1:10961/`
 2. 等待 `connect.challenge`
 3. 发送 `connect` 帧，并在 `params.auth.token` 中带上 operator API key
-4. 可调用 `chat.send`、`sessions_send`、`sessions_kill`、`sessions_spawn`、`session_set*` 等方法
+4. 可调用 `chat.send`、`sessions.send`、`sessions.kill`、`sessions.spawn`、`sessions.set*` 等方法
 5. 消费实时 `chat` 事件（`delta` / `final` / `error`）
 
 当前 bridge 方法：
@@ -602,14 +605,15 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 - `status`
 - `chat.send`
 - `chat.history`
-- `session_delete`
-- `sessions_send`
-- `sessions_kill`
-- `sessions_spawn`
-- `session_setThinking`
-- `session_setVerbose`
-- `session_setReasoning`
-- `session_setLabel`
+- `sessions.delete`
+- `sessions.send`
+- `sessions.kill`
+- `sessions.spawn`
+- `sessions.setThinking`
+- `sessions.setVerbose`
+- `sessions.setReasoning`
+- `sessions.setLabel`
+- `sessions.list`
 - `agents.list`
 - `models.list`
 - `config.get`
@@ -651,7 +655,7 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 {
   "type": "req",
   "id": "spawn-1",
-  "method": "sessions_spawn",
+  "method": "sessions.spawn",
   "params": {
     "task": "请总结当前仓库",
     "label": "Ops"
@@ -665,7 +669,7 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 {
   "type": "req",
   "id": "label-1",
-  "method": "session_setLabel",
+  "method": "sessions.setLabel",
   "params": {
     "sessionKey": "ops-bot",
     "label": "Ops"
@@ -676,19 +680,19 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 行为说明：
 
 - bridge 的 WebSocket 路径是根路径 `GET /`，不是 `/ws`。
-- `sessions_send` 会立即返回 `runId`，随后持续发送 `chat` 事件，并在普通消息完成后发出终态 `final`。
-- `sessions_spawn` 会创建新的异步会话，并可先持久化初始标签。
-- `session_set*` 只更新当前请求提供的字段，不会覆盖其它已存储的 session 设置。
-- `sessions_send` 的 control payload 当前会被确认接收，但还不会真的改变运行时控制状态。
+- `sessions.send` 会立即返回 `runId`，随后持续发送 `chat` 事件，并在普通消息完成后发出终态 `final`。
+- `sessions.spawn` 会创建新的异步会话，并可先持久化初始标签。
+- `sessions.set*` 只更新当前请求提供的字段，不会覆盖其它已存储的 session 设置。
+- `sessions.send` 的 control payload 当前会被确认接收，但还不会真的改变运行时控制状态。
 
 本地 gateway 冒烟测试：
 
 ```sh
 MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call health
 MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call status
-MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call session_setLabel \
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions.setLabel \
   --params '{"sessionKey":"ops-bot","label":"Ops"}'
-MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions_send \
+MICROCLAW_GATEWAY_TOKEN=mc_... microclaw gateway call sessions.send \
   --params '{"sessionKey":"ops-bot","message":"请给出状态摘要"}'
 ```
 

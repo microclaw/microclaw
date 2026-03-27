@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ReadonlyJSONObject, ReadonlyJSONValue } from 'assistant-stream/utils'
 import {
@@ -363,6 +363,8 @@ interface DynChannelDef {
   steps: string[]
   /** Hint text below the steps */
   hint: string
+  /** Optional channel-level config fields */
+  channelFields?: DynChannelField[]
   /** Config fields */
   fields: DynChannelField[]
 }
@@ -409,6 +411,33 @@ const DYNAMIC_CHANNELS: DynChannelDef[] = [
       { yamlKey: 'provider_preset', label: 'feishu_provider_preset', placeholder: 'provider1', description: 'Optional Feishu bot LLM provider profile override for this account.', secret: false },
       { yamlKey: 'topic_mode', label: 'feishu_topic_mode', placeholder: 'false', description: 'Optional topic mode (true/false).', secret: false, valueType: 'bool' },
       { yamlKey: 'show_progress', label: 'feishu_show_progress', placeholder: 'false', description: 'Optional progress updates in topic mode (true/false).', secret: false, valueType: 'bool' },
+    ],
+  },
+  {
+    name: 'weixin',
+    title: 'Weixin',
+    icon: '💚',
+    steps: [
+      'Minimal config is enough: enable Weixin and log in once per account.',
+      'Run `microclaw weixin login` (or `microclaw weixin login --account ops`) to persist local credentials.',
+      'Optional: configure webhook forwarding only if you are relaying inbound traffic externally.',
+    ],
+    hint: 'Native polling works after login. Leave secrets blank to keep existing values unchanged.',
+    channelFields: [
+      { yamlKey: 'webhook_path', label: 'weixin_webhook_path', placeholder: '/weixin/messages', description: 'Optional inbound webhook path override.', secret: false },
+      { yamlKey: 'webhook_token', label: 'weixin_webhook_token', placeholder: 'bridge-token', description: 'Optional channel-level webhook token. Leave blank to keep current secret unchanged.', secret: true },
+      { yamlKey: 'allowed_user_ids', label: 'weixin_allowed_user_ids', placeholder: 'alice@im.wechat,bob@im.wechat', description: 'Optional channel-level allowlist csv for the default single-account runtime.', secret: false },
+      { yamlKey: 'model', label: 'weixin_model', placeholder: 'gpt-5.2', description: 'Optional channel-level model override.', secret: false },
+      { yamlKey: 'base_url', label: 'weixin_base_url', placeholder: 'https://ilinkai.weixin.qq.com', description: 'Optional default Weixin API base URL.', secret: false },
+      { yamlKey: 'cdn_base_url', label: 'weixin_cdn_base_url', placeholder: 'https://novac2c.cdn.weixin.qq.com/c2c', description: 'Optional default Weixin CDN base URL.', secret: false },
+    ],
+    fields: [
+      { yamlKey: 'allowed_user_ids', label: 'weixin_allowed_user_ids', placeholder: 'alice@im.wechat,bob@im.wechat', description: 'Optional per-account allowlist csv.', secret: false },
+      { yamlKey: 'webhook_token', label: 'weixin_webhook_token', placeholder: 'bridge-token', description: 'Optional per-account webhook token. Leave blank to keep current secret unchanged.', secret: true },
+      { yamlKey: 'bot_username', label: 'weixin_bot_username', placeholder: 'weixin_bot_name', description: 'Optional per-account bot username override.', secret: false },
+      { yamlKey: 'model', label: 'weixin_model', placeholder: 'gpt-5.2', description: 'Optional per-account model override.', secret: false },
+      { yamlKey: 'base_url', label: 'weixin_base_url', placeholder: 'https://ilinkai.weixin.qq.com', description: 'Optional per-account Weixin API base URL override.', secret: false },
+      { yamlKey: 'cdn_base_url', label: 'weixin_cdn_base_url', placeholder: 'https://novac2c.cdn.weixin.qq.com/c2c', description: 'Optional per-account Weixin CDN base URL override.', secret: false },
     ],
   },
   {
@@ -1512,6 +1541,9 @@ function App() {
   const [replayNotice, setReplayNotice] = useState<string>('')
   const [sending, setSending] = useState<boolean>(false)
   const [configOpen, setConfigOpen] = useState<boolean>(false)
+  const [configLoading, setConfigLoading] = useState<boolean>(false)
+  const [configLoadStage, setConfigLoadStage] = useState<string>('')
+  const [configLoadError, setConfigLoadError] = useState<string>('')
   const [config, setConfig] = useState<ConfigPayload | null>(null)
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>({})
   const [soulFiles, setSoulFiles] = useState<string[]>([])
@@ -1545,6 +1577,7 @@ function App() {
   const [newPassword, setNewPassword] = useState<string>('')
   const [newPasswordConfirm, setNewPasswordConfirm] = useState<string>('')
   const [appVersion, setAppVersion] = useState<string>('')
+  const configLoadSeqRef = useRef(0)
 
   const sessionItems = useMemo(() => {
     const map = new Map<string, SessionItem>()
@@ -2122,20 +2155,46 @@ function App() {
 
 
   async function openConfig(): Promise<void> {
+    const loadSeq = configLoadSeqRef.current + 1
+    configLoadSeqRef.current = loadSeq
+    const isCurrentLoad = () => configLoadSeqRef.current === loadSeq
+
+    setConfigOpen(true)
+    setConfigLoading(true)
+    setConfigLoadError('')
+    setConfigLoadStage('Loading runtime config…')
     setSaveStatus('')
+    setConfig(null)
+    setConfigDraft({})
+    setSoulFiles([])
+    setConfigSelfCheck(null)
     setConfigSelfCheckError('')
     setConfigSelfCheckLoading(true)
+
+    const selfCheckPromise = api<ConfigSelfCheck>('/api/config/self_check')
+      .then((selfCheck) => {
+        if (!isCurrentLoad()) return null
+        setConfigSelfCheck(selfCheck)
+        return selfCheck
+      })
+      .catch((e) => {
+        if (!isCurrentLoad()) return null
+        setConfigSelfCheckError(e instanceof Error ? e.message : String(e))
+        return null
+      })
+      .finally(() => {
+        if (isCurrentLoad()) {
+          setConfigSelfCheckLoading(false)
+        }
+      })
+
     try {
-      const [data, selfCheck] = await Promise.all([
-        api<{ config?: ConfigPayload; soul_files?: string[] }>('/api/config'),
-        api<ConfigSelfCheck>('/api/config/self_check').catch((e) => {
-          setConfigSelfCheckError(e instanceof Error ? e.message : String(e))
-          return null
-        }),
-      ])
+      const data = await api<{ config?: ConfigPayload; soul_files?: string[] }>('/api/config')
+      if (!isCurrentLoad()) return
+
+      setConfigLoadStage('Preparing settings form…')
       setConfig(data.config || null)
       setSoulFiles(Array.isArray(data.soul_files) ? data.soul_files.map((v) => String(v)) : [])
-      setConfigSelfCheck(selfCheck)
       const channelsCfg = (data.config?.channels as Record<string, Record<string, unknown>> | undefined) || {}
       const telegramCfg = channelsCfg.telegram || {}
       const telegramDefaultAccount = defaultAccountIdFromChannelConfig(telegramCfg)
@@ -2252,6 +2311,17 @@ function App() {
             const chAccounts = orderedAccountsFromChannelConfig(chCfg)
             const botCount = normalizeBotCount(chAccounts.length || 1)
             const pairs: Array<[string, unknown]> = [[`${ch.name}__account_id`, defaultAccountIdFromChannelConfig(chCfg)], [`${ch.name}__bot_count`, botCount]]
+            for (const f of ch.channelFields || []) {
+              if (f.secret) {
+                pairs.push([`${ch.name}__has__${f.yamlKey}`, Boolean(String(chCfg[f.yamlKey] || '').trim())])
+                pairs.push([`${ch.name}__${f.yamlKey}`, ''])
+              } else {
+                pairs.push([
+                  `${ch.name}__${f.yamlKey}`,
+                  dynamicFieldDraftValue(chCfg[f.yamlKey], f.valueType || 'string'),
+                ])
+              }
+            }
             for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
               const account = chAccounts[slot - 1]
               const accountId = account?.[0] || defaultAccountIdForSlot(slot)
@@ -2277,19 +2347,25 @@ function App() {
           }),
         ),
       })
-      setConfigOpen(true)
+      setConfigLoadStage('Finishing checks…')
+      void selfCheckPromise
     } catch (e) {
+      if (!isCurrentLoad()) return
       if (isUnauthorizedError(e)) {
         lockForAuth('Session expired. Please sign in again.')
+        setConfigOpen(false)
         return
       }
       if (isForbiddenError(e)) {
-        setError('Forbidden: Runtime Config is not accessible with current credentials.')
+        setConfigLoadError('Forbidden: Runtime Config is not accessible with current credentials.')
         return
       }
-      setError(e instanceof Error ? e.message : String(e))
+      setConfigLoadError(e instanceof Error ? e.message : String(e))
     } finally {
-      setConfigSelfCheckLoading(false)
+      if (isCurrentLoad()) {
+        setConfigLoading(false)
+        setConfigLoadStage('')
+      }
     }
   }
 
@@ -2636,6 +2712,10 @@ function App() {
             }
             if (field === botCountKey) {
               next[botCountKey] = 1
+              for (const f of ch.channelFields || []) {
+                next[`${ch.name}__${f.yamlKey}`] = ''
+                if (f.secret) next[`${ch.name}__has__${f.yamlKey}`] = false
+              }
               for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
                 next[`${ch.name}__bot_${slot}__account_id`] = defaultAccountIdForSlot(slot)
                 next[`${ch.name}__bot_${slot}__soul_path`] = ''
@@ -2650,10 +2730,20 @@ function App() {
                 next[`${ch.name}__bot_${slot}__soul_path`] = ''
               }
             }
-            for (const f of ch.fields) {
+            for (const f of ch.channelFields || []) {
               const key = `${ch.name}__${f.yamlKey}`
               if (field === key) {
                 next[key] = ''
+                if (f.secret) next[`${ch.name}__has__${f.yamlKey}`] = false
+              }
+            }
+            for (const f of ch.fields) {
+              for (let slot = 1; slot <= BOT_SLOT_MAX; slot += 1) {
+                const key = `${ch.name}__bot_${slot}__${f.yamlKey}`
+                if (field === key) {
+                  next[key] = ''
+                  if (f.secret) next[`${ch.name}__bot_${slot}__has__${f.yamlKey}`] = false
+                }
               }
             }
           }
@@ -2912,6 +3002,25 @@ function App() {
         const accountId = normalizeAccountId(configDraft[`${ch.name}__account_id`])
         const botCount = normalizeBotCount(configDraft[`${ch.name}__bot_count`])
         const accounts: Record<string, unknown> = {}
+        const channelFields: Record<string, unknown> = {}
+        for (const f of ch.channelFields || []) {
+          const key = `${ch.name}__${f.yamlKey}`
+          const val = String(configDraft[key] || '').trim()
+          if (!val) continue
+          if ((f.valueType || 'string') === 'bool') {
+            const parsed = parseOptionalBoolString(val, `${ch.name}_${f.yamlKey}`)
+            if (parsed !== null) {
+              channelFields[f.yamlKey] = parsed
+            }
+          } else if ((f.valueType || 'string') === 'number') {
+            const parsed = parseOptionalU64String(val, `${ch.name}_${f.yamlKey}`)
+            if (parsed !== null) {
+              channelFields[f.yamlKey] = parsed
+            }
+          } else {
+            channelFields[f.yamlKey] = val
+          }
+        }
         for (let slot = 1; slot <= botCount; slot += 1) {
           const slotAccountId = normalizeAccountId(
             configDraft[`${ch.name}__bot_${slot}__account_id`] || defaultAccountIdForSlot(slot),
@@ -2963,12 +3072,17 @@ function App() {
             ...fields,
           }
         }
-        if (Object.keys(accounts).length > 0) {
+        if (Object.keys(accounts).length > 0 || Object.keys(channelFields).length > 0) {
           channelConfigs[ch.name] = {
-            default_account: accountId,
-            accounts: {
-              ...accounts,
-            },
+            ...channelFields,
+            ...(Object.keys(accounts).length > 0
+              ? {
+                  default_account: accountId,
+                  accounts: {
+                    ...accounts,
+                  },
+                }
+              : {}),
           }
         }
       }
@@ -3464,12 +3578,34 @@ function App() {
             {configSelfCheckLoading ? (
               <Text size="1" color="gray" className="mb-2 block">Checking critical config risks...</Text>
             ) : null}
+            {configLoadError ? (
+              <Callout.Root color="red" size="1" variant="soft" className="mb-2">
+                <Callout.Text>{configLoadError}</Callout.Text>
+              </Callout.Root>
+            ) : null}
             {configSelfCheckError ? (
               <Callout.Root color="red" size="1" variant="soft" className="mb-2">
                 <Callout.Text>Self-check failed: {configSelfCheckError}</Callout.Text>
               </Callout.Root>
             ) : null}
             <div className="mt-2 min-h-0 flex-1">
+              {configLoading ? (
+                <Card className="mb-3 p-4" style={sectionCardStyle}>
+                  <Text size="3" weight="bold">Loading Runtime Config</Text>
+                  <Text size="1" color="gray" className="mt-2 block">
+                    {configLoadStage || 'Opening settings…'}
+                  </Text>
+                  <div
+                    className="mt-3 h-2 overflow-hidden rounded-full"
+                    style={{ background: 'color-mix(in srgb, var(--mc-border-soft) 60%, transparent)' }}
+                  >
+                    <div
+                      className="h-full w-2/5 animate-pulse rounded-full"
+                      style={{ background: 'var(--mc-accent)' }}
+                    />
+                  </div>
+                </Card>
+              ) : null}
               {config ? (
                 <Tabs.Root defaultValue="general" orientation="vertical" className="h-full min-h-0">
                 <div className="grid h-full grid-cols-[240px_minmax(0,1fr)] gap-4">
@@ -4296,11 +4432,37 @@ function App() {
                         <div className={sectionCardClass} style={sectionCardStyle}>
                           <Text size="3" weight="bold">{ch.title}</Text>
                           <ConfigStepsCard steps={ch.steps.map((s, i) => <span key={i}>{s}</span>)} />
-                          <Text size="1" color="gray" className="mt-3 block">{ch.hint}</Text>
-                          <div className="mt-4 space-y-3">
-                            <ConfigFieldCard
-                              key={`${ch.name}__account_id`}
-                              label={`${ch.name}_default_account`}
+                        <Text size="1" color="gray" className="mt-3 block">{ch.hint}</Text>
+                        <div className="mt-4 space-y-3">
+                          {(ch.channelFields || []).map((f) => {
+                            const stateKey = `${ch.name}__${f.yamlKey}`
+                            const hasExistingSecret = f.secret ? Boolean(configDraft[`${ch.name}__has__${f.yamlKey}`]) : false
+                            return (
+                              <ConfigFieldCard
+                                key={stateKey}
+                                label={`${ch.name}_${f.yamlKey}`}
+                                description={<>{f.description}</>}
+                              >
+                                <TextField.Root
+                                  className="mt-2"
+                                  type={f.valueType === 'number' ? 'number' : 'text'}
+                                  min={f.valueType === 'number' ? '0' : undefined}
+                                  step={f.valueType === 'number' ? '1' : undefined}
+                                  value={String(configDraft[stateKey] || '')}
+                                  onChange={(e) => setConfigField(stateKey, e.target.value)}
+                                  placeholder={f.placeholder}
+                                />
+                                {hasExistingSecret && !String(configDraft[stateKey] || '').trim() ? (
+                                  <Text size="1" color="gray" className="mt-2 block">
+                                    Existing secret is configured and will be preserved.
+                                  </Text>
+                                ) : null}
+                              </ConfigFieldCard>
+                            )
+                          })}
+                          <ConfigFieldCard
+                            key={`${ch.name}__account_id`}
+                            label={`${ch.name}_default_account`}
                               description={<>Default account id under <code>channels.{ch.name}.accounts</code>.</>}
                             >
                               <TextField.Root
@@ -4356,6 +4518,9 @@ function App() {
                                     </ConfigFieldCard>
                                     {ch.fields.map((f) => {
                                       const stateKey = `${ch.name}__bot_${slot}__${f.yamlKey}`
+                                      const hasExistingSecret = f.secret
+                                        ? Boolean(configDraft[`${ch.name}__bot_${slot}__has__${f.yamlKey}`])
+                                        : false
                                       if (f.yamlKey === 'provider_preset') {
                                         return (
                                           <ConfigFieldCard key={stateKey} label={`${ch.name}_bot_${slot}_${f.yamlKey}`} description={<>{f.description}</>}>
@@ -4388,6 +4553,11 @@ function App() {
                                             onChange={(e) => setConfigField(stateKey, e.target.value)}
                                             placeholder={f.placeholder}
                                           />
+                                          {hasExistingSecret && !String(configDraft[stateKey] || '').trim() ? (
+                                            <Text size="1" color="gray" className="mt-2 block">
+                                              Existing secret is configured and will be preserved.
+                                            </Text>
+                                          ) : null}
                                         </ConfigFieldCard>
                                       )
                                     })}
@@ -4614,9 +4784,9 @@ function App() {
                   </div>
                 </div>
                 </Tabs.Root>
-              ) : (
-                <Text size="2" color="gray">Loading...</Text>
-              )}
+              ) : !configLoading && !configLoadError ? (
+                <Text size="2" color="gray">Runtime config is unavailable.</Text>
+              ) : null}
             </div>
 
             <div className="mt-3 flex items-center justify-between border-t border-[color:var(--mc-border-soft)] pt-3">
@@ -4631,7 +4801,9 @@ function App() {
                 <Dialog.Close>
                   <Button variant="soft">Close</Button>
                 </Dialog.Close>
-                <Button onClick={() => void saveConfigChanges()}>Save</Button>
+                <Button onClick={() => void saveConfigChanges()} disabled={configLoading || !config}>
+                  Save
+                </Button>
               </Flex>
             </div>
           </Dialog.Content>

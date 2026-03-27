@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::agent_engine::archive_conversation;
-use crate::config::{Config, ResolvedLlmProviderProfile};
+use crate::config::{
+    normalize_model_name, resolve_model_name_with_fallback, Config, ResolvedLlmProviderProfile,
+};
 use crate::http_client::llm_user_agent;
 use crate::run_control;
 use crate::runtime::AppState;
@@ -395,6 +397,12 @@ async fn build_model_response_with_persistence(
         return format!(
             "Model override cleared. Current provider/model: {provider} / {}",
             profile.default_model
+        );
+    }
+
+    if normalize_model_name(requested).is_none() {
+        return format!(
+            "Model '{requested}' is not a valid model id. Use `/model reset` to clear the override."
         );
     }
 
@@ -836,13 +844,25 @@ async fn resolve_effective_provider_and_model(
         .resolve_llm_provider_profile(&provider_alias)
         .or_else(|| config.resolve_llm_provider_profile(&config.llm_provider))
         .expect("default provider should resolve");
-    let model = {
+    let raw_model_override = {
         let model_overrides = llm_model_overrides.read().await;
-        model_overrides
-            .get(caller_channel)
-            .cloned()
-            .unwrap_or_else(|| profile.default_model.clone())
+        model_overrides.get(caller_channel).cloned()
     };
+    if raw_model_override
+        .as_deref()
+        .is_some_and(|model| normalize_model_name(model).is_none())
+    {
+        warn!(
+            "Ignoring invalid model override '{}' for channel '{}'",
+            raw_model_override.as_deref().unwrap_or_default(),
+            caller_channel
+        );
+    }
+    let model = resolve_model_name_with_fallback(
+        &profile.provider,
+        raw_model_override.as_deref(),
+        Some(&profile.default_model),
+    );
     (profile, model)
 }
 
@@ -865,7 +885,8 @@ mod tests {
         build_model_response, build_model_response_with_persistence, build_models_response,
         build_provider_response, build_provider_response_with_persistence,
         is_placeholder_model_list, parse_anthropic_models_json_ids, parse_models_command_args,
-        parse_openai_models_json_ids, resolve_openai_models_url,
+        parse_openai_models_json_ids, resolve_effective_provider_and_model,
+        resolve_openai_models_url,
     };
     use crate::config::{Config, LlmProviderProfile, ResolvedLlmProviderProfile};
     use chrono::Utc;
@@ -947,6 +968,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_command_rejects_wildcard_override() {
+        let cfg = test_config();
+        let provider_overrides = Arc::new(RwLock::new(HashMap::new()));
+        let overrides = Arc::new(RwLock::new(HashMap::new()));
+        let text = build_model_response(
+            &cfg,
+            provider_overrides,
+            overrides.clone(),
+            "telegram",
+            1,
+            "/model *",
+        )
+        .await;
+        assert_eq!(
+            text,
+            "Model '*' is not a valid model id. Use `/model reset` to clear the override."
+        );
+        let guard = overrides.read().await;
+        assert!(!guard.contains_key("telegram"));
+    }
+
+    #[tokio::test]
     async fn model_command_resets_override() {
         let cfg = test_config();
         let provider_overrides = Arc::new(RwLock::new(HashMap::new()));
@@ -968,6 +1011,21 @@ mod tests {
         );
         let guard = overrides.read().await;
         assert!(!guard.contains_key("telegram"));
+    }
+
+    #[tokio::test]
+    async fn provider_resolution_ignores_invalid_runtime_model_override() {
+        let cfg = test_config();
+        let provider_overrides = Arc::new(RwLock::new(HashMap::new()));
+        let mut map = HashMap::new();
+        map.insert("telegram".to_string(), "*".to_string());
+        let overrides = Arc::new(RwLock::new(map));
+
+        let (profile, model) =
+            resolve_effective_provider_and_model(&cfg, &provider_overrides, &overrides, "telegram")
+                .await;
+        assert_eq!(profile.alias, "openai");
+        assert_eq!(model, "gpt-5.2");
     }
 
     #[tokio::test]

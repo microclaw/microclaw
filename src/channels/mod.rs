@@ -11,6 +11,7 @@ pub mod signal;
 pub mod slack;
 pub mod startup_guard;
 pub mod telegram;
+pub mod weixin;
 pub mod whatsapp;
 
 // Re-export adapter types
@@ -26,6 +27,7 @@ pub use qq::QQAdapter;
 pub use signal::SignalAdapter;
 pub use slack::SlackAdapter;
 pub use telegram::TelegramAdapter;
+pub use weixin::WeixinAdapter;
 pub use whatsapp::WhatsAppAdapter;
 
 pub fn system_prompt_extension(caller_channel: &str) -> Option<&'static str> {

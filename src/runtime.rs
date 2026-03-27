@@ -22,12 +22,14 @@ use crate::channels::slack::{build_slack_runtime_contexts, SlackRuntimeContext};
 use crate::channels::telegram::{
     build_telegram_runtime_contexts, TelegramChannelConfig, TelegramRuntimeContext,
 };
+use crate::channels::weixin::{build_weixin_runtime_contexts, WeixinRuntimeContext};
 use crate::channels::whatsapp::{build_whatsapp_runtime_contexts, WhatsAppRuntimeContext};
 use crate::channels::{
     DingTalkAdapter, DiscordAdapter, EmailAdapter, FeishuAdapter, IMessageAdapter, IrcAdapter,
     MatrixAdapter, NostrAdapter, QQAdapter, SignalAdapter, SlackAdapter, TelegramAdapter,
-    WhatsAppAdapter,
+    WeixinAdapter, WhatsAppAdapter,
 };
+use crate::config::normalize_model_name;
 use crate::config::Config;
 use crate::embedding::EmbeddingProvider;
 use crate::hooks::HookManager;
@@ -82,7 +84,14 @@ where
     let runtimes = build(config);
     for runtime in &runtimes {
         if let Some((channel_name, model)) = model_override(runtime) {
-            llm_model_overrides.insert(channel_name, model);
+            if let Some(model) = normalize_model_name(&model) {
+                llm_model_overrides.insert(channel_name, model);
+            } else {
+                warn!(
+                    "Ignoring invalid model override '{}' for channel '{}'",
+                    model, channel_name
+                );
+            }
         }
         register(runtime, registry);
     }
@@ -356,6 +365,22 @@ pub async fn run(
                 runtime.channel_name.clone(),
                 runtime.send_command.clone(),
             )));
+        },
+        |runtime| {
+            runtime
+                .model
+                .clone()
+                .map(|model| (runtime.channel_name.clone(), model))
+        },
+    );
+    let weixin_runtimes: Vec<WeixinRuntimeContext> = prepare_channel_runtimes(
+        &config,
+        "weixin",
+        &mut registry,
+        &mut llm_model_overrides,
+        build_weixin_runtime_contexts,
+        |runtime, reg| {
+            reg.register(Arc::new(WeixinAdapter::from_runtime(runtime)));
         },
         |runtime| {
             runtime
@@ -653,6 +678,18 @@ pub async fn run(
         );
     }
 
+    let has_weixin = !weixin_runtimes.is_empty();
+    if has_weixin {
+        spawn_channel_runtimes(
+            state.clone(),
+            weixin_runtimes,
+            |channel_state, runtime_ctx| async move {
+                info!("Starting Weixin adapter '{}'", runtime_ctx.channel_name);
+                crate::channels::weixin::start_weixin_bot(channel_state, runtime_ctx).await;
+            },
+        );
+    }
+
     if has_web {
         let web_state = state.clone();
         info!(
@@ -704,6 +741,7 @@ pub async fn run(
         has_signal,
         has_dingtalk,
         has_qq,
+        has_weixin,
     ]
     .into_iter()
     .any(|v| v);
@@ -716,7 +754,7 @@ pub async fn run(
         Ok(())
     } else {
         Err(anyhow!(
-            "No channel is enabled. Configure channels.<name>.enabled (or legacy channel settings) for Telegram, Discord, Slack, Feishu, Matrix, WhatsApp, iMessage, Email, Nostr, Signal, DingTalk, QQ, IRC, or web."
+            "No channel is enabled. Configure channels.<name>.enabled (or legacy channel settings) for Telegram, Discord, Slack, Feishu, Matrix, WhatsApp, iMessage, Email, Nostr, Signal, DingTalk, QQ, Weixin, IRC, or web."
         ))
     }
 }

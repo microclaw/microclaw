@@ -29,9 +29,9 @@ use microclaw_core::error::MicroClawError;
 use microclaw_core::text::floor_char_boundary;
 
 use crate::channels::{
-    dingtalk, email, feishu, imessage, irc, matrix, nostr, qq, signal, slack, whatsapp,
+    dingtalk, email, feishu, imessage, irc, matrix, nostr, qq, signal, slack, weixin, whatsapp,
 };
-use crate::setup_def::DynamicChannelDef;
+use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 
 // Declarative channel metadata is owned by each channel module.
 const DYNAMIC_CHANNELS: &[DynamicChannelDef] = &[
@@ -46,6 +46,7 @@ const DYNAMIC_CHANNELS: &[DynamicChannelDef] = &[
     signal::SETUP_DEF,
     dingtalk::SETUP_DEF,
     qq::SETUP_DEF,
+    weixin::SETUP_DEF,
 ];
 
 /// Build the setup-wizard field key from channel name + yaml key.
@@ -306,6 +307,36 @@ fn trim_channel_prefix<'a>(channel: &str, label: &'a str) -> &'a str {
         return trimmed[prefix_len + 1..].trim_start();
     }
     trimmed
+}
+
+fn dynamic_channel_uses_minimal_setup(channel: &str) -> bool {
+    channel == "weixin"
+}
+
+fn effective_dynamic_slot_field_value<F>(
+    channel: &str,
+    slot: usize,
+    field: &ChannelFieldDef,
+    get: F,
+) -> String
+where
+    F: Fn(&str) -> String,
+{
+    let slot_key = dynamic_slot_field_key(channel, slot, field.yaml_key);
+    let slot_value = get(&slot_key);
+    let slot_value = slot_value.trim();
+    if !slot_value.is_empty() {
+        return slot_value.to_string();
+    }
+
+    let channel_key = dynamic_field_key(channel, field.yaml_key);
+    let channel_value = get(&channel_key);
+    let channel_value = channel_value.trim();
+    if !channel_value.is_empty() {
+        return channel_value.to_string();
+    }
+
+    field.default.trim().to_string()
 }
 
 fn default_account_id() -> &'static str {
@@ -3911,6 +3942,9 @@ impl SetupApp {
                     if !self.channel_enabled(ch) {
                         return false;
                     }
+                    if dynamic_channel_uses_minimal_setup(ch) {
+                        return false;
+                    }
                     if key == dynamic_account_id_field_key(ch)
                         || key == dynamic_accounts_json_field_key(ch)
                     {
@@ -4277,6 +4311,9 @@ impl SetupApp {
 
         for ch in DYNAMIC_CHANNELS {
             if self.channel_enabled(ch.name) {
+                if dynamic_channel_uses_minimal_setup(ch.name) {
+                    continue;
+                }
                 let bot_count_key = dynamic_bot_count_field_key(ch.name);
                 let bot_count = parse_bot_count(&self.field_value(&bot_count_key), &bot_count_key)?;
                 let mut seen_any = false;
@@ -4287,9 +4324,10 @@ impl SetupApp {
                         &self.field_value(&dynamic_slot_soul_path_field_key(ch.name, slot)),
                     );
                     let has_any = ch.fields.iter().any(|f| {
-                        !self
-                            .field_value(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
-                            .is_empty()
+                        !effective_dynamic_slot_field_value(ch.name, slot, f, |key| {
+                            self.field_value(key)
+                        })
+                        .is_empty()
                     }) || !soul_path.is_empty();
                     if !has_any {
                         continue;
@@ -4349,7 +4387,11 @@ impl SetupApp {
                             continue;
                         }
                         let key = dynamic_slot_field_key(ch.name, slot, f.yaml_key);
-                        if self.field_value(&key).is_empty() {
+                        if effective_dynamic_slot_field_value(ch.name, slot, f, |field_key| {
+                            self.field_value(field_key)
+                        })
+                        .is_empty()
+                        {
                             return Err(MicroClawError::Config(format!(
                                 "{} is required when {} bot slot #{} is configured",
                                 key, ch.name, slot
@@ -6386,6 +6428,9 @@ fn save_config_yaml(
         .iter()
         .map(|ch| {
             let selected = channel_selected(ch.name);
+            if dynamic_channel_uses_minimal_setup(ch.name) {
+                return (ch, selected);
+            }
             let bot_count = parse_bot_count(
                 &get(&dynamic_bot_count_field_key(ch.name)),
                 &dynamic_bot_count_field_key(ch.name),
@@ -6571,6 +6616,11 @@ fn save_config_yaml(
         if !include {
             continue;
         }
+        if dynamic_channel_uses_minimal_setup(ch.name) {
+            yaml.push_str(&format!("  {}:\n", ch.name));
+            yaml.push_str(&format!("    enabled: {}\n", channel_selected(ch.name)));
+            continue;
+        }
         let bot_count_key = dynamic_bot_count_field_key(ch.name);
         let bot_count = parse_bot_count(&get(&bot_count_key), &bot_count_key)?;
         let mut accounts_map = serde_json::Map::new();
@@ -6582,11 +6632,11 @@ fn save_config_yaml(
                 &get(&dynamic_slot_soul_path_field_key(ch.name, slot)),
                 &souls_dir,
             );
-            let has_any = ch.fields.iter().any(|f| {
-                !get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key))
-                    .trim()
-                    .is_empty()
-            }) || !soul_path.is_empty();
+            let has_any = ch
+                .fields
+                .iter()
+                .any(|f| !effective_dynamic_slot_field_value(ch.name, slot, f, get).is_empty())
+                || !soul_path.is_empty();
             if !has_any {
                 continue;
             }
@@ -6600,7 +6650,7 @@ fn save_config_yaml(
             let mut account = serde_json::Map::new();
             account.insert("enabled".into(), serde_json::Value::Bool(enabled));
             for f in ch.fields {
-                let v = get(&dynamic_slot_field_key(ch.name, slot, f.yaml_key));
+                let v = effective_dynamic_slot_field_value(ch.name, slot, f, get);
                 if v.trim().is_empty() {
                     continue;
                 }
@@ -9899,6 +9949,32 @@ sandbox:
     }
 
     #[test]
+    fn test_save_config_yaml_keeps_weixin_minimal_when_selected() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_weixin_minimal_test_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "weixin".into());
+        values.insert("LLM_PROVIDER".into(), "anthropic".into());
+        values.insert("LLM_API_KEY".into(), "key".into());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains("\nchannels:\n"));
+        assert!(s.contains("  weixin:\n"));
+        assert!(s.contains("    enabled: true\n"));
+        assert!(!s.contains("default_account:"));
+        assert!(!s.contains("accounts:"));
+        assert!(!s.contains("    base_url:"));
+        assert!(!s.contains("    cdn_base_url:"));
+        assert!(!s.contains("    webhook_path:"));
+
+        let _ = fs::remove_file(&yaml_path);
+    }
+
+    #[test]
     fn test_save_config_yaml_writes_feishu_topic_mode_as_bool() {
         let yaml_path = std::env::temp_dir().join(format!(
             "microclaw_setup_feishu_topic_mode_test_{}.yaml",
@@ -10101,6 +10177,51 @@ sandbox:
 
         let result = app.validate_local();
         assert!(result.is_ok(), "validate_local failed: {result:?}");
+    }
+
+    #[test]
+    fn test_validate_local_accepts_minimal_weixin() {
+        let mut app = SetupApp::new();
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
+            field.value = "weixin".to_string();
+        }
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_PROVIDER") {
+            field.value = "anthropic".to_string();
+        }
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_API_KEY") {
+            field.value = "key".to_string();
+        }
+
+        let result = app.validate_local();
+        assert!(result.is_ok(), "validate_local failed: {result:?}");
+    }
+
+    #[test]
+    fn test_weixin_setup_fields_hidden_when_enabled() {
+        let mut app = SetupApp::new();
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
+            field.value = "weixin".to_string();
+        }
+        app.ensure_selected_visible();
+
+        let visible_keys: Vec<String> = app
+            .visible_field_indices()
+            .iter()
+            .map(|idx| app.fields[*idx].key.clone())
+            .collect();
+
+        assert!(!visible_keys
+            .iter()
+            .any(|k| k == &dynamic_bot_count_field_key("weixin")));
+        assert!(!visible_keys
+            .iter()
+            .any(|k| k == &dynamic_slot_id_field_key("weixin", 1)));
+        assert!(!visible_keys
+            .iter()
+            .any(|k| k == &dynamic_slot_field_key("weixin", 1, "base_url")));
+        assert!(!visible_keys
+            .iter()
+            .any(|k| k == &dynamic_slot_field_key("weixin", 1, "cdn_base_url")));
     }
 
     #[test]
