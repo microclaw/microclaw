@@ -2069,12 +2069,43 @@ impl SetupApp {
 
         if let Some(path) = yaml_path {
             if let Ok(content) = fs::read_to_string(path) {
+                let explicit_enabled_channels =
+                    serde_yaml::from_str::<serde_yaml::Value>(&content).ok().and_then(|doc| {
+                        let channels = doc.get("channels")?.as_mapping()?;
+                        let mut enabled = Vec::new();
+                        for channel in Self::channel_options() {
+                            let is_enabled = channels
+                                .get(serde_yaml::Value::String(channel.to_string()))
+                                .and_then(|v| v.as_mapping())
+                                .and_then(|mapping| {
+                                    mapping
+                                        .get(serde_yaml::Value::String("enabled".to_string()))
+                                })
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            if is_enabled {
+                                enabled.push(channel.to_string());
+                            }
+                        }
+                        Some(enabled)
+                    });
                 if let Ok(config) = serde_yaml::from_str::<crate::config::Config>(&content) {
                     let mut map = HashMap::new();
-                    let mut enabled = Vec::new();
-                    for channel in Self::channel_options() {
-                        if config.channel_enabled(channel) {
-                            enabled.push(channel.to_string());
+                    let mut enabled = explicit_enabled_channels.unwrap_or_default();
+                    if enabled.is_empty() {
+                        if config.web_enabled {
+                            enabled.push("web".to_string());
+                        }
+                        if !config.telegram_bot_token.trim().is_empty() {
+                            enabled.push("telegram".to_string());
+                        }
+                        if config
+                            .discord_bot_token
+                            .as_deref()
+                            .map(|v| !v.trim().is_empty())
+                            .unwrap_or(false)
+                        {
+                            enabled.push("discord".to_string());
                         }
                     }
                     map.insert("ENABLED_CHANNELS".into(), enabled.join(","));
@@ -8593,6 +8624,75 @@ a2a:
         assert_eq!(app.field_value(a2a_agent_description_key()), "Routes work");
         assert_eq!(app.field_value(a2a_shared_tokens_key()), "shared-a2a-token");
         assert!(app.field_value(a2a_peers_json_key()).contains("\"worker\""));
+
+        std::env::set_current_dir(old_cwd).unwrap();
+        let _ = std::fs::remove_file(temp.join("microclaw.config.yaml"));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_setup_does_not_auto_enable_channels_from_present_but_disabled_blocks() {
+        let _guard = env_lock();
+        let temp = std::env::temp_dir().join(format!(
+            "microclaw_setup_disabled_channel_blocks_{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let old_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp).unwrap();
+        std::fs::write(
+            temp.join("microclaw.config.yaml"),
+            r#"
+api_key: key
+channels:
+  web:
+    enabled: true
+  discord:
+    enabled: false
+    default_account: "ops"
+    accounts:
+      ops:
+        bot_token: "discord_token_123"
+  slack:
+    enabled: false
+    app_token: "xapp-1"
+    bot_token: "xoxb-1"
+"#,
+        )
+        .unwrap();
+
+        let app = SetupApp::new();
+        assert_eq!(app.field_value("ENABLED_CHANNELS"), "web");
+
+        std::env::set_current_dir(old_cwd).unwrap();
+        let _ = std::fs::remove_file(temp.join("microclaw.config.yaml"));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_setup_load_existing_config_keeps_legacy_top_level_channel_inference() {
+        let _guard = env_lock();
+        let temp = std::env::temp_dir().join(format!(
+            "microclaw_setup_legacy_channel_inference_{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let old_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp).unwrap();
+        std::fs::write(
+            temp.join("microclaw.config.yaml"),
+            r#"
+api_key: key
+telegram_bot_token: "tg_token_123"
+bot_username: "tg_bot"
+"#,
+        )
+        .unwrap();
+
+        let app = SetupApp::new();
+        let enabled = app.field_value("ENABLED_CHANNELS");
+        assert!(enabled.split(',').any(|channel| channel == "telegram"));
+        assert!(!enabled.split(',').any(|channel| channel == "discord"));
 
         std::env::set_current_dir(old_cwd).unwrap();
         let _ = std::fs::remove_file(temp.join("microclaw.config.yaml"));
