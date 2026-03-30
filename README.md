@@ -812,7 +812,7 @@ Behavior notes:
 - `sessions.send` returns a `runId` immediately and then emits `chat` events, including a terminal `final` state for normal messages.
 - `sessions.spawn` can create a new async session and persist an initial label.
 - `sessions.set*` updates only the provided field and preserves previously stored session settings.
-- `sessions.send` control payloads are acknowledged, but not yet enforced as runtime controls.
+- `sessions.send` control payloads now enforce `interrupt` control for active Web-session runs. Supported aliases: `interrupt`, `stop`, `abort`, `cancel`, `kill`.
 
 Local gateway smoke tests:
 

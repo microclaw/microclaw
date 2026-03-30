@@ -80,7 +80,8 @@ MICROCLAW_GATEWAY_TOKEN=... microclaw gateway call sessions.send \
   - `sessions.spawn` can create a new session and persist an initial label.
   - `sessions.set*` writes only the provided field and preserves the rest of the stored session settings.
   - Session labels and settings are persisted in the `sessions` table and flow back into session listings / bridge payloads.
-  - `sessions.send` control payloads are acknowledged today, but not yet enforced as runtime controls.
+  - `sessions.send` control payloads now enforce session interruption for active Web runs.
+  - Supported control actions: `interrupt` and aliases `stop`, `abort`, `cancel`, `kill`.
 
 - Symptom: logs show send failures after operator disconnect
   - Messages such as `sending after closing is not allowed`, `already closed`, or `connection closed normally` are downgraded as expected closed-socket noise.

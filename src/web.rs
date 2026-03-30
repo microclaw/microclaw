@@ -5373,6 +5373,219 @@ commands:
     }
 
     #[tokio::test]
+    async fn test_ws_sessions_send_control_interrupt_aborts_active_stream_run() {
+        let web_state = test_web_state(Box::new(SlowLlm { sleep_ms: 1_500 }), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-control-secret").await;
+        let app = build_router(web_state.clone());
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+        let chat_id = unique_test_chat_id();
+        let session_key = format!("chat:{chat_id}");
+        let session_key_for_db = session_key.clone();
+
+        call_blocking(web_state.app_state.db.clone(), move |db| {
+            db.upsert_chat(chat_id, Some(&session_key_for_db), "web")
+        })
+        .await
+        .unwrap();
+
+        let send_req = Request::builder()
+            .method("POST")
+            .uri("/api/send_stream")
+            .header("authorization", "Bearer ws-control-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(
+                r#"{{"session_key":"{session_key}","sender_name":"u","message":"slow"}}"#
+            )))
+            .unwrap();
+        let send_resp = app.oneshot(send_req).await.unwrap();
+        assert_eq!(send_resp.status(), StatusCode::OK);
+        let send_body = axum::body::to_bytes(send_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let send_json: serde_json::Value = serde_json::from_slice(&send_body).unwrap();
+        let run_id = send_json
+            .get("run_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-control-secret" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "control-1",
+                "method": "sessions.send",
+                "params": {
+                    "key": session_key,
+                    "message": {
+                        "type": "control",
+                        "action": "interrupt"
+                    }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let control_res = loop {
+            let candidate = recv_ws_json(&mut ws).await;
+            if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                continue;
+            }
+            if candidate.get("id").and_then(|v| v.as_str()) != Some("control-1") {
+                continue;
+            }
+            break candidate;
+        };
+        assert_eq!(
+            control_res
+                .pointer("/payload/action")
+                .and_then(|v| v.as_str()),
+            Some("interrupt")
+        );
+        assert_eq!(
+            control_res
+                .pointer("/payload/terminated")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            control_res
+                .pointer("/payload/activeAborted")
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        for _ in 0..20 {
+            let status = web_state.run_hub.status(&run_id, "", true).await.unwrap();
+            if status.0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let (_, replay, done, _, _) = web_state
+            .run_hub
+            .subscribe_with_replay(&run_id, None, "", true)
+            .await
+            .unwrap();
+        assert!(done);
+        assert!(replay.iter().any(|evt| {
+            evt.event == "done" && evt.data.contains(crate::run_control::STOPPED_TEXT)
+        }));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_ws_sessions_send_control_interrupt_reports_idle_session() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        seed_test_api_key(&web_state, "ws-control-idle-secret").await;
+        let app = build_router(web_state.clone());
+        let (addr, server) = spawn_test_server(build_router(web_state.clone())).await;
+
+        let seed_req = Request::builder()
+            .method("POST")
+            .uri("/api/send")
+            .header("authorization", "Bearer ws-control-idle-secret")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"session_key":"main","sender_name":"u","message":"seed"}"#,
+            ))
+            .unwrap();
+        let seed_resp = app.oneshot(seed_req).await.unwrap();
+        assert_eq!(seed_resp.status(), StatusCode::OK);
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect-1",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "auth": { "token": "ws-control-idle-secret" }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = recv_ws_json(&mut ws).await;
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "req",
+                "id": "control-1",
+                "method": "sessions.send",
+                "params": {
+                    "key": "main",
+                    "message": {
+                        "type": "control",
+                        "action": "interrupt"
+                    }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let control_res = loop {
+            let candidate = recv_ws_json(&mut ws).await;
+            if candidate.get("type").and_then(|v| v.as_str()) != Some("res") {
+                continue;
+            }
+            if candidate.get("id").and_then(|v| v.as_str()) != Some("control-1") {
+                continue;
+            }
+            break candidate;
+        };
+        assert_eq!(
+            control_res
+                .pointer("/payload/applied")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            control_res
+                .pointer("/payload/terminated")
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            control_res
+                .pointer("/payload/reason")
+                .and_then(|v| v.as_str()),
+            Some("no active runs")
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn test_ws_connect_invalid_token_returns_unauthorized() {
         let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
         call_blocking(web_state.app_state.db.clone(), |db| {

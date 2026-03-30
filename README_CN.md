@@ -683,7 +683,7 @@ Mission Control / OpenClaw 风格 WebSocket bridge：
 - `sessions.send` 会立即返回 `runId`，随后持续发送 `chat` 事件，并在普通消息完成后发出终态 `final`。
 - `sessions.spawn` 会创建新的异步会话，并可先持久化初始标签。
 - `sessions.set*` 只更新当前请求提供的字段，不会覆盖其它已存储的 session 设置。
-- `sessions.send` 的 control payload 当前会被确认接收，但还不会真的改变运行时控制状态。
+- `sessions.send` 的 control payload 现在会真正执行 Web 会话中的 `interrupt` 控制。兼容别名：`interrupt`、`stop`、`abort`、`cancel`、`kill`。
 
 本地 gateway 冒烟测试：
 

@@ -163,6 +163,76 @@ fn build_session_settings_update(method: &str, params: &SessionSettingParams) ->
     settings
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionControlAction {
+    Interrupt,
+}
+
+impl SessionControlAction {
+    fn from_message(message: &serde_json::Value) -> Result<Self, String> {
+        let action = message
+            .get("action")
+            .or_else(|| message.get("command"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or("");
+        if action.is_empty() {
+            return Err("control action is required".into());
+        }
+        match action.to_ascii_lowercase().as_str() {
+            "interrupt" | "stop" | "abort" | "cancel" | "kill" => Ok(Self::Interrupt),
+            other => Err(format!(
+                "unsupported control action '{other}'. Supported actions: interrupt"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Interrupt => "interrupt",
+        }
+    }
+}
+
+async fn apply_session_control(
+    state: &WebState,
+    session_key: &str,
+    message: &serde_json::Value,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    let action = SessionControlAction::from_message(message)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+    let chat_id = match resolve_chat_id_for_session_key_read(state, session_key).await {
+        Ok(chat_id) => Some(chat_id),
+        Err((StatusCode::NOT_FOUND, _)) => None,
+        Err(err) => return Err(err),
+    };
+
+    let aborted = match (action, chat_id) {
+        (SessionControlAction::Interrupt, Some(chat_id)) => {
+            crate::run_control::abort_runs("web", chat_id).await
+        }
+        (SessionControlAction::Interrupt, None) => 0,
+    };
+    let reason = if chat_id.is_none() {
+        "session not found"
+    } else if aborted == 0 {
+        "no active runs"
+    } else {
+        "active runs interrupted"
+    };
+
+    Ok(json!({
+        "ok": true,
+        "key": session_key,
+        "sessionKey": session_key,
+        "action": action.as_str(),
+        "applied": true,
+        "terminated": aborted > 0,
+        "activeAborted": aborted,
+        "reason": reason,
+    }))
+}
+
 fn session_matches_search(session: &SessionItem, search_term: &str) -> bool {
     let needle = search_term.trim().to_ascii_lowercase();
     if needle.is_empty() {
@@ -977,23 +1047,25 @@ async fn handle_request_frame(
                 params.message.get("type").and_then(|v| v.as_str()),
                 Some("control")
             ) {
-                let action = params
-                    .message
-                    .get("action")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("noop");
+                let payload =
+                    match apply_session_control(state, &session_key, &params.message).await {
+                        Ok(payload) => payload,
+                        Err((status, msg)) => {
+                            let _ = send_error_response(
+                                sender,
+                                &id,
+                                ws_error_code_for_status(status),
+                                &msg,
+                            )
+                            .await;
+                            return Ok(());
+                        }
+                    };
                 let res = ResponseFrame {
                     kind: "res",
                     id: &id,
                     ok: true,
-                    payload: Some(json!({
-                        "ok": true,
-                        "key": session_key.clone(),
-                        "sessionKey": session_key,
-                        "action": action,
-                        "applied": false,
-                        "reason": "control messages are acknowledged but not yet enforced",
-                    })),
+                    payload: Some(payload),
                     error: None,
                 };
                 let _ = send_json(sender, &res).await;
