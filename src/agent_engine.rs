@@ -52,6 +52,11 @@ pub enum AgentEvent {
     TextDelta {
         delta: String,
     },
+    /// Emitted when the agent run was cancelled (via run_control interrupt).
+    /// Carries the final text accumulated before cancellation.
+    Cancelled {
+        final_text: String,
+    },
     FinalResponse {
         text: String,
     },
@@ -142,8 +147,11 @@ pub async fn process_with_agent_with_events(
             }
             notify.notified().await;
         } => {
+            // Signal cancellation explicitly via event type — not via FinalResponse with magic string.
             if let Some(tx) = event_tx {
-                let _ = tx.send(AgentEvent::FinalResponse { text: run_control::STOPPED_TEXT.to_string() });
+                let _ = tx.send(AgentEvent::Cancelled {
+                    final_text: run_control::STOPPED_TEXT.to_string(),
+                });
             }
             Ok(run_control::STOPPED_TEXT.to_string())
         }

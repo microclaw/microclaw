@@ -31,6 +31,7 @@ use microclaw_storage::usage::build_usage_report;
 
 mod a2a;
 mod auth;
+mod chat_abort;
 mod config;
 mod metrics;
 mod middleware;
@@ -194,6 +195,7 @@ struct RunChannel {
     history: VecDeque<RunEvent>,
     next_id: u64,
     done: bool,
+    aborted: bool,
     owner_actor: String,
 }
 
@@ -214,6 +216,7 @@ impl RunHub {
                 history: VecDeque::new(),
                 next_id: 1,
                 done: false,
+                aborted: false,
                 owner_actor,
             },
         );
@@ -237,6 +240,10 @@ impl RunHub {
         channel.history.push_back(evt.clone());
         if evt.event == "done" || evt.event == "error" {
             channel.done = true;
+        }
+        if evt.event == "aborted" {
+            channel.done = true;
+            channel.aborted = true;
         }
         let _ = channel.sender.send(evt);
     }
@@ -5365,9 +5372,14 @@ commands:
             .await
             .unwrap();
         assert!(done);
-        assert!(replay.iter().any(|evt| {
-            evt.event == "done" && evt.data.contains(crate::run_control::STOPPED_TEXT)
-        }));
+        // When a run is aborted, replay should contain an "aborted" event (not "done").
+        // The "aborted" event carries partial buffered text, which may be null if no
+        // text was generated before the abort signal was processed.
+        assert!(
+            replay.iter().any(|evt| evt.event == "aborted"),
+            "expected 'aborted' event in replay, got: {:?}",
+            replay
+        );
 
         server.abort();
     }

@@ -54,6 +54,11 @@ async fn start_stream_run_internal(
 
     let run_id = uuid::Uuid::new_v4().to_string();
     state.run_hub.create(&run_id, actor.clone()).await;
+
+    // Register with chat_abort controller for abort support
+    let abort_entry =
+        chat_abort::register_chat_run(run_id.clone(), session_key.clone(), None).await;
+
     let state_for_task = state.clone();
     let run_id_for_task = run_id.clone();
     let lock = state
@@ -90,6 +95,11 @@ async fn start_stream_run_internal(
             let state_for_events = state_for_task.clone();
             let run_id_for_events = run_id_for_task.clone();
             let run_history_limit = limits.run_history_limit;
+
+            // Clone for forward task (moved into async move)
+            let abort_entry_for_forward = abort_entry.clone();
+
+            // Forward AgentEvents to run_hub, buffering text deltas
             let forward = tokio::spawn(async move {
                 while let Some(evt) = evt_rx.recv().await {
                     match evt {
@@ -163,6 +173,11 @@ async fn start_stream_run_internal(
                                 .await;
                         }
                         AgentEvent::TextDelta { delta } => {
+                            // Buffer the text delta for abort
+                            {
+                                let mut buffer = abort_entry_for_forward.buffer.write().await;
+                                buffer.push_str(&delta);
+                            }
                             run_hub
                                 .publish(
                                     &run_id_for_events,
@@ -173,9 +188,13 @@ async fn start_stream_run_internal(
                                 .await;
                         }
                         AgentEvent::FinalResponse { .. } => {}
+                        // Cancelled is handled below after send_and_store_response_with_events.
+                        AgentEvent::Cancelled { .. } => {}
                     }
                 }
             });
+
+            let abort_entry = abort_entry.clone();
 
             match send_and_store_response_with_events(state_for_task.clone(), body, Some(&evt_tx))
                 .await
@@ -188,22 +207,45 @@ async fn start_stream_run_internal(
                         run_start.elapsed().as_millis() as i64,
                     )
                     .await;
+
+                    // Check if the agent was aborted via run_control interrupt.
+                    // When abort_runs is called, the agent loop returns STOPPED_TEXT.
                     let response_text = resp
                         .0
                         .get("response")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
+                    let was_aborted = response_text == crate::run_control::STOPPED_TEXT;
 
-                    state_for_task
-                        .run_hub
-                        .publish(
-                            &run_id_for_task,
-                            "done",
-                            json!({"response": response_text}).to_string(),
-                            limits.run_history_limit,
-                        )
-                        .await;
+                    if was_aborted {
+                        // Agent was interrupted — collect buffered text and publish
+                        // "aborted" event with partial content.
+                        let partial = {
+                            let buf = abort_entry.buffer.read().await;
+                            let t = buf.trim();
+                            if t.is_empty() { None } else { Some(t.to_string()) }
+                        };
+                        state_for_task
+                            .run_hub
+                            .publish(
+                                &run_id_for_task,
+                                "aborted",
+                                json!({ "text": partial }).to_string(),
+                                limits.run_history_limit,
+                            )
+                            .await;
+                    } else {
+                        state_for_task
+                            .run_hub
+                            .publish(
+                                &run_id_for_task,
+                                "done",
+                                json!({"response": response_text}).to_string(),
+                                limits.run_history_limit,
+                            )
+                            .await;
+                    }
                 }
                 Err((_, err_msg)) => {
                     metrics_record_request_result(
@@ -269,6 +311,9 @@ async fn start_stream_run_internal(
             latency_ms = run_start.elapsed().as_millis(),
             "Stream run finished"
         );
+
+        // Unregister from abort controller
+        chat_abort::unregister_chat_run(&run_id_for_task).await;
 
         state_for_task
             .run_hub

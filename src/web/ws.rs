@@ -86,6 +86,15 @@ struct ChatHistoryParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ChatAbortParams {
+    #[serde(rename = "key", alias = "sessionKey", alias = "session_key")]
+    session_key: String,
+    #[serde(default)]
+    run_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionDeleteParams {
     #[serde(rename = "key", alias = "sessionKey", alias = "session_key")]
     session_key: String,
@@ -531,6 +540,7 @@ async fn process_connect_frame(
                     "status",
                     "chat.send",
                     "chat.history",
+                    "chat.abort",
                     "sessions.delete",
                     "sessions.send",
                     "sessions.kill",
@@ -758,6 +768,60 @@ async fn handle_request_frame(
                 id: &id,
                 ok: true,
                 payload: Some(payload),
+                error: None,
+            };
+            let _ = send_json(sender, &res).await;
+        }
+        "chat.abort" => {
+            if !identity.allows(AuthScope::Write) {
+                let _ = send_error_response(sender, &id, "FORBIDDEN", "forbidden").await;
+                return Ok(());
+            }
+            let params = match serde_json::from_value::<ChatAbortParams>(params) {
+                Ok(v) => v,
+                Err(err) => {
+                    let _ = send_error_response(
+                        sender,
+                        &id,
+                        "INVALID_REQUEST",
+                        &format!("invalid chat.abort params: {err}"),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+            let session_key = normalize_session_key(Some(&params.session_key));
+
+            // Resolve session_key to (channel, chat_id) for run_control
+            let chat_id = match resolve_chat_id_for_session_key_read(state, &session_key).await {
+                Ok(id) => id,
+                Err((_, msg)) => {
+                    let _ = send_error_response(sender, &id, "NOT_FOUND", &msg).await;
+                    return Ok(());
+                }
+            };
+
+            // Also signal the chat_abort controller (sets AtomicBool for post-agent cleanup)
+            let run_ids = if let Some(ref run_id) = params.run_id {
+                super::chat_abort::abort_chat_run_by_id(run_id, &session_key).await;
+                vec![run_id.clone()]
+            } else {
+                let (_, ids, _) = super::chat_abort::abort_chat_runs_for_session_key(&session_key).await;
+                ids
+            };
+
+            // Actually interrupt the agent loop via run_control
+            let aborted = crate::run_control::abort_runs("web", chat_id).await;
+
+            let res = ResponseFrame {
+                kind: "res",
+                id: &id,
+                ok: true,
+                payload: Some(json!({
+                    "ok": true,
+                    "aborted": aborted > 0,
+                    "runIds": run_ids,
+                })),
                 error: None,
             };
             let _ = send_json(sender, &res).await;
@@ -1427,6 +1491,23 @@ async fn forward_run_event(
                 error_message: Some(error_message),
             })
         }
+        "aborted" => {
+            let partial_text = serde_json::from_str::<serde_json::Value>(&evt.data)
+                .ok()
+                .and_then(|v| v.get("text").and_then(|v| v.as_str()).map(str::to_string));
+            Some(ChatEventPayload {
+                run_id: run_id.to_string(),
+                session_key: session_key.to_string(),
+                legacy_session_key: session_key.to_string(),
+                seq: *seq,
+                state: "aborted",
+                message: partial_text.map(|text| ChatEventMessage {
+                    role: "assistant",
+                    content: vec![ChatEventContent { kind: "text", text }],
+                }),
+                error_message: None,
+            })
+        }
         _ => None,
     };
 
@@ -1442,7 +1523,7 @@ async fn forward_run_event(
         }
     }
 
-    evt.event == "done" || evt.event == "error"
+    evt.event == "done" || evt.event == "error" || evt.event == "aborted"
 }
 
 async fn send_error_response(
