@@ -2174,6 +2174,9 @@ async fn run_ws_connection(
 
     info!("Feishu WS: connecting (service_id={service_id}, ping_interval={ping_secs}s)");
 
+    crate::tls::ensure_rustls_crypto_provider()
+        .map_err(|e| format!("WebSocket TLS init failed: {e}"))?;
+
     let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
         .await
         .map_err(|e| format!("WebSocket connect failed: {e}"))?;

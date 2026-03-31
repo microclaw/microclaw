@@ -803,6 +803,9 @@ async fn run_socket_mode(
     let ws_url = open_socket_mode_connection(app_token).await?;
     info!("Slack Socket Mode: connecting to WebSocket...");
 
+    crate::tls::ensure_rustls_crypto_provider()
+        .map_err(|e| format!("WebSocket TLS init failed: {e}"))?;
+
     let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
         .await
         .map_err(|e| format!("WebSocket connect failed: {e}"))?;

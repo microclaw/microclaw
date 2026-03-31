@@ -305,6 +305,10 @@ async fn call_async(opts: &GatewayCallOptions) -> Result<serde_json::Value> {
         .with_context(|| format!("invalid JSON for --params: {}", opts.params))?;
     let timeout = Duration::from_millis(opts.timeout_ms.max(1_000));
 
+    crate::tls::ensure_rustls_crypto_provider()
+        .map_err(anyhow::Error::msg)
+        .context("failed to initialize rustls crypto provider")?;
+
     let (mut ws, _) = tokio::time::timeout(timeout, tokio_tungstenite::connect_async(&ws_url))
         .await
         .context("gateway websocket connect timed out")?
