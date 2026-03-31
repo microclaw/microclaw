@@ -132,31 +132,91 @@ jobs:
         include:
           - label: linux-x86_64
             os: ubuntu-latest
+            flavor: default
             bin: microclaw
+            packaged_bin: microclaw
+            cargo_features: ''
             target_triple: x86_64-unknown-linux-gnu
             asset_triple: x86_64-linux-gnu
             archive_ext: tar.gz
           - label: linux-arm64
             os: ubuntu-24.04-arm
+            flavor: default
             bin: microclaw
+            packaged_bin: microclaw
+            cargo_features: ''
             target_triple: aarch64-unknown-linux-gnu
             asset_triple: aarch64-linux-gnu
             archive_ext: tar.gz
           - label: macos-x86_64
             os: macos-15-intel
+            flavor: default
             bin: microclaw
+            packaged_bin: microclaw
+            cargo_features: ''
             target_triple: x86_64-apple-darwin
             asset_triple: x86_64-apple-darwin
             archive_ext: tar.gz
           - label: macos-arm64
             os: macos-14
+            flavor: default
             bin: microclaw
+            packaged_bin: microclaw
+            cargo_features: ''
             target_triple: aarch64-apple-darwin
             asset_triple: aarch64-apple-darwin
             archive_ext: tar.gz
           - label: windows-x86_64
             os: windows-latest
+            flavor: default
             bin: microclaw.exe
+            packaged_bin: microclaw.exe
+            cargo_features: ''
+            target_triple: x86_64-pc-windows-msvc
+            asset_triple: x86_64-windows-msvc
+            archive_ext: zip
+          - label: linux-x86_64-full
+            os: ubuntu-latest
+            flavor: full
+            bin: microclaw
+            packaged_bin: microclaw-full
+            cargo_features: full
+            target_triple: x86_64-unknown-linux-gnu
+            asset_triple: x86_64-linux-gnu
+            archive_ext: tar.gz
+          - label: linux-arm64-full
+            os: ubuntu-24.04-arm
+            flavor: full
+            bin: microclaw
+            packaged_bin: microclaw-full
+            cargo_features: full
+            target_triple: aarch64-unknown-linux-gnu
+            asset_triple: aarch64-linux-gnu
+            archive_ext: tar.gz
+          - label: macos-x86_64-full
+            os: macos-15-intel
+            flavor: full
+            bin: microclaw
+            packaged_bin: microclaw-full
+            cargo_features: full
+            target_triple: x86_64-apple-darwin
+            asset_triple: x86_64-apple-darwin
+            archive_ext: tar.gz
+          - label: macos-arm64-full
+            os: macos-14
+            flavor: full
+            bin: microclaw
+            packaged_bin: microclaw-full
+            cargo_features: full
+            target_triple: aarch64-apple-darwin
+            asset_triple: aarch64-apple-darwin
+            archive_ext: tar.gz
+          - label: windows-x86_64-full
+            os: windows-latest
+            flavor: full
+            bin: microclaw.exe
+            packaged_bin: microclaw-full.exe
+            cargo_features: full
             target_triple: x86_64-pc-windows-msvc
             asset_triple: x86_64-windows-msvc
             archive_ext: zip
@@ -183,24 +243,50 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        run: cargo build --release
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.cargo_features }}" ]; then
+            cargo build --release --features "${{ matrix.cargo_features }}"
+          else
+            cargo build --release
+          fi
+
+      - name: Prepare packaged binary name (Unix)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          cp "target/release/${{ matrix.bin }}" "target/release/${{ matrix.packaged_bin }}"
 
       - name: Package archive (Linux)
         if: matrix.archive_ext == 'tar.gz'
         shell: bash
         run: |
           RELEASE_VERSION="${RELEASE_TAG#v}"
-          ASSET_NAME="microclaw-${RELEASE_VERSION}-${{ matrix.asset_triple }}.tar.gz"
-          tar -czf "$ASSET_NAME" -C target/release "${{ matrix.bin }}"
+          ASSET_PREFIX="microclaw"
+          if [ "${{ matrix.flavor }}" = "full" ]; then
+            ASSET_PREFIX="microclaw-full"
+          fi
+          ASSET_NAME="${ASSET_PREFIX}-${RELEASE_VERSION}-${{ matrix.asset_triple }}.tar.gz"
+          tar -czf "$ASSET_NAME" -C target/release "${{ matrix.packaged_bin }}"
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+
+      - name: Prepare packaged binary name (Windows)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          Copy-Item "target/release/${{ matrix.bin }}" "target/release/${{ matrix.packaged_bin }}" -Force
 
       - name: Package archive (Windows)
         if: matrix.archive_ext == 'zip'
         shell: pwsh
         run: |
           $releaseVersion = $env:RELEASE_TAG -replace '^v', ''
-          $assetName = "microclaw-${releaseVersion}-${{ matrix.asset_triple }}.zip"
-          Compress-Archive -Path "target/release/${{ matrix.bin }}" -DestinationPath $assetName -Force
+          $assetPrefix = "microclaw"
+          if ("${{ matrix.flavor }}" -eq "full") {
+            $assetPrefix = "microclaw-full"
+          }
+          $assetName = "${assetPrefix}-${releaseVersion}-${{ matrix.asset_triple }}.zip"
+          Compress-Archive -Path "target/release/${{ matrix.packaged_bin }}" -DestinationPath $assetName -Force
           "ASSET_NAME=$assetName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upload build artifact
