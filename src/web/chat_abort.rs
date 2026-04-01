@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::time::Instant;
 
 use tokio::sync::RwLock;
 
@@ -15,15 +14,6 @@ pub struct ChatAbortControllerEntry {
     pub buffer: Arc<RwLock<String>>,
     /// The session key this run belongs to.
     pub session_key: String,
-    /// When this run was registered (Unix ms). Exposed for testing.
-    #[allow(dead_code)]
-    pub started_at_ms: i64,
-    /// When this run expires and should be auto-cleaned (Unix ms).
-    #[allow(dead_code)]
-    pub expires_at_ms: i64,
-    /// The WebSocket connection that owns this run (for auth).
-    #[allow(dead_code)]
-    pub owner_conn_id: Option<String>,
 }
 
 /// Global registry of active chat abort controllers.
@@ -32,16 +22,11 @@ static CHAT_ABORT_CONTROLLERS: LazyLock<RwLock<HashMap<String, ChatAbortControll
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 impl ChatAbortControllerEntry {
-    /// Creates a new abort controller entry with default expiration of 2 minutes.
-    pub fn new(session_key: String, owner_conn_id: Option<String>) -> Self {
-        let now_ms = Instant::now().elapsed().as_millis() as i64;
+    pub fn new(session_key: String) -> Self {
         Self {
             aborted: Arc::new(AtomicBool::new(false)),
             buffer: Arc::new(RwLock::new(String::new())),
             session_key,
-            started_at_ms: now_ms,
-            expires_at_ms: now_ms + 120_000, // default 2min
-            owner_conn_id,
         }
     }
 }
@@ -50,9 +35,8 @@ impl ChatAbortControllerEntry {
 pub async fn register_chat_run(
     run_id: String,
     session_key: String,
-    owner_conn_id: Option<String>,
 ) -> ChatAbortControllerEntry {
-    let entry = ChatAbortControllerEntry::new(session_key, owner_conn_id);
+    let entry = ChatAbortControllerEntry::new(session_key);
     let mut guard = CHAT_ABORT_CONTROLLERS.write().await;
     guard.insert(run_id, entry.clone());
     entry
@@ -64,24 +48,11 @@ pub async fn unregister_chat_run(run_id: &str) {
     guard.remove(run_id);
 }
 
-/// Clear all chat abort controller entries (for testing).
+/// Get a clone of the controller entry for a run.
 #[cfg(test)]
-pub async fn clear_all_runs() {
-    let mut guard = CHAT_ABORT_CONTROLLERS.write().await;
-    guard.clear();
-}
-
-/// Get a clone of the controller entry for a run. Exposed for testing.
-#[allow(dead_code)]
 pub async fn get_chat_run(run_id: &str) -> Option<ChatAbortControllerEntry> {
     let guard = CHAT_ABORT_CONTROLLERS.read().await;
     guard.get(run_id).cloned()
-}
-
-/// Check if a run has been aborted.
-#[allow(dead_code)]
-pub fn is_aborted(entry: &ChatAbortControllerEntry) -> bool {
-    entry.aborted.load(Ordering::SeqCst)
 }
 
 /// Signal abort for a specific run. Returns (aborted, partial_text).
@@ -188,17 +159,17 @@ pub async fn abort_chat_runs_for_session_key(
 mod tests {
     use super::*;
 
+    // Tests use unique run_id / session_key values so they can run in
+    // parallel without interfering via the shared global registry.
+
     #[tokio::test]
     async fn test_register_and_unregister() {
-        clear_all_runs().await;
-        let run_id = "test-run-1";
-        let session_key = "main:web:direct:user1";
-        let owner_conn = Some("conn-abc".to_string());
+        let run_id = "reg-unreg-1";
+        let session_key = "session:reg-unreg";
 
-        let entry = register_chat_run(run_id.to_string(), session_key.to_string(), owner_conn.clone()).await;
-        assert!(!is_aborted(&entry));
+        let entry = register_chat_run(run_id.to_string(), session_key.to_string()).await;
+        assert!(!entry.aborted.load(Ordering::SeqCst));
         assert_eq!(entry.session_key, session_key);
-        assert_eq!(entry.owner_conn_id, owner_conn);
 
         unregister_chat_run(run_id).await;
         assert!(get_chat_run(run_id).await.is_none());
@@ -206,62 +177,64 @@ mod tests {
 
     #[tokio::test]
     async fn test_abort_run_by_id_success() {
-        clear_all_runs().await;
-        let run_id = "test-run-2";
-        let session_key = "main:web:direct:user1";
+        let run_id = "abort-ok-1";
+        let session_key = "session:abort-ok";
 
-        register_chat_run(run_id.to_string(), session_key.to_string(), None).await;
+        register_chat_run(run_id.to_string(), session_key.to_string()).await;
 
         let (aborted, partial) = abort_chat_run_by_id(run_id, session_key).await;
         assert!(aborted);
         assert!(partial.is_none()); // no text accumulated yet
+
+        unregister_chat_run(run_id).await;
     }
 
     #[tokio::test]
     async fn test_abort_run_by_id_wrong_session() {
-        clear_all_runs().await;
-        let run_id = "test-run-3";
-        let session_key = "main:web:direct:user1";
+        let run_id = "abort-wrong-1";
+        let session_key = "session:abort-wrong";
 
-        register_chat_run(run_id.to_string(), session_key.to_string(), None).await;
+        register_chat_run(run_id.to_string(), session_key.to_string()).await;
 
         let (aborted, _) = abort_chat_run_by_id(run_id, "wrong:session:key").await;
         assert!(!aborted);
+
+        unregister_chat_run(run_id).await;
     }
 
     #[tokio::test]
     async fn test_abort_nonexistent_run() {
-        clear_all_runs().await;
-        let (aborted, _) = abort_chat_run_by_id("nonexistent", "any").await;
+        let (aborted, _) = abort_chat_run_by_id("nonexistent-xyz", "any").await;
         assert!(!aborted);
     }
 
     #[tokio::test]
     async fn test_abort_session_key_aborts_all_runs() {
-        // Clear any leftover state from previous tests
-        clear_all_runs().await;
+        let session_key = "session:batch-abort";
 
-        let session_key = "main:web:direct:user1";
-
-        register_chat_run("run-a".to_string(), session_key.to_string(), None).await;
-        register_chat_run("run-b".to_string(), session_key.to_string(), None).await;
-        register_chat_run("run-c".to_string(), "other:session".to_string(), None).await;
+        register_chat_run("batch-a".to_string(), session_key.to_string()).await;
+        register_chat_run("batch-b".to_string(), session_key.to_string()).await;
+        register_chat_run("batch-c".to_string(), "session:batch-other".to_string()).await;
 
         let (aborted, run_ids, _) = abort_chat_runs_for_session_key(session_key).await;
         assert!(aborted);
         assert_eq!(run_ids.len(), 2);
-        assert!(run_ids.contains(&"run-a".to_string()));
-        assert!(run_ids.contains(&"run-b".to_string()));
-        assert!(!run_ids.contains(&"run-c".to_string()));
+        assert!(run_ids.contains(&"batch-a".to_string()));
+        assert!(run_ids.contains(&"batch-b".to_string()));
+        assert!(!run_ids.contains(&"batch-c".to_string()));
+
+        // clean up
+        unregister_chat_run("batch-a").await;
+        unregister_chat_run("batch-b").await;
+        unregister_chat_run("batch-c").await;
     }
 
     #[tokio::test]
     async fn test_unregister_removes_from_map() {
-        clear_all_runs().await;
-        let run_id = "test-run-5";
-        let session_key = "main:web:direct:user1";
+        let run_id = "unreg-check-1";
+        let session_key = "session:unreg-check";
 
-        register_chat_run(run_id.to_string(), session_key.to_string(), None).await;
+        register_chat_run(run_id.to_string(), session_key.to_string()).await;
         assert!(get_chat_run(run_id).await.is_some());
 
         unregister_chat_run(run_id).await;
