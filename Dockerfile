@@ -43,6 +43,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 COPY --from=web-builder /usr/src/microclaw/web/dist ./web/dist
 
+ENV MICROCLAW_SKIP_WEB_BUILD=1
 RUN cargo build --release --locked --bin microclaw
 
 # Stage 5: Run
