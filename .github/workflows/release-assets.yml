@@ -121,102 +121,43 @@ jobs:
           exit 1
 
   build-assets:
-    name: Build ${{ matrix.label }}
-    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.target.label }}-${{ matrix.flavor }}
+    runs-on: ${{ matrix.target.os }}
     needs: verify-ci
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
-        include:
+        flavor: [default, full]
+        target:
           - label: linux-x86_64
             os: ubuntu-latest
-            flavor: default
             bin: microclaw
-            packaged_bin: microclaw
-            cargo_features: ''
             target_triple: x86_64-unknown-linux-gnu
             asset_triple: x86_64-linux-gnu
             archive_ext: tar.gz
           - label: linux-arm64
             os: ubuntu-24.04-arm
-            flavor: default
             bin: microclaw
-            packaged_bin: microclaw
-            cargo_features: ''
             target_triple: aarch64-unknown-linux-gnu
             asset_triple: aarch64-linux-gnu
             archive_ext: tar.gz
           - label: macos-x86_64
             os: macos-15-intel
-            flavor: default
             bin: microclaw
-            packaged_bin: microclaw
-            cargo_features: ''
             target_triple: x86_64-apple-darwin
             asset_triple: x86_64-apple-darwin
             archive_ext: tar.gz
           - label: macos-arm64
             os: macos-14
-            flavor: default
             bin: microclaw
-            packaged_bin: microclaw
-            cargo_features: ''
             target_triple: aarch64-apple-darwin
             asset_triple: aarch64-apple-darwin
             archive_ext: tar.gz
           - label: windows-x86_64
             os: windows-latest
-            flavor: default
             bin: microclaw.exe
-            packaged_bin: microclaw.exe
-            cargo_features: ''
-            target_triple: x86_64-pc-windows-msvc
-            asset_triple: x86_64-windows-msvc
-            archive_ext: zip
-          - label: linux-x86_64-full
-            os: ubuntu-latest
-            flavor: full
-            bin: microclaw
-            packaged_bin: microclaw-full
-            cargo_features: full
-            target_triple: x86_64-unknown-linux-gnu
-            asset_triple: x86_64-linux-gnu
-            archive_ext: tar.gz
-          - label: linux-arm64-full
-            os: ubuntu-24.04-arm
-            flavor: full
-            bin: microclaw
-            packaged_bin: microclaw-full
-            cargo_features: full
-            target_triple: aarch64-unknown-linux-gnu
-            asset_triple: aarch64-linux-gnu
-            archive_ext: tar.gz
-          - label: macos-x86_64-full
-            os: macos-15-intel
-            flavor: full
-            bin: microclaw
-            packaged_bin: microclaw-full
-            cargo_features: full
-            target_triple: x86_64-apple-darwin
-            asset_triple: x86_64-apple-darwin
-            archive_ext: tar.gz
-          - label: macos-arm64-full
-            os: macos-14
-            flavor: full
-            bin: microclaw
-            packaged_bin: microclaw-full
-            cargo_features: full
-            target_triple: aarch64-apple-darwin
-            asset_triple: aarch64-apple-darwin
-            archive_ext: tar.gz
-          - label: windows-x86_64-full
-            os: windows-latest
-            flavor: full
-            bin: microclaw.exe
-            packaged_bin: microclaw-full.exe
-            cargo_features: full
             target_triple: x86_64-pc-windows-msvc
             asset_triple: x86_64-windows-msvc
             archive_ext: zip
@@ -245,54 +186,64 @@ jobs:
       - name: Build release binary
         shell: bash
         run: |
-          if [ -n "${{ matrix.cargo_features }}" ]; then
-            cargo build --release --features "${{ matrix.cargo_features }}"
+          if [ "${{ matrix.flavor }}" = "full" ]; then
+            cargo build --release --features full
           else
             cargo build --release
           fi
 
       - name: Prepare packaged binary name (Unix)
-        if: matrix.archive_ext == 'tar.gz'
+        if: matrix.target.archive_ext == 'tar.gz'
         shell: bash
         run: |
-          cp "target/release/${{ matrix.bin }}" "target/release/${{ matrix.packaged_bin }}"
+          if [ "${{ matrix.flavor }}" = "full" ]; then
+            cp "target/release/${{ matrix.target.bin }}" "target/release/microclaw-full"
+          fi
 
-      - name: Package archive (Linux)
-        if: matrix.archive_ext == 'tar.gz'
+      - name: Package archive (Unix)
+        if: matrix.target.archive_ext == 'tar.gz'
         shell: bash
         run: |
           RELEASE_VERSION="${RELEASE_TAG#v}"
-          ASSET_PREFIX="microclaw"
           if [ "${{ matrix.flavor }}" = "full" ]; then
             ASSET_PREFIX="microclaw-full"
+            PACKAGED_BIN="microclaw-full"
+          else
+            ASSET_PREFIX="microclaw"
+            PACKAGED_BIN="${{ matrix.target.bin }}"
           fi
-          ASSET_NAME="${ASSET_PREFIX}-${RELEASE_VERSION}-${{ matrix.asset_triple }}.tar.gz"
-          tar -czf "$ASSET_NAME" -C target/release "${{ matrix.packaged_bin }}"
+          ASSET_NAME="${ASSET_PREFIX}-${RELEASE_VERSION}-${{ matrix.target.asset_triple }}.tar.gz"
+          tar -czf "$ASSET_NAME" -C target/release "${PACKAGED_BIN}"
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
 
       - name: Prepare packaged binary name (Windows)
-        if: matrix.archive_ext == 'zip'
+        if: matrix.target.archive_ext == 'zip'
         shell: pwsh
         run: |
-          Copy-Item "target/release/${{ matrix.bin }}" "target/release/${{ matrix.packaged_bin }}" -Force
+          if ("${{ matrix.flavor }}" -eq "full") {
+            Copy-Item "target/release/${{ matrix.target.bin }}" "target/release/microclaw-full.exe" -Force
+          }
 
       - name: Package archive (Windows)
-        if: matrix.archive_ext == 'zip'
+        if: matrix.target.archive_ext == 'zip'
         shell: pwsh
         run: |
           $releaseVersion = $env:RELEASE_TAG -replace '^v', ''
-          $assetPrefix = "microclaw"
           if ("${{ matrix.flavor }}" -eq "full") {
             $assetPrefix = "microclaw-full"
+            $packagedBin = "microclaw-full.exe"
+          } else {
+            $assetPrefix = "microclaw"
+            $packagedBin = "${{ matrix.target.bin }}"
           }
-          $assetName = "${assetPrefix}-${releaseVersion}-${{ matrix.asset_triple }}.zip"
-          Compress-Archive -Path "target/release/${{ matrix.packaged_bin }}" -DestinationPath $assetName -Force
+          $assetName = "${assetPrefix}-${releaseVersion}-${{ matrix.target.asset_triple }}.zip"
+          Compress-Archive -Path "target/release/${packagedBin}" -DestinationPath $assetName -Force
           "ASSET_NAME=$assetName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.label }}
+          name: ${{ matrix.target.label }}-${{ matrix.flavor }}
           path: ${{ env.ASSET_NAME }}
           if-no-files-found: error
 

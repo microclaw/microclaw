@@ -26,7 +26,6 @@ pub mod skills;
 pub mod tools;
 pub mod web;
 
-#[cfg(feature = "channel-discord")]
 pub use channels::discord;
 pub use channels::telegram;
 pub use microclaw_app::builtin_skills;

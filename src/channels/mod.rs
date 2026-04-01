@@ -1,5 +1,4 @@
 pub mod dingtalk;
-#[cfg(feature = "channel-discord")]
 pub mod discord;
 pub mod email;
 pub mod feishu;
@@ -18,7 +17,6 @@ pub mod whatsapp;
 
 // Re-export adapter types
 pub use dingtalk::DingTalkAdapter;
-#[cfg(feature = "channel-discord")]
 pub use discord::DiscordAdapter;
 pub use email::EmailAdapter;
 pub use feishu::FeishuAdapter;
