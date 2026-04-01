@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO="${MICROCLAW_REPO:-microclaw/microclaw}"
 BIN_NAME="microclaw"
+VARIANT="${MICROCLAW_VARIANT:-default}"
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 SKIP_RUN="${MICROCLAW_INSTALL_SKIP_RUN:-0}"
 
@@ -20,16 +21,23 @@ need_cmd() {
 
 print_help() {
   cat <<'EOF'
-Usage: install.sh [--skip-run]
+Usage: install.sh [--full] [--skip-run]
 
 Options:
+  --full       Install the full variant (includes Matrix channel + MCP support).
   --skip-run   Do not auto-run microclaw after install.
+
+Environment variables:
+  MICROCLAW_VARIANT   Set to "full" as an alternative to --full.
 EOF
 }
 
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --full)
+        VARIANT="full"
+        ;;
       --skip-run)
         SKIP_RUN=1
         ;;
@@ -113,11 +121,18 @@ download_release_json() {
 extract_asset_url() {
   # Match assets like:
   #   microclaw-0.0.5-aarch64-apple-darwin.tar.gz
-  #   microclaw-0.0.5-aarch64-linux-gnu.tar.gz
+  #   microclaw-full-0.0.5-aarch64-apple-darwin.tar.gz
   local release_json="$1"
   local os="$2"
   local arch="$3"
-  local os_regex arch_regex
+  local variant="$4"
+  local os_regex arch_regex asset_prefix
+
+  if [ "$variant" = "full" ]; then
+    asset_prefix="${BIN_NAME}-full"
+  else
+    asset_prefix="${BIN_NAME}"
+  fi
 
   case "$os" in
     darwin) os_regex="apple-darwin|darwin" ;;
@@ -140,7 +155,7 @@ extract_asset_url() {
   printf '%s\n' "$release_json" \
     | grep -Eo 'https://[^"]+' \
     | grep '/releases/download/' \
-    | grep -E "/${BIN_NAME}-[0-9]+\.[0-9]+\.[0-9]+-.*(apple-darwin|linux-gnu|linux-musl|windows-msvc)\.(tar\.gz|zip)$" \
+    | grep -E "/${asset_prefix}-[0-9]+\.[0-9]+\.[0-9]+-.*(apple-darwin|linux-gnu|linux-musl|windows-msvc)\.(tar\.gz|zip)$" \
     | grep -Ei "(${arch_regex}).*(${os_regex})|(${os_regex}).*(${arch_regex})" \
     | head -n1
 }
@@ -193,7 +208,8 @@ install_from_archive() {
   fi
 
   local bin_path
-  bin_path="$(find "$tmpdir" -type f -name "$BIN_NAME" | head -n1)"
+  # Full variant archives contain "microclaw-full" binary; fall back to "microclaw".
+  bin_path="$(find "$tmpdir" -type f \( -name "${BIN_NAME}-full" -o -name "$BIN_NAME" \) | head -n1)"
   if [ -z "$bin_path" ]; then
     err "Could not find '$BIN_NAME' in archive"
     return 1
@@ -232,9 +248,13 @@ main() {
     had_existing_bin=1
   fi
 
-  log "Installing ${BIN_NAME} for ${os}/${arch}..."
+  if [ "$VARIANT" = "full" ]; then
+    log "Installing ${BIN_NAME} (full variant) for ${os}/${arch}..."
+  else
+    log "Installing ${BIN_NAME} for ${os}/${arch}..."
+  fi
   release_json="$(download_release_json)"
-  asset_url="$(extract_asset_url "$release_json" "$os" "$arch" || true)"
+  asset_url="$(extract_asset_url "$release_json" "$os" "$arch" "$VARIANT" || true)"
   if [ -z "$asset_url" ]; then
     err "No prebuilt binary found for ${os}/${arch} in the latest GitHub release."
     err "Use a separate install method instead:"

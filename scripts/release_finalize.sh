@@ -238,7 +238,12 @@ release_asset_sha256() {
 homebrew_macos_asset_name() {
   local version="$1"
   local arch="$2"
-  echo "microclaw-${version}-${arch}-apple-darwin.tar.gz"
+  local variant="${3:-default}"
+  if [ "$variant" = "full" ]; then
+    echo "microclaw-full-${version}-${arch}-apple-darwin.tar.gz"
+  else
+    echo "microclaw-${version}-${arch}-apple-darwin.tar.gz"
+  fi
 }
 
 previous_release_tag() {
@@ -358,6 +363,8 @@ fi
 
 HOMEBREW_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64")"
 HOMEBREW_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64")"
+HOMEBREW_FULL_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64" "full")"
+HOMEBREW_FULL_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64" "full")"
 
 if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME"; then
   exit 1
@@ -367,10 +374,22 @@ if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBAL
   exit 1
 fi
 
+if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_ARM64_TARBALL_NAME"; then
+  exit 1
+fi
+
+if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_X86_64_TARBALL_NAME"; then
+  exit 1
+fi
+
 HOMEBREW_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME")"
 HOMEBREW_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBALL_NAME")"
+HOMEBREW_FULL_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_ARM64_TARBALL_NAME")"
+HOMEBREW_FULL_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_X86_64_TARBALL_NAME")"
 echo "Official Homebrew arm64 SHA256: $HOMEBREW_ARM64_SHA256"
 echo "Official Homebrew x86_64 SHA256: $HOMEBREW_X86_64_SHA256"
+echo "Official Homebrew full arm64 SHA256: $HOMEBREW_FULL_ARM64_SHA256"
+echo "Official Homebrew full x86_64 SHA256: $HOMEBREW_FULL_X86_64_SHA256"
 
 echo "Resetting tap workspace: $TAP_DIR"
 rm -rf "$TAP_DIR"
@@ -407,6 +426,33 @@ class Microclaw < Formula
 end
 RUBY
 
+FORMULA_FULL_PATH="$(dirname "$FORMULA_PATH")/microclaw-full.rb"
+cat > "$FORMULA_FULL_PATH" << RUBY
+class MicroclawFull < Formula
+  desc "Agentic AI assistant (full variant with Matrix channel + MCP support)"
+  homepage "https://github.com/$GITHUB_REPO"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$HOMEBREW_FULL_ARM64_TARBALL_NAME"
+      sha256 "$HOMEBREW_FULL_ARM64_SHA256"
+    else
+      url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$HOMEBREW_FULL_X86_64_TARBALL_NAME"
+      sha256 "$HOMEBREW_FULL_X86_64_SHA256"
+    end
+  end
+
+  def install
+    bin.install "microclaw-full" => "microclaw"
+  end
+
+  test do
+    assert_match "MicroClaw", shell_output("#{bin}/microclaw help")
+  end
+end
+RUBY
+
 git add .
 git commit -m "microclaw homebrew release $NEW_VERSION"
 sync_rebase_and_push origin
@@ -416,4 +462,5 @@ echo "Done! Released $TAG and updated Homebrew tap."
 echo ""
 echo "Users can install with:"
 echo "  brew tap microclaw/tap"
-echo "  brew install microclaw"
+echo "  brew install microclaw          # default (lightweight)"
+echo "  brew install microclaw-full     # full (Matrix + MCP)"

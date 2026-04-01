@@ -96,6 +96,12 @@ If you want a source build instead, jump to [Install](#install). If you want ope
 curl -fsSL https://microclaw.ai/install.sh | bash
 ```
 
+For the full variant (includes Matrix channel + MCP support):
+
+```sh
+curl -fsSL https://microclaw.ai/install.sh | bash -s -- --full
+```
+
 ### Windows PowerShell installer
 
 ```powershell
@@ -152,7 +158,8 @@ iwr https://microclaw.ai/uninstall.ps1 -UseBasicParsing | iex
 
 ```sh
 brew tap microclaw/tap
-brew install microclaw
+brew install microclaw          # default (lightweight)
+brew install microclaw-full     # full (Matrix + MCP)
 ```
 
 ### Docker image
