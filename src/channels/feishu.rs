@@ -165,6 +165,8 @@ pub struct FeishuChannelConfig {
     pub accounts: HashMap<String, FeishuAccountConfig>,
     #[serde(default)]
     pub default_account: Option<String>,
+    #[serde(default)]
+    pub ack_reaction: bool,
 }
 
 fn pick_default_account_id(
@@ -230,6 +232,7 @@ pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<Feis
             show_progress: account_cfg.show_progress,
             accounts: HashMap::new(),
             default_account: None,
+            ack_reaction: feishu_cfg.ack_reaction,
         };
         let bot_username = if account_cfg.bot_username.trim().is_empty() {
             config.bot_username_for_channel(&channel_name)
@@ -1335,117 +1338,9 @@ pub(crate) fn system_prompt_extension(caller_channel: &str) -> Option<&'static s
 // ACK Reaction (已读标记)
 // ---------------------------------------------------------------------------
 
-const FEISHU_ACK_REACTIONS_ZH_CN: &[&str] = &[
-    "OK", "JIAYI", "APPLAUSE", "THUMBSUP", "MUSCLE", "SMILE", "DONE",
+const FEISHU_ACK_REACTIONS: &[&str] = &[
+    "OK", "THUMBSUP", "DONE", "SMILE", "APPLAUSE", "MUSCLE",
 ];
-const FEISHU_ACK_REACTIONS_ZH_TW: &[&str] = &[
-    "OK",
-    "JIAYI",
-    "APPLAUSE",
-    "THUMBSUP",
-    "FINGERHEART",
-    "SMILE",
-    "DONE",
-];
-const FEISHU_ACK_REACTIONS_EN: &[&str] = &[
-    "OK",
-    "THUMBSUP",
-    "THANKS",
-    "MUSCLE",
-    "FINGERHEART",
-    "APPLAUSE",
-    "SMILE",
-    "DONE",
-];
-const FEISHU_ACK_REACTIONS_JA: &[&str] = &[
-    "OK",
-    "THUMBSUP",
-    "THANKS",
-    "MUSCLE",
-    "FINGERHEART",
-    "APPLAUSE",
-    "SMILE",
-    "DONE",
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FeishuAckLocale {
-    ZhCn,
-    ZhTw,
-    En,
-    Ja,
-}
-
-fn is_japanese_kana(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x3040..=0x309F | // Hiragana
-        0x30A0..=0x30FF | // Katakana
-        0x31F0..=0x31FF // Katakana Phonetic Extensions
-    )
-}
-
-fn is_cjk_han(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x3400..=0x4DBF | // CJK Extension A
-        0x4E00..=0x9FFF // CJK Unified Ideographs
-    )
-}
-
-fn is_traditional_only_han(ch: char) -> bool {
-    matches!(
-        ch,
-        '奮' | '鬥'
-            | '強'
-            | '體'
-            | '國'
-            | '臺'
-            | '萬'
-            | '與'
-            | '為'
-            | '這'
-            | '學'
-            | '機'
-            | '開'
-            | '裡'
-    )
-}
-
-fn is_simplified_only_han(ch: char) -> bool {
-    matches!(
-        ch,
-        '奋' | '斗'
-            | '强'
-            | '体'
-            | '国'
-            | '台'
-            | '万'
-            | '与'
-            | '为'
-            | '这'
-            | '学'
-            | '机'
-            | '开'
-            | '里'
-    )
-}
-
-fn detect_feishu_ack_locale(text: &str) -> FeishuAckLocale {
-    if text.chars().any(is_japanese_kana) {
-        return FeishuAckLocale::Ja;
-    }
-    if text.chars().any(is_traditional_only_han) {
-        return FeishuAckLocale::ZhTw;
-    }
-    if text.chars().any(is_simplified_only_han) {
-        return FeishuAckLocale::ZhCn;
-    }
-    if text.chars().any(is_cjk_han) {
-        return FeishuAckLocale::ZhCn;
-    }
-    FeishuAckLocale::En
-}
 
 fn pick_uniform_index(len: usize, seed: &str) -> usize {
     debug_assert!(len > 0);
@@ -1455,13 +1350,7 @@ fn pick_uniform_index(len: usize, seed: &str) -> usize {
 }
 
 fn random_feishu_ack_reaction(text: &str) -> &'static str {
-    let locale = detect_feishu_ack_locale(text);
-    let pool = match locale {
-        FeishuAckLocale::ZhCn => FEISHU_ACK_REACTIONS_ZH_CN,
-        FeishuAckLocale::ZhTw => FEISHU_ACK_REACTIONS_ZH_TW,
-        FeishuAckLocale::En => FEISHU_ACK_REACTIONS_EN,
-        FeishuAckLocale::Ja => FEISHU_ACK_REACTIONS_JA,
-    };
+    let pool = FEISHU_ACK_REACTIONS;
     pool[pick_uniform_index(pool.len(), text)]
 }
 
@@ -2579,39 +2468,40 @@ async fn handle_feishu_event(
         return;
     }
 
-    // Send ACK reaction (已读标记)
-    let ack_http_client = http_client.clone();
-    let ack_base_url = base_url.to_string();
-    let ack_app_id = feishu_cfg.app_id.clone();
-    let ack_app_secret = feishu_cfg.app_secret.clone();
-    let ack_message_id = message_id.to_string();
-    let ack_text = text.clone();
-    tokio::spawn(async move {
-        // Send ACK reaction with locale-aware emoji
-        let emoji = random_feishu_ack_reaction(&ack_text);
-        let token = match get_token(
-            &ack_http_client,
-            &ack_base_url,
-            &ack_app_id,
-            &ack_app_secret,
-        )
-        .await
-        {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-        if let Err(e) = send_feishu_reaction(
-            &ack_http_client,
-            &ack_base_url,
-            &token,
-            &ack_message_id,
-            emoji,
-        )
-        .await
-        {
-            warn!("Feishu: ACK reaction failed for {}: {}", ack_message_id, e);
-        }
-    });
+    // Send ACK reaction (已读标记) — only when enabled in config
+    if feishu_cfg.ack_reaction {
+        let ack_http_client = http_client.clone();
+        let ack_base_url = base_url.to_string();
+        let ack_app_id = feishu_cfg.app_id.clone();
+        let ack_app_secret = feishu_cfg.app_secret.clone();
+        let ack_message_id = message_id.to_string();
+        let ack_text = text.clone();
+        tokio::spawn(async move {
+            let emoji = random_feishu_ack_reaction(&ack_text);
+            let token = match get_token(
+                &ack_http_client,
+                &ack_base_url,
+                &ack_app_id,
+                &ack_app_secret,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(_) => return,
+            };
+            if let Err(e) = send_feishu_reaction(
+                &ack_http_client,
+                &ack_base_url,
+                &token,
+                &ack_message_id,
+                emoji,
+            )
+            .await
+            {
+                warn!("Feishu: ACK reaction failed for {}: {}", ack_message_id, e);
+            }
+        });
+    }
 
     // Group mentions: direct @bot and @all are treated as mention signals.
     let mention_flags = if !is_dm {
@@ -3731,5 +3621,24 @@ accounts:
         let runtimes = build_feishu_runtime_contexts(&cfg);
         assert_eq!(runtimes.len(), 1);
         assert!(runtimes[0].config.topic_mode);
+    }
+}
+
+#[cfg(test)]
+mod ack_reaction_tests {
+    use super::*;
+
+    #[test]
+    fn pick_uniform_index_is_deterministic() {
+        let idx1 = pick_uniform_index(6, "hello");
+        let idx2 = pick_uniform_index(6, "hello");
+        assert_eq!(idx1, idx2);
+        assert!(idx1 < 6);
+    }
+
+    #[test]
+    fn random_feishu_ack_reaction_returns_valid_emoji() {
+        let emoji = random_feishu_ack_reaction("test message");
+        assert!(FEISHU_ACK_REACTIONS.contains(&emoji));
     }
 }
