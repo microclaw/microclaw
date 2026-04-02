@@ -66,16 +66,14 @@ impl Drop for TurnGuard {
 pub struct ChatTurnQueue {
     slots: Mutex<HashMap<ChatKey, Arc<Mutex<ChatSlot>>>>,
     max_pending: usize,
-    enabled: bool,
     idle_ttl: Duration,
 }
 
 impl ChatTurnQueue {
-    pub fn new(enabled: bool, max_pending: usize) -> Self {
+    pub fn new(max_pending: usize) -> Self {
         Self {
             slots: Mutex::new(HashMap::new()),
             max_pending,
-            enabled,
             idle_ttl: Duration::from_secs(600),
         }
     }
@@ -107,16 +105,11 @@ impl ChatTurnQueue {
 
     /// Acquire the turn for a chat. Blocks until the previous run completes.
     /// Returns a [`TurnGuard`] that releases the turn when dropped.
-    ///
-    /// If `chat_turn_serialization` is disabled, returns immediately without locking.
     pub async fn acquire(
         self: &Arc<Self>,
         channel: &str,
         chat_id: i64,
     ) -> Option<TurnGuard> {
-        if !self.enabled {
-            return None;
-        }
         let key: ChatKey = (channel.to_string(), chat_id);
         let slot_arc = self.get_slot(&key).await;
 
@@ -166,9 +159,6 @@ impl ChatTurnQueue {
         chat_id: i64,
         msg: PendingMessage,
     ) -> bool {
-        if !self.enabled {
-            return false;
-        }
         let key: ChatKey = (channel.to_string(), chat_id);
         let slot_arc = {
             let slots = self.slots.lock().await;
@@ -230,8 +220,8 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn make_queue(enabled: bool) -> Arc<ChatTurnQueue> {
-        Arc::new(ChatTurnQueue::new(enabled, 20))
+    fn make_queue() -> Arc<ChatTurnQueue> {
+        Arc::new(ChatTurnQueue::new(20))
     }
 
     fn make_msg(content: &str) -> PendingMessage {
@@ -245,7 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_acquire_release_basic() {
-        let q = make_queue(true);
+        let q = make_queue();
         let guard = q.acquire("telegram", 1).await;
         assert!(guard.is_some());
         drop(guard);
@@ -256,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_acquire_blocks_concurrent() {
-        let q = make_queue(true);
+        let q = make_queue();
         let counter = Arc::new(AtomicUsize::new(0));
 
         let guard = q.acquire("tg", 1).await.unwrap();
@@ -283,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_enqueue_if_busy_returns_true_when_active() {
-        let q = make_queue(true);
+        let q = make_queue();
         let _guard = q.acquire("tg", 1).await.unwrap();
 
         let queued = q.enqueue_if_busy("tg", 1, make_msg("hello")).await;
@@ -295,7 +285,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_enqueue_if_busy_returns_false_when_idle() {
-        let q = make_queue(true);
+        let q = make_queue();
         // No active run
         let queued = q.enqueue_if_busy("tg", 1, make_msg("hello")).await;
         assert!(!queued);
@@ -303,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_pending_returns_all() {
-        let q = make_queue(true);
+        let q = make_queue();
         let _guard = q.acquire("tg", 1).await.unwrap();
 
         q.enqueue_if_busy("tg", 1, make_msg("a")).await;
@@ -319,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_clears_queue() {
-        let q = make_queue(true);
+        let q = make_queue();
         let _guard = q.acquire("tg", 1).await.unwrap();
 
         q.enqueue_if_busy("tg", 1, make_msg("a")).await;
@@ -331,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_different_chats_independent() {
-        let q = make_queue(true);
+        let q = make_queue();
         let counter = Arc::new(AtomicUsize::new(0));
 
         let _guard_chat1 = q.acquire("tg", 1).await.unwrap();
@@ -349,20 +339,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_disabled_queue_passes_through() {
-        let q = make_queue(false);
-        // acquire returns None when disabled
-        let guard = q.acquire("tg", 1).await;
-        assert!(guard.is_none());
-
-        // enqueue_if_busy returns false when disabled
-        let queued = q.enqueue_if_busy("tg", 1, make_msg("test")).await;
-        assert!(!queued);
-    }
-
-    #[tokio::test]
     async fn test_max_pending_drops_oldest() {
-        let q = Arc::new(ChatTurnQueue::new(true, 3));
+        let q = Arc::new(ChatTurnQueue::new(3));
         let _guard = q.acquire("tg", 1).await.unwrap();
 
         q.enqueue_if_busy("tg", 1, make_msg("a")).await;

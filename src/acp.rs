@@ -62,7 +62,6 @@ pub async fn serve(
     }
 
     let chat_turn_queue = Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(
-        config.chat_turn_serialization,
         config.chat_turn_queue_max_pending,
     ));
     let app_state = Arc::new(AppState {

@@ -481,7 +481,6 @@ pub async fn run(
     let log_exporter = OtlpLogExporter::from_observability(config.observability.as_ref());
 
     let chat_turn_queue = Arc::new(ChatTurnQueue::new(
-        config.chat_turn_serialization,
         config.chat_turn_queue_max_pending,
     ));
 

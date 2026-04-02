@@ -185,15 +185,12 @@ pub async fn process_with_agent_with_events(
     result
 }
 
-/// Check if pending messages were queued during the last turn and, if using
-/// the `queue_then_rerun` strategy, spawn a new agent run to process them.
+/// Check if pending messages were queued during the last turn and spawn a
+/// new agent run to process them.
 ///
 /// Channel adapters should call this after `process_with_agent_with_events`
 /// returns, passing the `Arc<AppState>` they already hold.
 pub fn maybe_rerun_for_pending(state: Arc<AppState>, channel: &str, chat_id: i64, chat_type: &str) {
-    if state.config.chat_turn_queue_strategy != "queue_then_rerun" {
-        return;
-    }
     let channel = channel.to_string();
     let chat_type = chat_type.to_string();
     tokio::spawn(async move {
@@ -2382,7 +2379,7 @@ mod tests {
             embedding: None,
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
-            chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(false, 20)),
+            chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
             metric_exporter: None,
             trace_exporter: None,
             log_exporter: None,
@@ -2424,7 +2421,7 @@ mod tests {
             embedding: None,
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
-            chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(false, 20)),
+            chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
             metric_exporter: None,
             trace_exporter: None,
             log_exporter: None,
