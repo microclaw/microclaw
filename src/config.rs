@@ -636,9 +636,6 @@ pub struct Config {
     /// Maximum number of pending messages per chat before oldest are dropped.
     #[serde(default = "default_chat_turn_queue_max_pending")]
     pub chat_turn_queue_max_pending: usize,
-    /// Enable parallel tool execution within a single LLM turn. Default: false.
-    #[serde(default)]
-    pub parallel_tool_execution: bool,
     /// Maximum number of tools to execute concurrently in a single wave.
     #[serde(default = "default_parallel_tool_max_concurrency")]
     pub parallel_tool_max_concurrency: usize,
@@ -1219,7 +1216,6 @@ impl Config {
             observability: None,
             channels: HashMap::new(),
             chat_turn_queue_max_pending: 20,
-            parallel_tool_execution: false,
             parallel_tool_max_concurrency: 8,
             tool_concurrency_overrides: HashMap::new(),
         }

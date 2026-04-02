@@ -137,10 +137,9 @@ pub async fn execute_tool_batch(
     trace_id: &[u8],
     parent_span_id: &[u8],
 ) -> Vec<ContentBlock> {
-    let parallel_enabled = state.config.parallel_tool_execution;
     let max_concurrency = state.config.parallel_tool_max_concurrency;
 
-    if !parallel_enabled || calls.len() <= 1 {
+    if calls.len() <= 1 {
         // Sequential execution (original behavior)
         return execute_sequentially(
             state,
