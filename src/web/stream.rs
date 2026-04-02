@@ -187,6 +187,8 @@ async fn start_stream_run_internal(
                                 )
                                 .await;
                         }
+                        AgentEvent::ToolWaveStart { .. } => {}
+                        AgentEvent::ToolWaveComplete { .. } => {}
                         AgentEvent::FinalResponse { .. } => {}
                         // Cancelled is handled below after send_and_store_response_with_events.
                         AgentEvent::Cancelled { .. } => {}

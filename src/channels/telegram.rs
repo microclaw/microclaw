@@ -10,8 +10,10 @@ use teloxide::types::{ChatAction, InputFile, MessageId, ParseMode, ThreadId};
 use tracing::{debug, error, info, warn};
 
 use crate::agent_engine::{
-    process_with_agent_with_events, should_suppress_user_error, AgentEvent, AgentRequestContext,
+    maybe_rerun_for_pending, process_with_agent_with_events, should_suppress_user_error,
+    AgentEvent, AgentRequestContext,
 };
+use crate::chat_turn_queue::PendingMessage;
 use crate::channels::startup_guard::{
     mark_channel_started, should_drop_pre_start_message, should_drop_recent_duplicate_message,
 };
@@ -1063,6 +1065,29 @@ async fn handle_message(
         }
     }
 
+    // If another agent run is active for this chat, queue the message and return early.
+    // The message is already stored in DB, so the active or next run will pick it up.
+    if state
+        .chat_turn_queue
+        .enqueue_if_busy(
+            &tg_channel_name,
+            chat_id,
+            PendingMessage {
+                sender_name: sender_name.clone(),
+                content: stored_content.clone(),
+                message_id: inbound_message_id.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+    {
+        debug!(
+            "Telegram message queued (chat busy): chat_id={}, message_id={}",
+            chat_id, inbound_message_id
+        );
+        return Ok(());
+    }
+
     info!(
         "Processing message from {} in chat {}: {}",
         sender_name,
@@ -1204,6 +1229,9 @@ async fn handle_message(
             }
         }
     }
+
+    // If messages were queued during this run, re-dispatch to process them.
+    maybe_rerun_for_pending(state, &tg_channel_name, chat_id, runtime_chat_type);
 
     Ok(())
 }

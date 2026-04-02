@@ -9,6 +9,7 @@ use futures_util::FutureExt;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+use crate::chat_turn_queue::ChatTurnQueue;
 use crate::channels::dingtalk::{build_dingtalk_runtime_contexts, DingTalkRuntimeContext};
 use crate::channels::discord::{build_discord_runtime_contexts, DiscordRuntimeContext};
 use crate::channels::email::{build_email_runtime_contexts, EmailRuntimeContext};
@@ -71,6 +72,7 @@ pub struct AppState {
     pub embedding: Option<Arc<dyn EmbeddingProvider>>,
     pub memory_backend: Arc<MemoryBackend>,
     pub tools: ToolRegistry,
+    pub chat_turn_queue: Arc<ChatTurnQueue>,
     pub metric_exporter: Option<Arc<OtlpMetricExporter>>,
     pub trace_exporter: Option<Arc<OtlpTraceExporter>>,
     pub log_exporter: Option<Arc<OtlpLogExporter>>,
@@ -478,6 +480,11 @@ pub async fn run(
     let trace_exporter = OtlpTraceExporter::from_observability(config.observability.as_ref());
     let log_exporter = OtlpLogExporter::from_observability(config.observability.as_ref());
 
+    let chat_turn_queue = Arc::new(ChatTurnQueue::new(
+        config.chat_turn_serialization,
+        config.chat_turn_queue_max_pending,
+    ));
+
     let state = Arc::new(AppState {
         config,
         channel_registry,
@@ -491,6 +498,7 @@ pub async fn run(
         embedding,
         memory_backend,
         tools,
+        chat_turn_queue,
         metric_exporter,
         trace_exporter,
         log_exporter,

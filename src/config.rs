@@ -66,6 +66,18 @@ fn default_max_tokens() -> u32 {
 fn default_max_tool_iterations() -> usize {
     100
 }
+fn default_chat_turn_serialization() -> bool {
+    true
+}
+fn default_chat_turn_queue_strategy() -> String {
+    "queue_then_rerun".to_string()
+}
+fn default_chat_turn_queue_max_pending() -> usize {
+    20
+}
+fn default_parallel_tool_max_concurrency() -> usize {
+    8
+}
 fn default_compaction_timeout_secs() -> u64 {
     180
 }
@@ -625,6 +637,30 @@ pub struct Config {
     pub subagents: SubagentConfig,
     #[serde(default)]
     pub a2a: A2AConfig,
+
+    // --- Concurrency ---
+    /// Enable per-chat turn serialization. When true, at most one agent run
+    /// is active per (channel, chat_id) at a time. Default: true.
+    #[serde(default = "default_chat_turn_serialization")]
+    pub chat_turn_serialization: bool,
+    /// Strategy for messages queued during an active turn.
+    /// "queue_then_rerun": merge pending messages and start a new run automatically.
+    /// "queue_only": merge into session silently; next explicit message triggers a run.
+    #[serde(default = "default_chat_turn_queue_strategy")]
+    pub chat_turn_queue_strategy: String,
+    /// Maximum number of pending messages per chat before oldest are dropped.
+    #[serde(default = "default_chat_turn_queue_max_pending")]
+    pub chat_turn_queue_max_pending: usize,
+    /// Enable parallel tool execution within a single LLM turn. Default: false.
+    #[serde(default)]
+    pub parallel_tool_execution: bool,
+    /// Maximum number of tools to execute concurrently in a single wave.
+    #[serde(default = "default_parallel_tool_max_concurrency")]
+    pub parallel_tool_max_concurrency: usize,
+    /// Override concurrency class for specific tools (e.g., promote safe MCP tools).
+    /// Keys are tool names, values are "read_only", "side_effect", or "exclusive".
+    #[serde(default)]
+    pub tool_concurrency_overrides: HashMap<String, String>,
     /// OpenAI-compatible request-body overrides applied for all models/providers.
     /// Set a key to `null` to remove that field from the outgoing JSON body.
     #[serde(default)]
@@ -1197,6 +1233,12 @@ impl Config {
             voice_transcription_command: None,
             observability: None,
             channels: HashMap::new(),
+            chat_turn_serialization: false,
+            chat_turn_queue_strategy: "queue_then_rerun".into(),
+            chat_turn_queue_max_pending: 20,
+            parallel_tool_execution: false,
+            parallel_tool_max_concurrency: 8,
+            tool_concurrency_overrides: HashMap::new(),
         }
     }
 

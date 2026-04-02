@@ -114,6 +114,58 @@ pub fn tool_risk(name: &str) -> ToolRisk {
     }
 }
 
+/// Classification for parallel tool execution within a single agent turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolConcurrencyClass {
+    /// Safe to run concurrently with any other ReadOnly tool.
+    ReadOnly,
+    /// Has side effects — must run sequentially with respect to other SideEffect/Exclusive tools.
+    SideEffect,
+    /// Must run completely alone in its own execution wave (e.g., bash, activate_skill).
+    Exclusive,
+}
+
+/// Returns the concurrency class for a built-in tool.
+/// MCP tools (prefixed with `mcp_`) default to `SideEffect`.
+/// Callers may override via `tool_concurrency_overrides` config.
+pub fn tool_concurrency_class(name: &str) -> ToolConcurrencyClass {
+    match name {
+        // Read-only tools: safe to parallelize
+        "read_file" | "glob" | "grep" | "web_fetch" | "web_search" | "get_current_time"
+        | "compare_time" | "calculate" | "read_memory" | "structured_memory_search"
+        | "todo_read" | "export_chat" | "a2a_list_peers" | "list_scheduled_tasks"
+        | "get_scheduled_task_history" | "list_scheduled_task_dlq" | "subagents_list"
+        | "subagents_info" | "subagents_focused" | "subagents_log" | "browser" => {
+            ToolConcurrencyClass::ReadOnly
+        }
+        // Exclusive tools: must run alone
+        "bash" | "activate_skill" | "sessions_spawn" => ToolConcurrencyClass::Exclusive,
+        // MCP tools: default to SideEffect (unknown external effects)
+        _ if name.starts_with("mcp_") => ToolConcurrencyClass::SideEffect,
+        // All other tools with side effects
+        "write_file" | "edit_file" | "write_memory" | "send_message" | "a2a_send"
+        | "schedule_task" | "pause_scheduled_task" | "resume_scheduled_task"
+        | "cancel_scheduled_task" | "replay_scheduled_task_dlq" | "structured_memory_update"
+        | "structured_memory_delete" | "todo_write" | "sync_skills" | "subagents_send"
+        | "subagents_focus" | "subagents_unfocus" | "subagents_kill"
+        | "subagents_retry_announces" | "subagents_orchestrate" => {
+            ToolConcurrencyClass::SideEffect
+        }
+        // Unknown tools: conservative default
+        _ => ToolConcurrencyClass::SideEffect,
+    }
+}
+
+/// Parse a concurrency class from a config string.
+pub fn parse_concurrency_class(s: &str) -> Option<ToolConcurrencyClass> {
+    match s.to_ascii_lowercase().as_str() {
+        "read_only" | "readonly" => Some(ToolConcurrencyClass::ReadOnly),
+        "side_effect" | "sideeffect" => Some(ToolConcurrencyClass::SideEffect),
+        "exclusive" => Some(ToolConcurrencyClass::Exclusive),
+        _ => None,
+    }
+}
+
 pub fn tool_execution_policy(name: &str) -> ToolExecutionPolicy {
     match name {
         "bash" => ToolExecutionPolicy::Dual,

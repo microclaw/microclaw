@@ -2337,6 +2337,7 @@ mod tests {
             embedding: None,
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
+            chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(false, 20)),
             metric_exporter: None,
             trace_exporter: None,
             log_exporter: None,

@@ -61,6 +61,10 @@ pub async fn serve(
         tools.add_tool(Box::new(crate::tools::mcp::McpTool::new(server, tool_info)));
     }
 
+    let chat_turn_queue = Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(
+        config.chat_turn_serialization,
+        config.chat_turn_queue_max_pending,
+    ));
     let app_state = Arc::new(AppState {
         config: config.clone(),
         channel_registry,
@@ -74,6 +78,7 @@ pub async fn serve(
         embedding,
         memory_backend,
         tools,
+        chat_turn_queue,
         metric_exporter: None,
         trace_exporter: None,
         log_exporter: None,

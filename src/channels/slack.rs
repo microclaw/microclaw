@@ -7,10 +7,12 @@ use serde::Deserialize;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{error, info, warn};
 
+use crate::agent_engine::maybe_rerun_for_pending;
 use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
+use crate::chat_turn_queue::PendingMessage;
 use crate::channels::startup_guard::{
     mark_channel_started, parse_epoch_ms_from_seconds_fraction, should_drop_pre_start_message,
     should_drop_recent_duplicate_message,
@@ -278,21 +280,7 @@ async fn maybe_plugin_slash_response(
     maybe_handle_plugin_command(config, text, chat_id, channel_name).await
 }
 
-static SLACK_CHAT_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
-    OnceLock::new();
 static SLACK_ASSISTANT_THREADS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-
-fn slack_chat_lock(channel_name: &str, external_chat_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-    let key = format!("{channel_name}:{external_chat_id}");
-    let cache = SLACK_CHAT_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let Ok(mut guard) = cache.lock() else {
-        return Arc::new(tokio::sync::Mutex::new(()));
-    };
-    guard
-        .entry(key)
-        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-        .clone()
-}
 
 fn slack_assistant_key(channel: &str, user: &str) -> String {
     format!("{channel}:{user}")
@@ -1092,9 +1080,6 @@ async fn handle_slack_message(
         None
     };
 
-    let chat_lock = slack_chat_lock(&runtime.channel_name, &external_chat_id);
-    let _guard = chat_lock.lock().await;
-
     // Store incoming message
     let stored = StoredMessage {
         id: inbound_message_id.clone(),
@@ -1187,6 +1172,29 @@ async fn handle_slack_message(
         }
     }
 
+    // If another agent run is active for this chat, queue the message and return early.
+    let slack_chat_type = if is_dm { "private" } else { "group" };
+    if app_state
+        .chat_turn_queue
+        .enqueue_if_busy(
+            &runtime.channel_name,
+            chat_id,
+            PendingMessage {
+                sender_name: user.to_string(),
+                content: text.to_string(),
+                message_id: inbound_message_id.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+    {
+        info!(
+            "Slack: message queued (chat busy): chat_id={}, message_id={}",
+            chat_id, inbound_message_id
+        );
+        return;
+    }
+
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
 
     match process_with_agent_with_events(
@@ -1194,7 +1202,7 @@ async fn handle_slack_message(
         AgentRequestContext {
             caller_channel: &runtime.channel_name,
             chat_id,
-            chat_type: if is_dm { "private" } else { "group" },
+            chat_type: slack_chat_type,
         },
         None,
         image_data,
@@ -1267,6 +1275,9 @@ async fn handle_slack_message(
             }
         }
     }
+
+    // If messages were queued during this run, re-dispatch to process them.
+    maybe_rerun_for_pending(app_state, &runtime.channel_name, chat_id, slack_chat_type);
 }
 
 #[cfg(test)]

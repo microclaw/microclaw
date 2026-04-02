@@ -3,6 +3,7 @@ pub mod acp;
 pub mod acp_subagent;
 pub mod agent_engine;
 pub mod channels;
+pub mod chat_turn_queue;
 pub mod chat_commands;
 pub mod clawhub;
 pub mod codex_auth;
@@ -24,6 +25,7 @@ pub mod setup;
 pub mod setup_def;
 pub mod skills;
 pub mod tls;
+pub mod tool_executor;
 pub mod tools;
 pub mod web;
 
