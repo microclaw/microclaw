@@ -997,6 +997,14 @@ fn find_provider_preset(provider: &str) -> Option<&'static ProviderPreset> {
         .find(|p| p.id.eq_ignore_ascii_case(provider))
 }
 
+/// Returns the default base URL for a known provider, or `None` if the
+/// provider is unknown or has no preset base URL.
+pub fn default_base_url_for_provider(provider: &str) -> Option<&'static str> {
+    find_provider_preset(provider)
+        .map(|p| p.default_base_url)
+        .filter(|url| !url.is_empty())
+}
+
 fn provider_protocol(provider: &str) -> ProviderProtocol {
     find_provider_preset(provider)
         .map(|p| p.protocol)
@@ -2629,17 +2637,6 @@ impl SetupApp {
                     {
                         map.insert(telegram_slot_username_key(1), bot_username.clone());
                     }
-                    if map
-                        .get(&telegram_slot_model_key(1))
-                        .map(|v| v.trim().is_empty())
-                        .unwrap_or(true)
-                        && !telegram_profile_override.trim().is_empty()
-                    {
-                        map.insert(
-                            telegram_slot_model_key(1),
-                            telegram_profile_override.clone(),
-                        );
-                    }
                     map.insert("DISCORD_BOT_TOKEN".into(), discord_bot_token);
                     map.insert("DISCORD_ACCOUNT_ID".into(), discord_account_id);
                     map.insert("DISCORD_MODEL".into(), discord_profile_override);
@@ -3620,7 +3617,37 @@ impl SetupApp {
         let Some((_, value)) = picker.options.get(picker.selected) else {
             return;
         };
+        let old_value = self.field_value(&picker.target_key);
         self.set_field_value(&picker.target_key, value.clone());
+        // Sync related legacy keys so save_config_yaml does not fall back to
+        // a stale value.
+        if let Some(related_keys) =
+            Self::llm_override_related_keys_for_model_field(&picker.target_key)
+        {
+            for key in &related_keys {
+                if key != &picker.target_key {
+                    self.set_field_value(key, value.clone());
+                }
+            }
+        }
+        // When a channel-level override changes, also update any bot-slot
+        // fields that still carry the old (inherited) value so that save does
+        // not write the stale override back into the per-account config.
+        if picker.target_key == "TELEGRAM_MODEL" {
+            for slot in 1..=MAX_BOT_SLOTS {
+                let key = telegram_slot_model_key(slot);
+                if self.field_value(&key) == old_value {
+                    self.set_field_value(&key, value.clone());
+                }
+            }
+        } else if picker.target_key == "DISCORD_MODEL" {
+            for slot in 1..=MAX_BOT_SLOTS {
+                let key = dynamic_slot_field_key("discord", slot, "model");
+                if self.field_value(&key) == old_value {
+                    self.set_field_value(&key, value.clone());
+                }
+            }
+        }
         let close_after_select = self
             .llm_override_page
             .as_ref()
@@ -3760,9 +3787,7 @@ impl SetupApp {
     fn to_env_map(&self) -> HashMap<String, String> {
         let mut out = HashMap::new();
         for field in &self.fields {
-            if !field.value.trim().is_empty() {
-                out.insert(field.key.to_string(), field.value.trim().to_string());
-            }
+            out.insert(field.key.to_string(), field.value.trim().to_string());
         }
         out
     }
@@ -6299,7 +6324,17 @@ fn save_config_yaml(
         })?
     };
     let telegram_llm_provider = get(telegram_llm_provider_key());
-    let telegram_channel_profile_override = if !telegram_profile_override.trim().is_empty() {
+    // Channel-level provider_preset: slot 1 (the default bot) is the
+    // authoritative source when present, so clearing the bot preset also
+    // clears the channel-level value.  Fall back to TELEGRAM_MODEL /
+    // TELEGRAM_LLM_PROVIDER only for legacy configs that lack slot fields.
+    let slot1_preset = get(&telegram_slot_model_key(1));
+    let telegram_channel_profile_override = if !slot1_preset.trim().is_empty() {
+        slot1_preset.trim().to_string()
+    } else if values.contains_key(&telegram_slot_model_key(1)) {
+        // Slot 1 field exists but is empty — user explicitly cleared it
+        String::new()
+    } else if !telegram_profile_override.trim().is_empty() {
         telegram_profile_override.trim().to_string()
     } else {
         telegram_llm_provider.trim().to_string()
@@ -9033,6 +9068,75 @@ subagents:
     }
 
     #[test]
+    fn test_save_config_yaml_clears_slot_provider_preset_when_set_to_empty() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_clear_slot_preset_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "telegram".into());
+        values.insert(telegram_slot_id_key(1), "main".into());
+        values.insert(telegram_slot_token_key(1), "tok123".into());
+        values.insert(telegram_slot_username_key(1), "TestBot".into());
+        // Simulate selecting "main (global default)" -> empty string
+        values.insert(telegram_slot_model_key(1), String::new());
+        values.insert("LLM_PROVIDER".into(), "openrouter".into());
+        values.insert("LLM_API_KEY".into(), "sk-or-key".into());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains("  telegram:\n"));
+        // The account should NOT have provider_preset when cleared
+        // (ignore comment lines like "# provider_presets:")
+        let has_active_preset = s
+            .lines()
+            .any(|line| !line.trim_start().starts_with('#') && line.contains("provider_preset:"));
+        assert!(
+            !has_active_preset,
+            "provider_preset should not appear when set to empty:\n{s}"
+        );
+
+        let _ = fs::remove_file(&yaml_path);
+        let _ = fs::remove_dir(config_backup_dir_for(&yaml_path));
+    }
+
+    #[test]
+    fn test_save_config_yaml_clears_channel_provider_preset_when_set_to_empty() {
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_setup_clear_channel_preset_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "telegram".into());
+        values.insert("TELEGRAM_MODEL".into(), String::new());
+        values.insert(telegram_llm_provider_key().into(), String::new());
+        values.insert(telegram_slot_id_key(1), "main".into());
+        values.insert(telegram_slot_token_key(1), "tok123".into());
+        values.insert(telegram_slot_username_key(1), "TestBot".into());
+        values.insert(telegram_slot_model_key(1), String::new());
+        values.insert("LLM_PROVIDER".into(), "openrouter".into());
+        values.insert("LLM_API_KEY".into(), "sk-or-key".into());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        assert!(s.contains("  telegram:\n"));
+        let has_active_preset = s
+            .lines()
+            .any(|line| !line.trim_start().starts_with('#') && line.contains("provider_preset:"));
+        assert!(
+            !has_active_preset,
+            "provider_preset should not appear when both TELEGRAM_MODEL and LLM_PROVIDER are empty:\n{s}"
+        );
+
+        let _ = fs::remove_file(&yaml_path);
+        let _ = fs::remove_dir(config_backup_dir_for(&yaml_path));
+    }
+
+    #[test]
     fn test_next_provider_preset_id_uses_provider_prefix() {
         let entries = vec![
             ProviderPresetDraft {
@@ -10741,6 +10845,151 @@ sandbox:
         assert_eq!(app.field_value(telegram_llm_provider_key()), "");
         assert_eq!(app.field_value(telegram_llm_api_key_key()), "");
         assert_eq!(app.field_value(telegram_llm_base_url_key()), "");
+    }
+
+    #[test]
+    fn test_picker_selecting_main_clears_slot_provider_preset() {
+        let mut app = SetupApp::new();
+        // Set up a Telegram bot slot with a provider preset
+        app.set_field_value(&telegram_slot_model_key(1), "nvidia".into());
+        assert_eq!(app.field_value(&telegram_slot_model_key(1)), "nvidia");
+
+        // Simulate opening the picker for this slot
+        app.open_llm_override_page_for_field(&telegram_slot_model_key(1));
+
+        // Simulate picker selecting "main (global default)" (index 0, value = "")
+        app.llm_override_picker = Some(LlmOverridePicker {
+            title: "Select LLM Provider Profile".to_string(),
+            target_key: telegram_slot_model_key(1),
+            options: vec![
+                ("main (global default)".to_string(), String::new()),
+                ("nvidia - nvidia / meta/llama".to_string(), "nvidia".into()),
+            ],
+            selected: 0, // selecting "main"
+        });
+        app.apply_llm_override_picker_selection();
+
+        // Field should be cleared
+        assert_eq!(
+            app.field_value(&telegram_slot_model_key(1)),
+            "",
+            "slot model key should be empty after selecting main"
+        );
+    }
+
+    #[test]
+    fn test_picker_selecting_main_clears_channel_provider_preset() {
+        let mut app = SetupApp::new();
+        // Set up channel-level override
+        app.set_field_value("TELEGRAM_MODEL", "googlegemini".into());
+        app.set_field_value(telegram_llm_provider_key(), "googlegemini".into());
+
+        // Simulate picker selecting "main" for channel-level field
+        app.llm_override_picker = Some(LlmOverridePicker {
+            title: "Select LLM Provider Profile".to_string(),
+            target_key: "TELEGRAM_MODEL".to_string(),
+            options: vec![
+                ("main (global default)".to_string(), String::new()),
+                (
+                    "googlegemini - google / gemini-2.5-pro".to_string(),
+                    "googlegemini".into(),
+                ),
+            ],
+            selected: 0,
+        });
+        app.apply_llm_override_picker_selection();
+
+        assert_eq!(
+            app.field_value("TELEGRAM_MODEL"),
+            "",
+            "TELEGRAM_MODEL should be empty after selecting main"
+        );
+        assert_eq!(
+            app.field_value(telegram_llm_provider_key()),
+            "",
+            "TELEGRAM_LLM_PROVIDER should also be cleared"
+        );
+    }
+
+    #[test]
+    fn test_picker_clearing_channel_also_clears_inherited_slot_values() {
+        let mut app = SetupApp::new();
+        // Simulate loading: channel has googlegemini, slot inherited the same
+        app.set_field_value("TELEGRAM_MODEL", "googlegemini".into());
+        app.set_field_value(telegram_llm_provider_key(), "googlegemini".into());
+        app.set_field_value(&telegram_slot_model_key(1), "googlegemini".into());
+
+        // User selects "main" on channel-level field
+        app.llm_override_picker = Some(LlmOverridePicker {
+            title: "Select LLM Provider Profile".to_string(),
+            target_key: "TELEGRAM_MODEL".to_string(),
+            options: vec![
+                ("main (global default)".to_string(), String::new()),
+                (
+                    "googlegemini - google / gemini-2.5-pro".to_string(),
+                    "googlegemini".into(),
+                ),
+            ],
+            selected: 0,
+        });
+        app.apply_llm_override_picker_selection();
+
+        assert_eq!(app.field_value("TELEGRAM_MODEL"), "");
+        assert_eq!(app.field_value(telegram_llm_provider_key()), "");
+        // Slot that inherited the same value should also be cleared
+        assert_eq!(
+            app.field_value(&telegram_slot_model_key(1)),
+            "",
+            "slot with inherited channel value should be cleared"
+        );
+    }
+
+    #[test]
+    fn test_end_to_end_clear_bot_provider_preset_via_picker_and_save() {
+        // Simulate loading a config where a Telegram bot has provider_preset: nvidia
+        let yaml_path = std::env::temp_dir().join(format!(
+            "microclaw_e2e_clear_preset_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+
+        // First create a config with provider_preset set
+        let mut values = HashMap::new();
+        values.insert("ENABLED_CHANNELS".into(), "telegram".into());
+        values.insert(telegram_slot_id_key(1), "main".into());
+        values.insert(telegram_slot_token_key(1), "tok123".into());
+        values.insert(telegram_slot_username_key(1), "GoatBot".into());
+        values.insert(telegram_slot_model_key(1), "nvidia".into());
+        values.insert("TELEGRAM_MODEL".into(), "nvidia".into());
+        values.insert(telegram_llm_provider_key().into(), "nvidia".into());
+        values.insert("LLM_PROVIDER".into(), "openrouter".into());
+        values.insert("LLM_API_KEY".into(), "sk-or-key".into());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        // Verify it was written with provider_preset
+        assert!(
+            s.lines()
+                .any(|l| !l.trim_start().starts_with('#') && l.contains("provider_preset")),
+            "initial save should contain provider_preset"
+        );
+
+        // Now simulate user selecting "main" in the picker -> set slot model to empty
+        values.insert(telegram_slot_model_key(1), String::new());
+        values.insert("TELEGRAM_MODEL".into(), String::new());
+        values.insert(telegram_llm_provider_key().into(), String::new());
+
+        save_config_yaml(&yaml_path, &values).unwrap();
+        let s = fs::read_to_string(&yaml_path).unwrap();
+        let has_active_preset = s
+            .lines()
+            .any(|line| !line.trim_start().starts_with('#') && line.contains("provider_preset"));
+        assert!(
+            !has_active_preset,
+            "after clearing, provider_preset should not appear:\n{s}"
+        );
+
+        let _ = fs::remove_file(&yaml_path);
+        let _ = fs::remove_dir(config_backup_dir_for(&yaml_path));
     }
 
     #[test]

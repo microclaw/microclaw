@@ -18,6 +18,7 @@ use crate::codex_auth::{
 use crate::config::WorkingDirIsolation;
 use crate::config::{resolve_model_name_with_fallback, Config};
 use crate::http_client::llm_user_agent;
+use crate::setup::default_base_url_for_provider;
 use microclaw_core::error::MicroClawError;
 use microclaw_core::llm_types::{
     ContentBlock, ImageSource, Message, MessageContent, MessagesRequest, MessagesResponse,
@@ -876,7 +877,7 @@ fn build_stream_response(
         }
         if let Some(tool) = tool_blocks.get(&index) {
             content.push(ResponseContentBlock::ToolUse {
-                id: tool.id.clone(),
+                id: sanitize_tool_id(&tool.id),
                 name: tool.name.clone(),
                 input: parse_tool_input(&tool.input_json),
                 thought_signature: tool.thought_signature.clone(),
@@ -1063,7 +1064,9 @@ fn resolve_openai_compat_base(provider: &str, configured_base: &str) -> String {
     }
 
     if trimmed.is_empty() {
-        "https://api.openai.com/v1".to_string()
+        default_base_url_for_provider(provider)
+            .unwrap_or("https://api.openai.com/v1")
+            .to_string()
     } else {
         trimmed
     }
@@ -1347,6 +1350,48 @@ struct OaiErrorResponse {
 #[derive(Debug, Deserialize)]
 struct OaiErrorDetail {
     message: String,
+    #[serde(default)]
+    code: Option<serde_json::Value>,
+    #[serde(default)]
+    r#type: Option<String>,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
+}
+
+impl OaiErrorDetail {
+    fn display(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(code) = &self.code {
+            let code_str = match code {
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            parts.push(code_str);
+        }
+        if let Some(t) = &self.r#type {
+            if !t.is_empty() {
+                parts.push(t.clone());
+            }
+        }
+        let prefix = if parts.is_empty() {
+            String::new()
+        } else {
+            format!("{}: ", parts.join(" "))
+        };
+        // OpenRouter includes upstream error details in metadata.raw
+        let raw_detail = self
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("raw"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if raw_detail.is_empty() {
+            format!("{prefix}{}", self.message)
+        } else {
+            format!("{prefix}{} — {raw_detail}", self.message)
+        }
+    }
 }
 
 fn should_retry_with_max_completion_tokens(error_text: &str) -> bool {
@@ -1512,6 +1557,14 @@ impl LlmProvider for OpenAiProvider {
         let mut retries = 0u32;
         let max_retries = 3;
 
+        debug!(
+            provider = %self.provider,
+            model = %model,
+            url = %self.chat_url,
+            has_api_key = !self.api_key.trim().is_empty(),
+            "Sending LLM request"
+        );
+
         loop {
             let mut req = self
                 .http
@@ -1559,9 +1612,15 @@ impl LlmProvider for OpenAiProvider {
                 continue;
             }
             if let Ok(err) = serde_json::from_str::<OaiErrorResponse>(&text) {
-                return Err(MicroClawError::LlmApi(err.error.message));
+                return Err(MicroClawError::LlmApi(format!(
+                    "{} (url={})",
+                    err.error.display(), self.chat_url
+                )));
             }
-            return Err(MicroClawError::LlmApi(format!("HTTP {status}: {text}")));
+            return Err(MicroClawError::LlmApi(format!(
+                "HTTP {status} {}: {text}",
+                self.chat_url
+            )));
         }
     }
 
@@ -1694,9 +1753,15 @@ impl LlmProvider for OpenAiProvider {
                 continue;
             }
             if let Ok(err) = serde_json::from_str::<OaiErrorResponse>(&text) {
-                return Err(MicroClawError::LlmApi(err.error.message));
+                return Err(MicroClawError::LlmApi(format!(
+                    "{} (url={})",
+                    err.error.display(), self.chat_url
+                )));
             }
-            return Err(MicroClawError::LlmApi(format!("HTTP {status}: {text}")));
+            return Err(MicroClawError::LlmApi(format!(
+                "HTTP {status} {}: {text}",
+                self.chat_url
+            )));
         };
 
         let mut byte_stream = response.bytes_stream();
@@ -1758,7 +1823,7 @@ impl LlmProvider for OpenAiProvider {
         }
         for tool in tool_calls.values() {
             content.push(ResponseContentBlock::ToolUse {
-                id: tool.id.clone(),
+                id: sanitize_tool_id(&tool.id),
                 name: tool.name.clone(),
                 input: parse_tool_input(&tool.input_json),
                 thought_signature: tool.thought_signature.clone(),
@@ -1767,7 +1832,7 @@ impl LlmProvider for OpenAiProvider {
         if let Some(parsed_raw_calls) = raw_text_tool_calls {
             for tool in parsed_raw_calls {
                 content.push(ResponseContentBlock::ToolUse {
-                    id: tool.id,
+                    id: sanitize_tool_id(&tool.id),
                     name: tool.name,
                     input: parse_tool_input(&tool.input_json),
                     thought_signature: tool.thought_signature,
@@ -1876,7 +1941,7 @@ impl OpenAiProvider {
 
             let text = response.text().await.unwrap_or_default();
             if let Ok(err) = serde_json::from_str::<OaiErrorResponse>(&text) {
-                return Err(MicroClawError::LlmApi(err.error.message));
+                return Err(MicroClawError::LlmApi(err.error.display()));
             }
             return Err(MicroClawError::LlmApi(format!("HTTP {status}: {text}")));
         }
@@ -2299,7 +2364,7 @@ fn translate_oai_responses_response(resp: OaiResponsesResponse) -> MessagesRespo
                     format!("call_{call_idx}")
                 });
                 content.push(ResponseContentBlock::ToolUse {
-                    id: call_id,
+                    id: sanitize_tool_id(&call_id),
                     name,
                     input: parsed_args,
                     thought_signature: None,
@@ -2328,6 +2393,21 @@ fn translate_oai_responses_response(resp: OaiResponsesResponse) -> MessagesRespo
             output_tokens: usage.output_tokens,
         }),
     }
+}
+
+/// Ensure a tool-call / tool-use ID only contains characters accepted by all
+/// major providers (Anthropic requires `^[a-zA-Z0-9_-]+$`).  If the ID
+/// contains any illegal characters, a fresh unique ID is generated to avoid
+/// potential collisions from character replacement.
+fn sanitize_tool_id(id: &str) -> String {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return format!("call_{}", uuid::Uuid::new_v4().simple());
+    }
+    id.to_string()
 }
 
 #[cfg(test)]
@@ -2390,7 +2470,7 @@ fn translate_oai_response_with_display_reasoning(
                 .and_then(|s| s.as_str().map(|s| s.to_string()))
                 .or(tc.function.thought_signature);
             content.push(ResponseContentBlock::ToolUse {
-                id: tc.id,
+                id: sanitize_tool_id(&tc.id),
                 name: tc.function.name,
                 input,
                 thought_signature,
@@ -4072,6 +4152,45 @@ mod tests {
     fn test_resolve_openai_compat_base_defaults_openai() {
         let base = resolve_openai_compat_base("openai", "");
         assert_eq!(base, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_resolve_openai_compat_base_defaults_openrouter() {
+        let base = resolve_openai_compat_base("openrouter", "");
+        assert_eq!(base, "https://openrouter.ai/api/v1");
+    }
+
+    #[test]
+    fn test_resolve_openai_compat_base_defaults_deepseek() {
+        let base = resolve_openai_compat_base("deepseek", "");
+        assert_eq!(base, "https://api.deepseek.com/v1");
+    }
+
+    #[test]
+    fn test_resolve_openai_compat_base_defaults_ollama() {
+        let base = resolve_openai_compat_base("ollama", "");
+        assert_eq!(base, "http://127.0.0.1:11434/v1");
+    }
+
+    #[test]
+    fn test_resolve_openai_compat_base_defaults_google() {
+        let base = resolve_openai_compat_base("google", "");
+        assert_eq!(
+            base,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+    }
+
+    #[test]
+    fn test_resolve_openai_compat_base_unknown_provider_falls_back_to_openai() {
+        let base = resolve_openai_compat_base("some-unknown-provider", "");
+        assert_eq!(base, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_resolve_openai_compat_base_custom_overrides_provider_default() {
+        let base = resolve_openai_compat_base("openrouter", "https://custom.example.com/v1");
+        assert_eq!(base, "https://custom.example.com/v1");
     }
 
     #[test]
