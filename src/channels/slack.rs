@@ -8,7 +8,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::maybe_rerun_for_pending;
-use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::process_with_agent_with_events_guarded;
 use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
@@ -1172,11 +1172,10 @@ async fn handle_slack_message(
         }
     }
 
-    // If another agent run is active for this chat, queue the message and return early.
     let slack_chat_type = if is_dm { "private" } else { "group" };
-    if app_state
+    let turn_guard = match app_state
         .chat_turn_queue
-        .enqueue_if_busy(
+        .try_start_or_enqueue(
             &runtime.channel_name,
             chat_id,
             PendingMessage {
@@ -1188,16 +1187,19 @@ async fn handle_slack_message(
         )
         .await
     {
-        info!(
-            "Slack: message queued (chat busy): chat_id={}, message_id={}",
-            chat_id, inbound_message_id
-        );
-        return;
-    }
+        Some(guard) => guard,
+        None => {
+            info!(
+                "Slack: message queued (chat busy): chat_id={}, message_id={}",
+                chat_id, inbound_message_id
+            );
+            return;
+        }
+    };
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
 
-    match process_with_agent_with_events(
+    match process_with_agent_with_events_guarded(
         &app_state,
         AgentRequestContext {
             caller_channel: &runtime.channel_name,
@@ -1207,6 +1209,7 @@ async fn handle_slack_message(
         None,
         image_data,
         Some(&event_tx),
+        Some(turn_guard),
     )
     .await
     {

@@ -13,7 +13,7 @@ use serenity::prelude::*;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::maybe_rerun_for_pending;
-use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::process_with_agent_with_events_guarded;
 use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
@@ -562,10 +562,10 @@ impl EventHandler for Handler {
         } else {
             "private"
         };
-        if self
+        let turn_guard = match self
             .app_state
             .chat_turn_queue
-            .enqueue_if_busy(
+            .try_start_or_enqueue(
                 &self.runtime.channel_name,
                 channel_id,
                 PendingMessage {
@@ -577,19 +577,22 @@ impl EventHandler for Handler {
             )
             .await
         {
-            info!(
-                "Discord: message queued (chat busy): chat_id={}, message_id={}",
-                channel_id, inbound_message_id
-            );
-            return;
-        }
+            Some(guard) => guard,
+            None => {
+                info!(
+                    "Discord: message queued (chat busy): chat_id={}, message_id={}",
+                    channel_id, inbound_message_id
+                );
+                return;
+            }
+        };
 
         // Start typing indicator
         let typing = msg.channel_id.start_typing(&ctx.http);
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
         // Process with shared agent engine (reuses the same loop as Telegram)
-        match process_with_agent_with_events(
+        match process_with_agent_with_events_guarded(
             &self.app_state,
             AgentRequestContext {
                 caller_channel: &self.runtime.channel_name,
@@ -599,6 +602,7 @@ impl EventHandler for Handler {
             None,
             None,
             Some(&event_tx),
+            Some(turn_guard),
         )
         .await
         {

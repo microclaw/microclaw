@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::agent_engine::maybe_rerun_for_pending;
-use crate::agent_engine::process_with_agent_with_events;
+use crate::agent_engine::process_with_agent_with_events_guarded;
 use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
@@ -2149,11 +2149,10 @@ async fn handle_matrix_message(
         return;
     }
 
-    // If another agent run is active for this chat, queue the message and return early.
     let matrix_chat_type = if msg.is_direct { "private" } else { "group" };
-    if app_state
+    let turn_guard = match app_state
         .chat_turn_queue
-        .enqueue_if_busy(
+        .try_start_or_enqueue(
             &runtime.channel_name,
             chat_id,
             PendingMessage {
@@ -2165,12 +2164,15 @@ async fn handle_matrix_message(
         )
         .await
     {
-        info!(
-            "Matrix: message queued (chat busy): chat_id={}, event_id={}",
-            chat_id, inbound_event_id
-        );
-        return;
-    }
+        Some(guard) => guard,
+        None => {
+            info!(
+                "Matrix: message queued (chat busy): chat_id={}, event_id={}",
+                chat_id, inbound_event_id
+            );
+            return;
+        }
+    };
 
     info!(
         "Matrix message from {} in {}: {}",
@@ -2185,7 +2187,7 @@ async fn handle_matrix_message(
     let streaming_config = runtime.streaming.clone();
     let use_streaming = streaming_config.enabled;
 
-    match process_with_agent_with_events(
+    match process_with_agent_with_events_guarded(
         &app_state,
         AgentRequestContext {
             caller_channel: &runtime.channel_name,
@@ -2195,6 +2197,7 @@ async fn handle_matrix_message(
         None,
         None,
         Some(&event_tx),
+        Some(turn_guard),
     )
     .await
     {

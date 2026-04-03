@@ -10,7 +10,7 @@ use teloxide::types::{ChatAction, InputFile, MessageId, ParseMode, ThreadId};
 use tracing::{debug, error, info, warn};
 
 use crate::agent_engine::{
-    maybe_rerun_for_pending, process_with_agent_with_events, should_suppress_user_error,
+    maybe_rerun_for_pending, process_with_agent_with_events_guarded, should_suppress_user_error,
     AgentEvent, AgentRequestContext,
 };
 use crate::chat_turn_queue::PendingMessage;
@@ -1065,11 +1065,10 @@ async fn handle_message(
         }
     }
 
-    // If another agent run is active for this chat, queue the message and return early.
-    // The message is already stored in DB, so the active or next run will pick it up.
-    if state
+    // Atomically try to start a turn or queue the message if a turn is active.
+    let turn_guard = match state
         .chat_turn_queue
-        .enqueue_if_busy(
+        .try_start_or_enqueue(
             &tg_channel_name,
             chat_id,
             PendingMessage {
@@ -1081,12 +1080,15 @@ async fn handle_message(
         )
         .await
     {
-        debug!(
-            "Telegram message queued (chat busy): chat_id={}, message_id={}",
-            chat_id, inbound_message_id
-        );
-        return Ok(());
-    }
+        Some(guard) => guard,
+        None => {
+            info!(
+                "Telegram message queued (chat busy): chat_id={}, message_id={}",
+                chat_id, inbound_message_id
+            );
+            return Ok(());
+        }
+    };
 
     info!(
         "Processing message from {} in chat {}: {}",
@@ -1113,7 +1115,7 @@ async fn handle_message(
 
     // Process through platform-agnostic agent engine.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
-    match process_with_agent_with_events(
+    match process_with_agent_with_events_guarded(
         &state,
         AgentRequestContext {
             caller_channel: &tg_channel_name,
@@ -1123,6 +1125,7 @@ async fn handle_message(
         None,
         image_data,
         Some(&event_tx),
+        Some(turn_guard),
     )
     .await
     {

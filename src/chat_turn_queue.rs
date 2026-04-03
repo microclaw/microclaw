@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Key identifying a specific chat across channels.
 type ChatKey = (String, i64);
@@ -187,7 +187,7 @@ impl ChatTurnQueue {
             );
         }
 
-        debug!(
+        info!(
             channel,
             chat_id,
             sender = %msg.sender_name,
@@ -196,6 +196,60 @@ impl ChatTurnQueue {
         );
         slot.pending_messages.push(msg);
         true
+    }
+
+    /// Atomically try to start a new turn or enqueue the message.
+    ///
+    /// If no turn is active, acquires the lock and returns `Some(TurnGuard)`.
+    /// If a turn is active, queues the message and returns `None`.
+    ///
+    /// This avoids the race window between a separate `enqueue_if_busy` check
+    /// and a later `acquire()` call.
+    pub async fn try_start_or_enqueue(
+        self: &Arc<Self>,
+        channel: &str,
+        chat_id: i64,
+        msg: PendingMessage,
+    ) -> Option<TurnGuard> {
+        let key: ChatKey = (channel.to_string(), chat_id);
+        let slot_arc = self.get_slot(&key).await;
+
+        let turn_lock = {
+            let slot = slot_arc.lock().await;
+            slot.turn_lock.clone()
+        };
+
+        match turn_lock.try_lock_owned() {
+            Ok(guard) => {
+                // No active run — we start a new turn.
+                let mut slot = slot_arc.lock().await;
+                slot.last_active = Instant::now();
+                debug!(channel, chat_id, "Chat turn acquired");
+                Some(TurnGuard { _guard: guard, key })
+            }
+            Err(_) => {
+                // A run is active — queue the message.
+                let mut slot = slot_arc.lock().await;
+                if slot.pending_messages.len() >= self.max_pending {
+                    slot.pending_messages.remove(0);
+                    warn!(
+                        channel,
+                        chat_id,
+                        max_pending = self.max_pending,
+                        "ChatTurnQueue: pending messages at capacity; dropped oldest"
+                    );
+                }
+                info!(
+                    channel,
+                    chat_id,
+                    sender = %msg.sender_name,
+                    pending_count = slot.pending_messages.len() + 1,
+                    "Message queued while chat turn is active"
+                );
+                slot.pending_messages.push(msg);
+                None
+            }
+        }
     }
 
     /// Drain all pending messages accumulated during the current turn.

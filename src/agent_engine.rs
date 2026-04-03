@@ -136,11 +136,25 @@ pub async fn process_with_agent_with_events(
     image_data: Option<(String, String)>,
     event_tx: Option<&UnboundedSender<AgentEvent>>,
 ) -> anyhow::Result<String> {
-    // Acquire per-chat turn lock to serialize agent runs.
-    let _turn_guard = state
-        .chat_turn_queue
-        .acquire(context.caller_channel, context.chat_id)
-        .await;
+    process_with_agent_with_events_guarded(state, context, override_prompt, image_data, event_tx, None).await
+}
+
+pub async fn process_with_agent_with_events_guarded(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+    override_prompt: Option<&str>,
+    image_data: Option<(String, String)>,
+    event_tx: Option<&UnboundedSender<AgentEvent>>,
+    turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
+) -> anyhow::Result<String> {
+    // Use provided guard, or acquire per-chat turn lock.
+    let _turn_guard = match turn_guard {
+        Some(g) => Some(g),
+        None => state
+            .chat_turn_queue
+            .acquire(context.caller_channel, context.chat_id)
+            .await,
+    };
 
     let source_message_id = call_blocking(state.db.clone(), move |db| {
         db.get_recent_messages(context.chat_id, 20)
