@@ -53,7 +53,7 @@ regex = "1"
 thiserror = "2"
 anyhow = "1"
 async-trait = "0.1"
-agent-client-protocol = "0.10.3"
+agent-client-protocol = "0.10.4"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_yaml = "0.9"
