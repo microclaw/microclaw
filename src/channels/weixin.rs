@@ -1339,7 +1339,7 @@ async fn send_text_message_native(
             "item_list": [
                 {
                     "type": MSG_ITEM_TEXT,
-                    "text_item": { "text": text }
+                    "text_item": { "text": text, "content_type": "markdown" }
                 }
             ],
             "context_token": context_token,
