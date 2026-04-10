@@ -1,0 +1,49 @@
+name: microclaw
+title: MicroClaw
+version: git
+summary: Multi-channel AI assistant supporting multiple messaging systems and models
+description: |
+  MicroClaw is a personal AI assistant in the spirit of the Claw family. It is developed in
+  Rust to be smaller and have fewer vulnerabilities. It is a multi-channel agent runtime, meaning
+  you can conduct multiple parallel conversations about different projects at the same time.
+  It shares one channel-agnostic agent loop and one provider-agnostic LLM layer, with channel
+  adapters for ingress/egress, which means over time it can work with more and more messaging
+  and model systems.
+license: MIT
+contact: https://discord.gg/pvmezwkAk5
+issues: https://github.com/microclaw/microclaw/issues
+source-code: https://github.com/microclaw/microclaw
+website: https://microclaw.ai
+donation: https://github.com/sponsors/microclaw
+
+base: core24
+confinement: strict
+grade: stable
+
+apps:
+  microclaw:
+    command: bin/wrapper.sh
+    plugs:
+      - network
+      - network-bind
+
+parts:
+  wrapper:
+    plugin: dump
+    source: snap/local
+    organize:
+      wrapper.sh: bin/wrapper.sh
+
+  microclaw:
+    plugin: rust
+    source: .
+    build-snaps:
+      - node/22/stable
+    build-packages:
+      - pkg-config
+      - libssl-dev
+    stage-packages:
+      - ca-certificates
+      - openssl
+    after:
+      - wrapper

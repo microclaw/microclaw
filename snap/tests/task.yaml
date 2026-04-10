@@ -1,0 +1,17 @@
+summary: Verify MicroClaw snap installation and CLI behavior
+
+execute: |
+  # Change to the parent directory to find the snap
+  cd $SPREAD_PATH/..
+  
+  # Install the snap that was built locally (snapcraft builds in project root)
+  snap install microclaw_*.snap --dangerous
+  
+  # Ensure the CLI is available and works
+  microclaw --version | grep "microclaw "
+  
+  # Test the start command with help
+  microclaw start --help
+  
+  # Uninstall
+  snap remove microclaw

@@ -1,0 +1,10 @@
+project: microclaw
+backends:
+  lxd:
+    systems:
+      - ubuntu-24.04
+suites:
+  e2e:
+    summary: End-to-end tests for the MicroClaw snap
+    paths:
+      - ./tests
