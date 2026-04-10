@@ -492,12 +492,6 @@ fn apply_config_override(path: Option<&PathBuf>) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to resolve current directory: {e}"))?
             .join(path)
     };
-    if !resolved.exists() {
-        anyhow::bail!(
-            "--config points to non-existent file: {}",
-            resolved.display()
-        );
-    }
     std::env::set_var("MICROCLAW_CONFIG", &resolved);
     Ok(())
 }

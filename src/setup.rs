@@ -2075,16 +2075,10 @@ impl SetupApp {
 
     /// Load existing config values from microclaw.config.yaml/.yml.
     fn load_existing_config() -> HashMap<String, String> {
-        let yaml_path = if Path::new("./microclaw.config.yaml").exists() {
-            Some("./microclaw.config.yaml")
-        } else if Path::new("./microclaw.config.yml").exists() {
-            Some("./microclaw.config.yml")
-        } else {
-            None
-        };
+        let yaml_path = crate::config::Config::config_path_for_setup();
 
-        if let Some(path) = yaml_path {
-            if let Ok(content) = fs::read_to_string(path) {
+        if yaml_path.exists() {
+            if let Ok(content) = fs::read_to_string(&yaml_path) {
                 let explicit_enabled_channels = serde_yaml::from_str::<serde_yaml::Value>(&content)
                     .ok()
                     .and_then(|doc| {
@@ -6110,10 +6104,22 @@ fn create_config_backup(path: &Path) -> Result<Option<String>, MicroClawError> {
         .and_then(|n| n.to_str())
         .unwrap_or("microclaw.config.yaml");
     let backup_dir = config_backup_dir_for(path);
-    fs::create_dir_all(&backup_dir)?;
+    fs::create_dir_all(&backup_dir).map_err(|e| {
+        MicroClawError::Config(format!(
+            "Failed to create config backup dir {}: {}",
+            backup_dir.display(),
+            e
+        ))
+    })?;
     let ts = Utc::now().format("%Y%m%d%H%M%S").to_string();
     let backup_path = backup_dir.join(format!("{file_name}.bak.{ts}"));
-    fs::copy(path, &backup_path)?;
+    fs::copy(path, &backup_path).map_err(|e| {
+        MicroClawError::Config(format!(
+            "Failed to write config backup {}: {}",
+            backup_path.display(),
+            e
+        ))
+    })?;
     let _ = prune_old_config_backups(&backup_dir, file_name, MAX_CONFIG_BACKUPS);
     Ok(Some(backup_path.display().to_string()))
 }
@@ -7114,7 +7120,9 @@ fn save_config_yaml(
     yaml.push_str("\n# Optional SOUL files directory (defaults to <data_dir>/souls)\n");
     yaml.push_str(&format!("souls_dir: {}\n", yaml_double_quoted(&souls_dir)));
 
-    fs::write(path, yaml)?;
+    fs::write(path, yaml).map_err(|e| {
+        MicroClawError::Config(format!("Failed to write config to {}: {}", path.display(), e))
+    })?;
     Ok(backup)
 }
 
@@ -7777,11 +7785,16 @@ fn try_save(terminal: &mut DefaultTerminal, app: &mut SetupApp) -> Result<(), Mi
     };
 
     let values = app.to_env_map();
+    let save_path = crate::config::Config::config_path_for_setup();
+    let display_path = save_path.display().to_string();
     let backup = match run_with_spinner(
         terminal,
         app,
-        "Saving (3/3): writing microclaw.config.yaml",
-        move || save_config_yaml(Path::new("microclaw.config.yaml"), &values),
+        &format!("Saving (3/3): writing {}", display_path),
+        move || {
+            let p = &save_path;
+            save_config_yaml(p, &values)
+        },
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -7792,7 +7805,7 @@ fn try_save(terminal: &mut DefaultTerminal, app: &mut SetupApp) -> Result<(), Mi
 
     app.backup_path = backup;
     app.completion_summary = checks;
-    app.status = "Saved microclaw.config.yaml".into();
+    app.status = format!("Saved {}", display_path);
     app.completed = true;
     Ok(())
 }
@@ -7809,11 +7822,16 @@ fn try_save_skip_online(
     }
 
     let values = app.to_env_map();
+    let save_path = crate::config::Config::config_path_for_setup();
+    let display_path = save_path.display().to_string();
     let backup = match run_with_spinner(
         terminal,
         app,
-        "Saving (2/2): writing microclaw.config.yaml",
-        move || save_config_yaml(Path::new("microclaw.config.yaml"), &values),
+        &format!("Saving (2/2): writing {}", display_path),
+        move || {
+            let p = &save_path;
+            save_config_yaml(p, &values)
+        },
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -7824,7 +7842,7 @@ fn try_save_skip_online(
 
     app.backup_path = backup;
     app.completion_summary = vec!["Online/model validation skipped by user".to_string()];
-    app.status = "Saved microclaw.config.yaml (online validation skipped)".into();
+    app.status = format!("Saved {} (online validation skipped)", display_path);
     app.completed = true;
     Ok(())
 }
