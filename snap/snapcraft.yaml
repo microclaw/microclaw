@@ -27,7 +27,7 @@ apps:
       - network
       - network-bind
     environment:
-      MICROCLAW_CONFIG: $SNAP_COMMON/config.yaml
+      MICROCLAW_CONFIG: $SNAP_USER_COMMON/config.yaml
 
 parts:
   wrapper:
