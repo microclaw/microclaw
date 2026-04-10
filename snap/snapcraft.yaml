@@ -28,6 +28,7 @@ apps:
       - network-bind
     environment:
       MICROCLAW_CONFIG: $SNAP_USER_COMMON/config.yaml
+      RUST_LOG: info,matrix_sdk_crypto::backups=error,matrix_sdk_base::client=warn
 
 parts:
   wrapper:
