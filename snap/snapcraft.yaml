@@ -39,6 +39,8 @@ parts:
   microclaw:
     plugin: rust
     source: .
+    rust-features:
+      - channel-matrix
     build-snaps:
       - node/22/stable
     build-packages:
