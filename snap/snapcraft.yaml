@@ -22,10 +22,12 @@ grade: stable
 
 apps:
   microclaw:
-    command: bin/wrapper.sh
+    command: bin/microclaw
     plugs:
       - network
       - network-bind
+    environment:
+      MICROCLAW_CONFIG: $SNAP_COMMON/config.yaml
 
 parts:
   wrapper:
