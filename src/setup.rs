@@ -731,6 +731,11 @@ fn soul_picker_file_names(data_dir: Option<&str>, souls_dir: Option<&str>) -> Ve
 }
 
 fn default_data_dir_for_setup() -> String {
+    if std::env::var("SNAP").is_ok() {
+        if let Ok(snap_user_common) = std::env::var("SNAP_USER_COMMON") {
+            return snap_user_common;
+        }
+    }
     std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from))
