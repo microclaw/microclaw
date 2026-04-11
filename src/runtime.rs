@@ -460,6 +460,7 @@ pub async fn run(
     let memory_backend = Arc::new(MemoryBackend::new(
         db.clone(),
         crate::memory_backend::MemoryMcpClient::discover(&mcp_manager),
+        &config.data_dir,
     ));
     let tools = ToolRegistry::new(
         &config,

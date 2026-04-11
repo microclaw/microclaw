@@ -1373,11 +1373,11 @@ async fn process_with_agent_logic(
                 let remaining = max_iter.saturating_sub(current_iter);
                 if pct >= 90 {
                     Some(format!(
-                        "[budget_pressure]: URGENT — only {remaining} iteration(s) remaining out of {max_iter}. Provide your final answer now."
+                        "\n<system_notice type=\"iteration_budget\" severity=\"urgent\">\nOnly {remaining} iteration(s) remaining out of {max_iter}. Provide your final answer now.\n</system_notice>"
                     ))
                 } else if pct >= 70 {
                     Some(format!(
-                        "[budget_pressure]: You've used {current_iter}/{max_iter} iterations. Start wrapping up and prepare your answer."
+                        "\n<system_notice type=\"iteration_budget\" severity=\"warning\">\nYou've used {current_iter}/{max_iter} iterations. Start wrapping up and prepare your answer.\n</system_notice>"
                     ))
                 } else {
                     None

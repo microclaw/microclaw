@@ -292,6 +292,67 @@ pub(crate) async fn maybe_handle_explicit_memory_command(
     )))
 }
 
+/// Sanitize a query string for memory retrieval.
+///
+/// AI agents sometimes prepend system prompts or tool definitions to user messages,
+/// which destroys embedding quality for semantic search. This sanitizer extracts the
+/// likely user intent by:
+/// 1. Detecting and stripping common system prompt patterns
+/// 2. Extracting the last meaningful sentence (most likely to be the actual query)
+/// 3. Truncating overly long queries that are likely contaminated
+fn sanitize_memory_query(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() < 200 {
+        // Short queries are unlikely to contain system prompt contamination
+        return trimmed.to_string();
+    }
+
+    // Check for system prompt contamination markers
+    let lower = trimmed.to_ascii_lowercase();
+    let contamination_markers = [
+        "you are a",
+        "you are an",
+        "your role is",
+        "system prompt",
+        "instructions:",
+        "<system>",
+        "tool_use",
+        "tool_result",
+        "[scheduler]:",
+        "as an ai assistant",
+    ];
+    let is_contaminated = contamination_markers.iter().any(|m| lower.contains(m));
+
+    if !is_contaminated {
+        // Not contaminated, but still truncate if very long
+        if trimmed.len() > 500 {
+            return trimmed.chars().take(500).collect();
+        }
+        return trimmed.to_string();
+    }
+
+    // Strategy: extract the last meaningful sentence (tail extraction)
+    // Split on sentence boundaries and take the last non-trivial one
+    let sentences: Vec<&str> = trimmed
+        .split(|c: char| c == '.' || c == '?' || c == '!' || c == '\n')
+        .map(|s| s.trim())
+        .filter(|s| s.len() > 10)
+        .collect();
+
+    if let Some(last) = sentences.last() {
+        return last.chars().take(300).collect();
+    }
+
+    // Fallback: take the last 200 chars
+    let start = trimmed
+        .char_indices()
+        .rev()
+        .nth(199)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    trimmed[start..].to_string()
+}
+
 pub(crate) async fn build_db_memory_context(
     memory_backend: &Arc<MemoryBackend>,
     db: &Arc<Database>,
@@ -300,6 +361,7 @@ pub(crate) async fn build_db_memory_context(
     query: &str,
     token_budget: usize,
 ) -> String {
+    let query = &sanitize_memory_query(query);
     let memories = match memory_backend.get_memories_for_context(chat_id, 100).await {
         Ok(m) => m,
         Err(_) => return String::new(),

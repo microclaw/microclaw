@@ -49,6 +49,7 @@ pub async fn serve(
     let memory_backend = Arc::new(MemoryBackend::new(
         db.clone(),
         MemoryMcpClient::discover(&mcp_manager),
+        &config.data_dir,
     ));
     let tools = ToolRegistry::new(
         &config,

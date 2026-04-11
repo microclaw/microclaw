@@ -163,11 +163,32 @@ fn invalid_memory_payload(op: impl Into<String>, detail: impl Into<String>) -> M
     MemoryProviderFailure::invalid_payload(op, detail).into_error()
 }
 
+/// Append a write-ahead log entry for memory operations (for auditing and poisoning detection).
+/// Non-blocking, best-effort — failures are logged but do not block the write.
+fn audit_memory_write(data_dir: &str, entry: serde_json::Value) {
+    use std::io::Write;
+    let wal_dir = std::path::Path::new(data_dir).join("runtime").join("wal");
+    if std::fs::create_dir_all(&wal_dir).is_err() {
+        return;
+    }
+    let path = wal_dir.join("memory_writes.jsonl");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let mut line = serde_json::to_string(&entry).unwrap_or_default();
+        line.push('\n');
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
 pub struct MemoryBackend {
     provider: Arc<dyn MemoryProvider>,
     stats: Arc<MemoryBackendStats>,
     primary_provider: Option<Arc<dyn MemoryProvider>>,
     primary_provider_name: Option<String>,
+    data_dir: String,
 }
 
 type ProviderBundle = (
@@ -177,7 +198,7 @@ type ProviderBundle = (
 );
 
 impl MemoryBackend {
-    pub fn new(db: Arc<Database>, mcp: Option<MemoryMcpClient>) -> Self {
+    pub fn new(db: Arc<Database>, mcp: Option<MemoryMcpClient>, data_dir: &str) -> Self {
         let stats = Arc::new(MemoryBackendStats::new());
         let sqlite: Arc<dyn MemoryProvider> = Arc::new(SqliteMemoryProvider::new(db.clone()));
         let (provider, primary_provider, primary_provider_name): ProviderBundle = match mcp {
@@ -201,6 +222,7 @@ impl MemoryBackend {
             stats,
             primary_provider,
             primary_provider_name,
+            data_dir: data_dir.to_string(),
         }
     }
 
@@ -210,6 +232,7 @@ impl MemoryBackend {
             stats: Arc::new(MemoryBackendStats::new()),
             primary_provider: None,
             primary_provider_name: None,
+            data_dir: String::new(),
         }
     }
 
@@ -220,6 +243,7 @@ impl MemoryBackend {
             stats: Arc::new(MemoryBackendStats::new()),
             primary_provider: None,
             primary_provider_name: None,
+            data_dir: String::new(),
         }
     }
 
@@ -234,6 +258,7 @@ impl MemoryBackend {
             stats,
             primary_provider: None,
             primary_provider_name,
+            data_dir: String::new(),
         }
     }
 
@@ -316,6 +341,21 @@ impl MemoryBackend {
         source: &str,
         confidence: f64,
     ) -> Result<i64, MicroClawError> {
+        if !self.data_dir.is_empty() {
+            audit_memory_write(
+                &self.data_dir,
+                serde_json::json!({
+                    "op": "insert",
+                    "chat_id": chat_id,
+                    "category": category,
+                    "source": source,
+                    "confidence": confidence,
+                    "content_len": content.len(),
+                    "content_preview": &content[..content.len().min(100)],
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                }),
+            );
+        }
         self.provider
             .insert_memory_with_metadata(chat_id, content, category, source, confidence)
             .await

@@ -1113,6 +1113,11 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_memories_confidence ON memories(confidence)",
             [],
         )?;
+        // Composite index for archive_excess_memories: covers capacity enforcement queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_chat_active_confidence ON memories(chat_id, is_archived, confidence, last_seen_at)",
+            [],
+        )?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
             [],
