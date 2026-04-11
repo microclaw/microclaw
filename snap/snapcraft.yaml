@@ -31,12 +31,6 @@ apps:
       RUST_LOG: info,matrix_sdk_crypto::backups=error,matrix_sdk_base::client=warn
 
 parts:
-  wrapper:
-    plugin: dump
-    source: snap/local
-    organize:
-      wrapper.sh: bin/wrapper.sh
-
   microclaw:
     plugin: rust
     source: .
@@ -50,5 +44,3 @@ parts:
     stage-packages:
       - ca-certificates
       - openssl
-    after:
-      - wrapper

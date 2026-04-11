@@ -478,7 +478,7 @@ fn collect_mcp_config_paths(data_root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn apply_config_override(path: Option<&PathBuf>) -> anyhow::Result<()> {
+fn apply_config_override(path: Option<&PathBuf>, require_exists: bool) -> anyhow::Result<()> {
     let Some(path) = path else {
         return Ok(());
     };
@@ -492,6 +492,12 @@ fn apply_config_override(path: Option<&PathBuf>) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to resolve current directory: {e}"))?
             .join(path)
     };
+    if require_exists && !resolved.exists() {
+        anyhow::bail!(
+            "--config points to non-existent file: {}",
+            resolved.display()
+        );
+    }
     std::env::set_var("MICROCLAW_CONFIG", &resolved);
     Ok(())
 }
@@ -566,7 +572,8 @@ async fn reembed_memories() -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    apply_config_override(cli.config.as_ref())?;
+    let is_setup = matches!(cli.command, Some(MainCommand::Setup(_)));
+    apply_config_override(cli.config.as_ref(), !is_setup)?;
 
     let launch_mode = match cli.command {
         Some(MainCommand::Start) => Some("start"),
@@ -780,7 +787,7 @@ mod tests {
         let old_cfg = std::env::var("MICROCLAW_CONFIG").ok();
         std::env::set_current_dir(&base).expect("set_current_dir");
         let rel = PathBuf::from("api_test_microclaw.config.yaml");
-        apply_config_override(Some(&rel)).expect("apply config override");
+        apply_config_override(Some(&rel), true).expect("apply config override");
         let resolved = std::env::var("MICROCLAW_CONFIG").expect("MICROCLAW_CONFIG");
         assert!(resolved.ends_with("api_test_microclaw.config.yaml"));
 
