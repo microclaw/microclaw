@@ -11,6 +11,7 @@ pub mod memory;
 pub mod read_file;
 pub mod schedule;
 pub mod send_message;
+pub mod skill_manage;
 pub mod structured_memory;
 pub mod subagents;
 pub mod sync_skills;
@@ -241,6 +242,10 @@ impl ToolRegistry {
             Box::new(activate_skill::ActivateSkillTool::new_with_runtime(
                 &skills_data_dir,
                 &config.data_dir,
+            )),
+            Box::new(skill_manage::SkillManageTool::new(
+                &skills_data_dir,
+                config.control_chat_ids.clone(),
             )),
             Box::new(sync_skills::SyncSkillsTool::new(&skills_data_dir)),
             Box::new(todo::TodoReadTool::new(&config.data_dir)),

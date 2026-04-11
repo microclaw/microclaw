@@ -369,18 +369,49 @@ pub(crate) async fn build_db_memory_context(
         ordered = scored.into_iter().map(|(_, _, m)| m).collect();
     }
 
+    // Partition: PROFILE memories get priority injection (always included first)
+    let (profile_memories, other_memories): (Vec<&Memory>, Vec<&Memory>) =
+        ordered.iter().partition(|m| m.category == "PROFILE");
+
     let mut out = String::from("<structured_memories>\n");
     let mut used_tokens = 0usize;
-    let mut omitted = 0usize;
+    let mut included = 0usize;
     let budget = token_budget.max(1);
+    // Reserve up to 30% of budget for PROFILE, but allow less if fewer PROFILE memories exist
+    let profile_budget = budget * 30 / 100;
 
-    for (idx, m) in ordered.iter().enumerate() {
+    // Phase 1: inject PROFILE memories first (up to profile_budget)
+    for m in &profile_memories {
         let estimated_tokens = (m.content.len() / 4) + 10;
-        if used_tokens + estimated_tokens > budget {
-            omitted = ordered.len().saturating_sub(idx);
+        if used_tokens + estimated_tokens > profile_budget && included > 0 {
             break;
         }
+        used_tokens += estimated_tokens;
+        included += 1;
+        let scope = if m.chat_id.is_none() {
+            "global"
+        } else {
+            "chat"
+        };
+        out.push_str(&format!("[{}] [{}] {}\n", m.category, scope, m.content));
+    }
 
+    // Phase 2: fill remaining budget with KNOWLEDGE/EVENT memories
+    // Also include any PROFILE memories that didn't fit in the profile budget
+    let remaining_profiles = &profile_memories[included..];
+    let combined_rest: Vec<&Memory> = remaining_profiles
+        .iter()
+        .copied()
+        .chain(other_memories.into_iter())
+        .collect();
+
+    let mut omitted = 0usize;
+    for (idx, m) in combined_rest.iter().enumerate() {
+        let estimated_tokens = (m.content.len() / 4) + 10;
+        if used_tokens + estimated_tokens > budget {
+            omitted = combined_rest.len().saturating_sub(idx);
+            break;
+        }
         used_tokens += estimated_tokens;
         let scope = if m.chat_id.is_none() {
             "global"
@@ -394,7 +425,7 @@ pub(crate) async fn build_db_memory_context(
     }
     out.push_str("</structured_memories>\n");
 
-    let candidate_count = ordered.len();
+    let candidate_count = profile_memories.len() + combined_rest.len();
     let selected_count = candidate_count.saturating_sub(omitted);
     let retrieval_method_owned = retrieval_method.to_string();
     let _ = call_blocking(db.clone(), move |d| {

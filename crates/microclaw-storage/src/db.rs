@@ -3436,6 +3436,61 @@ impl Database {
         Ok(rows)
     }
 
+    /// Archive the lowest-confidence, least-recently-seen memories for a chat
+    /// (or global if `chat_id` is None) when the count exceeds `max_entries`.
+    /// Returns the number of memories archived.
+    pub fn archive_excess_memories(
+        &self,
+        chat_id: Option<i64>,
+        max_entries: usize,
+    ) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let count: usize = if let Some(cid) = chat_id {
+            conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE is_archived = 0 AND chat_id = ?1",
+                params![cid],
+                |row| row.get(0),
+            )?
+        } else {
+            conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE is_archived = 0 AND chat_id IS NULL",
+                [],
+                |row| row.get(0),
+            )?
+        };
+        if count <= max_entries {
+            return Ok(0);
+        }
+        let excess = count - max_entries;
+        let now = chrono::Utc::now().to_rfc3339();
+        let rows = if let Some(cid) = chat_id {
+            conn.execute(
+                "UPDATE memories SET is_archived = 1, archived_at = ?1, updated_at = ?1
+                 WHERE is_archived = 0 AND chat_id = ?2
+                   AND id IN (
+                     SELECT id FROM memories
+                     WHERE is_archived = 0 AND chat_id = ?2
+                     ORDER BY confidence ASC, COALESCE(last_seen_at, updated_at, created_at) ASC
+                     LIMIT ?3
+                   )",
+                params![now, cid, excess],
+            )?
+        } else {
+            conn.execute(
+                "UPDATE memories SET is_archived = 1, archived_at = ?1, updated_at = ?1
+                 WHERE is_archived = 0 AND chat_id IS NULL
+                   AND id IN (
+                     SELECT id FROM memories
+                     WHERE is_archived = 0 AND chat_id IS NULL
+                     ORDER BY confidence ASC, COALESCE(last_seen_at, updated_at, created_at) ASC
+                     LIMIT ?2
+                   )",
+                params![now, excess],
+            )?
+        };
+        Ok(rows)
+    }
+
     pub fn supersede_memory(
         &self,
         from_memory_id: i64,

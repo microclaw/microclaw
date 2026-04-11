@@ -84,6 +84,12 @@ fn default_max_document_size_mb() -> u64 {
 fn default_memory_token_budget() -> usize {
     1500
 }
+fn default_memory_max_entries_per_chat() -> usize {
+    200
+}
+fn default_memory_max_global_entries() -> usize {
+    500
+}
 fn default_data_dir() -> String {
     default_data_root().to_string_lossy().to_string()
 }
@@ -620,6 +626,10 @@ pub struct Config {
     pub max_document_size_mb: u64,
     #[serde(default = "default_memory_token_budget")]
     pub memory_token_budget: usize,
+    #[serde(default = "default_memory_max_entries_per_chat")]
+    pub memory_max_entries_per_chat: usize,
+    #[serde(default = "default_memory_max_global_entries")]
+    pub memory_max_global_entries: usize,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
     #[serde(default = "default_compact_keep_recent")]
@@ -734,6 +744,10 @@ pub struct Config {
     pub reflector_enabled: bool,
     #[serde(default = "default_reflector_interval_mins")]
     pub reflector_interval_mins: u64,
+    /// Minimum number of tool calls in a conversation before skill review is triggered.
+    /// Set to 0 to disable autonomous skill creation. Default: 0 (disabled).
+    #[serde(default)]
+    pub skill_review_min_tool_calls: usize,
 
     // --- Soul ---
     /// Path to a SOUL.md file that defines the bot's personality, voice, and values.
@@ -1168,6 +1182,8 @@ impl Config {
             max_history_messages: 50,
             max_document_size_mb: 100,
             memory_token_budget: 1500,
+            memory_max_entries_per_chat: 200,
+            memory_max_global_entries: 500,
             data_dir: default_data_dir(),
             skills_dir: None,
             working_dir: default_working_dir(),
@@ -1212,6 +1228,7 @@ impl Config {
             embedding_dim: None,
             reflector_enabled: true,
             reflector_interval_mins: 15,
+            skill_review_min_tool_calls: 0,
             soul_path: None,
             souls_dir: None,
             clawhub: ClawHubConfig::default(),

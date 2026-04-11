@@ -407,6 +407,22 @@ async fn run_reflector(state: &Arc<AppState>) {
 
     let _ = call_blocking(state.db.clone(), move |db| db.archive_stale_memories(30)).await;
 
+    // Enforce global memory capacity limit
+    if state.config.memory_max_global_entries > 0 {
+        let max_global = state.config.memory_max_global_entries;
+        let _ = call_blocking(state.db.clone(), move |db| {
+            let archived = db.archive_excess_memories(None, max_global)?;
+            if archived > 0 {
+                info!(
+                    "Reflector: archived {} excess global memories (limit: {})",
+                    archived, max_global
+                );
+            }
+            Ok(())
+        })
+        .await;
+    }
+
     let lookback_secs = (state.config.reflector_interval_mins * 2 * 60) as i64;
     let since = (Utc::now() - chrono::Duration::seconds(lookback_secs)).to_rfc3339();
 
@@ -422,8 +438,15 @@ async fn run_reflector(state: &Arc<AppState>) {
         }
     };
 
-    for chat_id in chat_ids {
+    for chat_id in chat_ids.iter().copied() {
         reflect_for_chat(state, chat_id).await;
+    }
+
+    // Run skill review for active chats if enabled
+    if state.config.skill_review_min_tool_calls > 0 {
+        for chat_id in chat_ids {
+            review_for_skill_creation(state, chat_id).await;
+        }
     }
 }
 
@@ -655,6 +678,22 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
     let skipped = outcome.skipped;
     let dedup_method = outcome.dedup_method;
 
+    // 9. Enforce memory capacity limits — archive excess low-confidence memories
+    if state.config.memory_max_entries_per_chat > 0 {
+        let max_per_chat = state.config.memory_max_entries_per_chat;
+        let _ = call_blocking(state.db.clone(), move |db| {
+            let archived = db.archive_excess_memories(Some(chat_id), max_per_chat)?;
+            if archived > 0 {
+                info!(
+                    "Reflector: archived {} excess memories for chat {} (limit: {})",
+                    archived, chat_id, max_per_chat
+                );
+            }
+            Ok(())
+        })
+        .await;
+    }
+
     if let Some(ts) = latest_message_ts {
         let _ = call_blocking(state.db.clone(), move |db| {
             db.set_reflector_cursor(chat_id, &ts)
@@ -685,6 +724,200 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         .map(|_| ())
     })
     .await;
+}
+
+const SKILL_REVIEW_SYSTEM_PROMPT: &str = r#"You are a skill review specialist. Analyze conversations to identify reusable approaches that should be saved as skills.
+
+A "skill" is a set of step-by-step instructions for a task type the agent encountered. Only recommend creating a skill if:
+1. The conversation shows a non-trivial multi-step approach (5+ distinct steps)
+2. The approach required trial-and-error or domain-specific knowledge
+3. The approach is REUSABLE — it would help with similar future tasks
+4. No existing skill already covers this approach
+
+If you find a worthy skill, output EXACTLY one JSON object:
+{"create": true, "name": "skill-name", "description": "One-line description", "instructions": "Full markdown instructions"}
+
+If nothing is worth saving as a skill, output:
+{"create": false}
+
+Output ONLY the JSON object, no other text."#;
+
+async fn review_for_skill_creation(state: &Arc<AppState>, chat_id: i64) {
+    let min_tool_calls = state.config.skill_review_min_tool_calls;
+    if min_tool_calls == 0 {
+        return;
+    }
+
+    // Load recent messages to look for complex conversations
+    let messages = match call_blocking(state.db.clone(), move |db| {
+        db.get_recent_messages(chat_id, 50)
+    })
+    .await
+    {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+
+    // Count bot messages that look like tool results (heuristic: messages containing tool patterns)
+    let tool_call_heuristic = messages
+        .iter()
+        .filter(|m| {
+            m.is_from_bot
+                && (m.content.contains("tool_use")
+                    || m.content.contains("tool_result")
+                    || m.content.contains("Executing"))
+        })
+        .count();
+
+    // Also count by total message volume as a proxy (each tool call = ~3 messages: assistant+tool_result+assistant)
+    let estimated_tool_calls = messages.len() / 3;
+    let effective_count = tool_call_heuristic.max(estimated_tool_calls);
+
+    if effective_count < min_tool_calls {
+        return;
+    }
+
+    // Check if we already have many skills (avoid skill explosion)
+    let existing_skills = state.skills.discover_skills();
+    let agent_created_count = existing_skills
+        .iter()
+        .filter(|s| s.source == "agent-created")
+        .count();
+    if agent_created_count >= 20 {
+        info!(
+            "Skill review: skipping for chat {} — already {} agent-created skills",
+            chat_id, agent_created_count
+        );
+        return;
+    }
+
+    // Build conversation summary for the LLM
+    let conversation = messages
+        .iter()
+        .map(|m| {
+            format!(
+                "[{}]: {}",
+                m.sender_name,
+                strip_reflector_thinking_tags(&m.content)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let existing_skill_names: Vec<&str> = existing_skills.iter().map(|s| s.name.as_str()).collect();
+    let skills_hint = if existing_skill_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nExisting skills (do NOT duplicate): {}",
+            existing_skill_names.join(", ")
+        )
+    };
+
+    let user_msg = Message {
+        role: "user".into(),
+        content: MessageContent::Text(format!(
+            "Review this conversation for skill-worthy approaches:{skills_hint}\n\nConversation:\n{conversation}"
+        )),
+    };
+    let response = match state
+        .llm
+        .send_message(SKILL_REVIEW_SYSTEM_PROMPT, vec![user_msg], None)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Skill review: LLM call failed for chat {chat_id}: {e}");
+            return;
+        }
+    };
+
+    let text = response
+        .content
+        .iter()
+        .filter_map(|b| {
+            if let ResponseContentBlock::Text { text } = b {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    let cleaned = strip_reflector_thinking_tags(&text);
+    let trimmed = cleaned.trim();
+
+    // Parse the review result
+    let review: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => {
+            // Try finding JSON in the response
+            let start = trimmed.find('{').unwrap_or(0);
+            let end = trimmed.rfind('}').map(|i| i + 1).unwrap_or(trimmed.len());
+            match serde_json::from_str(&trimmed[start..end]) {
+                Ok(v) => v,
+                Err(_) => return,
+            }
+        }
+    };
+
+    if !review.get("create").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return;
+    }
+
+    let skill_name = match review.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n.to_string(),
+        None => return,
+    };
+    let description = match review.get("description").and_then(|v| v.as_str()) {
+        Some(d) => d,
+        None => return,
+    };
+    let instructions = match review.get("instructions").and_then(|v| v.as_str()) {
+        Some(i) => i,
+        None => return,
+    };
+
+    // Check if skill already exists
+    if existing_skills.iter().any(|s| s.name == skill_name) {
+        return;
+    }
+
+    // Validate content
+    if microclaw_storage::memory_quality::scan_for_injection(instructions).is_err() {
+        warn!(
+            "Skill review: rejected auto-created skill '{}' due to injection scan failure",
+            skill_name
+        );
+        return;
+    }
+
+    // Write the skill
+    let skills_dir = std::path::PathBuf::from(state.config.skills_data_dir());
+    let skill_dir = skills_dir.join(&skill_name);
+    if let Err(e) = std::fs::create_dir_all(&skill_dir) {
+        error!("Skill review: failed to create directory for '{}': {}", skill_name, e);
+        return;
+    }
+
+    let content = format!(
+        "---\nname: {}\ndescription: {}\nsource: agent-created\nupdated_at: \"{}\"\n---\n{}\n",
+        skill_name,
+        description,
+        Utc::now().to_rfc3339(),
+        instructions
+    );
+
+    if let Err(e) = std::fs::write(skill_dir.join("SKILL.md"), &content) {
+        error!("Skill review: failed to write SKILL.md for '{}': {}", skill_name, e);
+        return;
+    }
+
+    info!(
+        "Skill review: auto-created skill '{}' from chat {} conversation",
+        skill_name, chat_id
+    );
 }
 
 #[cfg(test)]

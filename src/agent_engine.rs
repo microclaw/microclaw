@@ -1365,6 +1365,31 @@ async fn process_with_agent_logic(
             metrics.tool_calls += tool_metrics.tool_calls;
             metrics.tool_errors += tool_metrics.tool_errors;
 
+            // Inject iteration budget warning if approaching the limit
+            let max_iter = state.config.max_tool_iterations;
+            let current_iter = iteration + 1; // 1-based
+            let budget_warning = if max_iter > 0 {
+                let pct = (current_iter * 100) / max_iter;
+                let remaining = max_iter.saturating_sub(current_iter);
+                if pct >= 90 {
+                    Some(format!(
+                        "[budget_pressure]: URGENT — only {remaining} iteration(s) remaining out of {max_iter}. Provide your final answer now."
+                    ))
+                } else if pct >= 70 {
+                    Some(format!(
+                        "[budget_pressure]: You've used {current_iter}/{max_iter} iterations. Start wrapping up and prepare your answer."
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let mut tool_results = tool_results;
+            if let Some(warning) = budget_warning {
+                tool_results.push(ContentBlock::Text { text: warning });
+            }
+
             messages.push(Message {
                 role: "user".into(),
                 content: MessageContent::Blocks(tool_results),
