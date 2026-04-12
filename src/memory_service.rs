@@ -334,7 +334,7 @@ fn sanitize_memory_query(raw: &str) -> String {
     // Strategy: extract the last meaningful sentence (tail extraction)
     // Split on sentence boundaries and take the last non-trivial one
     let sentences: Vec<&str> = trimmed
-        .split(|c: char| c == '.' || c == '?' || c == '!' || c == '\n')
+        .split(['.', '?', '!', '\n'])
         .map(|s| s.trim())
         .filter(|s| s.len() > 10)
         .collect();
