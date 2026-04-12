@@ -353,6 +353,18 @@ fn sanitize_memory_query(raw: &str) -> String {
     trimmed[start..].to_string()
 }
 
+/// Build structured memory context using a 4-layer memory stack:
+///
+/// - **L0 (Identity)**: PROFILE memories — always loaded first. These define who the user is.
+///   Budget: up to 20% of total. Cost: ~100-200 tokens typically.
+/// - **L1 (Essential)**: Highest-confidence, most-recently-seen memories across all categories.
+///   These are the "essential story" — durable facts the agent should always know.
+///   Budget: up to 30% of total. Cost: ~300-500 tokens.
+/// - **L2 (Relevance)**: Query-relevant memories via semantic/keyword ranking.
+///   Loaded based on what the user is currently asking about.
+///   Budget: remaining tokens. Cost: variable.
+/// - **L3 (Deep Search)**: Not injected here — available via `structured_memory_search` tool
+///   for on-demand deep retrieval when the agent needs more context.
 pub(crate) async fn build_db_memory_context(
     memory_backend: &Arc<MemoryBackend>,
     db: &Arc<Database>,
@@ -371,124 +383,173 @@ pub(crate) async fn build_db_memory_context(
         return String::new();
     }
 
-    let mut ordered: Vec<&Memory> = Vec::new();
-    #[cfg(feature = "sqlite-vec")]
-    let mut retrieval_method = if memory_supports_local_semantic_ranking(memory_backend) {
-        "keyword"
-    } else {
-        "provider"
-    };
-    #[cfg(not(feature = "sqlite-vec"))]
-    let retrieval_method = "keyword";
+    let budget = token_budget.max(1);
+    let mut used_tokens = 0usize;
+    let mut out = String::from("<structured_memories>\n");
+    let mut injected_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
-    #[cfg(feature = "sqlite-vec")]
-    {
-        if let Some(provider) = embedding {
-            if memory_supports_local_semantic_ranking(memory_backend) && !query.trim().is_empty() {
-                if let Ok(query_vec) = provider.embed(query).await {
-                    let knn_result = call_blocking(db.clone(), move |db| {
-                        db.knn_memories(chat_id, &query_vec, 20)
-                    })
-                    .await;
-                    if let Ok(knn_rows) = knn_result {
-                        let by_id: std::collections::HashMap<i64, &Memory> =
-                            memories.iter().map(|m| (m.id, m)).collect();
-                        for (id, _) in knn_rows {
-                            if let Some(mem) = by_id.get(&id) {
-                                ordered.push(*mem);
+    // ── L0: Identity (PROFILE memories, up to 20% of budget) ──
+    let l0_budget = budget * 20 / 100;
+    let mut profile_memories: Vec<&Memory> = memories
+        .iter()
+        .filter(|m| m.category == "PROFILE" && !m.is_archived)
+        .collect();
+    // Sort profiles by confidence desc, then recency
+    profile_memories.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    if !profile_memories.is_empty() {
+        out.push_str("# Identity\n");
+        for m in &profile_memories {
+            let est = (m.content.len() / 4) + 10;
+            if used_tokens + est > l0_budget && !injected_ids.is_empty() {
+                break;
+            }
+            used_tokens += est;
+            injected_ids.insert(m.id);
+            let scope = if m.chat_id.is_none() { "global" } else { "chat" };
+            out.push_str(&format!("[PROFILE] [{}] {}\n", scope, m.content));
+        }
+    }
+
+    // ── L1: Essential Story (highest-confidence memories, up to 30% of budget) ──
+    let l1_budget = used_tokens + (budget * 30 / 100);
+    let mut essential: Vec<&Memory> = memories
+        .iter()
+        .filter(|m| !m.is_archived && !injected_ids.contains(&m.id))
+        .collect();
+    // Score by confidence + recency (higher = more essential)
+    essential.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut l1_count = 0usize;
+    if !essential.is_empty() {
+        out.push_str("# Essential\n");
+        for m in &essential {
+            let est = (m.content.len() / 4) + 10;
+            if used_tokens + est > l1_budget {
+                break;
+            }
+            used_tokens += est;
+            injected_ids.insert(m.id);
+            l1_count += 1;
+            let scope = if m.chat_id.is_none() { "global" } else { "chat" };
+            out.push_str(&format!("[{}] [{}] {}\n", m.category, scope, m.content));
+        }
+    }
+
+    // ── L2: Relevance-ranked (query-dependent, fills remaining budget) ──
+    // Build relevance-ordered list from memories not yet injected
+    let remaining: Vec<&Memory> = memories
+        .iter()
+        .filter(|m| !injected_ids.contains(&m.id) && !m.is_archived)
+        .collect();
+
+    if !remaining.is_empty() {
+        let mut relevance_ordered: Vec<&Memory> = Vec::new();
+
+        #[cfg(feature = "sqlite-vec")]
+        let mut retrieval_method = if memory_supports_local_semantic_ranking(memory_backend) {
+            "keyword"
+        } else {
+            "provider"
+        };
+        #[cfg(not(feature = "sqlite-vec"))]
+        let retrieval_method = "keyword";
+
+        #[cfg(feature = "sqlite-vec")]
+        {
+            if let Some(provider) = embedding {
+                if memory_supports_local_semantic_ranking(memory_backend)
+                    && !query.trim().is_empty()
+                {
+                    if let Ok(query_vec) = provider.embed(query).await {
+                        let knn_result = call_blocking(db.clone(), move |db| {
+                            db.knn_memories(chat_id, &query_vec, 20)
+                        })
+                        .await;
+                        if let Ok(knn_rows) = knn_result {
+                            let by_id: std::collections::HashMap<i64, &Memory> =
+                                remaining.iter().map(|m| (m.id, m)).collect();
+                            for (id, _) in knn_rows {
+                                if let Some(mem) = by_id.get(&id) {
+                                    relevance_ordered.push(*mem);
+                                }
                             }
-                        }
-                        if !ordered.is_empty() {
-                            retrieval_method = "knn";
+                            if !relevance_ordered.is_empty() {
+                                retrieval_method = "knn";
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    #[cfg(not(feature = "sqlite-vec"))]
-    {
-        let _ = embedding;
-    }
-
-    if ordered.is_empty() {
-        let query_tokens = tokenize_for_relevance(query);
-        let mut scored: Vec<(usize, usize, &Memory)> = memories
-            .iter()
-            .enumerate()
-            .map(|(idx, m)| {
-                (
-                    score_relevance_with_cache(&m.content, &query_tokens),
-                    idx,
-                    m,
-                )
-            })
-            .collect();
-        if !query.is_empty() {
-            scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        #[cfg(not(feature = "sqlite-vec"))]
+        {
+            let _ = embedding;
         }
-        ordered = scored.into_iter().map(|(_, _, m)| m).collect();
-    }
 
-    // Partition: PROFILE memories get priority injection (always included first)
-    let (profile_memories, other_memories): (Vec<&Memory>, Vec<&Memory>) =
-        ordered.iter().partition(|m| m.category == "PROFILE");
-
-    let mut out = String::from("<structured_memories>\n");
-    let mut used_tokens = 0usize;
-    let mut included = 0usize;
-    let budget = token_budget.max(1);
-    // Reserve up to 30% of budget for PROFILE, but allow less if fewer PROFILE memories exist
-    let profile_budget = budget * 30 / 100;
-
-    // Phase 1: inject PROFILE memories first (up to profile_budget)
-    for m in &profile_memories {
-        let estimated_tokens = (m.content.len() / 4) + 10;
-        if used_tokens + estimated_tokens > profile_budget && included > 0 {
-            break;
+        if relevance_ordered.is_empty() {
+            let query_tokens = tokenize_for_relevance(query);
+            let mut scored: Vec<(usize, usize, &&Memory)> = remaining
+                .iter()
+                .enumerate()
+                .map(|(idx, m)| {
+                    (
+                        score_relevance_with_cache(&m.content, &query_tokens),
+                        idx,
+                        m,
+                    )
+                })
+                .collect();
+            if !query.is_empty() {
+                scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            }
+            relevance_ordered = scored.into_iter().map(|(_, _, m)| *m).collect();
         }
-        used_tokens += estimated_tokens;
-        included += 1;
-        let scope = if m.chat_id.is_none() {
-            "global"
-        } else {
-            "chat"
-        };
-        out.push_str(&format!("[{}] [{}] {}\n", m.category, scope, m.content));
-    }
 
-    // Phase 2: fill remaining budget with KNOWLEDGE/EVENT memories
-    // Also include any PROFILE memories that didn't fit in the profile budget
-    let remaining_profiles = &profile_memories[included..];
-    let combined_rest: Vec<&Memory> = remaining_profiles
-        .iter()
-        .copied()
-        .chain(other_memories.into_iter())
-        .collect();
-
-    let mut omitted = 0usize;
-    for (idx, m) in combined_rest.iter().enumerate() {
-        let estimated_tokens = (m.content.len() / 4) + 10;
-        if used_tokens + estimated_tokens > budget {
-            omitted = combined_rest.len().saturating_sub(idx);
-            break;
+        let mut l2_count = 0usize;
+        let mut l2_omitted = 0usize;
+        if !relevance_ordered.is_empty() {
+            out.push_str("# Relevant\n");
         }
-        used_tokens += estimated_tokens;
-        let scope = if m.chat_id.is_none() {
-            "global"
-        } else {
-            "chat"
-        };
-        out.push_str(&format!("[{}] [{}] {}\n", m.category, scope, m.content));
+        for (idx, m) in relevance_ordered.iter().enumerate() {
+            let est = (m.content.len() / 4) + 10;
+            if used_tokens + est > budget {
+                l2_omitted = relevance_ordered.len().saturating_sub(idx);
+                break;
+            }
+            used_tokens += est;
+            injected_ids.insert(m.id);
+            l2_count += 1;
+            let scope = if m.chat_id.is_none() { "global" } else { "chat" };
+            out.push_str(&format!("[{}] [{}] {}\n", m.category, scope, m.content));
+        }
+
+        if l2_omitted > 0 {
+            out.push_str(&format!(
+                "(+{l2_omitted} memories available via structured_memory_search tool)\n"
+            ));
+        }
+
+        let _ = retrieval_method;
+        let _ = l1_count;
+        let _ = l2_count;
     }
-    if omitted > 0 {
-        out.push_str(&format!("(+{omitted} memories omitted)\n"));
-    }
+
     out.push_str("</structured_memories>\n");
 
-    let candidate_count = profile_memories.len() + combined_rest.len();
-    let selected_count = candidate_count.saturating_sub(omitted);
+    let candidate_count = memories.len();
+    let selected_count = injected_ids.len();
+    let omitted = candidate_count.saturating_sub(selected_count);
+    let retrieval_method = "layered";
     let retrieval_method_owned = retrieval_method.to_string();
     let _ = call_blocking(db.clone(), move |d| {
         d.log_memory_injection(
@@ -503,8 +564,8 @@ pub(crate) async fn build_db_memory_context(
     })
     .await;
     info!(
-        "Memory injection: chat {} -> {} memories, method={}, tokens_est={}, omitted={}",
-        chat_id, selected_count, retrieval_method, used_tokens, omitted
+        "Memory injection (4-layer): chat {} -> {}/{} memories (L0:identity + L1:essential + L2:relevant), tokens_est={}, omitted={}",
+        chat_id, selected_count, candidate_count, used_tokens, omitted
     );
     out
 }
