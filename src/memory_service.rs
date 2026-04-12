@@ -365,6 +365,7 @@ fn sanitize_memory_query(raw: &str) -> String {
 ///   Budget: remaining tokens. Cost: variable.
 /// - **L3 (Deep Search)**: Not injected here — available via `structured_memory_search` tool
 ///   for on-demand deep retrieval when the agent needs more context.
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn build_db_memory_context(
     memory_backend: &Arc<MemoryBackend>,
     db: &Arc<Database>,
@@ -372,6 +373,8 @@ pub(crate) async fn build_db_memory_context(
     chat_id: i64,
     query: &str,
     token_budget: usize,
+    l0_identity_pct: usize,
+    l1_essential_pct: usize,
 ) -> String {
     let query = &sanitize_memory_query(query);
     let memories = match memory_backend.get_memories_for_context(chat_id, 100).await {
@@ -384,12 +387,15 @@ pub(crate) async fn build_db_memory_context(
     }
 
     let budget = token_budget.max(1);
+    // Clamp percentages to sane range; remaining goes to L2 relevance
+    let l0_pct = l0_identity_pct.min(50);
+    let l1_pct = l1_essential_pct.min(50);
     let mut used_tokens = 0usize;
     let mut out = String::from("<structured_memories>\n");
     let mut injected_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
-    // ── L0: Identity (PROFILE memories, up to 20% of budget) ──
-    let l0_budget = budget * 20 / 100;
+    // ── L0: Identity (PROFILE memories, up to l0_pct% of budget) ──
+    let l0_budget = budget * l0_pct / 100;
     let mut profile_memories: Vec<&Memory> = memories
         .iter()
         .filter(|m| m.category == "PROFILE" && !m.is_archived)
@@ -415,8 +421,8 @@ pub(crate) async fn build_db_memory_context(
         }
     }
 
-    // ── L1: Essential Story (highest-confidence memories, up to 30% of budget) ──
-    let l1_budget = used_tokens + (budget * 30 / 100);
+    // ── L1: Essential Story (highest-confidence memories, up to l1_pct% of budget) ──
+    let l1_budget = used_tokens + (budget * l1_pct / 100);
     let mut essential: Vec<&Memory> = memories
         .iter()
         .filter(|m| !m.is_archived && !injected_ids.contains(&m.id))

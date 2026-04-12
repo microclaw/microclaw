@@ -84,11 +84,20 @@ fn default_max_document_size_mb() -> u64 {
 fn default_memory_token_budget() -> usize {
     1500
 }
+fn default_memory_l0_identity_pct() -> usize {
+    20
+}
+fn default_memory_l1_essential_pct() -> usize {
+    30
+}
 fn default_memory_max_entries_per_chat() -> usize {
     200
 }
 fn default_memory_max_global_entries() -> usize {
     500
+}
+fn default_kg_max_triples_per_chat() -> usize {
+    1000
 }
 fn default_data_dir() -> String {
     default_data_root().to_string_lossy().to_string()
@@ -626,10 +635,19 @@ pub struct Config {
     pub max_document_size_mb: u64,
     #[serde(default = "default_memory_token_budget")]
     pub memory_token_budget: usize,
+    /// Percentage of memory_token_budget reserved for L0 Identity (PROFILE) memories. Default: 20.
+    #[serde(default = "default_memory_l0_identity_pct")]
+    pub memory_l0_identity_pct: usize,
+    /// Percentage of memory_token_budget reserved for L1 Essential (high-confidence) memories. Default: 30.
+    #[serde(default = "default_memory_l1_essential_pct")]
+    pub memory_l1_essential_pct: usize,
     #[serde(default = "default_memory_max_entries_per_chat")]
     pub memory_max_entries_per_chat: usize,
     #[serde(default = "default_memory_max_global_entries")]
     pub memory_max_global_entries: usize,
+    /// Maximum active triples per chat in the knowledge graph. 0 = unlimited. Default: 1000.
+    #[serde(default = "default_kg_max_triples_per_chat")]
+    pub kg_max_triples_per_chat: usize,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
     #[serde(default = "default_compact_keep_recent")]
@@ -1182,8 +1200,11 @@ impl Config {
             max_history_messages: 50,
             max_document_size_mb: 100,
             memory_token_budget: 1500,
+            memory_l0_identity_pct: 20,
+            memory_l1_essential_pct: 30,
             memory_max_entries_per_chat: 200,
             memory_max_global_entries: 500,
+            kg_max_triples_per_chat: 1000,
             data_dir: default_data_dir(),
             skills_dir: None,
             working_dir: default_working_dir(),

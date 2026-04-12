@@ -164,23 +164,28 @@ fn invalid_memory_payload(op: impl Into<String>, detail: impl Into<String>) -> M
 }
 
 /// Append a write-ahead log entry for memory operations (for auditing and poisoning detection).
-/// Non-blocking, best-effort — failures are logged but do not block the write.
+/// Spawns a background task — never blocks the write path.
 fn audit_memory_write(data_dir: &str, entry: serde_json::Value) {
-    use std::io::Write;
-    let wal_dir = std::path::Path::new(data_dir).join("runtime").join("wal");
-    if std::fs::create_dir_all(&wal_dir).is_err() {
-        return;
-    }
-    let path = wal_dir.join("memory_writes.jsonl");
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        let mut line = serde_json::to_string(&entry).unwrap_or_default();
-        line.push('\n');
-        let _ = file.write_all(line.as_bytes());
-    }
+    let data_dir = data_dir.to_string();
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            let wal_dir = std::path::Path::new(&data_dir).join("runtime").join("wal");
+            std::fs::create_dir_all(&wal_dir)?;
+            let path = wal_dir.join("memory_writes.jsonl");
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+            let mut line = serde_json::to_string(&entry).unwrap_or_default();
+            line.push('\n');
+            file.write_all(line.as_bytes())
+        })
+        .await;
+        if let Err(e) = result {
+            tracing::debug!("Memory WAL write failed (non-critical): {e}");
+        }
+    });
 }
 
 pub struct MemoryBackend {

@@ -706,7 +706,30 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         return;
     }
 
-    // 8. Insert new memories or update superseded ones
+    // 8. Insert new memories or update superseded ones.
+    //    If the LLM returned triples but no memories, convert triples to memories as fallback
+    //    so that facts are not silently lost from the structured_memories context.
+    let extracted = if extracted.is_empty() && !kg_triples.is_empty() {
+        info!(
+            "Reflector: chat {} — LLM returned {} triples but 0 memories, converting triples to memories as fallback",
+            chat_id, kg_triples.len()
+        );
+        kg_triples
+            .iter()
+            .filter_map(|t| {
+                let s = t.get("subject")?.as_str()?;
+                let p = t.get("predicate")?.as_str()?;
+                let o = t.get("object")?.as_str()?;
+                Some(serde_json::json!({
+                    "content": format!("{s} {p} {o}"),
+                    "category": "KNOWLEDGE",
+                }))
+            })
+            .collect()
+    } else {
+        extracted
+    };
+
     let outcome = apply_reflector_extractions(state, chat_id, &existing, &extracted).await;
     let inserted = outcome.inserted;
     let updated = outcome.updated;
@@ -747,7 +770,23 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         }
     }
 
-    // 10. Enforce memory capacity limits — archive excess low-confidence memories
+    // 10. Enforce KG capacity limits — prune excess triples
+    if state.config.kg_max_triples_per_chat > 0 {
+        let max_kg = state.config.kg_max_triples_per_chat;
+        let _ = call_blocking(state.db.clone(), move |db| {
+            let pruned = db.kg_prune_excess(chat_id, max_kg)?;
+            if pruned > 0 {
+                info!(
+                    "Reflector: pruned {} excess KG triples for chat {} (limit: {})",
+                    pruned, chat_id, max_kg
+                );
+            }
+            Ok(())
+        })
+        .await;
+    }
+
+    // 11. Enforce memory capacity limits — archive excess low-confidence memories
     if state.config.memory_max_entries_per_chat > 0 {
         let max_per_chat = state.config.memory_max_entries_per_chat;
         let _ = call_blocking(state.db.clone(), move |db| {

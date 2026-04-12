@@ -3781,6 +3781,50 @@ impl Database {
         Ok((total, active, total.saturating_sub(active)))
     }
 
+    /// Delete oldest invalidated triples when count exceeds max_triples for a chat.
+    /// If still over limit after pruning invalidated, also deletes oldest active triples by confidence.
+    pub fn kg_prune_excess(
+        &self,
+        chat_id: i64,
+        max_triples: usize,
+    ) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM knowledge_graph WHERE chat_id = ?1",
+            params![chat_id],
+            |row| row.get(0),
+        )?;
+        if count <= max_triples {
+            return Ok(0);
+        }
+        let excess = count - max_triples;
+        // First: delete invalidated triples (oldest first)
+        let deleted_invalidated = conn.execute(
+            "DELETE FROM knowledge_graph WHERE id IN (
+                SELECT id FROM knowledge_graph
+                WHERE chat_id = ?1 AND valid_to IS NOT NULL
+                ORDER BY created_at ASC
+                LIMIT ?2
+            )",
+            params![chat_id, excess],
+        )?;
+        let remaining_excess = excess.saturating_sub(deleted_invalidated);
+        if remaining_excess == 0 {
+            return Ok(deleted_invalidated);
+        }
+        // Still over: delete lowest-confidence active triples
+        let deleted_active = conn.execute(
+            "DELETE FROM knowledge_graph WHERE id IN (
+                SELECT id FROM knowledge_graph
+                WHERE chat_id = ?1 AND valid_to IS NULL
+                ORDER BY confidence ASC, created_at ASC
+                LIMIT ?2
+            )",
+            params![chat_id, remaining_excess],
+        )?;
+        Ok(deleted_invalidated + deleted_active)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn log_reflector_run(
         &self,
