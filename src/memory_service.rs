@@ -475,11 +475,11 @@ pub(crate) async fn build_db_memory_context(
                         })
                         .await;
                         if let Ok(knn_rows) = knn_result {
-                            let by_id: std::collections::HashMap<i64, &Memory> =
+                            let by_id: std::collections::HashMap<i64, &&Memory> =
                                 remaining.iter().map(|m| (m.id, m)).collect();
                             for (id, _) in knn_rows {
                                 if let Some(mem) = by_id.get(&id) {
-                                    relevance_ordered.push(*mem);
+                                    relevance_ordered.push(**mem);
                                 }
                             }
                             if !relevance_ordered.is_empty() {
