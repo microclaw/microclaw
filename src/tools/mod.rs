@@ -6,6 +6,7 @@ pub mod edit_file;
 pub mod export_chat;
 pub mod glob;
 pub mod grep;
+pub mod knowledge_graph;
 pub mod mcp;
 pub mod memory;
 pub mod read_file;
@@ -262,6 +263,8 @@ impl ToolRegistry {
                 db.clone(),
                 memory_backend.clone(),
             )),
+            Box::new(knowledge_graph::KnowledgeGraphQueryTool::new(db.clone())),
+            Box::new(knowledge_graph::KnowledgeGraphAddTool::new(db.clone())),
         ];
 
         // Add ClawHub tools if enabled

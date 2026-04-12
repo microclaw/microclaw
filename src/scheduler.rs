@@ -293,8 +293,21 @@ Rules:
 - Each memory < 100 characters, specific and concrete
 - Category must be exactly one of: PROFILE (user attributes/preferences), KNOWLEDGE (facts/expertise), EVENT (significant things that happened)
 - If a new memory updates or supersedes an existing one, add "supersedes_id": <id> to replace it
-- Output ONLY valid JSON array: [{"content":"...","category":"PROFILE","supersedes_id":null}]
-- If nothing worth remembering: []
+
+Output format — a JSON object with two arrays:
+{
+  "memories": [{"content":"...","category":"PROFILE","supersedes_id":null}],
+  "triples": [{"subject":"User","predicate":"prefers","object":"Rust"}]
+}
+
+"memories" — flat text memories (same as before).
+"triples" — structured entity relationships for the knowledge graph. Extract these when you see clear subject-predicate-object patterns:
+  - subject: an entity name (person, project, service, tool)
+  - predicate: a relationship (uses, prefers, located_at, version_is, works_on, manages, depends_on)
+  - object: the related entity or value
+  Only extract triples with clear, factual relationships. Skip vague or uncertain ones.
+
+If nothing worth remembering: {"memories":[],"triples":[]}
 
 CRITICAL — how to memorize bugs and problems:
 - NEVER describe broken behavior as a fact (e.g. "tool calls were broken", "agent typed tool calls as text"). This causes the agent to repeat the broken behavior in future sessions.
@@ -364,6 +377,80 @@ fn strip_reflector_thinking_tags(input: &str) -> String {
 
     let cleaned = crate::agent_engine::strip_thinking(input);
     strip_tag(&cleaned, "<notepad>", "</notepad>")
+}
+
+/// Parse reflector LLM response. Supports two formats:
+///
+/// 1. New object: `{"memories":[...],"triples":[...]}`
+/// 2. Legacy array: `[{"content":"...","category":"..."}]`
+///
+/// Returns `(memory_extractions, kg_triples)`.
+fn parse_reflector_response(
+    raw_text: &str,
+    chat_id: i64,
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let cleaned = strip_reflector_thinking_tags(raw_text);
+    let trimmed = cleaned.trim();
+
+    // Try parsing as the new object format first
+    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(obj) = obj.as_object() {
+            let memories = obj
+                .get("memories")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let triples = obj
+                .get("triples")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            return (memories, triples);
+        }
+    }
+
+    // Try extracting JSON object from noise
+    if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
+            if end > start {
+                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]) {
+                    if let Some(obj) = obj.as_object() {
+                        let memories = obj
+                            .get("memories")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let triples = obj
+                            .get("triples")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        return (memories, triples);
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to legacy array format (no triples)
+    if let Ok(arr) = parse_reflector_json_array(trimmed) {
+        return (arr, Vec::new());
+    }
+
+    // Last resort: find array in noise
+    let start = trimmed.find('[').unwrap_or(0);
+    let end = trimmed.rfind(']').map(|i| i + 1).unwrap_or(trimmed.len());
+    if start < end {
+        if let Ok(arr) = parse_reflector_json_array(&trimmed[start..end]) {
+            return (arr, Vec::new());
+        }
+    }
+
+    error!(
+        "Reflector: parse failed for chat {}: no valid JSON found",
+        chat_id
+    );
+    (Vec::new(), Vec::new())
 }
 
 fn parse_reflector_json_array(text: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {
@@ -569,63 +656,11 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         .collect::<Vec<_>>()
         .join("");
 
-    // 7. Parse JSON array
-    let extracted: Vec<serde_json::Value> = match parse_reflector_json_array(text.trim()) {
-        Ok(v) => v,
-        Err(_) => {
-            let cleaned = strip_reflector_thinking_tags(&text);
-            let start = cleaned.find('[').unwrap_or(0);
-            let end = cleaned.rfind(']').map(|i| i + 1).unwrap_or(cleaned.len());
-            if start >= end {
-                error!("Reflector: parse failed for chat {chat_id}: no JSON array found");
-                let finished_at = Utc::now().to_rfc3339();
-                let _ = call_blocking(state.db.clone(), move |db| {
-                    db.log_reflector_run(
-                        chat_id,
-                        &started_at,
-                        &finished_at,
-                        0,
-                        0,
-                        0,
-                        0,
-                        "none",
-                        false,
-                        Some("no JSON array found"),
-                    )
-                    .map(|_| ())
-                })
-                .await;
-                return;
-            }
-            match parse_reflector_json_array(&cleaned[start..end]) {
-                Ok(v) => v,
-                Err(e) => {
-                    error!("Reflector: parse failed for chat {chat_id}: {e}");
-                    let finished_at = Utc::now().to_rfc3339();
-                    let error_msg = e.to_string();
-                    let _ = call_blocking(state.db.clone(), move |db| {
-                        db.log_reflector_run(
-                            chat_id,
-                            &started_at,
-                            &finished_at,
-                            0,
-                            0,
-                            0,
-                            0,
-                            "none",
-                            false,
-                            Some(&error_msg),
-                        )
-                        .map(|_| ())
-                    })
-                    .await;
-                    return;
-                }
-            }
-        }
-    };
+    // 7. Parse response — supports both new object format {"memories":[...],"triples":[...]}
+    //    and legacy array format [{"content":"...","category":"..."}]
+    let (extracted, kg_triples) = parse_reflector_response(&text, chat_id);
 
-    if extracted.is_empty() {
+    if extracted.is_empty() && kg_triples.is_empty() {
         if let Some(ts) = latest_message_ts {
             let _ = call_blocking(state.db.clone(), move |db| {
                 db.set_reflector_cursor(chat_id, &ts)
@@ -651,7 +686,7 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
                 .as_deref()
                 .unwrap_or("unknown")
         );
-        let skipped_count = extracted.len();
+        let skipped_count = extracted.len() + kg_triples.len();
         let _ = call_blocking(state.db.clone(), move |db| {
             db.log_reflector_run(
                 chat_id,
@@ -678,7 +713,41 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
     let skipped = outcome.skipped;
     let dedup_method = outcome.dedup_method;
 
-    // 9. Enforce memory capacity limits — archive excess low-confidence memories
+    // 9. Populate knowledge graph from extracted triples
+    if !kg_triples.is_empty() {
+        let mut kg_inserted = 0usize;
+        for triple in &kg_triples {
+            let subject = match triple.get("subject").and_then(|v| v.as_str()) {
+                Some(s) if !s.trim().is_empty() => s.trim(),
+                _ => continue,
+            };
+            let predicate = match triple.get("predicate").and_then(|v| v.as_str()) {
+                Some(p) if !p.trim().is_empty() => p.trim(),
+                _ => continue,
+            };
+            let object = match triple.get("object").and_then(|v| v.as_str()) {
+                Some(o) if !o.trim().is_empty() => o.trim(),
+                _ => continue,
+            };
+            let now = Utc::now().to_rfc3339();
+            let s = subject.to_string();
+            let p = predicate.to_string();
+            let o = object.to_string();
+            let vf = now.clone();
+            let _ = call_blocking(state.db.clone(), move |db| {
+                db.kg_insert_triple(&s, &p, &o, Some(chat_id), &vf, 0.72, "reflector", None)
+            })
+            .await;
+            kg_inserted += 1;
+        }
+        if kg_inserted > 0 {
+            info!(
+                "Reflector: chat {chat_id} -> {kg_inserted} knowledge graph triples added"
+            );
+        }
+    }
+
+    // 10. Enforce memory capacity limits — archive excess low-confidence memories
     if state.config.memory_max_entries_per_chat > 0 {
         let max_per_chat = state.config.memory_max_entries_per_chat;
         let _ = call_blocking(state.db.clone(), move |db| {
