@@ -5,6 +5,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
 
+use crate::chat_turn_queue::PendingMessage;
 use crate::config::{
     normalize_model_name, resolve_model_name_with_fallback, ResolvedLlmProviderProfile,
 };
@@ -70,6 +71,10 @@ pub enum AgentEvent {
     },
     FinalResponse {
         text: String,
+    },
+    /// Emitted when pending user messages are injected mid-turn.
+    MidTurnInjection {
+        count: usize,
     },
 }
 
@@ -1194,6 +1199,43 @@ async fn process_with_agent_logic(
                 continue;
             }
 
+            // --- Mid-turn injection at end_turn ---
+            // If the user sent follow-ups while the LLM was generating, continue
+            // the loop instead of finalizing so the model can address them.
+            if state.config.enable_mid_turn_injection && has_displayable_output {
+                let pending = state
+                    .chat_turn_queue
+                    .drain_pending(context.caller_channel, chat_id)
+                    .await;
+                let pending: Vec<_> = pending
+                    .into_iter()
+                    .filter(|m| !m.content.trim().is_empty())
+                    .collect();
+                if !pending.is_empty() {
+                    info!(
+                        chat_id,
+                        channel = context.caller_channel,
+                        count = pending.len(),
+                        iteration = iteration + 1,
+                        "Mid-turn: injecting pending messages at end_turn, continuing loop"
+                    );
+                    if let Some(tx) = event_tx {
+                        let _ = tx.send(AgentEvent::MidTurnInjection {
+                            count: pending.len(),
+                        });
+                    }
+                    messages.push(Message {
+                        role: "assistant".into(),
+                        content: MessageContent::Text(text.clone()),
+                    });
+                    messages.push(Message {
+                        role: "user".into(),
+                        content: MessageContent::Text(format_mid_turn_injection(&pending)),
+                    });
+                    continue;
+                }
+            }
+
             // Add final assistant message and save session (keep full text including thinking)
             messages.push(Message {
                 role: "assistant".into(),
@@ -1390,6 +1432,35 @@ async fn process_with_agent_logic(
             let mut tool_results = tool_results;
             if let Some(warning) = budget_warning {
                 tool_results.push(ContentBlock::Text { text: warning });
+            }
+
+            // --- Mid-turn message injection (tool completion breakpoint) ---
+            if state.config.enable_mid_turn_injection {
+                let pending = state
+                    .chat_turn_queue
+                    .drain_pending(context.caller_channel, chat_id)
+                    .await;
+                let pending: Vec<_> = pending
+                    .into_iter()
+                    .filter(|m| !m.content.trim().is_empty())
+                    .collect();
+                if !pending.is_empty() {
+                    info!(
+                        chat_id,
+                        channel = context.caller_channel,
+                        count = pending.len(),
+                        iteration = iteration + 1,
+                        "Mid-turn: injecting pending user messages after tool execution"
+                    );
+                    if let Some(tx) = event_tx {
+                        let _ = tx.send(AgentEvent::MidTurnInjection {
+                            count: pending.len(),
+                        });
+                    }
+                    tool_results.push(ContentBlock::Text {
+                        text: format_mid_turn_injection(&pending),
+                    });
+                }
             }
 
             messages.push(Message {
@@ -1915,6 +1986,26 @@ pub(crate) fn history_to_claude_messages(
 }
 
 /// Split long text for Telegram's 4096-char limit.
+/// Format pending messages for mid-turn injection into the agent loop.
+fn format_mid_turn_injection(pending: &[PendingMessage]) -> String {
+    let mut text = String::from(
+        "<system_notice type=\"mid_turn_user_message\">\n\
+         The user sent follow-up messages while you were working:\n\n",
+    );
+    for msg in pending {
+        text.push_str(&format!(
+            "[{}] {}: {}\n",
+            msg.timestamp, msg.sender_name, msg.content
+        ));
+    }
+    text.push_str(
+        "\nAcknowledge these messages and adjust your approach if needed. \
+         Continue unless told to stop or change direction.\n\
+         </system_notice>",
+    );
+    text
+}
+
 /// Exposed for testing.
 #[allow(dead_code)]
 /// Strip `<think>...</think>` and `<thought>...</thought>` blocks from model output.
