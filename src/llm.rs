@@ -2113,6 +2113,21 @@ fn translate_messages_to_oai_with_reasoning(
                         if !emitted_any_tool {
                             pending_tool_ids.clear();
                         }
+                        // Text blocks co-located with tool_results (e.g. iteration-budget
+                        // warnings, mid-turn user message injections) have no place in the
+                        // OpenAI "role=tool" scheme. Emit them as a follow-up user message
+                        // so they still reach the model instead of being silently dropped.
+                        let extra_text: String = blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !extra_text.trim().is_empty() {
+                            out.push(json!({"role": "user", "content": extra_text}));
+                        }
                     } else {
                         pending_tool_ids.clear();
                         // Images + text → multipart content array
@@ -2277,6 +2292,24 @@ fn translate_messages_to_oai_responses_input(messages: &[Message]) -> Vec<serde_
                         }
                         if !emitted_any_tool {
                             pending_tool_ids.clear();
+                        }
+                        // Preserve text blocks co-located with tool_results (budget
+                        // warnings, mid-turn injections) by emitting them as a follow-up
+                        // user message.
+                        let extra_text: String = blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !extra_text.trim().is_empty() {
+                            out.push(json!({
+                                "type": "message",
+                                "role": "user",
+                                "content": extra_text,
+                            }));
                         }
                     } else {
                         pending_tool_ids.clear();
@@ -2726,6 +2759,47 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_messages_tool_result_with_sidecar_text_emits_user_message() {
+        // When a user turn bundles tool_result blocks with free-form Text blocks
+        // (e.g. iteration-budget warnings or mid-turn user message injections),
+        // the Text content must not be dropped — emit it as a follow-up user message.
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "glob".into(),
+                    input: json!({}),
+                    thought_signature: None,
+                }]),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t1".into(),
+                        content: "file.rs".into(),
+                        is_error: None,
+                    },
+                    ContentBlock::Text {
+                        text: "<system_notice>follow-up from user</system_notice>".into(),
+                    },
+                ]),
+            },
+        ];
+        let out = translate_messages_to_oai("", &msgs);
+        // assistant + tool + user (text sidecar) = 3 messages
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[1]["role"], "tool");
+        assert_eq!(out[1]["tool_call_id"], "t1");
+        assert_eq!(out[2]["role"], "user");
+        assert_eq!(
+            out[2]["content"],
+            "<system_notice>follow-up from user</system_notice>"
+        );
+    }
+
+    #[test]
     fn test_translate_messages_orphaned_tool_result_skipped() {
         // tool_result without matching tool_use should be stripped
         let msgs = vec![Message {
@@ -2836,6 +2910,41 @@ mod tests {
         assert_eq!(out[0]["type"], "function_call");
         assert_eq!(out[1]["type"], "message");
         assert_eq!(out[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_translate_messages_to_oai_responses_preserves_sidecar_text_with_tool_result() {
+        let msgs = vec![
+            Message {
+                role: "assistant".into(),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "glob".into(),
+                    input: json!({}),
+                    thought_signature: None,
+                }]),
+            },
+            Message {
+                role: "user".into(),
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t1".into(),
+                        content: "file.rs".into(),
+                        is_error: None,
+                    },
+                    ContentBlock::Text {
+                        text: "<system_notice>follow-up</system_notice>".into(),
+                    },
+                ]),
+            },
+        ];
+        let out = translate_messages_to_oai_responses_input(&msgs);
+        // function_call + function_call_output + user message = 3 items
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[1]["type"], "function_call_output");
+        assert_eq!(out[2]["type"], "message");
+        assert_eq!(out[2]["role"], "user");
+        assert_eq!(out[2]["content"], "<system_notice>follow-up</system_notice>");
     }
 
     #[test]

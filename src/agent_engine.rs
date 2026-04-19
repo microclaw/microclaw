@@ -1985,7 +1985,6 @@ pub(crate) fn history_to_claude_messages(
     messages
 }
 
-/// Split long text for Telegram's 4096-char limit.
 /// Format pending messages for mid-turn injection into the agent loop.
 fn format_mid_turn_injection(pending: &[PendingMessage]) -> String {
     let mut text = String::from(
@@ -2292,9 +2291,10 @@ async fn compact_messages(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_db_memory_context, history_to_claude_messages, process_with_agent, strip_thinking,
-        AgentRequestContext,
+        build_db_memory_context, format_mid_turn_injection, history_to_claude_messages,
+        process_with_agent, strip_thinking, AgentRequestContext,
     };
+    use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
     use crate::llm::LlmProvider;
     use crate::memory::MemoryManager;
@@ -2843,6 +2843,33 @@ mod tests {
     fn test_strip_thinking_removes_thinking_and_reasoning_tags() {
         let text = "<thinking>plan</thinking>\n<reasoning>private</reasoning>\nVisible";
         assert_eq!(strip_thinking(text), "Visible");
+    }
+
+    #[test]
+    fn test_format_mid_turn_injection_contains_sender_timestamp_and_content() {
+        let pending = vec![
+            PendingMessage {
+                sender_name: "Alice".to_string(),
+                content: "actually, can you also check X?".to_string(),
+                message_id: "m1".to_string(),
+                timestamp: "2026-04-19T12:00:00Z".to_string(),
+            },
+            PendingMessage {
+                sender_name: "Alice".to_string(),
+                content: "never mind, skip X".to_string(),
+                message_id: "m2".to_string(),
+                timestamp: "2026-04-19T12:00:05Z".to_string(),
+            },
+        ];
+        let out = format_mid_turn_injection(&pending);
+        assert!(out.contains("<system_notice type=\"mid_turn_user_message\">"));
+        assert!(out.ends_with("</system_notice>"));
+        assert!(out.contains("[2026-04-19T12:00:00Z] Alice: actually, can you also check X?"));
+        assert!(out.contains("[2026-04-19T12:00:05Z] Alice: never mind, skip X"));
+        // Messages appear in arrival order.
+        let pos_a = out.find("check X").unwrap();
+        let pos_b = out.find("skip X").unwrap();
+        assert!(pos_a < pos_b);
     }
 
     #[tokio::test]
