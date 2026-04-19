@@ -23,6 +23,8 @@ model: ""
 max_tokens: 8192
 # Max tool loop iterations per message
 max_tool_iterations: 100
+# Inject pending messages into the active agent loop between iterations (mid-turn injection)
+enable_mid_turn_injection: true
 # Chat history context size
 max_history_messages: 50
 # Maximum inbound Telegram document size in MB

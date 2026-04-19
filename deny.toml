@@ -5,9 +5,9 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-# Temporary exception for the 2026-03-20 rustls-webpki advisory while the
+# Temporary exceptions for rustls-webpki advisories while the
 # upstream rustls/tokio-tungstenite/serenity dependency chain catches up.
-ignore = ["RUSTSEC-2026-0049"]
+ignore = ["RUSTSEC-2026-0049", "RUSTSEC-2026-0098", "RUSTSEC-2026-0099"]
 
 [bans]
 # The current graph includes several unavoidable duplicate transitive versions
