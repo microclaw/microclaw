@@ -5,6 +5,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
 
+use crate::chat_turn_queue::PendingMessage;
 use crate::config::{
     normalize_model_name, resolve_model_name_with_fallback, ResolvedLlmProviderProfile,
 };
@@ -70,6 +71,10 @@ pub enum AgentEvent {
     },
     FinalResponse {
         text: String,
+    },
+    /// Emitted when pending user messages are injected mid-turn.
+    MidTurnInjection {
+        count: usize,
     },
 }
 
@@ -1194,6 +1199,43 @@ async fn process_with_agent_logic(
                 continue;
             }
 
+            // --- Mid-turn injection at end_turn ---
+            // If the user sent follow-ups while the LLM was generating, continue
+            // the loop instead of finalizing so the model can address them.
+            if state.config.enable_mid_turn_injection && has_displayable_output {
+                let pending = state
+                    .chat_turn_queue
+                    .drain_pending(context.caller_channel, chat_id)
+                    .await;
+                let pending: Vec<_> = pending
+                    .into_iter()
+                    .filter(|m| !m.content.trim().is_empty())
+                    .collect();
+                if !pending.is_empty() {
+                    info!(
+                        chat_id,
+                        channel = context.caller_channel,
+                        count = pending.len(),
+                        iteration = iteration + 1,
+                        "Mid-turn: injecting pending messages at end_turn, continuing loop"
+                    );
+                    if let Some(tx) = event_tx {
+                        let _ = tx.send(AgentEvent::MidTurnInjection {
+                            count: pending.len(),
+                        });
+                    }
+                    messages.push(Message {
+                        role: "assistant".into(),
+                        content: MessageContent::Text(text.clone()),
+                    });
+                    messages.push(Message {
+                        role: "user".into(),
+                        content: MessageContent::Text(format_mid_turn_injection(&pending)),
+                    });
+                    continue;
+                }
+            }
+
             // Add final assistant message and save session (keep full text including thinking)
             messages.push(Message {
                 role: "assistant".into(),
@@ -1390,6 +1432,35 @@ async fn process_with_agent_logic(
             let mut tool_results = tool_results;
             if let Some(warning) = budget_warning {
                 tool_results.push(ContentBlock::Text { text: warning });
+            }
+
+            // --- Mid-turn message injection (tool completion breakpoint) ---
+            if state.config.enable_mid_turn_injection {
+                let pending = state
+                    .chat_turn_queue
+                    .drain_pending(context.caller_channel, chat_id)
+                    .await;
+                let pending: Vec<_> = pending
+                    .into_iter()
+                    .filter(|m| !m.content.trim().is_empty())
+                    .collect();
+                if !pending.is_empty() {
+                    info!(
+                        chat_id,
+                        channel = context.caller_channel,
+                        count = pending.len(),
+                        iteration = iteration + 1,
+                        "Mid-turn: injecting pending user messages after tool execution"
+                    );
+                    if let Some(tx) = event_tx {
+                        let _ = tx.send(AgentEvent::MidTurnInjection {
+                            count: pending.len(),
+                        });
+                    }
+                    tool_results.push(ContentBlock::Text {
+                        text: format_mid_turn_injection(&pending),
+                    });
+                }
             }
 
             messages.push(Message {
@@ -1914,7 +1985,26 @@ pub(crate) fn history_to_claude_messages(
     messages
 }
 
-/// Split long text for Telegram's 4096-char limit.
+/// Format pending messages for mid-turn injection into the agent loop.
+fn format_mid_turn_injection(pending: &[PendingMessage]) -> String {
+    let mut text = String::from(
+        "<system_notice type=\"mid_turn_user_message\">\n\
+         The user sent follow-up messages while you were working:\n\n",
+    );
+    for msg in pending {
+        text.push_str(&format!(
+            "[{}] {}: {}\n",
+            msg.timestamp, msg.sender_name, msg.content
+        ));
+    }
+    text.push_str(
+        "\nAcknowledge these messages and adjust your approach if needed. \
+         Continue unless told to stop or change direction.\n\
+         </system_notice>",
+    );
+    text
+}
+
 /// Exposed for testing.
 #[allow(dead_code)]
 /// Strip `<think>...</think>` and `<thought>...</thought>` blocks from model output.
@@ -2201,9 +2291,10 @@ async fn compact_messages(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_db_memory_context, history_to_claude_messages, process_with_agent, strip_thinking,
-        AgentRequestContext,
+        build_db_memory_context, format_mid_turn_injection, history_to_claude_messages,
+        process_with_agent, strip_thinking, AgentRequestContext,
     };
+    use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
     use crate::llm::LlmProvider;
     use crate::memory::MemoryManager;
@@ -2752,6 +2843,33 @@ mod tests {
     fn test_strip_thinking_removes_thinking_and_reasoning_tags() {
         let text = "<thinking>plan</thinking>\n<reasoning>private</reasoning>\nVisible";
         assert_eq!(strip_thinking(text), "Visible");
+    }
+
+    #[test]
+    fn test_format_mid_turn_injection_contains_sender_timestamp_and_content() {
+        let pending = vec![
+            PendingMessage {
+                sender_name: "Alice".to_string(),
+                content: "actually, can you also check X?".to_string(),
+                message_id: "m1".to_string(),
+                timestamp: "2026-04-19T12:00:00Z".to_string(),
+            },
+            PendingMessage {
+                sender_name: "Alice".to_string(),
+                content: "never mind, skip X".to_string(),
+                message_id: "m2".to_string(),
+                timestamp: "2026-04-19T12:00:05Z".to_string(),
+            },
+        ];
+        let out = format_mid_turn_injection(&pending);
+        assert!(out.contains("<system_notice type=\"mid_turn_user_message\">"));
+        assert!(out.ends_with("</system_notice>"));
+        assert!(out.contains("[2026-04-19T12:00:00Z] Alice: actually, can you also check X?"));
+        assert!(out.contains("[2026-04-19T12:00:05Z] Alice: never mind, skip X"));
+        // Messages appear in arrival order.
+        let pos_a = out.find("check X").unwrap();
+        let pos_b = out.find("skip X").unwrap();
+        assert!(pos_a < pos_b);
     }
 
     #[tokio::test]

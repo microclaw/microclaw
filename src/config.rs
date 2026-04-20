@@ -669,6 +669,10 @@ pub struct Config {
     /// Maximum number of pending messages per chat before oldest are dropped.
     #[serde(default = "default_chat_turn_queue_max_pending")]
     pub chat_turn_queue_max_pending: usize,
+    /// Inject pending messages into the active agent loop between iterations,
+    /// rather than queuing them for a separate re-run. Default: true.
+    #[serde(default = "default_true")]
+    pub enable_mid_turn_injection: bool,
     /// Maximum number of tools to execute concurrently in a single wave.
     #[serde(default = "default_parallel_tool_max_concurrency")]
     pub parallel_tool_max_concurrency: usize,
@@ -1259,6 +1263,7 @@ impl Config {
             observability: None,
             channels: HashMap::new(),
             chat_turn_queue_max_pending: 20,
+            enable_mid_turn_injection: true,
             parallel_tool_max_concurrency: 8,
             tool_concurrency_overrides: HashMap::new(),
         }

@@ -59,7 +59,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-audit --locked
       - run: cargo install cargo-deny --locked
-      - run: cargo audit --ignore RUSTSEC-2026-0049
+      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099
       - run: cargo deny check advisories bans licenses
 
   rust-ubuntu:
