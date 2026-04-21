@@ -8561,11 +8561,12 @@ pub fn enable_sandbox_in_config() -> Result<String, MicroClawError> {
         ));
     };
     let mut cfg = Config::load()?;
+    let before_cfg = cfg.clone();
     cfg.sandbox.mode = SandboxMode::All;
     cfg.sandbox.backend = SandboxBackend::Auto;
     cfg.sandbox.no_network = true;
     cfg.sandbox.require_runtime = true;
-    cfg.save_yaml(&path.to_string_lossy())?;
+    crate::config_persistence::save_config_delta_preserving_comments(&path, &before_cfg, &cfg)?;
     Ok(path.to_string_lossy().to_string())
 }
 

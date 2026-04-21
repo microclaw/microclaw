@@ -8,6 +8,7 @@ pub mod chat_commands;
 pub mod clawhub;
 pub mod codex_auth;
 pub mod config;
+pub mod config_persistence;
 pub mod doctor;
 pub mod embedding;
 pub mod gateway;

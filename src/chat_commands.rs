@@ -73,6 +73,7 @@ fn persist_channel_llm_overrides(
 ) -> Result<(), String> {
     let path = config_path_for_save()?;
     let mut cfg = Config::load().unwrap_or_else(|_| config.clone());
+    let before_cfg = cfg.clone();
     match provider {
         PersistedOverride::Unchanged => {}
         PersistedOverride::Clear => cfg.set_provider_override_for_channel(caller_channel, None),
@@ -88,7 +89,7 @@ fn persist_channel_llm_overrides(
         }
     }
     cfg.post_deserialize().map_err(|e| e.to_string())?;
-    cfg.save_yaml(&path.to_string_lossy())
+    crate::config_persistence::save_config_delta_preserving_comments(&path, &before_cfg, &cfg)
         .map_err(|e| e.to_string())
 }
 

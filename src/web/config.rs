@@ -696,6 +696,7 @@ pub(super) async fn api_update_config(
 
     let path = config_path_for_save()?;
     let mut cfg = crate::config::Config::load().unwrap_or_else(|_| state.app_state.config.clone());
+    let cfg_before_update = cfg.clone();
 
     if let Some(v) = body.llm_provider {
         cfg.llm_provider = v;
@@ -902,8 +903,12 @@ pub(super) async fn api_update_config(
         return Err((StatusCode::BAD_REQUEST, e.to_string()));
     }
 
-    cfg.save_yaml(&path.to_string_lossy())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::config_persistence::save_config_delta_preserving_comments(
+        &path,
+        &cfg_before_update,
+        &cfg,
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     audit_log(
         &state,

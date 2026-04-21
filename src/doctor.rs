@@ -110,6 +110,8 @@ struct DoctorCli {
     command: Option<DoctorCommand>,
     #[arg(long)]
     json: bool,
+    #[arg(long, default_value_t = false)]
+    apply_config_migrations: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -136,13 +138,20 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
     let json_output = cli.json;
     let sandbox_only = matches!(cli.command, Some(DoctorCommand::Sandbox));
 
-    match migrate_channels_config() {
-        Ok(Some((path, changed))) => {
+    match migrate_channels_config(cli.apply_config_migrations) {
+        Ok(Some((path, changed, applied))) => {
             if changed > 0 && !json_output {
-                println!(
-                    "Applied automatic channel migration ({changed} block(s)) in {}.",
-                    path.display()
-                );
+                if applied {
+                    println!(
+                        "Applied channel migration ({changed} block(s)) in {}.",
+                        path.display()
+                    );
+                } else {
+                    println!(
+                        "Detected channel migration opportunity ({changed} block(s)) in {}. Re-run with --apply-config-migrations to persist changes.",
+                        path.display()
+                    );
+                }
             }
         }
         Ok(None) => {}
@@ -174,16 +183,19 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn migrate_channels_config() -> anyhow::Result<Option<(PathBuf, usize)>> {
+fn migrate_channels_config(apply: bool) -> anyhow::Result<Option<(PathBuf, usize, bool)>> {
     let Some(path) = Config::resolve_config_path()? else {
         return Ok(None);
     };
     let mut cfg = Config::load()?;
+    let before_cfg = cfg.clone();
     let changed = migrate_channels_to_accounts(&mut cfg);
-    if changed > 0 {
-        cfg.save_yaml(&path.to_string_lossy())?;
+    let mut applied = false;
+    if apply && changed > 0 {
+        crate::config_persistence::save_config_delta_preserving_comments(&path, &before_cfg, &cfg)?;
+        applied = true;
     }
-    Ok(Some((path, changed)))
+    Ok(Some((path, changed, applied)))
 }
 
 fn channel_default_account_id(channel_cfg: &serde_yaml::Mapping) -> String {
