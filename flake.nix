@@ -17,7 +17,10 @@
           version = "0.1.0";
           src = ./web;
           npmBuildScript = "build";
-          npmDepsHash = "sha256-b4jpN4AD57bzvFAJueC4zuO0oTrDq/22TTfY9hvucNU=";
+          npmDeps = pkgs.importNpmLock {
+            npmRoot = ./web;
+          };
+          npmConfigHook = pkgs.importNpmLock.npmConfigHook;
 
           installPhase = ''
             runHook preInstall
