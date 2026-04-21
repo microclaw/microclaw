@@ -94,6 +94,8 @@ pub struct WebFetchUrlValidationConfig {
     pub allowlist_hosts: Vec<String>,
     #[serde(default)]
     pub denylist_hosts: Vec<String>,
+    #[serde(default = "default_block_private_ips")]
+    pub block_private_ips: bool,
     #[serde(default)]
     pub feed_sync: WebFetchFeedSyncConfig,
 }
@@ -129,6 +131,10 @@ const fn default_feed_fail_open() -> bool {
 
 const fn default_feed_max_entries_per_source() -> usize {
     10_000
+}
+
+const fn default_block_private_ips() -> bool {
+    true
 }
 
 fn default_allowed_schemes() -> Vec<String> {
@@ -173,6 +179,7 @@ impl Default for WebFetchUrlValidationConfig {
             allowed_schemes: default_allowed_schemes(),
             allowlist_hosts: Vec::new(),
             denylist_hosts: Vec::new(),
+            block_private_ips: default_block_private_ips(),
             feed_sync: WebFetchFeedSyncConfig::default(),
         }
     }
@@ -446,6 +453,18 @@ pub fn validate_web_fetch_url(
         return Err(format!("URL host '{}' is not in allowlist", host));
     }
 
+    // SSRF guard: resolve hostname and reject private/internal targets unless
+    // the host is explicitly on the allowlist (operator opt-out).
+    if config.block_private_ips {
+        let allowlisted = config
+            .allowlist_hosts
+            .iter()
+            .any(|rule| host_matches_rule(&host, rule));
+        if !allowlisted {
+            crate::url_safety::check_url_private_ip(&parsed)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -608,6 +627,7 @@ mod tests {
             allowed_schemes: vec!["https".into()],
             allowlist_hosts: vec!["allowed.com".into()],
             denylist_hosts: vec!["allowed.com".into()],
+            block_private_ips: true,
             feed_sync: WebFetchFeedSyncConfig::default(),
         };
         assert!(validate_web_fetch_url("ftp://bad", cfg).is_ok());
@@ -788,7 +808,11 @@ mod tests {
     #[test]
     fn redirect_validation_allows_relative_target() {
         let current = Url::parse("https://safe.example/start").unwrap();
-        let cfg = WebFetchUrlValidationConfig::default();
+        // Disable SSRF check for a hostname that doesn't resolve publicly.
+        let cfg = WebFetchUrlValidationConfig {
+            block_private_ips: false,
+            ..WebFetchUrlValidationConfig::default()
+        };
         let next = resolve_and_validate_redirect_target(&current, "/next", &cfg).unwrap();
         assert_eq!(next.as_str(), "https://safe.example/next");
     }

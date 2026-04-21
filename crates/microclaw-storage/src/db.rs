@@ -208,7 +208,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 20;
+const SCHEMA_VERSION_CURRENT: i64 = 21;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -900,6 +900,47 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 20)?;
         version = 20;
+    }
+    if version < 21 {
+        // Session search: FTS5 virtual table over messages, with triggers to
+        // keep it in sync on INSERT/UPDATE/DELETE. The table is created as
+        // contentless (`content=''`) to avoid duplicating text on disk; we
+        // manually keep it in sync via triggers rather than rely on the
+        // external-content mode so that deletions of individual messages are
+        // still cleanly reflected.
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                sender_name,
+                chat_id UNINDEXED,
+                message_id UNINDEXED,
+                timestamp UNINDEXED,
+                is_from_bot UNINDEXED,
+                tokenize = 'unicode61 remove_diacritics 2'
+            );",
+        )?;
+        // Backfill existing messages into the FTS index. rowid pattern uses
+        // a composite of chat_id and message_id to stay unique.
+        conn.execute_batch(
+            "INSERT INTO messages_fts(content, sender_name, chat_id, message_id, timestamp, is_from_bot)
+             SELECT content, sender_name, chat_id, id, timestamp, is_from_bot FROM messages;",
+        )?;
+        conn.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(content, sender_name, chat_id, message_id, timestamp, is_from_bot)
+                VALUES (new.content, new.sender_name, new.chat_id, new.id, new.timestamp, new.is_from_bot);
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+                DELETE FROM messages_fts WHERE chat_id = old.chat_id AND message_id = old.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+                DELETE FROM messages_fts WHERE chat_id = old.chat_id AND message_id = old.id;
+                INSERT INTO messages_fts(content, sender_name, chat_id, message_id, timestamp, is_from_bot)
+                VALUES (new.content, new.sender_name, new.chat_id, new.id, new.timestamp, new.is_from_bot);
+            END;",
+        )?;
+        set_schema_version(conn, 21)?;
+        version = 21;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -2752,6 +2793,68 @@ impl Database {
                     timestamp: row.get(5)?,
                 })
             })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
+    /// Full-text search over stored messages using the SQLite FTS5 index.
+    ///
+    /// `query` must be a valid FTS5 match expression (simple words are OK,
+    /// e.g. `"rust async"`). Returns ranked matches newest-first for
+    /// equally-ranked rows. When `chat_id` is `Some`, the search is scoped to
+    /// that chat; otherwise it spans all chats. When `since` is `Some`, only
+    /// messages with timestamp >= that value are returned. Results are
+    /// truncated to `limit` rows.
+    pub fn search_messages_fts(
+        &self,
+        query: &str,
+        chat_id: Option<i64>,
+        since: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>, MicroClawError> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 200) as i64;
+        let conn = self.lock_conn();
+
+        let mut sql = String::from(
+            "SELECT m.id, m.chat_id, m.sender_name, m.content, m.is_from_bot, m.timestamp
+             FROM messages_fts f
+             JOIN messages m ON m.id = f.message_id AND m.chat_id = f.chat_id
+             WHERE f.content MATCH ?1",
+        );
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(query.to_string())];
+        if let Some(cid) = chat_id {
+            sql.push_str(" AND m.chat_id = ?");
+            sql.push_str(&(binds.len() + 1).to_string());
+            binds.push(Box::new(cid));
+        }
+        if let Some(ts) = since {
+            sql.push_str(" AND m.timestamp >= ?");
+            sql.push_str(&(binds.len() + 1).to_string());
+            binds.push(Box::new(ts.to_string()));
+        }
+        sql.push_str(" ORDER BY bm25(messages_fts), m.timestamp DESC LIMIT ?");
+        sql.push_str(&(binds.len() + 1).to_string());
+        binds.push(Box::new(limit));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let bind_refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let messages = stmt
+            .query_map(
+                rusqlite::params_from_iter(bind_refs.iter().copied()),
+                |row| {
+                    Ok(StoredMessage {
+                        id: row.get(0)?,
+                        chat_id: row.get(1)?,
+                        sender_name: row.get(2)?,
+                        content: row.get(3)?,
+                        is_from_bot: row.get::<_, i32>(4)? != 0,
+                        timestamp: row.get(5)?,
+                    })
+                },
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(messages)
     }
@@ -5122,6 +5225,60 @@ mod tests {
         assert_eq!(messages[0].sender_name, "alice");
         assert_eq!(messages[0].content, "hello");
         assert!(!messages[0].is_from_bot);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_search_messages_fts_basic() {
+        let (db, dir) = test_db();
+        let now = chrono::Utc::now();
+        let messages = [
+            ("chat-1", 101, "alice", "Rust async futures are awesome"),
+            ("chat-2", 101, "bot", "I agree, tokio makes them easy"),
+            ("chat-3", 101, "alice", "Let's talk about JavaScript promises instead"),
+            ("chat-4", 202, "bob", "Discussing Rust borrow checker"),
+        ];
+        for (i, (id, chat, sender, content)) in messages.iter().enumerate() {
+            let msg = StoredMessage {
+                id: (*id).into(),
+                chat_id: *chat,
+                sender_name: (*sender).into(),
+                content: (*content).into(),
+                is_from_bot: *sender == "bot",
+                timestamp: (now + chrono::Duration::seconds(i as i64)).to_rfc3339(),
+            };
+            db.store_message(&msg).unwrap();
+        }
+
+        let rust_hits = db.search_messages_fts("rust", None, None, 10).unwrap();
+        assert!(rust_hits.len() >= 2, "expected at least 2 rust matches");
+        assert!(rust_hits.iter().all(|m| m.content.to_lowercase().contains("rust")));
+
+        let scoped = db.search_messages_fts("rust", Some(101), None, 10).unwrap();
+        assert!(scoped.iter().all(|m| m.chat_id == 101));
+
+        let empty = db.search_messages_fts("", None, None, 10).unwrap();
+        assert!(empty.is_empty());
+
+        let no_match = db
+            .search_messages_fts("nothingmatchesthis", None, None, 10)
+            .unwrap();
+        assert!(no_match.is_empty());
+
+        // Delete and confirm the FTS row is also removed via trigger.
+        {
+            let conn = db.lock_conn();
+            conn.execute(
+                "DELETE FROM messages WHERE id = ?1 AND chat_id = ?2",
+                params!["chat-1", 101i64],
+            )
+            .unwrap();
+        }
+        let after_delete = db
+            .search_messages_fts("awesome", None, None, 10)
+            .unwrap();
+        assert!(after_delete.is_empty());
+
         cleanup(&dir);
     }
 

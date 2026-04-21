@@ -2,6 +2,7 @@ pub mod a2a;
 pub mod activate_skill;
 pub mod bash;
 pub mod browser;
+pub mod clarify;
 pub mod edit_file;
 pub mod export_chat;
 pub mod glob;
@@ -9,9 +10,11 @@ pub mod grep;
 pub mod knowledge_graph;
 pub mod mcp;
 pub mod memory;
+pub mod osv_check;
 pub mod read_file;
 pub mod schedule;
 pub mod send_message;
+pub mod session_search;
 pub mod skill_manage;
 pub mod structured_memory;
 pub mod subagents;
@@ -265,6 +268,20 @@ impl ToolRegistry {
             )),
             Box::new(knowledge_graph::KnowledgeGraphQueryTool::new(db.clone())),
             Box::new(knowledge_graph::KnowledgeGraphAddTool::new(db.clone())),
+            Box::new(session_search::SessionSearchTool::new(db.clone())),
+            Box::new(osv_check::OsvCheckTool::new(
+                config.tool_timeout_secs("osv_check", 10),
+            )),
+            Box::new(clarify::ClarifyTool::new(
+                channel_registry.clone(),
+                db.clone(),
+                if config.bot_username.trim().is_empty() {
+                    "bot".to_string()
+                } else {
+                    config.bot_username.clone()
+                },
+                config.bot_username_overrides(),
+            )),
         ];
 
         // Add ClawHub tools if enabled
@@ -361,6 +378,10 @@ impl ToolRegistry {
             Box::new(structured_memory::StructuredMemorySearchTool::new(
                 db.clone(),
                 memory_backend,
+            )),
+            Box::new(session_search::SessionSearchTool::new(db.clone())),
+            Box::new(osv_check::OsvCheckTool::new(
+                config.tool_timeout_secs("osv_check", 10),
             )),
         ];
         if allow_session_tools {
