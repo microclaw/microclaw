@@ -177,6 +177,26 @@ pub fn check_raw_url_private_ip(raw_url: &str) -> Result<(), String> {
     check_url_private_ip(&parsed)
 }
 
+/// A reqwest redirect policy that re-validates each hop against the SSRF
+/// guard. Use with `reqwest::ClientBuilder::redirect(policy)` to catch
+/// redirects inside third-party SDKs or forwarded requests that would
+/// otherwise bypass the manual redirect loop in `web_fetch`.
+///
+/// Stops the redirect chain (returning an error that the caller sees as
+/// a request failure) when a hop targets a blocked address. Follows up
+/// to `max_redirects` hops when every hop passes.
+pub fn ssrf_redirect_policy(max_redirects: usize) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= max_redirects {
+            return attempt.error(format!("too many redirects (>{max_redirects})"));
+        }
+        if let Err(e) = check_url_private_ip(attempt.url()) {
+            return attempt.error(format!("SSRF guard blocked redirect: {e}"));
+        }
+        attempt.follow()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

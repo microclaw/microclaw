@@ -37,7 +37,9 @@ impl MediaClient {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs.max(5)))
-            .redirect(reqwest::redirect::Policy::limited(3))
+            // Re-validate SSRF on every redirect hop — handles both
+            // provider-side redirects and any third-party SDK path.
+            .redirect(crate::url_safety::ssrf_redirect_policy(3))
             .user_agent("MicroClaw-media/1.0")
             .build()
             .map_err(|e| format!("failed to build HTTP client: {e}"))?;
