@@ -5,7 +5,7 @@ use std::sync::Arc;
 use microclaw_core::llm_types::ToolDefinition;
 use microclaw_storage::db::Database;
 
-use super::{schema_object, Tool, ToolResult};
+use super::{authorize_chat_access, auth_context_from_input, schema_object, Tool, ToolResult};
 
 /// Session search tool — full-text search over the chatbot's stored messages.
 ///
@@ -14,6 +14,17 @@ use super::{schema_object, Tool, ToolResult};
 /// snippet) for the agent to reason about them without loading whole
 /// transcripts. Modeled after `session_search_tool.py` in
 /// `nousresearch/hermes-agent`, adapted to microclaw's SQLite schema.
+///
+/// Access model:
+/// - By default the search is scoped to the caller's own chat. The tool
+///   participates in `should_inject_default_chat_id`, so when the agent
+///   omits `chat_id` the runtime injects the caller's.
+/// - Explicit `chat_id = N` is gated by `authorize_chat_access` — only the
+///   caller or a control chat may search another chat's messages.
+/// - `all_chats = true` opts in to cross-chat search and is only honored for
+///   control chats. This keeps multi-tenant deployments (multiple DMs,
+///   groups, channels, SOUL-per-chat personalities) from leaking messages
+///   across conversations.
 pub struct SessionSearchTool {
     db: Arc<Database>,
 }
@@ -46,7 +57,10 @@ impl Tool for SessionSearchTool {
                 talk about X?', or you need cross-session recall. Returns ranked \
                 message snippets with chat metadata. Supports FTS5 syntax — simple \
                 words, quoted phrases, `NEAR`, `AND/OR/NOT`, and column prefix \
-                filters (e.g. `sender_name:alice content:refund`)."
+                filters (e.g. `sender_name:alice content:refund`). \
+                By default the search is scoped to the current chat; \
+                pass `chat_id` to target a different chat the caller can access, \
+                or `all_chats: true` (control chats only) to search every chat."
                 .into(),
             input_schema: schema_object(
                 json!({
@@ -56,7 +70,11 @@ impl Tool for SessionSearchTool {
                     },
                     "chat_id": {
                         "type": "integer",
-                        "description": "Optional chat scope. When omitted, searches across all chats the caller can access."
+                        "description": "Optional chat scope. Defaults to the caller's chat. Accessing other chats requires either the same caller_chat_id or a control chat."
+                    },
+                    "all_chats": {
+                        "type": "boolean",
+                        "description": "Control-chat-only opt-in to search every chat. Ignored for non-control callers."
                     },
                     "since": {
                         "type": "string",
@@ -81,7 +99,38 @@ impl Tool for SessionSearchTool {
             Some(q) if !q.trim().is_empty() => q.trim().to_string(),
             _ => return ToolResult::error("Missing or empty required parameter: query".into()),
         };
-        let chat_id = input.get("chat_id").and_then(|v| v.as_i64());
+
+        let Some(auth) = auth_context_from_input(&input) else {
+            return ToolResult::error(
+                "session_search requires an auth context (caller_chat_id) on the input".into(),
+            );
+        };
+
+        let all_chats = input
+            .get("all_chats")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let explicit_chat_id = input.get("chat_id").and_then(|v| v.as_i64());
+
+        // Resolve the scope based on access policy.
+        //   1. all_chats=true is a control-only escape hatch → no chat_id filter.
+        //   2. explicit chat_id is gated by authorize_chat_access.
+        //   3. default → caller's own chat (runtime may have already injected this).
+        let scope_chat_id: Option<i64> = if all_chats {
+            if !auth.is_control_chat() {
+                return ToolResult::error(
+                    "all_chats=true is only available for control chats".into(),
+                );
+            }
+            None
+        } else {
+            let target = explicit_chat_id.unwrap_or(auth.caller_chat_id);
+            if let Err(e) = authorize_chat_access(&input, target) {
+                return ToolResult::error(e);
+            }
+            Some(target)
+        };
+
         let since = input
             .get("since")
             .and_then(|v| v.as_str())
@@ -105,7 +154,7 @@ impl Tool for SessionSearchTool {
         let search = tokio::task::spawn_blocking(move || {
             db.search_messages_fts(
                 &query_for_task,
-                chat_id,
+                scope_chat_id,
                 since_for_task.as_deref(),
                 max_results,
             )
@@ -122,13 +171,20 @@ impl Tool for SessionSearchTool {
             }
         };
 
+        let scope_label = match scope_chat_id {
+            Some(cid) => format!("chat {cid}"),
+            None => "all chats".to_string(),
+        };
+
         if results.is_empty() {
-            return ToolResult::success(format!("No messages matched FTS5 query: {query}"));
+            return ToolResult::success(format!(
+                "No messages matched FTS5 query {query:?} in {scope_label}"
+            ));
         }
 
         let mut lines = Vec::with_capacity(results.len() + 1);
         lines.push(format!(
-            "{} match(es) for FTS5 query: {query}",
+            "{} match(es) for FTS5 query {query:?} in {scope_label}",
             results.len()
         ));
         for m in &results {
@@ -161,5 +217,88 @@ mod tests {
     fn trim_snippet_passes_short_content() {
         let text = "hello";
         assert_eq!(trim_snippet(text, 100), text);
+    }
+
+    fn auth_input(caller_chat_id: i64, control_chat_ids: Vec<i64>) -> serde_json::Value {
+        json!({
+            "query": "anything",
+            "__microclaw_auth": {
+                "caller_channel": "telegram",
+                "caller_chat_id": caller_chat_id,
+                "control_chat_ids": control_chat_ids,
+                "env_files": [],
+            }
+        })
+    }
+
+    struct ScopedDir(std::path::PathBuf);
+    impl Drop for ScopedDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn make_tmp_db() -> (Arc<Database>, ScopedDir) {
+        let dir = std::env::temp_dir().join(format!("microclaw_test_{}", uuid::Uuid::new_v4()));
+        let db = Database::new(dir.to_str().unwrap()).expect("open db");
+        (Arc::new(db), ScopedDir(dir))
+    }
+
+    #[tokio::test]
+    async fn cross_chat_without_permission_is_rejected() {
+        let (db, _dir) = make_tmp_db();
+        let tool = SessionSearchTool::new(db);
+        let mut input = auth_input(100, vec![]);
+        input["chat_id"] = json!(200);
+        let result = tool.execute(input).await;
+        assert!(result.is_error, "expected permission error, got ok");
+        assert!(
+            result.content.contains("Permission denied"),
+            "expected permission-denied message, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn all_chats_denied_for_non_control_caller() {
+        let (db, _dir) = make_tmp_db();
+        let tool = SessionSearchTool::new(db);
+        let mut input = auth_input(100, vec![]);
+        input["all_chats"] = json!(true);
+        let result = tool.execute(input).await;
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("control chats"),
+            "expected control-only message, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn all_chats_allowed_for_control_caller() {
+        let (db, _dir) = make_tmp_db();
+        let tool = SessionSearchTool::new(db);
+        let mut input = auth_input(100, vec![100]);
+        input["all_chats"] = json!(true);
+        let result = tool.execute(input).await;
+        assert!(
+            !result.is_error,
+            "expected ok for control chat, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn default_scope_is_caller_chat() {
+        let (db, _dir) = make_tmp_db();
+        let tool = SessionSearchTool::new(db);
+        let input = auth_input(100, vec![]);
+        let result = tool.execute(input).await;
+        assert!(!result.is_error, "expected ok, got: {}", result.content);
+        assert!(
+            result.content.contains("chat 100") || result.content.contains("No messages matched"),
+            "expected scope label 'chat 100', got: {}",
+            result.content
+        );
     }
 }

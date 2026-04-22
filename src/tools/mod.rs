@@ -67,6 +67,7 @@ impl ToolRegistry {
                 | "subagents_focused"
                 | "subagents_send"
                 | "subagents_orchestrate"
+                | "session_search"
         )
     }
 
