@@ -2149,6 +2149,48 @@ impl Database {
         }
     }
 
+    /// Overwrite the session label for a chat. No-op if the chat has no
+    /// session row yet. Used by the title generator background task.
+    pub fn set_session_label(
+        &self,
+        chat_id: i64,
+        label: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE sessions SET label = ?1 WHERE chat_id = ?2",
+            params![label, chat_id],
+        )?;
+        Ok(())
+    }
+
+    /// Return the current session label + message count for a chat. Used
+    /// to decide whether the title generator should run.
+    pub fn get_session_label_and_length(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<(Option<String>, usize)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let result = conn
+            .query_row(
+                "SELECT label, messages_json FROM sessions WHERE chat_id = ?1",
+                params![chat_id],
+                |row| {
+                    let label: Option<String> = row.get(0)?;
+                    let json: String = row.get(1)?;
+                    Ok((label, json))
+                },
+            )
+            .optional()?;
+        let Some((label, json)) = result else {
+            return Ok(None);
+        };
+        let count = serde_json::from_str::<Vec<serde_json::Value>>(&json)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        Ok(Some((label, count)))
+    }
+
     pub fn save_session_settings(
         &self,
         chat_id: i64,

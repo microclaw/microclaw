@@ -25,6 +25,7 @@ pub mod scheduler;
 pub mod setup;
 pub mod setup_def;
 pub mod skills;
+pub mod title_generator;
 pub mod tls;
 pub mod tool_executor;
 pub mod tools;
