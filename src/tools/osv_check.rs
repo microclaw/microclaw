@@ -1,9 +1,12 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 
 use microclaw_core::llm_types::ToolDefinition;
+use microclaw_storage::db::{call_blocking, Database};
+use microclaw_tools::tool_cache::{cache_key, default_ttls};
 
 use super::{schema_object, Tool, ToolResult};
 
@@ -16,6 +19,7 @@ use super::{schema_object, Tool, ToolResult};
 pub struct OsvCheckTool {
     endpoint: String,
     timeout_secs: u64,
+    db: Option<Arc<Database>>,
 }
 
 impl OsvCheckTool {
@@ -23,7 +27,13 @@ impl OsvCheckTool {
         Self {
             endpoint: "https://api.osv.dev/v1/query".to_string(),
             timeout_secs: timeout_secs.clamp(1, 30),
+            db: None,
         }
+    }
+
+    pub fn with_cache(mut self, db: Arc<Database>) -> Self {
+        self.db = Some(db);
+        self
     }
 
     /// Allow tests to override the endpoint.
@@ -144,6 +154,46 @@ impl Tool for OsvCheckTool {
     }
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult {
+        // Cache lookup before the HTTP call. Keyed by normalized (tool,
+        // input) — auth context is stripped automatically.
+        let key = cache_key(self.name(), &input);
+        let ttl = default_ttls()
+            .get(self.name())
+            .copied()
+            .unwrap_or_else(|| Duration::from_secs(3600));
+        if let Some(db) = &self.db {
+            let now = chrono::Utc::now().to_rfc3339();
+            let lookup_key = key.clone();
+            if let Ok(Some(cached)) =
+                call_blocking(db.clone(), move |d| d.get_cached_tool_result(&lookup_key, &now))
+                    .await
+            {
+                if !cached.is_error {
+                    return ToolResult::success(cached.content)
+                        .with_metadata(json!({ "cached": true }));
+                }
+            }
+        }
+        let result = self.execute_uncached(input).await;
+        if let Some(db) = &self.db {
+            if !result.is_error {
+                let expires =
+                    (chrono::Utc::now() + chrono::Duration::from_std(ttl).unwrap_or_default())
+                        .to_rfc3339();
+                let content = result.content.clone();
+                let tool_name = self.name().to_string();
+                let _ = call_blocking(db.clone(), move |d| {
+                    d.put_cached_tool_result(&key, &tool_name, &content, false, None, &expires)
+                })
+                .await;
+            }
+        }
+        result
+    }
+}
+
+impl OsvCheckTool {
+    async fn execute_uncached(&self, input: serde_json::Value) -> ToolResult {
         let package = match input.get("package").and_then(|v| v.as_str()) {
             Some(v) if !v.trim().is_empty() => v.trim().to_string(),
             _ => return ToolResult::error("Missing required parameter: package".into()),

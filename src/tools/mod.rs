@@ -275,9 +275,10 @@ impl ToolRegistry {
             Box::new(knowledge_graph::KnowledgeGraphQueryTool::new(db.clone())),
             Box::new(knowledge_graph::KnowledgeGraphAddTool::new(db.clone())),
             Box::new(session_search::SessionSearchTool::new(db.clone())),
-            Box::new(osv_check::OsvCheckTool::new(
-                config.tool_timeout_secs("osv_check", 10),
-            )),
+            Box::new(
+                osv_check::OsvCheckTool::new(config.tool_timeout_secs("osv_check", 10))
+                    .with_cache(db.clone()),
+            ),
             Box::new(clarify::ClarifyTool::new(
                 channel_registry.clone(),
                 db.clone(),
@@ -399,9 +400,10 @@ impl ToolRegistry {
                 memory_backend,
             )),
             Box::new(session_search::SessionSearchTool::new(db.clone())),
-            Box::new(osv_check::OsvCheckTool::new(
-                config.tool_timeout_secs("osv_check", 10),
-            )),
+            Box::new(
+                osv_check::OsvCheckTool::new(config.tool_timeout_secs("osv_check", 10))
+                    .with_cache(db.clone()),
+            ),
         ];
         if allow_session_tools {
             if let Some(channel_registry) = channel_registry {

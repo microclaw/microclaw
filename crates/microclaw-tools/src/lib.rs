@@ -7,6 +7,7 @@ pub mod path_guard;
 pub mod runtime;
 pub mod sandbox;
 pub mod todo_store;
+pub mod tool_cache;
 pub mod types;
 pub mod url_safety;
 pub mod web_content_validation;

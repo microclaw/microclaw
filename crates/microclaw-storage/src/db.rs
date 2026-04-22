@@ -72,6 +72,17 @@ pub struct TaskRunLog {
     pub result_summary: Option<String>,
 }
 
+/// A row returned from the tool result cache lookup.
+#[derive(Debug, Clone)]
+pub struct CachedToolResult {
+    pub tool_name: String,
+    pub content: String,
+    pub is_error: bool,
+    pub metadata_json: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmUsageSummary {
     pub requests: i64,
@@ -208,7 +219,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 21;
+const SCHEMA_VERSION_CURRENT: i64 = 22;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -941,6 +952,27 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 21)?;
         version = 21;
+    }
+    if version < 22 {
+        // Tool result cache — keyed by SHA-256 of (tool_name + normalized
+        // input JSON). Tools opt in by name; rows are purged lazily via TTL.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tool_result_cache (
+                cache_key TEXT PRIMARY KEY,
+                tool_name TEXT NOT NULL,
+                result_content TEXT NOT NULL,
+                is_error INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tool_result_cache_tool_expires
+                ON tool_result_cache(tool_name, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_tool_result_cache_expires
+                ON tool_result_cache(expires_at);",
+        )?;
+        set_schema_version(conn, 22)?;
+        version = 22;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -2147,6 +2179,76 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Look up a cached tool result by key; returns `None` if missing or
+    /// past its TTL. Passing `now` as an RFC3339 string lets callers
+    /// control "now" deterministically in tests.
+    pub fn get_cached_tool_result(
+        &self,
+        cache_key: &str,
+        now: &str,
+    ) -> Result<Option<CachedToolResult>, MicroClawError> {
+        let conn = self.lock_conn();
+        let row = conn
+            .query_row(
+                "SELECT tool_name, result_content, is_error, metadata_json, created_at, expires_at
+                 FROM tool_result_cache
+                 WHERE cache_key = ?1 AND expires_at > ?2",
+                params![cache_key, now],
+                |r| {
+                    Ok(CachedToolResult {
+                        tool_name: r.get(0)?,
+                        content: r.get(1)?,
+                        is_error: r.get::<_, i64>(2)? != 0,
+                        metadata_json: r.get::<_, Option<String>>(3)?,
+                        created_at: r.get(4)?,
+                        expires_at: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Insert or replace a cached tool result. Only non-error results
+    /// should be cached in practice; the `is_error` flag is exposed so
+    /// callers can choose a policy.
+    pub fn put_cached_tool_result(
+        &self,
+        cache_key: &str,
+        tool_name: &str,
+        content: &str,
+        is_error: bool,
+        metadata_json: Option<&str>,
+        expires_at: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO tool_result_cache
+                (cache_key, tool_name, result_content, is_error, metadata_json, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(cache_key) DO UPDATE SET
+                tool_name = excluded.tool_name,
+                result_content = excluded.result_content,
+                is_error = excluded.is_error,
+                metadata_json = excluded.metadata_json,
+                created_at = excluded.created_at,
+                expires_at = excluded.expires_at",
+            params![cache_key, tool_name, content, is_error as i64, metadata_json, now, expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// Delete all expired cache rows. Returns number of rows deleted.
+    pub fn prune_tool_result_cache(&self, now: &str) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let n = conn.execute(
+            "DELETE FROM tool_result_cache WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        Ok(n)
     }
 
     /// Overwrite the session label for a chat. No-op if the chat has no
