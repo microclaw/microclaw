@@ -76,6 +76,8 @@ fn minimal_config() -> Config {
         souls_dir: None,
         clawhub: microclaw::config::ClawHubConfig::default(),
         plugins: microclaw::plugins::PluginsConfig::default(),
+        media: microclaw::config::MediaConfig::default(),
+        openai_base_url: None,
         voice_provider: "openai".into(),
         voice_transcription_command: None,
         observability: None,

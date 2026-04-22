@@ -2916,6 +2916,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "microclaw-core",
  "regex",
  "reqwest 0.12.28",

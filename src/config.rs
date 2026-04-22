@@ -288,6 +288,177 @@ pub struct ModelPrice {
     pub output_per_million_usd: f64,
 }
 
+/// Configuration for multimedia tools (image generation, vision, TTS, STT).
+///
+/// All four tools are **disabled by default** — operators opt in per-tool.
+/// Credential resolution order for each tool (first non-empty wins):
+/// 1. `media.api_key` (plaintext in config; discouraged but supported)
+/// 2. Environment variable `MICROCLAW_OPENAI_API_KEY`
+/// 3. Environment variable `OPENAI_API_KEY`
+/// 4. `config.openai_api_key` (existing top-level field; used by transcribe)
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MediaConfig {
+    /// Optional explicit API key. Prefer env vars (`MICROCLAW_OPENAI_API_KEY`
+    /// or `OPENAI_API_KEY`) over plaintext here.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional per-module base URL override. Falls back to `openai_base_url`
+    /// then to `https://api.openai.com/v1`.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub image_gen: ImageGenConfig,
+    #[serde(default)]
+    pub vision: VisionConfig,
+    #[serde(default)]
+    pub tts: TtsConfig,
+    #[serde(default)]
+    pub stt: SttConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImageGenConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_image_model")]
+    pub model: String,
+    #[serde(default = "default_image_size")]
+    pub default_size: String,
+}
+
+impl Default for ImageGenConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_image_model(),
+            default_size: default_image_size(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VisionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_vision_model")]
+    pub model: String,
+    #[serde(default = "default_vision_max_tokens")]
+    pub max_tokens: u32,
+}
+
+impl Default for VisionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_vision_model(),
+            max_tokens: default_vision_max_tokens(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TtsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    #[serde(default = "default_tts_voice")]
+    pub default_voice: String,
+    #[serde(default = "default_tts_format")]
+    pub default_format: String,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_tts_model(),
+            default_voice: default_tts_voice(),
+            default_format: default_tts_format(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SttConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_stt_model")]
+    pub model: String,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+impl Default for SttConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_stt_model(),
+            language: None,
+        }
+    }
+}
+
+fn default_image_model() -> String {
+    "gpt-image-1".into()
+}
+fn default_image_size() -> String {
+    "1024x1024".into()
+}
+fn default_vision_model() -> String {
+    "gpt-4o-mini".into()
+}
+fn default_vision_max_tokens() -> u32 {
+    1024
+}
+fn default_tts_model() -> String {
+    "tts-1".into()
+}
+fn default_tts_voice() -> String {
+    "alloy".into()
+}
+fn default_tts_format() -> String {
+    "mp3".into()
+}
+fn default_stt_model() -> String {
+    "whisper-1".into()
+}
+
+impl MediaConfig {
+    /// Resolve the API key using the documented priority order. Returns
+    /// `None` if no source is configured. Never logs the value.
+    pub fn resolve_api_key(&self, fallback_openai_key: Option<&str>) -> Option<String> {
+        if let Some(k) = self.api_key.as_deref().filter(|s| !s.trim().is_empty()) {
+            return Some(k.to_string());
+        }
+        if let Ok(k) = std::env::var("MICROCLAW_OPENAI_API_KEY") {
+            if !k.trim().is_empty() {
+                return Some(k);
+            }
+        }
+        if let Ok(k) = std::env::var("OPENAI_API_KEY") {
+            if !k.trim().is_empty() {
+                return Some(k);
+            }
+        }
+        fallback_openai_key
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
+    }
+
+    /// Resolve the base URL using the documented priority order. Always
+    /// returns a non-empty value (defaults to OpenAI).
+    pub fn resolve_base_url(&self, fallback: Option<&str>) -> String {
+        if let Some(u) = self.base_url.as_deref().filter(|s| !s.trim().is_empty()) {
+            return u.trim_end_matches('/').to_string();
+        }
+        if let Some(u) = fallback.filter(|s| !s.trim().is_empty()) {
+            return u.trim_end_matches('/').to_string();
+        }
+        "https://api.openai.com/v1".to_string()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct LlmProviderProfile {
     #[serde(default)]
@@ -788,6 +959,19 @@ pub struct Config {
     #[serde(default)]
     pub plugins: PluginsConfig,
 
+    // --- Media tools (OpenAI-compatible) ---
+    /// Multimedia tool configuration (image generation / vision / TTS / STT).
+    /// When unset, each tool defaults to `enabled: false`. API key and base URL
+    /// fall back to `openai_api_key` / `openai_base_url`, so users who already
+    /// have their OpenAI credential wired up get zero-config.
+    #[serde(default)]
+    pub media: MediaConfig,
+
+    /// Override for the OpenAI-compatible base URL used by media tools. When
+    /// unset, media tools use `https://api.openai.com/v1`.
+    #[serde(default)]
+    pub openai_base_url: Option<String>,
+
     // --- Voice / Speech-to-text ---
     /// Voice transcription provider: "openai" uses OpenAI Whisper API, "local" uses voice_transcription_command
     #[serde(default = "default_voice_provider", rename = "voice_provider")]
@@ -1258,6 +1442,8 @@ impl Config {
             souls_dir: None,
             clawhub: ClawHubConfig::default(),
             plugins: PluginsConfig::default(),
+            media: MediaConfig::default(),
+            openai_base_url: None,
             voice_provider: "openai".into(),
             voice_transcription_command: None,
             observability: None,

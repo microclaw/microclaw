@@ -3,8 +3,10 @@ pub mod activate_skill;
 pub mod bash;
 pub mod browser;
 pub mod clarify;
+pub mod describe_image;
 pub mod edit_file;
 pub mod export_chat;
+pub mod generate_image;
 pub mod glob;
 pub mod grep;
 pub mod knowledge_graph;
@@ -19,8 +21,10 @@ pub mod skill_manage;
 pub mod structured_memory;
 pub mod subagents;
 pub mod sync_skills;
+pub mod text_to_speech;
 pub mod time_math;
 pub mod todo;
+pub mod transcribe_audio;
 pub mod web_fetch;
 pub mod web_search;
 pub mod write_file;
@@ -283,6 +287,18 @@ impl ToolRegistry {
                 },
                 config.bot_username_overrides(),
             )),
+            Box::new(generate_image::GenerateImageTool::new(
+                config,
+                channel_registry.clone(),
+                db.clone(),
+            )),
+            Box::new(describe_image::DescribeImageTool::new(config)),
+            Box::new(text_to_speech::TextToSpeechTool::new(
+                config,
+                channel_registry.clone(),
+                db.clone(),
+            )),
+            Box::new(transcribe_audio::TranscribeAudioTool::new(config)),
         ];
 
         // Add ClawHub tools if enabled

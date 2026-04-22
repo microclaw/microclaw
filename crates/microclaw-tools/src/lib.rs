@@ -2,6 +2,7 @@
 
 pub mod command_runner;
 pub mod env_file;
+pub mod media_client;
 pub mod path_guard;
 pub mod runtime;
 pub mod sandbox;
