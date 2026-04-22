@@ -9,6 +9,7 @@ pub mod export_chat;
 pub mod generate_image;
 pub mod glob;
 pub mod grep;
+pub mod insights;
 pub mod knowledge_graph;
 pub mod mcp;
 pub mod memory;
@@ -299,6 +300,7 @@ impl ToolRegistry {
                 db.clone(),
             )),
             Box::new(transcribe_audio::TranscribeAudioTool::new(config)),
+            Box::new(insights::InsightsTool::new(db.clone())),
         ];
 
         // Add ClawHub tools if enabled
