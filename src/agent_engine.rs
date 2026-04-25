@@ -298,6 +298,14 @@ fn tool_use_fingerprint(blocks: &[ResponseContentBlock]) -> Option<String> {
     }
 }
 
+/// Stable key for one tool call, used by the duplicate-call circuit
+/// breaker. Reuses the cache-key normalizer so that semantically
+/// equivalent JSON inputs (e.g. reordered object keys) produce the same
+/// key, while auth-context noise is stripped.
+fn duplicate_call_key(name: &str, input: &serde_json::Value) -> String {
+    microclaw_tools::tool_cache::cache_key(name, input)
+}
+
 
 pub fn should_suppress_user_error(err: &anyhow::Error) -> bool {
     let text = err.to_string().to_ascii_lowercase();
@@ -882,6 +890,11 @@ async fn process_with_agent_logic(
     let mut last_tool_use_fingerprint: Option<String> = None;
     let mut repeated_tool_use_streak: usize = 0;
     const MAX_IDENTICAL_TOOL_USE_STREAK: usize = 6;
+    // Sliding history of the last N (tool_name, args_hash) keys, used by
+    // the duplicate-call circuit breaker to short-circuit calls that have
+    // already been issued too many times.
+    let mut recent_tool_call_keys: std::collections::VecDeque<String> =
+        std::collections::VecDeque::with_capacity(state.config.tool_repeat_window.max(1));
     for iteration in 0..state.config.max_tool_iterations {
         if let Some(tx) = event_tx {
             let _ = tx.send(AgentEvent::Iteration {
@@ -1354,7 +1367,7 @@ async fn process_with_agent_logic(
             });
 
             // Extract pending tool calls from the response.
-            let pending_calls: Vec<crate::tool_executor::PendingToolCall> = response
+            let raw_pending_calls: Vec<crate::tool_executor::PendingToolCall> = response
                 .content
                 .iter()
                 .filter_map(|block| {
@@ -1369,6 +1382,53 @@ async fn process_with_agent_logic(
                     }
                 })
                 .collect();
+
+            // Duplicate-call circuit breaker: if a (tool, args) pair has been
+            // issued >= `tool_repeat_limit` times within the last
+            // `tool_repeat_window` calls across earlier iterations, short-
+            // circuit it with an error tool_result so the model adjusts
+            // course instead of looping. fetch_artifact is exempted —
+            // legitimate paginated reads of one artifact look like repeats.
+            let mut pending_calls: Vec<crate::tool_executor::PendingToolCall> =
+                Vec::with_capacity(raw_pending_calls.len());
+            let mut short_circuit_results: Vec<(String, ContentBlock)> = Vec::new();
+            let repeat_window = state.config.tool_repeat_window;
+            let repeat_limit = state.config.tool_repeat_limit.max(1);
+            for call in raw_pending_calls {
+                if repeat_window == 0 || call.name == "fetch_artifact" {
+                    pending_calls.push(call);
+                    continue;
+                }
+                let key = duplicate_call_key(&call.name, &call.input);
+                let prior = recent_tool_call_keys.iter().filter(|k| **k == key).count();
+                if prior >= repeat_limit {
+                    warn!(
+                        chat_id,
+                        iteration = iteration + 1,
+                        tool = %call.name,
+                        prior_calls = prior,
+                        "Circuit breaker: short-circuiting repeated tool call"
+                    );
+                    let msg = format!(
+                        "Circuit breaker: this exact `{}` call (same arguments) has already \
+                         run {prior} time(s) in the last {repeat_window} tool calls. \
+                         Repeating it again is unlikely to produce a different result. \
+                         Try a different tool, change the arguments, or summarize what you \
+                         already learned and proceed.",
+                        call.name
+                    );
+                    short_circuit_results.push((
+                        call.id.clone(),
+                        ContentBlock::ToolResult {
+                            tool_use_id: call.id.clone(),
+                            content: msg,
+                            is_error: Some(true),
+                        },
+                    ));
+                } else {
+                    pending_calls.push(call);
+                }
+            }
 
             let mut batch_ctx = crate::tool_executor::ToolBatchContext {
                 failed_tools: failed_tools.clone(),
@@ -1385,7 +1445,7 @@ async fn process_with_agent_logic(
                 tool_errors: 0,
             };
 
-            let tool_results = crate::tool_executor::execute_tool_batch(
+            let mut tool_results = crate::tool_executor::execute_tool_batch(
                 state,
                 &pending_calls,
                 &mut batch_ctx,
@@ -1399,6 +1459,29 @@ async fn process_with_agent_logic(
                 parent_span_id,
             )
             .await;
+
+            // Splice short-circuited tool_result blocks back in. Order doesn't
+            // need to match the original tool_use sequence because the LLM
+            // pairs results by tool_use_id.
+            for (_id, block) in short_circuit_results {
+                tool_results.push(block);
+            }
+
+            // Record the (tool, args) keys that actually executed in the
+            // sliding-window history. Short-circuited calls are intentionally
+            // omitted so the breaker only counts real attempts.
+            if repeat_window > 0 {
+                for call in &pending_calls {
+                    if call.name == "fetch_artifact" {
+                        continue;
+                    }
+                    let key = duplicate_call_key(&call.name, &call.input);
+                    if recent_tool_call_keys.len() >= repeat_window {
+                        recent_tool_call_keys.pop_front();
+                    }
+                    recent_tool_call_keys.push_back(key);
+                }
+            }
 
             // Sync back batch context to the agent loop state.
             failed_tools = batch_ctx.failed_tools;
@@ -1430,7 +1513,6 @@ async fn process_with_agent_logic(
             } else {
                 None
             };
-            let mut tool_results = tool_results;
             if let Some(warning) = budget_warning {
                 tool_results.push(ContentBlock::Text { text: warning });
             }
@@ -2292,8 +2374,8 @@ async fn compact_messages(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_db_memory_context, format_mid_turn_injection, history_to_claude_messages,
-        process_with_agent, strip_thinking, AgentRequestContext,
+        build_db_memory_context, duplicate_call_key, format_mid_turn_injection,
+        history_to_claude_messages, process_with_agent, strip_thinking, AgentRequestContext,
     };
     use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
@@ -3519,6 +3601,35 @@ mod tests {
         assert!(prompt.contains("# Plugin Documents"));
         assert!(prompt.contains("[p1:doc1]"));
         assert!(prompt.contains("API spec v1"));
+    }
+
+    #[test]
+    fn duplicate_call_key_is_stable_and_arg_sensitive() {
+        let a = serde_json::json!({"path": "/foo", "limit": 10});
+        let b = serde_json::json!({"limit": 10, "path": "/foo"});
+        assert_eq!(
+            duplicate_call_key("read_file", &a),
+            duplicate_call_key("read_file", &b),
+            "key order shouldn't matter"
+        );
+
+        let c = serde_json::json!({"path": "/bar", "limit": 10});
+        assert_ne!(
+            duplicate_call_key("read_file", &a),
+            duplicate_call_key("read_file", &c),
+            "different args must produce different keys"
+        );
+
+        // Auth context is stripped — same call from different chats collides.
+        let with_auth = serde_json::json!({
+            "path": "/foo",
+            "limit": 10,
+            "__microclaw_auth": {"caller_chat_id": 1}
+        });
+        assert_eq!(
+            duplicate_call_key("read_file", &a),
+            duplicate_call_key("read_file", &with_auth),
+        );
     }
 
     #[test]
