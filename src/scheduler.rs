@@ -933,6 +933,18 @@ async fn review_for_skill_creation(state: &Arc<AppState>, chat_id: i64) {
         return;
     }
 
+    // Filter out failed/aborted turns before spending an LLM call. We
+    // would rather miss a borderline-skill from a tense turn than mint a
+    // skill that codifies a broken approach.
+    let signal = crate::skill_review::assess_success(&session_messages);
+    if signal == crate::skill_review::SuccessSignal::Unlikely {
+        info!(
+            chat_id,
+            tool_use_count, "Skill review: skipping — task did not look successful"
+        );
+        return;
+    }
+
     // Check if we already have many skills (avoid skill explosion)
     let existing_skills = state.skills.discover_skills();
     let agent_created_count = existing_skills

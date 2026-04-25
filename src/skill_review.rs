@@ -12,6 +12,8 @@
 //!
 //! Module entry points:
 //! - [`build_tool_trajectory`] — render a `Vec<Message>` to a step list
+//! - [`assess_success`] — cheap heuristic that flags failed/aborted turns
+//!   so the review LLM doesn't waste budget packaging them as skills
 
 use microclaw_core::llm_types::{ContentBlock, Message, MessageContent};
 
@@ -161,6 +163,146 @@ fn render_steps(steps: &[TrajectoryStep]) -> String {
         }
     }
     out
+}
+
+/// Cheap, no-LLM verdict on whether a completed turn is "successful
+/// enough" to mine for a reusable skill. We bias toward false positives
+/// (review more) over false negatives (miss a good skill) — only the
+/// clear failure shapes are flagged as `Unlikely`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuccessSignal {
+    /// Strong indicators of completion: low tool-error rate, no failure
+    /// phrasing in the final assistant text, no circuit-breaker fires.
+    Likely,
+    /// Ambiguous: some errors recovered from, or short final text. Worth
+    /// reviewing but caller may want to weight differently.
+    Mixed,
+    /// Clear failure signature: high tool-error rate, explicit apology,
+    /// circuit-breaker triggered, or empty final assistant turn after
+    /// tool work. Skip to save the review LLM call.
+    Unlikely,
+}
+
+const FAILURE_PHRASES: &[&str] = &[
+    "i'm sorry",
+    "i am sorry",
+    "i apologize",
+    "unfortunately",
+    "i couldn't",
+    "i could not",
+    "i was unable",
+    "unable to",
+    "i don't have access",
+    "i don't have the ability",
+    "no luck",
+    "gave up",
+    "抱歉",
+    "无法",
+    "不能完成",
+    "失败",
+    "做不到",
+];
+
+const CIRCUIT_BREAKER_MARKER: &str = "Circuit breaker:";
+
+/// Inspect the trailing assistant text + the tool-result mix to decide
+/// whether the task looks completed. Designed to be safe to call even on
+/// short or pathological message lists.
+pub fn assess_success(messages: &[Message]) -> SuccessSignal {
+    let (tool_results, errors) = count_tool_results(messages);
+    let final_text = last_assistant_text(messages);
+
+    // Hard fail: the duplicate-call circuit breaker fired during the turn
+    // — by definition the agent was looping, not progressing.
+    if circuit_breaker_fired(messages) {
+        return SuccessSignal::Unlikely;
+    }
+
+    // Hard fail: agent emitted tool calls but produced no closing text.
+    if tool_results > 0 && final_text.trim().is_empty() {
+        return SuccessSignal::Unlikely;
+    }
+
+    // Hard fail: more than half of tool results errored.
+    if tool_results >= 4 && errors * 2 > tool_results {
+        return SuccessSignal::Unlikely;
+    }
+
+    let lower = final_text.to_ascii_lowercase();
+    let apology = FAILURE_PHRASES.iter().any(|p| lower.contains(p));
+    if apology {
+        return SuccessSignal::Unlikely;
+    }
+
+    // Soft fail: noticeable error rate or terse closing text.
+    if (tool_results >= 4 && errors * 4 > tool_results) || final_text.trim().len() < 20 {
+        return SuccessSignal::Mixed;
+    }
+
+    SuccessSignal::Likely
+}
+
+/// Last `assistant`-role plain-text content in the message list.
+/// Concatenates Text blocks within the final assistant message; ignores
+/// tool_use/tool_result blocks. Returns "" if the conversation does not
+/// end on an assistant turn.
+fn last_assistant_text(messages: &[Message]) -> String {
+    let last_assistant = messages.iter().rev().find(|m| m.role == "assistant");
+    let Some(msg) = last_assistant else {
+        return String::new();
+    };
+    match &msg.content {
+        MessageContent::Text(t) => t.clone(),
+        MessageContent::Blocks(blocks) => {
+            let mut buf = String::new();
+            for block in blocks {
+                if let ContentBlock::Text { text } = block {
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(text);
+                }
+            }
+            buf
+        }
+    }
+}
+
+/// `(total_tool_results, errored_tool_results)` across the conversation.
+fn count_tool_results(messages: &[Message]) -> (usize, usize) {
+    let mut total = 0usize;
+    let mut errors = 0usize;
+    for msg in messages {
+        if let MessageContent::Blocks(blocks) = &msg.content {
+            for block in blocks {
+                if let ContentBlock::ToolResult { is_error, .. } = block {
+                    total += 1;
+                    if is_error.unwrap_or(false) {
+                        errors += 1;
+                    }
+                }
+            }
+        }
+    }
+    (total, errors)
+}
+
+/// True iff any tool_result body starts with the duplicate-call circuit
+/// breaker marker. Marker text lives in `agent_engine.rs` — keep them in
+/// sync if either changes.
+fn circuit_breaker_fired(messages: &[Message]) -> bool {
+    for msg in messages {
+        if let MessageContent::Blocks(blocks) = &msg.content {
+            for block in blocks {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    if content.contains(CIRCUIT_BREAKER_MARKER) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 fn head_preview(text: &str, max_chars: usize) -> String {
@@ -320,6 +462,135 @@ mod tests {
         assert!(out.contains("see image"));
         assert!(!out.contains("ignored"));
         assert_eq!(out.lines().count(), 1);
+    }
+
+    fn ok_tool_result(id: &str, body: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: id.into(),
+            content: body.into(),
+            is_error: None,
+        }
+    }
+
+    fn err_tool_result(id: &str, body: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: id.into(),
+            content: body.into(),
+            is_error: Some(true),
+        }
+    }
+
+    #[test]
+    fn assess_success_likely_for_clean_completed_turn() {
+        let msgs = vec![
+            user_text("write a hello world"),
+            assistant_blocks(vec![ContentBlock::ToolUse {
+                id: "tu_1".into(),
+                name: "write_file".into(),
+                input: json!({"path": "hello.py"}),
+                thought_signature: None,
+            }]),
+            user_blocks(vec![ok_tool_result("tu_1", "wrote 13 bytes")]),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "Done — wrote a Python hello-world to hello.py.".into(),
+            }]),
+        ];
+        assert_eq!(assess_success(&msgs), SuccessSignal::Likely);
+    }
+
+    #[test]
+    fn assess_success_unlikely_when_apology_in_final_text() {
+        let msgs = vec![
+            user_text("ship this"),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "I'm sorry, I couldn't complete the deploy.".into(),
+            }]),
+        ];
+        assert_eq!(assess_success(&msgs), SuccessSignal::Unlikely);
+    }
+
+    #[test]
+    fn assess_success_unlikely_when_majority_tool_errors() {
+        let mut blocks_assist = Vec::new();
+        let mut blocks_user = Vec::new();
+        for i in 0..5 {
+            blocks_assist.push(ContentBlock::ToolUse {
+                id: format!("tu_{i}"),
+                name: "bash".into(),
+                input: json!({"cmd": "x"}),
+                thought_signature: None,
+            });
+            // 3 of 5 errored.
+            if i < 3 {
+                blocks_user.push(err_tool_result(&format!("tu_{i}"), "failed"));
+            } else {
+                blocks_user.push(ok_tool_result(&format!("tu_{i}"), "ok"));
+            }
+        }
+        let msgs = vec![
+            user_text("debug this"),
+            assistant_blocks(blocks_assist),
+            user_blocks(blocks_user),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "Fixed it by switching shells.".into(),
+            }]),
+        ];
+        assert_eq!(assess_success(&msgs), SuccessSignal::Unlikely);
+    }
+
+    #[test]
+    fn assess_success_unlikely_when_circuit_breaker_fired() {
+        let msgs = vec![
+            user_text("find foo"),
+            assistant_blocks(vec![ContentBlock::ToolUse {
+                id: "tu_1".into(),
+                name: "grep".into(),
+                input: json!({"q": "foo"}),
+                thought_signature: None,
+            }]),
+            user_blocks(vec![err_tool_result(
+                "tu_1",
+                "Circuit breaker: this exact `grep` call (same arguments) ...",
+            )]),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "Let me try a different approach.".into(),
+            }]),
+        ];
+        assert_eq!(assess_success(&msgs), SuccessSignal::Unlikely);
+    }
+
+    #[test]
+    fn assess_success_unlikely_when_tools_ran_but_no_closing_text() {
+        let msgs = vec![
+            user_text("do stuff"),
+            assistant_blocks(vec![ContentBlock::ToolUse {
+                id: "tu_1".into(),
+                name: "bash".into(),
+                input: json!({"cmd": "ls"}),
+                thought_signature: None,
+            }]),
+            user_blocks(vec![ok_tool_result("tu_1", "files...")]),
+            assistant_blocks(vec![ContentBlock::Text { text: "".into() }]),
+        ];
+        assert_eq!(assess_success(&msgs), SuccessSignal::Unlikely);
+    }
+
+    #[test]
+    fn assess_success_mixed_for_terse_closing_text() {
+        let msgs = vec![
+            user_text("compute pi"),
+            assistant_blocks(vec![ContentBlock::ToolUse {
+                id: "tu_1".into(),
+                name: "calculate".into(),
+                input: json!({"expr": "pi"}),
+                thought_signature: None,
+            }]),
+            user_blocks(vec![ok_tool_result("tu_1", "3.14159")]),
+            assistant_blocks(vec![ContentBlock::Text {
+                text: "3.14159".into(),
+            }]),
+        ];
+        assert_eq!(assess_success(&msgs), SuccessSignal::Mixed);
     }
 
     #[test]
