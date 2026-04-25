@@ -873,38 +873,63 @@ If nothing is worth saving as a skill, output:
 
 Output ONLY the JSON object, no other text."#;
 
+/// Load the structured `Vec<Message>` for a chat from `sessions.messages_json`.
+/// Returns `None` if no session row exists or the JSON fails to parse.
+async fn load_session_messages(state: &Arc<AppState>, chat_id: i64) -> Option<Vec<Message>> {
+    let loaded = call_blocking(state.db.clone(), move |db| db.load_session(chat_id))
+        .await
+        .ok()??;
+    let (json, _updated_at) = loaded;
+    match serde_json::from_str::<Vec<Message>>(&json) {
+        Ok(msgs) => Some(msgs),
+        Err(e) => {
+            warn!(
+                chat_id,
+                "Skill review: failed to parse session messages_json: {e}"
+            );
+            None
+        }
+    }
+}
+
+/// Exact count of `tool_use` blocks in a structured message list.
+/// Replaces the previous "messages.len() / 3" heuristic.
+fn count_tool_uses(messages: &[Message]) -> usize {
+    let mut n = 0;
+    for msg in messages {
+        if let MessageContent::Blocks(blocks) = &msg.content {
+            for block in blocks {
+                if matches!(
+                    block,
+                    microclaw_core::llm_types::ContentBlock::ToolUse { .. }
+                ) {
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+
 async fn review_for_skill_creation(state: &Arc<AppState>, chat_id: i64) {
     let min_tool_calls = state.config.skill_review_min_tool_calls;
     if min_tool_calls == 0 {
         return;
     }
 
-    // Load recent messages to look for complex conversations
-    let messages = match call_blocking(state.db.clone(), move |db| {
-        db.get_recent_messages(chat_id, 50)
-    })
-    .await
-    {
-        Ok(m) => m,
-        Err(_) => return,
+    // Load the structured session (full Vec<Message> with ContentBlocks
+    // intact). We need the typed form so we can build a faithful tool
+    // trajectory; the flattened messages table loses tool_use/tool_result
+    // structure. Skip review if no session row exists yet — the agent
+    // hasn't actually run a turn for this chat.
+    let session_messages = match load_session_messages(state, chat_id).await {
+        Some(msgs) if !msgs.is_empty() => msgs,
+        _ => return,
     };
 
-    // Count bot messages that look like tool results (heuristic: messages containing tool patterns)
-    let tool_call_heuristic = messages
-        .iter()
-        .filter(|m| {
-            m.is_from_bot
-                && (m.content.contains("tool_use")
-                    || m.content.contains("tool_result")
-                    || m.content.contains("Executing"))
-        })
-        .count();
-
-    // Also count by total message volume as a proxy (each tool call = ~3 messages: assistant+tool_result+assistant)
-    let estimated_tool_calls = messages.len() / 3;
-    let effective_count = tool_call_heuristic.max(estimated_tool_calls);
-
-    if effective_count < min_tool_calls {
+    // Count actual tool_use blocks in the session — exact, not heuristic.
+    let tool_use_count = count_tool_uses(&session_messages);
+    if tool_use_count < min_tool_calls {
         return;
     }
 
@@ -922,18 +947,10 @@ async fn review_for_skill_creation(state: &Arc<AppState>, chat_id: i64) {
         return;
     }
 
-    // Build conversation summary for the LLM
-    let conversation = messages
-        .iter()
-        .map(|m| {
-            format!(
-                "[{}]: {}",
-                m.sender_name,
-                strip_reflector_thinking_tags(&m.content)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let trajectory = crate::skill_review::build_tool_trajectory(&session_messages);
+    if trajectory.trim().is_empty() {
+        return;
+    }
 
     let existing_skill_names: Vec<&str> = existing_skills.iter().map(|s| s.name.as_str()).collect();
     let skills_hint = if existing_skill_names.is_empty() {
@@ -948,7 +965,7 @@ async fn review_for_skill_creation(state: &Arc<AppState>, chat_id: i64) {
     let user_msg = Message {
         role: "user".into(),
         content: MessageContent::Text(format!(
-            "Review this conversation for skill-worthy approaches:{skills_hint}\n\nConversation:\n{conversation}"
+            "Review this trajectory ({tool_use_count} tool calls) for skill-worthy approaches:{skills_hint}\n\nTrajectory:\n{trajectory}"
         )),
     };
     let response = match state

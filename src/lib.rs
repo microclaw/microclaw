@@ -24,6 +24,7 @@ pub mod runtime;
 pub mod scheduler;
 pub mod setup;
 pub mod setup_def;
+pub mod skill_review;
 pub mod skills;
 pub mod title_generator;
 pub mod tls;
