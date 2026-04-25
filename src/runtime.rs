@@ -73,6 +73,7 @@ pub struct AppState {
     pub memory_backend: Arc<MemoryBackend>,
     pub tools: ToolRegistry,
     pub chat_turn_queue: Arc<ChatTurnQueue>,
+    pub skill_review_queue: crate::skill_review::SkillReviewQueue,
     pub metric_exporter: Option<Arc<OtlpMetricExporter>>,
     pub trace_exporter: Option<Arc<OtlpTraceExporter>>,
     pub log_exporter: Option<Arc<OtlpLogExporter>>,
@@ -485,6 +486,9 @@ pub async fn run(
         config.chat_turn_queue_max_pending,
     ));
 
+    let (skill_review_queue, skill_review_worker) =
+        crate::skill_review::build_skill_review_channel();
+
     let state = Arc::new(AppState {
         config,
         channel_registry,
@@ -499,6 +503,7 @@ pub async fn run(
         memory_backend,
         tools,
         chat_turn_queue,
+        skill_review_queue,
         metric_exporter,
         trace_exporter,
         log_exporter,
@@ -513,6 +518,13 @@ pub async fn run(
 
     crate::scheduler::spawn_scheduler(state.clone());
     crate::scheduler::spawn_reflector(state.clone());
+    {
+        let review_state = state.clone();
+        spawn_guarded("skill_review_worker".to_string(), async move {
+            crate::skill_review::spawn_skill_review_worker(review_state, skill_review_worker)
+                .await;
+        });
+    }
     if state.config.subagents.announce_to_chat {
         let relay_state = state.clone();
         spawn_guarded("subagents_announce_relay".to_string(), async move {

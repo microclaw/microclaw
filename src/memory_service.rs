@@ -30,7 +30,7 @@ fn jaccard_similarity_ratio(a: &str, b: &str) -> f64 {
     }
 }
 
-fn tokenize_for_relevance(text: &str) -> std::collections::HashSet<String> {
+pub(crate) fn tokenize_for_relevance(text: &str) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
 
     for token in text
@@ -297,6 +297,29 @@ pub(crate) async fn maybe_handle_explicit_memory_command(
 /// AI agents sometimes prepend system prompts or tool definitions to user messages,
 /// which destroys embedding quality for semantic search. This sanitizer extracts the
 /// likely user intent by:
+/// Effective ranking score for a memory: `confidence` × recency-decay.
+/// PROFILE memories are exempted (they describe the user, not transient state)
+/// and a non-positive `half_life_days` disables decay entirely.
+fn effective_memory_score(
+    m: &Memory,
+    now: chrono::DateTime<chrono::Utc>,
+    half_life_days: f64,
+) -> f64 {
+    if m.category == "PROFILE" || half_life_days <= 0.0 {
+        return m.confidence;
+    }
+    let parsed = chrono::DateTime::parse_from_rfc3339(&m.last_seen_at)
+        .or_else(|_| chrono::DateTime::parse_from_rfc3339(&m.updated_at));
+    let last_seen = match parsed {
+        Ok(t) => t.with_timezone(&chrono::Utc),
+        Err(_) => return m.confidence,
+    };
+    let age_days =
+        (now - last_seen).num_seconds().max(0) as f64 / 86_400.0;
+    let decay = 0.5_f64.powf(age_days / half_life_days);
+    m.confidence * decay
+}
+
 /// 1. Detecting and stripping common system prompt patterns
 /// 2. Extracting the last meaningful sentence (most likely to be the actual query)
 /// 3. Truncating overly long queries that are likely contaminated
@@ -375,6 +398,7 @@ pub(crate) async fn build_db_memory_context(
     token_budget: usize,
     l0_identity_pct: usize,
     l1_essential_pct: usize,
+    recency_half_life_days: f64,
 ) -> String {
     let query = &sanitize_memory_query(query);
     let memories = match memory_backend.get_memories_for_context(chat_id, 100).await {
@@ -423,15 +447,18 @@ pub(crate) async fn build_db_memory_context(
 
     // ── L1: Essential Story (highest-confidence memories, up to l1_pct% of budget) ──
     let l1_budget = used_tokens + (budget * l1_pct / 100);
+    let now = chrono::Utc::now();
     let mut essential: Vec<&Memory> = memories
         .iter()
         .filter(|m| !m.is_archived && !injected_ids.contains(&m.id))
         .collect();
-    // Score by confidence + recency (higher = more essential)
+    // Score by confidence × recency-decay (PROFILE memories don't decay; everyone
+    // else loses half their weight per `recency_half_life_days`). The decay
+    // pulls stale tactical facts down so durable knowledge floats.
     essential.sort_by(|a, b| {
-        b.confidence
-            .partial_cmp(&a.confidence)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        let sa = effective_memory_score(a, now, recency_half_life_days);
+        let sb = effective_memory_score(b, now, recency_half_life_days);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut l1_count = 0usize;
@@ -784,4 +811,54 @@ pub(crate) async fn apply_reflector_extractions(
 #[cfg(feature = "sqlite-vec")]
 pub(crate) fn memory_supports_local_semantic_ranking(memory_backend: &MemoryBackend) -> bool {
     memory_backend.supports_local_semantic_ranking()
+}
+
+#[cfg(test)]
+mod recency_tests {
+    use super::effective_memory_score;
+    use microclaw_storage::db::Memory;
+
+    fn mk(category: &str, last_seen: &str, confidence: f64) -> Memory {
+        Memory {
+            id: 1,
+            chat_id: Some(1),
+            content: "x".into(),
+            category: category.into(),
+            created_at: last_seen.into(),
+            updated_at: last_seen.into(),
+            embedding_model: None,
+            confidence,
+            source: "test".into(),
+            last_seen_at: last_seen.into(),
+            is_archived: false,
+            archived_at: None,
+            expires_at: None,
+        }
+    }
+
+    #[test]
+    fn profile_memories_are_immune_to_decay() {
+        let now = chrono::Utc::now();
+        let stale = (now - chrono::Duration::days(365)).to_rfc3339();
+        let m = mk("PROFILE", &stale, 0.9);
+        assert!((effective_memory_score(&m, now, 30.0) - 0.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn knowledge_memories_decay_by_half_per_half_life() {
+        let now = chrono::Utc::now();
+        let half_life = 30.0;
+        let one_half = (now - chrono::Duration::days(30)).to_rfc3339();
+        let m = mk("KNOWLEDGE", &one_half, 1.0);
+        let s = effective_memory_score(&m, now, half_life);
+        assert!((s - 0.5).abs() < 0.01, "expected ~0.5, got {s}");
+    }
+
+    #[test]
+    fn zero_half_life_disables_decay() {
+        let now = chrono::Utc::now();
+        let stale = (now - chrono::Duration::days(365)).to_rfc3339();
+        let m = mk("EVENT", &stale, 0.7);
+        assert!((effective_memory_score(&m, now, 0.0) - 0.7).abs() < 1e-9);
+    }
 }

@@ -135,7 +135,8 @@ pub fn tool_concurrency_class(name: &str) -> ToolConcurrencyClass {
         | "compare_time" | "calculate" | "read_memory" | "structured_memory_search"
         | "todo_read" | "export_chat" | "a2a_list_peers" | "list_scheduled_tasks"
         | "get_scheduled_task_history" | "list_scheduled_task_dlq" | "subagents_list"
-        | "subagents_info" | "subagents_focused" | "subagents_log" | "browser" => {
+        | "subagents_info" | "subagents_focused" | "subagents_log" | "browser"
+        | "fetch_artifact" => {
             ToolConcurrencyClass::ReadOnly
         }
         // Exclusive tools: must run alone

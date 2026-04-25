@@ -298,6 +298,14 @@ fn tool_use_fingerprint(blocks: &[ResponseContentBlock]) -> Option<String> {
     }
 }
 
+/// Stable key for one tool call, used by the duplicate-call circuit
+/// breaker. Reuses the cache-key normalizer so that semantically
+/// equivalent JSON inputs (e.g. reordered object keys) produce the same
+/// key, while auth-context noise is stripped.
+fn duplicate_call_key(name: &str, input: &serde_json::Value) -> String {
+    microclaw_tools::tool_cache::cache_key(name, input)
+}
+
 
 pub fn should_suppress_user_error(err: &anyhow::Error) -> bool {
     let text = err.to_string().to_ascii_lowercase();
@@ -756,10 +764,13 @@ async fn process_with_agent_logic(
         state.config.memory_token_budget,
         state.config.memory_l0_identity_pct,
         state.config.memory_l1_essential_pct,
+        state.config.memory_recency_half_life_days,
     )
     .await;
     let memory_context = format!("{}{}", file_memory, db_memory);
-    let skills_catalog = state.skills.build_skills_catalog();
+    let skills_catalog = state
+        .skills
+        .build_skills_catalog_for_query(&query, state.config.skills_catalog_top_k);
     let soul_content = load_soul_content(&state.config, context.caller_channel, chat_id);
     let bot_username = state
         .config
@@ -881,6 +892,11 @@ async fn process_with_agent_logic(
     let mut last_tool_use_fingerprint: Option<String> = None;
     let mut repeated_tool_use_streak: usize = 0;
     const MAX_IDENTICAL_TOOL_USE_STREAK: usize = 6;
+    // Sliding history of the last N (tool_name, args_hash) keys, used by
+    // the duplicate-call circuit breaker to short-circuit calls that have
+    // already been issued too many times.
+    let mut recent_tool_call_keys: std::collections::VecDeque<String> =
+        std::collections::VecDeque::with_capacity(state.config.tool_repeat_window.max(1));
     for iteration in 0..state.config.max_tool_iterations {
         if let Some(tx) = event_tx {
             let _ = tx.send(AgentEvent::Iteration {
@@ -1244,6 +1260,14 @@ async fn process_with_agent_logic(
             persist_session_with_skill_env_files(state, chat_id, &mut messages, &skill_env_files)
                 .await;
 
+            // End-of-turn skill review handoff. Non-blocking — the worker
+            // task drains the queue independently. Gating on
+            // `skill_review_min_tool_calls > 0` here saves an enqueue
+            // when the feature is disabled (the worker would skip anyway).
+            if state.config.skill_review_min_tool_calls > 0 {
+                state.skill_review_queue.enqueue(chat_id);
+            }
+
             let final_text = if display_text.trim().is_empty() {
                 if stop_reason == "max_tokens" {
                     "I reached the model output limit before producing a visible reply. Please ask me to continue."
@@ -1353,7 +1377,7 @@ async fn process_with_agent_logic(
             });
 
             // Extract pending tool calls from the response.
-            let pending_calls: Vec<crate::tool_executor::PendingToolCall> = response
+            let raw_pending_calls: Vec<crate::tool_executor::PendingToolCall> = response
                 .content
                 .iter()
                 .filter_map(|block| {
@@ -1368,6 +1392,53 @@ async fn process_with_agent_logic(
                     }
                 })
                 .collect();
+
+            // Duplicate-call circuit breaker: if a (tool, args) pair has been
+            // issued >= `tool_repeat_limit` times within the last
+            // `tool_repeat_window` calls across earlier iterations, short-
+            // circuit it with an error tool_result so the model adjusts
+            // course instead of looping. fetch_artifact is exempted —
+            // legitimate paginated reads of one artifact look like repeats.
+            let mut pending_calls: Vec<crate::tool_executor::PendingToolCall> =
+                Vec::with_capacity(raw_pending_calls.len());
+            let mut short_circuit_results: Vec<(String, ContentBlock)> = Vec::new();
+            let repeat_window = state.config.tool_repeat_window;
+            let repeat_limit = state.config.tool_repeat_limit.max(1);
+            for call in raw_pending_calls {
+                if repeat_window == 0 || call.name == "fetch_artifact" {
+                    pending_calls.push(call);
+                    continue;
+                }
+                let key = duplicate_call_key(&call.name, &call.input);
+                let prior = recent_tool_call_keys.iter().filter(|k| **k == key).count();
+                if prior >= repeat_limit {
+                    warn!(
+                        chat_id,
+                        iteration = iteration + 1,
+                        tool = %call.name,
+                        prior_calls = prior,
+                        "Circuit breaker: short-circuiting repeated tool call"
+                    );
+                    let msg = format!(
+                        "Circuit breaker: this exact `{}` call (same arguments) has already \
+                         run {prior} time(s) in the last {repeat_window} tool calls. \
+                         Repeating it again is unlikely to produce a different result. \
+                         Try a different tool, change the arguments, or summarize what you \
+                         already learned and proceed.",
+                        call.name
+                    );
+                    short_circuit_results.push((
+                        call.id.clone(),
+                        ContentBlock::ToolResult {
+                            tool_use_id: call.id.clone(),
+                            content: msg,
+                            is_error: Some(true),
+                        },
+                    ));
+                } else {
+                    pending_calls.push(call);
+                }
+            }
 
             let mut batch_ctx = crate::tool_executor::ToolBatchContext {
                 failed_tools: failed_tools.clone(),
@@ -1384,7 +1455,7 @@ async fn process_with_agent_logic(
                 tool_errors: 0,
             };
 
-            let tool_results = crate::tool_executor::execute_tool_batch(
+            let mut tool_results = crate::tool_executor::execute_tool_batch(
                 state,
                 &pending_calls,
                 &mut batch_ctx,
@@ -1398,6 +1469,29 @@ async fn process_with_agent_logic(
                 parent_span_id,
             )
             .await;
+
+            // Splice short-circuited tool_result blocks back in. Order doesn't
+            // need to match the original tool_use sequence because the LLM
+            // pairs results by tool_use_id.
+            for (_id, block) in short_circuit_results {
+                tool_results.push(block);
+            }
+
+            // Record the (tool, args) keys that actually executed in the
+            // sliding-window history. Short-circuited calls are intentionally
+            // omitted so the breaker only counts real attempts.
+            if repeat_window > 0 {
+                for call in &pending_calls {
+                    if call.name == "fetch_artifact" {
+                        continue;
+                    }
+                    let key = duplicate_call_key(&call.name, &call.input);
+                    if recent_tool_call_keys.len() >= repeat_window {
+                        recent_tool_call_keys.pop_front();
+                    }
+                    recent_tool_call_keys.push_back(key);
+                }
+            }
 
             // Sync back batch context to the agent loop state.
             failed_tools = batch_ctx.failed_tools;
@@ -1429,7 +1523,6 @@ async fn process_with_agent_logic(
             } else {
                 None
             };
-            let mut tool_results = tool_results;
             if let Some(warning) = budget_warning {
                 tool_results.push(ContentBlock::Text { text: warning });
             }
@@ -2291,8 +2384,8 @@ async fn compact_messages(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_db_memory_context, format_mid_turn_injection, history_to_claude_messages,
-        process_with_agent, strip_thinking, AgentRequestContext,
+        build_db_memory_context, duplicate_call_key, format_mid_turn_injection,
+        history_to_claude_messages, process_with_agent, strip_thinking, AgentRequestContext,
     };
     use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
@@ -2512,6 +2605,7 @@ mod tests {
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
             chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
+            skill_review_queue: crate::skill_review::build_skill_review_channel().0,
             metric_exporter: None,
             trace_exporter: None,
             log_exporter: None,
@@ -2554,6 +2648,7 @@ mod tests {
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
             chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
+            skill_review_queue: crate::skill_review::build_skill_review_channel().0,
             metric_exporter: None,
             trace_exporter: None,
             log_exporter: None,
@@ -2583,7 +2678,7 @@ mod tests {
             .unwrap();
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
-        let context = build_db_memory_context(&memory_backend, &db, None, 100, "short", 20, 20, 30).await;
+        let context = build_db_memory_context(&memory_backend, &db, None, 100, "short", 20, 20, 30, 30.0).await;
         assert!(context.contains("<structured_memories>"));
         // With a tiny budget (20 tokens), not all memories fit — some are available via deep search
         assert!(
@@ -2605,7 +2700,7 @@ mod tests {
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
         let context =
-            build_db_memory_context(&memory_backend, &db, None, 100, "likes", 10_000, 20, 30).await;
+            build_db_memory_context(&memory_backend, &db, None, 100, "likes", 10_000, 20, 30, 30.0).await;
         assert!(context.contains("user likes rust"));
         assert!(context.contains("user likes coffee"));
         assert!(!context.contains("memories available via"));
@@ -2623,7 +2718,7 @@ mod tests {
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
         let context =
-            build_db_memory_context(&memory_backend, &db, None, 100, "喜欢 咖啡", 10_000, 20, 30).await;
+            build_db_memory_context(&memory_backend, &db, None, 100, "喜欢 咖啡", 10_000, 20, 30, 30.0).await;
         // Both PROFILE memories should be in L0 (Identity layer)
         assert!(
             context.contains("用户喜欢咖啡和编程"),
@@ -2713,6 +2808,7 @@ mod tests {
                 1500,
                 20,
                 30,
+                30.0,
             )
             .await;
             assert!(
@@ -3517,6 +3613,35 @@ mod tests {
         assert!(prompt.contains("# Plugin Documents"));
         assert!(prompt.contains("[p1:doc1]"));
         assert!(prompt.contains("API spec v1"));
+    }
+
+    #[test]
+    fn duplicate_call_key_is_stable_and_arg_sensitive() {
+        let a = serde_json::json!({"path": "/foo", "limit": 10});
+        let b = serde_json::json!({"limit": 10, "path": "/foo"});
+        assert_eq!(
+            duplicate_call_key("read_file", &a),
+            duplicate_call_key("read_file", &b),
+            "key order shouldn't matter"
+        );
+
+        let c = serde_json::json!({"path": "/bar", "limit": 10});
+        assert_ne!(
+            duplicate_call_key("read_file", &a),
+            duplicate_call_key("read_file", &c),
+            "different args must produce different keys"
+        );
+
+        // Auth context is stripped — same call from different chats collides.
+        let with_auth = serde_json::json!({
+            "path": "/foo",
+            "limit": 10,
+            "__microclaw_auth": {"caller_chat_id": 1}
+        });
+        assert_eq!(
+            duplicate_call_key("read_file", &a),
+            duplicate_call_key("read_file", &with_auth),
+        );
     }
 
     #[test]
