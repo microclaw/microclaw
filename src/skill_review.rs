@@ -15,7 +15,14 @@
 //! - [`assess_success`] — cheap heuristic that flags failed/aborted turns
 //!   so the review LLM doesn't waste budget packaging them as skills
 
-use microclaw_core::llm_types::{ContentBlock, Message, MessageContent};
+use std::sync::Arc;
+
+use microclaw_core::llm_types::{ContentBlock, Message, MessageContent, ResponseContentBlock};
+use microclaw_storage::db::call_blocking;
+use tokio::sync::mpsc;
+use tracing::{error, info, warn};
+
+use crate::runtime::AppState;
 
 /// Cap per-tool-input JSON in the rendered trajectory. Generous enough to
 /// preserve typical commands/queries, tight enough that one giant `bash`
@@ -315,6 +322,288 @@ fn head_preview(text: &str, max_chars: usize) -> String {
     format!("{}… (+{} chars)", head.replace('\n', " "), total - max_chars)
 }
 
+/// Cap on how many `agent-created` skills can coexist before the
+/// pipeline self-throttles. Prevents runaway accumulation; the activation
+/// tracker (added in a later commit) can later evict low-value entries.
+const MAX_AGENT_CREATED_SKILLS: usize = 20;
+
+const SKILL_REVIEW_SYSTEM_PROMPT: &str = r#"You are a skill review specialist. Analyze conversations to identify reusable approaches that should be saved as skills.
+
+A "skill" is a set of step-by-step instructions for a task type the agent encountered. Only recommend creating a skill if:
+1. The conversation shows a non-trivial multi-step approach (5+ distinct steps)
+2. The approach required trial-and-error or domain-specific knowledge
+3. The approach is REUSABLE — it would help with similar future tasks
+4. No existing skill already covers this approach
+
+If you find a worthy skill, output EXACTLY one JSON object:
+{"create": true, "name": "skill-name", "description": "One-line description", "instructions": "Full markdown instructions"}
+
+If nothing is worth saving as a skill, output:
+{"create": false}
+
+Output ONLY the JSON object, no other text."#;
+
+/// Asynchronous queue for end-of-turn skill review requests. The agent
+/// loop enqueues a `chat_id` after a successful turn; a dedicated worker
+/// task drains the queue and invokes [`run_skill_review`] without
+/// blocking the request path.
+///
+/// The wrapper struct exists so [`crate::runtime::AppState`] can hand
+/// out cheap clones (`enqueue` only needs the sender). The worker
+/// retains the receiver via [`SkillReviewWorker::start`].
+#[derive(Clone)]
+pub struct SkillReviewQueue {
+    tx: mpsc::UnboundedSender<i64>,
+}
+
+impl SkillReviewQueue {
+    /// Send a chat_id to the review worker. Silently drops the request if
+    /// the worker has been shut down — review is best-effort and never
+    /// blocks the caller.
+    pub fn enqueue(&self, chat_id: i64) {
+        let _ = self.tx.send(chat_id);
+    }
+}
+
+/// Owning side of the skill-review queue. Created together with the
+/// `SkillReviewQueue` handle and consumed by [`spawn_skill_review_worker`].
+pub struct SkillReviewWorker {
+    rx: mpsc::UnboundedReceiver<i64>,
+}
+
+/// Build the `(handle, worker)` pair that goes into [`AppState`] and the
+/// scheduler boot, respectively.
+pub fn build_skill_review_channel() -> (SkillReviewQueue, SkillReviewWorker) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    (SkillReviewQueue { tx }, SkillReviewWorker { rx })
+}
+
+/// Run the worker loop on the current task. Drains all immediately-
+/// available chat_ids into a dedup set before processing, so a flurry of
+/// enqueues for the same chat collapses to one review.
+pub async fn spawn_skill_review_worker(state: Arc<AppState>, mut worker: SkillReviewWorker) {
+    use std::collections::HashSet;
+    while let Some(first) = worker.rx.recv().await {
+        let mut pending: HashSet<i64> = HashSet::new();
+        pending.insert(first);
+        while let Ok(more) = worker.rx.try_recv() {
+            pending.insert(more);
+        }
+        for chat_id in pending {
+            run_skill_review(state.clone(), chat_id).await;
+        }
+    }
+}
+
+/// Run the full review pipeline for one chat. Safe to call repeatedly
+/// for the same chat — the cap on `agent-created` skills and the
+/// duplicate-name check inside skill creation prevent runaway writes.
+///
+/// Steps (each may early-return without an LLM call):
+///   1. Gate: feature must be enabled (`skill_review_min_tool_calls > 0`).
+///   2. Load structured session; require `tool_use_count >= threshold`.
+///   3. Run [`assess_success`] heuristic; skip on `Unlikely`.
+///   4. Cap check: bail if `agent-created` count >= [`MAX_AGENT_CREATED_SKILLS`].
+///   5. Build trajectory + ask LLM for a verdict.
+///   6. On `{"create": true, ...}`, validate + write SKILL.md.
+pub async fn run_skill_review(state: Arc<AppState>, chat_id: i64) {
+    let min_tool_calls = state.config.skill_review_min_tool_calls;
+    if min_tool_calls == 0 {
+        return;
+    }
+
+    let session_messages = match load_session_messages(&state, chat_id).await {
+        Some(msgs) if !msgs.is_empty() => msgs,
+        _ => return,
+    };
+
+    let tool_use_count = count_tool_uses(&session_messages);
+    if tool_use_count < min_tool_calls {
+        return;
+    }
+
+    let signal = assess_success(&session_messages);
+    if signal == SuccessSignal::Unlikely {
+        info!(
+            chat_id,
+            tool_use_count, "Skill review: skipping — task did not look successful"
+        );
+        return;
+    }
+
+    let existing_skills = state.skills.discover_skills();
+    let agent_created_count = existing_skills
+        .iter()
+        .filter(|s| s.source == "agent-created")
+        .count();
+    if agent_created_count >= MAX_AGENT_CREATED_SKILLS {
+        info!(
+            chat_id,
+            agent_created_count,
+            "Skill review: skipping — agent-created skill cap reached"
+        );
+        return;
+    }
+
+    let trajectory = build_tool_trajectory(&session_messages);
+    if trajectory.trim().is_empty() {
+        return;
+    }
+
+    let existing_skill_names: Vec<&str> =
+        existing_skills.iter().map(|s| s.name.as_str()).collect();
+    let skills_hint = if existing_skill_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nExisting skills (do NOT duplicate): {}",
+            existing_skill_names.join(", ")
+        )
+    };
+
+    let user_msg = Message {
+        role: "user".into(),
+        content: MessageContent::Text(format!(
+            "Review this trajectory ({tool_use_count} tool calls) for skill-worthy approaches:{skills_hint}\n\nTrajectory:\n{trajectory}"
+        )),
+    };
+    let response = match state
+        .llm
+        .send_message(SKILL_REVIEW_SYSTEM_PROMPT, vec![user_msg], None)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Skill review: LLM call failed for chat {chat_id}: {e}");
+            return;
+        }
+    };
+
+    let text = response
+        .content
+        .iter()
+        .filter_map(|b| {
+            if let ResponseContentBlock::Text { text } = b {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    let trimmed = text.trim();
+    let review: serde_json::Value = match parse_review_json(trimmed) {
+        Some(v) => v,
+        None => return,
+    };
+
+    if !review.get("create").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return;
+    }
+
+    let skill_name = match review.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n.to_string(),
+        None => return,
+    };
+    let description = match review.get("description").and_then(|v| v.as_str()) {
+        Some(d) => d,
+        None => return,
+    };
+    let instructions = match review.get("instructions").and_then(|v| v.as_str()) {
+        Some(i) => i,
+        None => return,
+    };
+
+    if existing_skills.iter().any(|s| s.name == skill_name) {
+        return;
+    }
+
+    if microclaw_storage::memory_quality::scan_for_injection(instructions).is_err() {
+        warn!(
+            "Skill review: rejected auto-created skill '{}' due to injection scan failure",
+            skill_name
+        );
+        return;
+    }
+
+    let skills_dir = std::path::PathBuf::from(state.config.skills_data_dir());
+    let skill_dir = skills_dir.join(&skill_name);
+    if let Err(e) = std::fs::create_dir_all(&skill_dir) {
+        error!(
+            "Skill review: failed to create directory for '{}': {}",
+            skill_name, e
+        );
+        return;
+    }
+
+    let content = format!(
+        "---\nname: {}\ndescription: {}\nsource: agent-created\nupdated_at: \"{}\"\n---\n{}\n",
+        skill_name,
+        description,
+        chrono::Utc::now().to_rfc3339(),
+        instructions
+    );
+
+    if let Err(e) = std::fs::write(skill_dir.join("SKILL.md"), &content) {
+        error!(
+            "Skill review: failed to write SKILL.md for '{}': {}",
+            skill_name, e
+        );
+        return;
+    }
+
+    info!(
+        "Skill review: auto-created skill '{}' from chat {} conversation",
+        skill_name, chat_id
+    );
+}
+
+/// Tolerate review responses with leading/trailing prose by extracting
+/// the outermost `{...}` substring before parsing.
+fn parse_review_json(trimmed: &str) -> Option<serde_json::Value> {
+    if let Ok(v) = serde_json::from_str(trimmed) {
+        return Some(v);
+    }
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}').map(|i| i + 1)?;
+    if end <= start {
+        return None;
+    }
+    serde_json::from_str(&trimmed[start..end]).ok()
+}
+
+async fn load_session_messages(state: &Arc<AppState>, chat_id: i64) -> Option<Vec<Message>> {
+    let loaded = call_blocking(state.db.clone(), move |db| db.load_session(chat_id))
+        .await
+        .ok()??;
+    let (json, _updated_at) = loaded;
+    match serde_json::from_str::<Vec<Message>>(&json) {
+        Ok(msgs) => Some(msgs),
+        Err(e) => {
+            warn!(
+                chat_id,
+                "Skill review: failed to parse session messages_json: {e}"
+            );
+            None
+        }
+    }
+}
+
+fn count_tool_uses(messages: &[Message]) -> usize {
+    let mut n = 0;
+    for msg in messages {
+        if let MessageContent::Blocks(blocks) = &msg.content {
+            for block in blocks {
+                if matches!(block, ContentBlock::ToolUse { .. }) {
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,6 +880,52 @@ mod tests {
             }]),
         ];
         assert_eq!(assess_success(&msgs), SuccessSignal::Mixed);
+    }
+
+    #[test]
+    fn parse_review_json_handles_bare_object() {
+        let v = parse_review_json(r#"{"create": false}"#).unwrap();
+        assert_eq!(v.get("create").and_then(|x| x.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn parse_review_json_strips_surrounding_prose() {
+        let v = parse_review_json(
+            "Sure! Here is the verdict:\n{\"create\": true, \"name\": \"x\"}\nThanks.",
+        )
+        .unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("x"));
+    }
+
+    #[test]
+    fn parse_review_json_returns_none_when_no_braces() {
+        assert!(parse_review_json("nothing here").is_none());
+    }
+
+    #[tokio::test]
+    async fn skill_review_queue_collapses_duplicate_enqueues() {
+        let (queue, mut worker) = build_skill_review_channel();
+        // Sender lives on; close it after enqueues so the worker drains
+        // and exits cleanly.
+        queue.enqueue(1);
+        queue.enqueue(1);
+        queue.enqueue(2);
+        queue.enqueue(1);
+        drop(queue);
+
+        let mut received = Vec::new();
+        // Mimic the worker's drain pattern: block on first, then non-block
+        // until empty.
+        if let Some(first) = worker.rx.recv().await {
+            let mut pending = std::collections::HashSet::new();
+            pending.insert(first);
+            while let Ok(more) = worker.rx.try_recv() {
+                pending.insert(more);
+            }
+            received.extend(pending);
+        }
+        received.sort();
+        assert_eq!(received, vec![1, 2]);
     }
 
     #[test]

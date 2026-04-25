@@ -1258,6 +1258,14 @@ async fn process_with_agent_logic(
             persist_session_with_skill_env_files(state, chat_id, &mut messages, &skill_env_files)
                 .await;
 
+            // End-of-turn skill review handoff. Non-blocking — the worker
+            // task drains the queue independently. Gating on
+            // `skill_review_min_tool_calls > 0` here saves an enqueue
+            // when the feature is disabled (the worker would skip anyway).
+            if state.config.skill_review_min_tool_calls > 0 {
+                state.skill_review_queue.enqueue(chat_id);
+            }
+
             let final_text = if display_text.trim().is_empty() {
                 if stop_reason == "max_tokens" {
                     "I reached the model output limit before producing a visible reply. Please ask me to continue."
@@ -2595,6 +2603,7 @@ mod tests {
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
             chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
+            skill_review_queue: crate::skill_review::build_skill_review_channel().0,
             metric_exporter: None,
             trace_exporter: None,
             log_exporter: None,
@@ -2637,6 +2646,7 @@ mod tests {
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
             chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
+            skill_review_queue: crate::skill_review::build_skill_review_channel().0,
             metric_exporter: None,
             trace_exporter: None,
             log_exporter: None,
