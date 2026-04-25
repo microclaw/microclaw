@@ -756,6 +756,7 @@ async fn process_with_agent_logic(
         state.config.memory_token_budget,
         state.config.memory_l0_identity_pct,
         state.config.memory_l1_essential_pct,
+        state.config.memory_recency_half_life_days,
     )
     .await;
     let memory_context = format!("{}{}", file_memory, db_memory);
@@ -2583,7 +2584,7 @@ mod tests {
             .unwrap();
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
-        let context = build_db_memory_context(&memory_backend, &db, None, 100, "short", 20, 20, 30).await;
+        let context = build_db_memory_context(&memory_backend, &db, None, 100, "short", 20, 20, 30, 30.0).await;
         assert!(context.contains("<structured_memories>"));
         // With a tiny budget (20 tokens), not all memories fit — some are available via deep search
         assert!(
@@ -2605,7 +2606,7 @@ mod tests {
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
         let context =
-            build_db_memory_context(&memory_backend, &db, None, 100, "likes", 10_000, 20, 30).await;
+            build_db_memory_context(&memory_backend, &db, None, 100, "likes", 10_000, 20, 30, 30.0).await;
         assert!(context.contains("user likes rust"));
         assert!(context.contains("user likes coffee"));
         assert!(!context.contains("memories available via"));
@@ -2623,7 +2624,7 @@ mod tests {
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
         let context =
-            build_db_memory_context(&memory_backend, &db, None, 100, "喜欢 咖啡", 10_000, 20, 30).await;
+            build_db_memory_context(&memory_backend, &db, None, 100, "喜欢 咖啡", 10_000, 20, 30, 30.0).await;
         // Both PROFILE memories should be in L0 (Identity layer)
         assert!(
             context.contains("用户喜欢咖啡和编程"),
@@ -2713,6 +2714,7 @@ mod tests {
                 1500,
                 20,
                 30,
+                30.0,
             )
             .await;
             assert!(

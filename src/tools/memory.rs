@@ -216,7 +216,7 @@ impl Tool for WriteMemoryTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "write_memory".into(),
-            description: "Write to the AGENTS.md memory file. Use this to remember important information about the user or conversation. Use scope 'global' for memories shared across all chats, 'bot' for the current bot/account, or 'chat' for chat-specific memories. In chat scope, memory is stored per person when sender identity is available.".into(),
+            description: "Write to the AGENTS.md memory file. Use this to remember important information about the user or conversation. Use scope 'global' for memories shared across all chats, 'bot' for the current bot/account, or 'chat' for chat-specific memories. In chat scope, memory is stored per person when sender identity is available. Pass `ttl_days` for facts that should expire (e.g. \"working from Tokyo this week\", \"travel until 2026-05-20\") so the memory is auto-pruned later.".into(),
             input_schema: schema_object(
                 json!({
                     "scope": {
@@ -231,6 +231,10 @@ impl Tool for WriteMemoryTool {
                     "content": {
                         "type": "string",
                         "description": "The content to write to the memory file (global/bot replace full file; chat updates the latest sender section when sender identity is available)"
+                    },
+                    "ttl_days": {
+                        "type": "number",
+                        "description": "Optional. If set, the structured memory row is auto-pruned after this many days. Use for time-bounded facts; omit for durable knowledge."
                     }
                 }),
                 &["scope", "content"],
@@ -311,13 +315,17 @@ impl Tool for WriteMemoryTool {
         match std::fs::write(&path, &write_content) {
             Ok(()) => {
                 let memory_content = content.trim().to_string();
+                let ttl_days = input
+                    .get("ttl_days")
+                    .and_then(|v| v.as_f64())
+                    .filter(|v| v.is_finite() && *v > 0.0);
                 if !memory_content.is_empty() {
                     if let Some(normalized) =
                         memory_quality::normalize_memory_content(&memory_content, 180)
                     {
                         if memory_quality::memory_quality_ok(&normalized) {
                             let chat_id = memory_chat_id;
-                            let _ = self
+                            if let Ok(memory_id) = self
                                 .memory_backend
                                 .insert_memory_with_metadata(
                                     chat_id,
@@ -326,12 +334,27 @@ impl Tool for WriteMemoryTool {
                                     "write_memory_tool",
                                     0.85,
                                 )
-                                .await;
+                                .await
+                            {
+                                if let Some(days) = ttl_days {
+                                    let secs = (days * 86_400.0) as i64;
+                                    let expires_at = (chrono::Utc::now()
+                                        + chrono::Duration::seconds(secs))
+                                    .to_rfc3339();
+                                    let _ = self
+                                        .db
+                                        .set_memory_expires_at(memory_id, Some(&expires_at));
+                                }
+                            }
                         }
                     }
                 }
 
-                ToolResult::success(format!("Memory saved to {} scope.", scope))
+                let suffix = match ttl_days {
+                    Some(d) => format!(" (expires in {d} day(s))"),
+                    None => String::new(),
+                };
+                ToolResult::success(format!("Memory saved to {} scope.{}", scope, suffix))
             }
             Err(e) => ToolResult::error(format!("Failed to write memory: {e}")),
         }

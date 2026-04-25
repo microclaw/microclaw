@@ -111,6 +111,9 @@ fn default_tool_result_truncation_tail_chars() -> usize {
 fn default_tool_result_artifact_ttl_hours() -> u64 {
     24
 }
+fn default_memory_recency_half_life_days() -> f64 {
+    30.0
+}
 fn default_data_dir() -> String {
     default_data_root().to_string_lossy().to_string()
 }
@@ -853,6 +856,12 @@ pub struct Config {
     /// Long enough to span a typical multi-turn task. Default: 24 hours.
     #[serde(default = "default_tool_result_artifact_ttl_hours")]
     pub tool_result_artifact_ttl_hours: u64,
+    /// Half-life (in days) of the recency-decay multiplier applied to
+    /// non-PROFILE memories during L1/L2 ranking. After `half_life_days`,
+    /// a memory's effective score is half of its raw confidence; PROFILE
+    /// memories never decay. Set to 0 to disable decay. Default: 30.
+    #[serde(default = "default_memory_recency_half_life_days")]
+    pub memory_recency_half_life_days: f64,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
     #[serde(default = "default_compact_keep_recent")]
@@ -1431,6 +1440,7 @@ impl Config {
             tool_result_truncation_head_chars: 1500,
             tool_result_truncation_tail_chars: 500,
             tool_result_artifact_ttl_hours: 24,
+            memory_recency_half_life_days: 30.0,
             data_dir: default_data_dir(),
             skills_dir: None,
             working_dir: default_working_dir(),

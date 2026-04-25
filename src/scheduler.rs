@@ -494,6 +494,29 @@ async fn run_reflector(state: &Arc<AppState>) {
 
     let _ = call_blocking(state.db.clone(), move |db| db.archive_stale_memories(30)).await;
 
+    // Hard-delete memories whose `expires_at` has elapsed. Distinct from
+    // archive: TTL'd memories are gone for good once they expire.
+    let now = Utc::now().to_rfc3339();
+    let _ = call_blocking(state.db.clone(), move |db| {
+        let pruned = db.prune_expired_memories(&now)?;
+        if pruned > 0 {
+            info!("Reflector: pruned {pruned} expired memories");
+        }
+        Ok(())
+    })
+    .await;
+
+    // Same for stashed tool-result artifacts whose TTL has passed.
+    let now = Utc::now().to_rfc3339();
+    let _ = call_blocking(state.db.clone(), move |db| {
+        let pruned = db.prune_tool_artifacts(&now)?;
+        if pruned > 0 {
+            info!("Reflector: pruned {pruned} expired tool artifacts");
+        }
+        Ok(())
+    })
+    .await;
+
     // Enforce global memory capacity limit
     if state.config.memory_max_global_entries > 0 {
         let max_global = state.config.memory_max_global_entries;

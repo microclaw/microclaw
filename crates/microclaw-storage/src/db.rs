@@ -126,6 +126,10 @@ pub struct Memory {
     pub last_seen_at: String,
     pub is_archived: bool,
     pub archived_at: Option<String>,
+    /// Optional RFC3339 timestamp at which this memory expires. NULL means
+    /// the memory is durable; expired rows are filtered from retrieval and
+    /// pruned by the reflector.
+    pub expires_at: Option<String>,
 }
 
 /// A single triple in the temporal knowledge graph.
@@ -230,7 +234,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 23;
+const SCHEMA_VERSION_CURRENT: i64 = 24;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -390,6 +394,9 @@ fn ensure_memory_schema(conn: &Connection) -> Result<(), MicroClawError> {
     }
     if !table_has_column(conn, "memories", "archived_at")? {
         conn.execute("ALTER TABLE memories ADD COLUMN archived_at TEXT", [])?;
+    }
+    if !table_has_column(conn, "memories", "expires_at")? {
+        conn.execute("ALTER TABLE memories ADD COLUMN expires_at TEXT", [])?;
     }
     conn.execute(
         "UPDATE memories
@@ -1007,6 +1014,21 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 23)?;
         version = 23;
+    }
+    if version < 24 {
+        // Memory TTL: per-row expiration for time-bounded facts (NULL = never).
+        // Distinct from `valid_to` (knowledge-graph temporal validity) and
+        // `is_archived` (manual demotion).
+        if !table_has_column(conn, "memories", "expires_at")? {
+            conn.execute("ALTER TABLE memories ADD COLUMN expires_at TEXT", [])?;
+        }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_expires ON memories(expires_at)
+             WHERE expires_at IS NOT NULL",
+            [],
+        )?;
+        set_schema_version(conn, 24)?;
+        version = 24;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -3416,18 +3438,20 @@ impl Database {
         limit: usize,
     ) -> Result<Vec<Memory>, MicroClawError> {
         let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model,
-                    confidence, source, last_seen_at, is_archived, archived_at
+                    confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories
              WHERE (chat_id = ?1 OR chat_id IS NULL)
                AND is_archived = 0
                AND confidence >= 0.45
+               AND (expires_at IS NULL OR expires_at > ?3)
              ORDER BY updated_at DESC
              LIMIT ?2",
         )?;
         let memories = stmt
-            .query_map(params![chat_id, limit as i64], |row| {
+            .query_map(params![chat_id, limit as i64, now], |row| {
                 Ok(Memory {
                     id: row.get(0)?,
                     chat_id: row.get(1)?,
@@ -3441,6 +3465,7 @@ impl Database {
                     last_seen_at: row.get(9)?,
                     is_archived: row.get::<_, i64>(10)? != 0,
                     archived_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3454,7 +3479,7 @@ impl Database {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model,
-                    confidence, source, last_seen_at, is_archived, archived_at
+                    confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories
              WHERE (chat_id = ?1 OR (?1 IS NULL AND chat_id IS NULL))",
         )?;
@@ -3473,6 +3498,7 @@ impl Database {
                     last_seen_at: row.get(9)?,
                     is_archived: row.get::<_, i64>(10)? != 0,
                     archived_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3510,12 +3536,14 @@ impl Database {
     ) -> Result<Vec<Memory>, MicroClawError> {
         let conn = self.lock_conn();
         let pattern = format!("%{}%", query.to_lowercase());
+        let now = chrono::Utc::now().to_rfc3339();
         let mut sql = String::from(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model,
-                    confidence, source, last_seen_at, is_archived, archived_at
+                    confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories
              WHERE (chat_id = ?1 OR chat_id IS NULL)
-               AND LOWER(content) LIKE ?2",
+               AND LOWER(content) LIKE ?2
+               AND (expires_at IS NULL OR expires_at > ?4)",
         );
         if !include_archived {
             sql.push_str(" AND is_archived = 0");
@@ -3526,7 +3554,7 @@ impl Database {
         sql.push_str(" ORDER BY confidence DESC, updated_at DESC LIMIT ?3");
         let mut stmt = conn.prepare(&sql)?;
         let memories = stmt
-            .query_map(params![chat_id, pattern, limit as i64], |row| {
+            .query_map(params![chat_id, pattern, limit as i64, now], |row| {
                 Ok(Memory {
                     id: row.get(0)?,
                     chat_id: row.get(1)?,
@@ -3540,6 +3568,7 @@ impl Database {
                     last_seen_at: row.get(9)?,
                     is_archived: row.get::<_, i64>(10)? != 0,
                     archived_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3551,6 +3580,32 @@ impl Database {
         let conn = self.lock_conn();
         let rows = conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         Ok(rows > 0)
+    }
+
+    /// Set or clear the `expires_at` of a memory. Pass `None` to clear.
+    pub fn set_memory_expires_at(
+        &self,
+        id: i64,
+        expires_at: Option<&str>,
+    ) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let rows = conn.execute(
+            "UPDATE memories SET expires_at = ?1 WHERE id = ?2",
+            params![expires_at, id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Hard-delete memories whose `expires_at` is at or before `now`.
+    /// Returns the number of rows deleted. Called from the reflector on its
+    /// scheduled tick.
+    pub fn prune_expired_memories(&self, now: &str) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let n = conn.execute(
+            "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+            params![now],
+        )?;
+        Ok(n)
     }
 
     /// Update content and category of an existing memory. Returns true if found.
@@ -3633,7 +3688,7 @@ impl Database {
         let conn = self.lock_conn();
         let mut query = String::from(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model
-             , confidence, source, last_seen_at, is_archived, archived_at
+             , confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories
              WHERE embedding_model IS NULL
                AND is_archived = 0",
@@ -3659,6 +3714,7 @@ impl Database {
                 last_seen_at: row.get(9)?,
                 is_archived: row.get::<_, i64>(10)? != 0,
                 archived_at: row.get(11)?,
+                expires_at: row.get(12)?,
             })
         };
 
@@ -3765,7 +3821,7 @@ impl Database {
         let conn = self.lock_conn();
         let result = conn.query_row(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model,
-                    confidence, source, last_seen_at, is_archived, archived_at
+                    confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories WHERE id = ?1",
             params![id],
             |row| {
@@ -3782,6 +3838,7 @@ impl Database {
                     last_seen_at: row.get(9)?,
                     is_archived: row.get::<_, i64>(10)? != 0,
                     archived_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             },
         );
@@ -7160,6 +7217,44 @@ mod tests {
         let logs = db.list_audit_logs(Some("operator"), 20).unwrap();
         assert!(!logs.is_empty());
 
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_memory_ttl_filters_and_prunes() {
+        let (db, dir) = test_db();
+        let durable = db
+            .insert_memory(Some(7), "durable fact", "KNOWLEDGE")
+            .unwrap();
+        let expiring = db
+            .insert_memory(Some(7), "transient fact", "KNOWLEDGE")
+            .unwrap();
+        let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+
+        // Future expiry — still surfaced in retrieval.
+        db.set_memory_expires_at(durable, Some(&future)).unwrap();
+        // Past expiry — gets filtered from retrieval right away.
+        db.set_memory_expires_at(expiring, Some(&past)).unwrap();
+
+        let ctx = db.get_memories_for_context(7, 50).unwrap();
+        let ids: Vec<i64> = ctx.iter().map(|m| m.id).collect();
+        assert!(ids.contains(&durable), "durable memory should be visible");
+        assert!(
+            !ids.contains(&expiring),
+            "expired memory must not appear in context retrieval"
+        );
+
+        // Search also filters.
+        let hits = db.search_memories(7, "fact", 50).unwrap();
+        assert!(hits.iter().all(|m| m.id != expiring));
+
+        // Prune deletes the row.
+        let now = chrono::Utc::now().to_rfc3339();
+        let pruned = db.prune_expired_memories(&now).unwrap();
+        assert_eq!(pruned, 1);
+        assert!(db.get_memory_by_id(expiring).unwrap().is_none());
+        assert!(db.get_memory_by_id(durable).unwrap().is_some());
         cleanup(&dir);
     }
 
