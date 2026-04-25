@@ -123,6 +123,9 @@ fn default_tool_repeat_limit() -> usize {
 fn default_skill_archive_after_days() -> u64 {
     30
 }
+fn default_skills_catalog_top_k() -> usize {
+    3
+}
 fn default_data_dir() -> String {
     default_data_root().to_string_lossy().to_string()
 }
@@ -887,6 +890,13 @@ pub struct Config {
     /// to disable. Default: 30 days.
     #[serde(default = "default_skill_archive_after_days")]
     pub skill_archive_after_days: u64,
+    /// When building the skills section of the system prompt, inline the
+    /// full body of the top-K skills whose descriptions match the user
+    /// query and list the rest as `name: description` only. Cuts prompt
+    /// cost as the skill library grows. Set to 0 to fall back to the
+    /// flat catalog. Default: 3.
+    #[serde(default = "default_skills_catalog_top_k")]
+    pub skills_catalog_top_k: usize,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
     #[serde(default = "default_compact_keep_recent")]
@@ -1469,6 +1479,7 @@ impl Config {
             tool_repeat_window: 10,
             tool_repeat_limit: 3,
             skill_archive_after_days: 30,
+            skills_catalog_top_k: 3,
             data_dir: default_data_dir(),
             skills_dir: None,
             working_dir: default_working_dir(),

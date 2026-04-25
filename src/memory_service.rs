@@ -30,7 +30,7 @@ fn jaccard_similarity_ratio(a: &str, b: &str) -> f64 {
     }
 }
 
-fn tokenize_for_relevance(text: &str) -> std::collections::HashSet<String> {
+pub(crate) fn tokenize_for_relevance(text: &str) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
 
     for token in text

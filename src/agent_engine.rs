@@ -768,7 +768,9 @@ async fn process_with_agent_logic(
     )
     .await;
     let memory_context = format!("{}{}", file_memory, db_memory);
-    let skills_catalog = state.skills.build_skills_catalog();
+    let skills_catalog = state
+        .skills
+        .build_skills_catalog_for_query(&query, state.config.skills_catalog_top_k);
     let soul_content = load_soul_content(&state.config, context.caller_channel, chat_id);
     let bot_username = state
         .config

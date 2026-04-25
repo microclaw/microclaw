@@ -93,6 +93,12 @@ const MAX_SKILL_DESCRIPTION_CHARS: usize = 120;
 const COMPACT_SKILLS_MODE_THRESHOLD: usize = 20;
 const SKILLS_STATE_FILENAME: &str = "skills_state.json";
 
+/// Per-skill body cap when a hot match's full SKILL.md is inlined into
+/// the system prompt. Keeps the prompt-cost predictable as the skill
+/// library grows; the agent can still call `activate_skill` to read the
+/// full body if it needs more.
+const MAX_INLINED_SKILL_BODY_CHARS: usize = 1500;
+
 impl SkillManager {
     pub fn from_skills_dir(skills_dir: &str) -> Self {
         SkillManager {
@@ -316,6 +322,100 @@ impl SkillManager {
         catalog
     }
 
+    /// Build a query-aware skills catalog: inline the full body of the
+    /// top-`top_k` skills whose descriptions overlap the query, and fall
+    /// back to a compact `name: description` listing for the rest.
+    ///
+    /// Tradeoff vs `build_skills_catalog`: spending a bigger token slice
+    /// on the most-relevant skills (so the agent has the procedural
+    /// knowledge inline and doesn't need an extra `activate_skill`
+    /// round-trip) while keeping the long tail cheap.
+    ///
+    /// `top_k = 0` falls back to [`build_skills_catalog`] verbatim. An
+    /// empty `query` also falls back — without a query the relevance
+    /// score is meaningless.
+    pub fn build_skills_catalog_for_query(&self, query: &str, top_k: usize) -> String {
+        if top_k == 0 || query.trim().is_empty() {
+            return self.build_skills_catalog();
+        }
+        let mut skills = self.discover_skills();
+        if skills.is_empty() {
+            return String::new();
+        }
+
+        let query_tokens = crate::memory_service::tokenize_for_relevance(query);
+        // Score by description-token overlap. Name is also factored in so
+        // a query like "tokyo-deploy" matches a skill literally named
+        // `tokyo-deploy`.
+        let mut scored: Vec<(usize, SkillMetadata)> = skills
+            .drain(..)
+            .map(|s| {
+                let blob = format!("{} {}", s.name, s.description);
+                let blob_tokens = crate::memory_service::tokenize_for_relevance(&blob);
+                let score = blob_tokens
+                    .iter()
+                    .filter(|t| query_tokens.contains(*t))
+                    .count();
+                (score, s)
+            })
+            .collect();
+        // Higher score first; tie-break by name for stability.
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+
+        // Hot bucket: top_k entries with score > 0.
+        let mut hot: Vec<SkillMetadata> = Vec::new();
+        let mut cold: Vec<SkillMetadata> = Vec::new();
+        for (score, meta) in scored {
+            if score > 0 && hot.len() < top_k {
+                hot.push(meta);
+            } else {
+                cold.push(meta);
+            }
+        }
+        if hot.is_empty() {
+            // No relevant matches — degenerate to the plain catalog.
+            return self.build_skills_catalog();
+        }
+
+        let mut out = String::from("<available_skills>\n");
+        out.push_str("<!-- Hot matches: full body inlined for the most relevant skills. -->\n");
+        for meta in &hot {
+            out.push_str(&format!("## {}\n", meta.name));
+            out.push_str(&format!("Description: {}\n", meta.description));
+            if let Some(version) = &meta.version {
+                out.push_str(&format!("Version: {}\n", version));
+            }
+            let skill_md = meta.dir_path.join("SKILL.md");
+            if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                let body = strip_frontmatter(&content);
+                let body = truncate_chars(body, MAX_INLINED_SKILL_BODY_CHARS);
+                out.push_str("Instructions:\n");
+                out.push_str(&body);
+                if !body.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            out.push('\n');
+        }
+        if !cold.is_empty() {
+            out.push_str("<!-- Other available skills (call activate_skill to load full body): -->\n");
+            cold.sort_by_key(|s| s.name.to_ascii_lowercase());
+            let total_cold = cold.len();
+            let omitted = total_cold.saturating_sub(MAX_SKILLS_CATALOG_ITEMS);
+            for skill in cold.into_iter().take(MAX_SKILLS_CATALOG_ITEMS) {
+                let desc = truncate_chars(&skill.description, MAX_SKILL_DESCRIPTION_CHARS);
+                out.push_str(&format!("- {}: {}\n", skill.name, desc));
+            }
+            if omitted > 0 {
+                out.push_str(&format!(
+                    "- ... ({omitted} additional skills omitted for prompt budget)\n"
+                ));
+            }
+        }
+        out.push_str("</available_skills>");
+        out
+    }
+
     /// Build a user-facing formatted list of available skills.
     pub fn list_skills_formatted(&self) -> String {
         let skills = self.discover_skills();
@@ -478,6 +578,19 @@ fn missing_deps(deps: &[String]) -> Vec<String> {
         .filter(|dep| !command_exists(dep))
         .cloned()
         .collect()
+}
+
+/// Return the SKILL.md body with its YAML frontmatter (`---\n…\n---\n`)
+/// removed. If no frontmatter is present, the input is returned as-is.
+fn strip_frontmatter(content: &str) -> &str {
+    let trimmed = content.trim_start_matches('\u{feff}');
+    if !trimmed.starts_with("---\n") {
+        return trimmed;
+    }
+    match trimmed[4..].find("\n---\n") {
+        Some(end) => trimmed[4 + end + 5..].trim_start_matches('\n'),
+        None => trimmed,
+    }
 }
 
 fn truncate_chars(s: &str, max_chars: usize) -> String {
@@ -749,6 +862,117 @@ ok
         assert!(alpha_pos < zeta_pos);
         assert!(catalog.contains("..."));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_skill(root: &std::path::Path, name: &str, description: &str, body: &str) {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let content = format!(
+            "---\nname: {name}\ndescription: {description}\nsource: agent-created\n---\n{body}\n"
+        );
+        std::fs::write(dir.join("SKILL.md"), content).unwrap();
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_falls_back_when_top_k_zero() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_top_k_zero_{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_skill(&dir, "alpha", "alpha skill", "ok");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        let plain = sm.build_skills_catalog();
+        let queried = sm.build_skills_catalog_for_query("alpha", 0);
+        assert_eq!(plain, queried);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_inlines_relevant_skill_body() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_inline_{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_skill(&dir, "deploy-helper", "kubernetes rolling deploy", "Step 1: kubectl apply\nStep 2: verify");
+        write_skill(&dir, "irrelevant", "make tea", "boil water");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        let out = sm.build_skills_catalog_for_query("how do i do a kubernetes deploy?", 3);
+        assert!(out.contains("## deploy-helper"), "got: {out}");
+        assert!(out.contains("Step 1: kubectl apply"), "body not inlined: {out}");
+        // Irrelevant skill ends up in the cold list with just name+desc.
+        assert!(out.contains("- irrelevant: make tea"), "got: {out}");
+        assert!(!out.contains("boil water"), "irrelevant body leaked: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_falls_back_when_no_match() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_nomatch_{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_skill(&dir, "alpha", "alpha skill", "ok");
+        write_skill(&dir, "beta", "beta skill", "ok");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        // Query has no overlap with any skill description.
+        let out = sm.build_skills_catalog_for_query("xyz unrelated", 3);
+        // No "## name" inlined-body sections.
+        assert!(!out.contains("## alpha"));
+        assert!(!out.contains("## beta"));
+        // Plain catalog still lists both.
+        assert!(out.contains("- alpha: alpha skill"));
+        assert!(out.contains("- beta: beta skill"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_caps_inlined_body() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_cap_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let big_body = "x".repeat(MAX_INLINED_SKILL_BODY_CHARS + 500);
+        write_skill(&dir, "matchme", "matchme description", &big_body);
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        let out = sm.build_skills_catalog_for_query("matchme description", 3);
+        assert!(out.contains("## matchme"));
+        // Body got truncated with the "..." sentinel from truncate_chars.
+        assert!(out.contains("..."), "expected truncation marker: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_respects_top_k_bucket() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_top_k_{}",
+            uuid::Uuid::new_v4()
+        ));
+        // Five skills all matching "deploy"; top_k=2 should inline 2 hot
+        // bodies, others go to the cold list.
+        for n in 0..5 {
+            let name = format!("deploy-{n}");
+            write_skill(&dir, &name, "deploy stuff", &format!("body {n}"));
+        }
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        let out = sm.build_skills_catalog_for_query("deploy", 2);
+        let inlined = out.matches("## deploy-").count();
+        assert_eq!(inlined, 2, "expected 2 inlined hot matches; got: {out}");
+        // Remaining 3 should be in the cold list with name+description.
+        let cold = out.matches("- deploy-").count();
+        assert_eq!(cold, 3, "expected 3 cold entries; got: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strip_frontmatter_removes_yaml_block() {
+        let body = "---\nname: x\ndescription: y\n---\nthe body\n";
+        assert_eq!(strip_frontmatter(body), "the body\n");
+    }
+
+    #[test]
+    fn strip_frontmatter_returns_input_when_no_frontmatter() {
+        let body = "no frontmatter here\n";
+        assert_eq!(strip_frontmatter(body), body);
     }
 
     #[test]
