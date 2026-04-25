@@ -552,11 +552,93 @@ async fn execute_single_tool(
         ctx.consecutive_send_message_calls += 1;
     }
 
+    // Spill oversized tool results to an artifact and truncate the inline copy
+    // so the message history stays cheap to replay. The agent can fetch the
+    // full body via `fetch_artifact`. `fetch_artifact` itself is exempted to
+    // avoid recursive truncation when the agent reads a slice.
+    let content = if name == "fetch_artifact" {
+        result.content
+    } else {
+        maybe_spill_to_artifact(state, chat_id, name, result.content).await
+    };
+
     ContentBlock::ToolResult {
         tool_use_id: id.clone(),
-        content: result.content,
+        content,
         is_error: if result.is_error { Some(true) } else { None },
     }
+}
+
+/// Spill `content` to a `tool_result_artifacts` row when it exceeds the
+/// configured threshold; the returned string keeps the head + tail and a
+/// pointer the agent can pass to `fetch_artifact`. Falls back to the
+/// untouched content on any storage error so a transient DB failure never
+/// drops a tool result.
+async fn maybe_spill_to_artifact(
+    state: &AppState,
+    chat_id: i64,
+    tool_name: &str,
+    content: String,
+) -> String {
+    let threshold = state.config.tool_result_truncation_threshold_chars;
+    if threshold == 0 {
+        return content;
+    }
+    let total_chars = content.chars().count();
+    if total_chars <= threshold {
+        return content;
+    }
+
+    let head_chars = state.config.tool_result_truncation_head_chars;
+    let tail_chars = state.config.tool_result_truncation_tail_chars;
+    let ttl_hours = state.config.tool_result_artifact_ttl_hours;
+
+    // Guard against pathological config: head + tail must still leave room
+    // for the truncation marker, otherwise truncation is pointless.
+    if head_chars + tail_chars >= total_chars {
+        return content;
+    }
+
+    let artifact_id = format!("art_{}", uuid::Uuid::new_v4().simple());
+    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(ttl_hours as i64)).to_rfc3339();
+
+    let db = state.db.clone();
+    let artifact_id_for_save = artifact_id.clone();
+    let tool_name_for_save = tool_name.to_string();
+    let content_for_save = content.clone();
+    let saved = microclaw_storage::db::call_blocking(db, move |db| {
+        db.save_tool_artifact(
+            &artifact_id_for_save,
+            chat_id,
+            &tool_name_for_save,
+            &content_for_save,
+            &expires_at,
+        )
+    })
+    .await;
+
+    if let Err(e) = saved {
+        warn!(
+            chat_id,
+            tool = %tool_name,
+            "Failed to persist tool artifact; returning untruncated content: {}",
+            e
+        );
+        return content;
+    }
+
+    let head: String = content.chars().take(head_chars).collect();
+    let tail: String = content
+        .chars()
+        .skip(total_chars - tail_chars)
+        .collect();
+    let hidden = total_chars - head_chars - tail_chars;
+    format!(
+        "{head}\n\n[--- {hidden} of {total_chars} characters truncated. \
+         Full result saved as artifact `{artifact_id}` for {ttl_hours}h. \
+         Call fetch_artifact(artifact_id=\"{artifact_id}\", offset=N, length=N) \
+         to read more. ---]\n\n{tail}"
+    )
 }
 
 /// Execute a wave of tools in parallel using futures::join_all.

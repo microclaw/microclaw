@@ -83,6 +83,17 @@ pub struct CachedToolResult {
     pub expires_at: String,
 }
 
+/// Metadata for a stored tool-result artifact.
+#[derive(Debug, Clone)]
+pub struct ToolArtifactMeta {
+    pub artifact_id: String,
+    pub chat_id: i64,
+    pub tool_name: String,
+    pub total_chars: i64,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmUsageSummary {
     pub requests: i64,
@@ -219,7 +230,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 22;
+const SCHEMA_VERSION_CURRENT: i64 = 23;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -973,6 +984,29 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 22)?;
         version = 22;
+    }
+    if version < 23 {
+        // Tool result artifacts — full content stash for results that exceed
+        // the in-context truncation threshold. The agent reads slices via
+        // the `fetch_artifact` tool. Rows expire after a TTL to bound
+        // storage growth.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tool_result_artifacts (
+                artifact_id TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                tool_name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                total_chars INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tool_result_artifacts_chat
+                ON tool_result_artifacts(chat_id, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_tool_result_artifacts_expires
+                ON tool_result_artifacts(expires_at);",
+        )?;
+        set_schema_version(conn, 23)?;
+        version = 23;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -2246,6 +2280,80 @@ impl Database {
         let conn = self.lock_conn();
         let n = conn.execute(
             "DELETE FROM tool_result_cache WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        Ok(n)
+    }
+
+    /// Persist a tool-result artifact (full content) so the agent can fetch
+    /// slices later via `fetch_artifact`. The caller is responsible for
+    /// generating a unique `artifact_id`.
+    pub fn save_tool_artifact(
+        &self,
+        artifact_id: &str,
+        chat_id: i64,
+        tool_name: &str,
+        content: &str,
+        expires_at: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let total_chars = content.chars().count() as i64;
+        conn.execute(
+            "INSERT INTO tool_result_artifacts
+                (artifact_id, chat_id, tool_name, content, total_chars, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![artifact_id, chat_id, tool_name, content, total_chars, now, expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch a character-range slice of a stored artifact. Returns
+    /// `(meta, slice, returned_chars)` if the artifact exists and is not
+    /// expired. `offset` and `length` are interpreted as Unicode code
+    /// points to keep the cap predictable across multi-byte content.
+    pub fn get_tool_artifact_slice(
+        &self,
+        artifact_id: &str,
+        offset: usize,
+        length: usize,
+        now: &str,
+    ) -> Result<Option<(ToolArtifactMeta, String)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let row = conn
+            .query_row(
+                "SELECT artifact_id, chat_id, tool_name, content, total_chars, created_at, expires_at
+                 FROM tool_result_artifacts
+                 WHERE artifact_id = ?1 AND expires_at > ?2",
+                params![artifact_id, now],
+                |r| {
+                    let content: String = r.get(3)?;
+                    Ok((
+                        ToolArtifactMeta {
+                            artifact_id: r.get(0)?,
+                            chat_id: r.get(1)?,
+                            tool_name: r.get(2)?,
+                            total_chars: r.get(4)?,
+                            created_at: r.get(5)?,
+                            expires_at: r.get(6)?,
+                        },
+                        content,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((meta, content)) = row else {
+            return Ok(None);
+        };
+        let slice: String = content.chars().skip(offset).take(length).collect();
+        Ok(Some((meta, slice)))
+    }
+
+    /// Delete expired artifact rows. Returns number of rows deleted.
+    pub fn prune_tool_artifacts(&self, now: &str) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let n = conn.execute(
+            "DELETE FROM tool_result_artifacts WHERE expires_at <= ?1",
             params![now],
         )?;
         Ok(n)
@@ -7052,6 +7160,46 @@ mod tests {
         let logs = db.list_audit_logs(Some("operator"), 20).unwrap();
         assert!(!logs.is_empty());
 
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_tool_artifact_save_and_slice() {
+        let (db, dir) = test_db();
+        let now = chrono::Utc::now();
+        let expires = (now + chrono::Duration::hours(1)).to_rfc3339();
+        let body: String = "0123456789".repeat(20); // 200 chars
+        db.save_tool_artifact("art_x", 42, "bash", &body, &expires)
+            .unwrap();
+
+        // First slice from offset 0
+        let (meta, slice) = db
+            .get_tool_artifact_slice("art_x", 0, 50, &now.to_rfc3339())
+            .unwrap()
+            .expect("artifact present");
+        assert_eq!(meta.chat_id, 42);
+        assert_eq!(meta.tool_name, "bash");
+        assert_eq!(meta.total_chars, 200);
+        assert_eq!(slice.chars().count(), 50);
+        assert!(body.starts_with(&slice));
+
+        // Slice past the end clamps to remaining
+        let (_, tail) = db
+            .get_tool_artifact_slice("art_x", 190, 50, &now.to_rfc3339())
+            .unwrap()
+            .unwrap();
+        assert_eq!(tail.chars().count(), 10);
+
+        // Expired artifact returns None
+        let future = (now + chrono::Duration::hours(2)).to_rfc3339();
+        let missing = db
+            .get_tool_artifact_slice("art_x", 0, 10, &future)
+            .unwrap();
+        assert!(missing.is_none());
+
+        // Prune removes expired rows
+        let pruned = db.prune_tool_artifacts(&future).unwrap();
+        assert_eq!(pruned, 1);
         cleanup(&dir);
     }
 

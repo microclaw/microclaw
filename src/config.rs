@@ -99,6 +99,18 @@ fn default_memory_max_global_entries() -> usize {
 fn default_kg_max_triples_per_chat() -> usize {
     1000
 }
+fn default_tool_result_truncation_threshold_chars() -> usize {
+    4000
+}
+fn default_tool_result_truncation_head_chars() -> usize {
+    1500
+}
+fn default_tool_result_truncation_tail_chars() -> usize {
+    500
+}
+fn default_tool_result_artifact_ttl_hours() -> u64 {
+    24
+}
 fn default_data_dir() -> String {
     default_data_root().to_string_lossy().to_string()
 }
@@ -306,6 +318,11 @@ pub struct MediaConfig {
     /// then to `https://api.openai.com/v1`.
     #[serde(default)]
     pub base_url: Option<String>,
+    /// Extra directories that `describe_image` / `transcribe_audio` may read
+    /// from, beyond the working_dir default. Absolute paths only. Empty by
+    /// default — matches the previous working-dir-only behavior.
+    #[serde(default)]
+    pub allowed_read_dirs: Vec<String>,
     #[serde(default)]
     pub image_gen: ImageGenConfig,
     #[serde(default)]
@@ -819,6 +836,23 @@ pub struct Config {
     /// Maximum active triples per chat in the knowledge graph. 0 = unlimited. Default: 1000.
     #[serde(default = "default_kg_max_triples_per_chat")]
     pub kg_max_triples_per_chat: usize,
+    /// Tool-result content over this many Unicode characters is truncated in
+    /// the message history and the full body is stored as an artifact the
+    /// agent can read via `fetch_artifact`. Set to 0 to disable. Default: 4000.
+    #[serde(default = "default_tool_result_truncation_threshold_chars")]
+    pub tool_result_truncation_threshold_chars: usize,
+    /// When truncating, keep this many leading characters of the original
+    /// content in the message history. Default: 1500.
+    #[serde(default = "default_tool_result_truncation_head_chars")]
+    pub tool_result_truncation_head_chars: usize,
+    /// When truncating, keep this many trailing characters (so the agent
+    /// still sees errors/summaries that often live at the end). Default: 500.
+    #[serde(default = "default_tool_result_truncation_tail_chars")]
+    pub tool_result_truncation_tail_chars: usize,
+    /// Lifetime for stashed tool-result artifacts before they're pruned.
+    /// Long enough to span a typical multi-turn task. Default: 24 hours.
+    #[serde(default = "default_tool_result_artifact_ttl_hours")]
+    pub tool_result_artifact_ttl_hours: u64,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
     #[serde(default = "default_compact_keep_recent")]
@@ -1393,6 +1427,10 @@ impl Config {
             memory_max_entries_per_chat: 200,
             memory_max_global_entries: 500,
             kg_max_triples_per_chat: 1000,
+            tool_result_truncation_threshold_chars: 4000,
+            tool_result_truncation_head_chars: 1500,
+            tool_result_truncation_tail_chars: 500,
+            tool_result_artifact_ttl_hours: 24,
             data_dir: default_data_dir(),
             skills_dir: None,
             working_dir: default_working_dir(),

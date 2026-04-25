@@ -6,6 +6,7 @@ pub mod clarify;
 pub mod describe_image;
 pub mod edit_file;
 pub mod export_chat;
+pub mod fetch_artifact;
 pub mod generate_image;
 pub mod glob;
 pub mod grep;
@@ -302,6 +303,7 @@ impl ToolRegistry {
             )),
             Box::new(transcribe_audio::TranscribeAudioTool::new(config)),
             Box::new(insights::InsightsTool::new(db.clone())),
+            Box::new(fetch_artifact::FetchArtifactTool::new(db.clone())),
         ];
 
         // Add ClawHub tools if enabled
@@ -404,6 +406,7 @@ impl ToolRegistry {
                 osv_check::OsvCheckTool::new(config.tool_timeout_secs("osv_check", 10))
                     .with_cache(db.clone()),
             ),
+            Box::new(fetch_artifact::FetchArtifactTool::new(db.clone())),
         ];
         if allow_session_tools {
             if let Some(channel_registry) = channel_registry {
