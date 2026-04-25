@@ -126,6 +126,9 @@ fn default_skill_archive_after_days() -> u64 {
 fn default_skills_catalog_top_k() -> usize {
     3
 }
+fn default_skill_review_min_tool_calls() -> usize {
+    5
+}
 fn default_data_dir() -> String {
     default_data_root().to_string_lossy().to_string()
 }
@@ -1015,9 +1018,10 @@ pub struct Config {
     pub reflector_enabled: bool,
     #[serde(default = "default_reflector_interval_mins")]
     pub reflector_interval_mins: u64,
-    /// Minimum number of tool calls in a conversation before skill review is triggered.
-    /// Set to 0 to disable autonomous skill creation. Default: 0 (disabled).
-    #[serde(default)]
+    /// Minimum tool_use blocks in a turn before the end-of-turn skill
+    /// review fires. Autonomous skill creation is on by default; set to
+    /// 0 to disable entirely. Default: 5.
+    #[serde(default = "default_skill_review_min_tool_calls")]
     pub skill_review_min_tool_calls: usize,
 
     // --- Soul ---
@@ -1524,7 +1528,7 @@ impl Config {
             embedding_dim: None,
             reflector_enabled: true,
             reflector_interval_mins: 15,
-            skill_review_min_tool_calls: 0,
+            skill_review_min_tool_calls: 5,
             soul_path: None,
             souls_dir: None,
             clawhub: ClawHubConfig::default(),
