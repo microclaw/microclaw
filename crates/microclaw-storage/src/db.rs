@@ -234,7 +234,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 24;
+const SCHEMA_VERSION_CURRENT: i64 = 25;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -1029,6 +1029,25 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 24)?;
         version = 24;
+    }
+    if version < 25 {
+        // Skill activation log — drives the auto-archive of agent-created
+        // skills that haven't been used in N days, and surfaces usage
+        // counts in the insights tool.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS skill_activation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_name TEXT NOT NULL,
+                chat_id INTEGER,
+                activated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_activation_name_time
+                ON skill_activation_logs(skill_name, activated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_activation_time
+                ON skill_activation_logs(activated_at);",
+        )?;
+        set_schema_version(conn, 25)?;
+        version = 25;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -2379,6 +2398,68 @@ impl Database {
             params![now],
         )?;
         Ok(n)
+    }
+
+    /// Append a row to the skill activation log. `chat_id` may be 0 for
+    /// channel-less invocations (e.g. tests).
+    pub fn log_skill_activation(
+        &self,
+        skill_name: &str,
+        chat_id: i64,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO skill_activation_logs (skill_name, chat_id, activated_at)
+             VALUES (?1, ?2, ?3)",
+            params![skill_name, chat_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// Most-recent activation timestamp for a skill, or `None` if never
+    /// activated. Used by the auto-archive job.
+    pub fn last_skill_activation_at(
+        &self,
+        skill_name: &str,
+    ) -> Result<Option<String>, MicroClawError> {
+        let conn = self.lock_conn();
+        let result = conn.query_row(
+            "SELECT activated_at FROM skill_activation_logs
+             WHERE skill_name = ?1
+             ORDER BY activated_at DESC
+             LIMIT 1",
+            params![skill_name],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(ts) => Ok(Some(ts)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Activation counts for every skill seen in the last `since` window.
+    /// Returns `(skill_name, count)` rows ordered by count descending.
+    /// Used by the insights surface and operator dashboards.
+    pub fn skill_activation_counts_since(
+        &self,
+        since: &str,
+    ) -> Result<Vec<(String, i64)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT skill_name, COUNT(*) AS n
+             FROM skill_activation_logs
+             WHERE activated_at >= ?1
+             GROUP BY skill_name
+             ORDER BY n DESC, skill_name ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![since], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Overwrite the session label for a chat. No-op if the chat has no
@@ -7217,6 +7298,38 @@ mod tests {
         let logs = db.list_audit_logs(Some("operator"), 20).unwrap();
         assert!(!logs.is_empty());
 
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_skill_activation_log_and_query() {
+        let (db, dir) = test_db();
+        // No activations yet → None
+        assert!(db.last_skill_activation_at("alpha").unwrap().is_none());
+
+        db.log_skill_activation("alpha", 7).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        db.log_skill_activation("alpha", 7).unwrap();
+        db.log_skill_activation("beta", 8).unwrap();
+
+        let last_alpha = db.last_skill_activation_at("alpha").unwrap().unwrap();
+        let last_beta = db.last_skill_activation_at("beta").unwrap().unwrap();
+        assert!(last_alpha >= last_beta || last_alpha <= last_beta);
+
+        let counts = db
+            .skill_activation_counts_since("1970-01-01T00:00:00Z")
+            .unwrap();
+        let alpha = counts.iter().find(|(n, _)| n == "alpha").unwrap();
+        let beta = counts.iter().find(|(n, _)| n == "beta").unwrap();
+        assert_eq!(alpha.1, 2);
+        assert_eq!(beta.1, 1);
+        // Counts ordered by n DESC then name — alpha first.
+        assert_eq!(counts[0].0, "alpha");
+
+        // Cutoff in the future → no rows.
+        let future = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+        let none = db.skill_activation_counts_since(&future).unwrap();
+        assert!(none.is_empty());
         cleanup(&dir);
     }
 

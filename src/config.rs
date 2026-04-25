@@ -120,6 +120,9 @@ fn default_tool_repeat_window() -> usize {
 fn default_tool_repeat_limit() -> usize {
     3
 }
+fn default_skill_archive_after_days() -> u64 {
+    30
+}
 fn default_data_dir() -> String {
     default_data_root().to_string_lossy().to_string()
 }
@@ -878,6 +881,12 @@ pub struct Config {
     /// Repeat threshold for the duplicate-call circuit breaker. Default: 3.
     #[serde(default = "default_tool_repeat_limit")]
     pub tool_repeat_limit: usize,
+    /// Auto-archive `agent-created` skills that haven't been activated in
+    /// this many days and are themselves at least this old. The skill dir
+    /// is moved under `<skills_dir>/.archived/` (recoverable). Set to 0
+    /// to disable. Default: 30 days.
+    #[serde(default = "default_skill_archive_after_days")]
+    pub skill_archive_after_days: u64,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
     #[serde(default = "default_compact_keep_recent")]
@@ -1459,6 +1468,7 @@ impl Config {
             memory_recency_half_life_days: 30.0,
             tool_repeat_window: 10,
             tool_repeat_limit: 3,
+            skill_archive_after_days: 30,
             data_dir: default_data_dir(),
             skills_dir: None,
             working_dir: default_working_dir(),

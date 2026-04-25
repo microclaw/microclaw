@@ -250,10 +250,13 @@ impl ToolRegistry {
                 db.clone(),
                 channel_registry.clone(),
             )),
-            Box::new(activate_skill::ActivateSkillTool::new_with_runtime(
-                &skills_data_dir,
-                &config.data_dir,
-            )),
+            Box::new(
+                activate_skill::ActivateSkillTool::new_with_runtime(
+                    &skills_data_dir,
+                    &config.data_dir,
+                )
+                .with_db(db.clone()),
+            ),
             Box::new(skill_manage::SkillManageTool::new(
                 &skills_data_dir,
                 config.control_chat_ids.clone(),
@@ -393,10 +396,13 @@ impl ToolRegistry {
             Box::new(time_math::GetCurrentTimeTool::new(config.timezone.clone())),
             Box::new(time_math::CompareTimeTool::new(config.timezone.clone())),
             Box::new(time_math::CalculateTool::new()),
-            Box::new(activate_skill::ActivateSkillTool::new_with_runtime(
-                &skills_data_dir,
-                &config.data_dir,
-            )),
+            Box::new(
+                activate_skill::ActivateSkillTool::new_with_runtime(
+                    &skills_data_dir,
+                    &config.data_dir,
+                )
+                .with_db(db.clone()),
+            ),
             Box::new(structured_memory::StructuredMemorySearchTool::new(
                 db.clone(),
                 memory_backend,

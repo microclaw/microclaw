@@ -15,10 +15,12 @@
 //! - [`assess_success`] — cheap heuristic that flags failed/aborted turns
 //!   so the review LLM doesn't waste budget packaging them as skills
 
+use std::path::Path;
 use std::sync::Arc;
 
 use microclaw_core::llm_types::{ContentBlock, Message, MessageContent, ResponseContentBlock};
 use microclaw_storage::db::call_blocking;
+use microclaw_storage::db::Database;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -836,6 +838,128 @@ async fn load_session_messages(state: &Arc<AppState>, chat_id: i64) -> Option<Ve
     }
 }
 
+/// Pure decision rule for the auto-archive sweep — extracted so the
+/// policy can be unit-tested without touching the filesystem clock.
+/// Returns `true` iff the candidate skill should be archived.
+pub fn should_archive_skill(
+    is_agent_created: bool,
+    skill_mtime: chrono::DateTime<chrono::Utc>,
+    last_activation: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+    threshold_days: u64,
+) -> bool {
+    if !is_agent_created || threshold_days == 0 {
+        return false;
+    }
+    let cutoff = now - chrono::Duration::days(threshold_days as i64);
+    if skill_mtime >= cutoff {
+        return false;
+    }
+    !matches!(last_activation, Some(t) if t >= cutoff)
+}
+
+/// Move stale agent-created skills out of the active discovery path.
+/// Targets a skill iff [`should_archive_skill`] returns true for its
+/// (mtime, last activation) pair against `threshold_days`.
+///
+/// Archived skills are moved to `<skills_root>/.archived/<name>-<stamp>/`.
+/// The `.archived` dir doesn't itself contain a SKILL.md so the
+/// discoverer skips it. Returns the number of skills archived.
+pub fn archive_inactive_agent_skills(
+    skills_root: &Path,
+    db: &Database,
+    threshold_days: u64,
+) -> std::io::Result<usize> {
+    if threshold_days == 0 {
+        return Ok(0);
+    }
+    let entries = match std::fs::read_dir(skills_root) {
+        Ok(e) => e,
+        Err(_) => return Ok(0),
+    };
+
+    let now = chrono::Utc::now();
+    let archive_root = skills_root.join(".archived");
+
+    let mut archived = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path
+            .file_name()
+            .map(|n| n.to_string_lossy().starts_with('.'))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let skill_md = path.join("SKILL.md");
+        if !skill_md.exists() {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&skill_md) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let agent_created = is_agent_created(&content);
+        let mtime: chrono::DateTime<chrono::Utc> = match std::fs::metadata(&skill_md)
+            .and_then(|m| m.modified())
+        {
+            Ok(t) => t.into(),
+            Err(_) => continue,
+        };
+
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let last_activation = match db.last_skill_activation_at(&name) {
+            Ok(v) => v
+                .as_deref()
+                .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                .map(|t| t.with_timezone(&chrono::Utc)),
+            Err(e) => {
+                warn!(skill = %name, "skill archive: db lookup failed: {e}");
+                continue;
+            }
+        };
+
+        if !should_archive_skill(agent_created, mtime, last_activation, now, threshold_days) {
+            continue;
+        }
+
+        if let Err(e) = std::fs::create_dir_all(&archive_root) {
+            warn!("skill archive: failed to create archive root: {e}");
+            return Ok(archived);
+        }
+        let stamp = now.format("%Y%m%dT%H%M%S");
+        let dest = archive_root.join(format!("{name}-{stamp}"));
+        if let Err(e) = std::fs::rename(&path, &dest) {
+            warn!(skill = %name, "skill archive: rename failed: {e}");
+            continue;
+        }
+        archived += 1;
+        info!(skill = %name, dest = %dest.display(), "Skill archive: moved inactive skill");
+    }
+    Ok(archived)
+}
+
+/// Cheap frontmatter scan for `source: agent-created`. Avoids pulling
+/// in the full skill parser; the existing in-tree YAML format keeps the
+/// field on its own line.
+fn is_agent_created(content: &str) -> bool {
+    if !content.starts_with("---\n") {
+        return false;
+    }
+    let end = match content[4..].find("\n---\n") {
+        Some(i) => 4 + i,
+        None => return false,
+    };
+    content[4..end]
+        .lines()
+        .map(|l| l.trim())
+        .any(|l| l.starts_with("source:") && l.split(':').nth(1).map(|v| v.trim()) == Some("agent-created"))
+}
+
 fn count_tool_uses(messages: &[Message]) -> usize {
     let mut n = 0;
     for msg in messages {
@@ -1162,6 +1286,57 @@ mod tests {
             updated_at: None,
             env_file: None,
         }
+    }
+
+    fn dt(days_ago: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() - chrono::Duration::days(days_ago)
+    }
+
+    #[test]
+    fn should_archive_threshold_zero_disables() {
+        let now = chrono::Utc::now();
+        assert!(!should_archive_skill(true, dt(60), None, now, 0));
+    }
+
+    #[test]
+    fn should_archive_human_curated_never_archived() {
+        let now = chrono::Utc::now();
+        assert!(!should_archive_skill(false, dt(60), None, now, 30));
+    }
+
+    #[test]
+    fn should_archive_old_unused_agent_skill() {
+        let now = chrono::Utc::now();
+        assert!(should_archive_skill(true, dt(60), None, now, 30));
+    }
+
+    #[test]
+    fn should_archive_skips_recently_activated_skill() {
+        let now = chrono::Utc::now();
+        // mtime old, but activated yesterday → keep.
+        assert!(!should_archive_skill(
+            true,
+            dt(60),
+            Some(dt(1)),
+            now,
+            30
+        ));
+    }
+
+    #[test]
+    fn should_archive_skips_freshly_created_skill() {
+        let now = chrono::Utc::now();
+        // mtime is recent (5 days < 30) → keep, regardless of activations.
+        assert!(!should_archive_skill(true, dt(5), None, now, 30));
+    }
+
+    #[test]
+    fn is_agent_created_recognizes_frontmatter_field() {
+        let body =
+            "---\nname: x\nsource: agent-created\nversion: 1\n---\nbody\n";
+        assert!(is_agent_created(body));
+        let body_human = "---\nname: x\nsource: builtin\n---\nbody\n";
+        assert!(!is_agent_created(body_human));
     }
 
     #[test]

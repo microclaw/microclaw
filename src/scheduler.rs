@@ -517,6 +517,27 @@ async fn run_reflector(state: &Arc<AppState>) {
     })
     .await;
 
+    // Auto-archive agent-created skills that haven't been used in N days.
+    let archive_days = state.config.skill_archive_after_days;
+    if archive_days > 0 {
+        let skills_root = std::path::PathBuf::from(state.config.skills_data_dir());
+        let _ = call_blocking(state.db.clone(), move |db| {
+            match crate::skill_review::archive_inactive_agent_skills(
+                &skills_root,
+                db,
+                archive_days,
+            ) {
+                Ok(n) if n > 0 => {
+                    info!("Reflector: archived {n} inactive agent-created skill(s)");
+                }
+                Ok(_) => {}
+                Err(e) => warn!("Reflector: skill archive sweep failed: {e}"),
+            }
+            Ok(())
+        })
+        .await;
+    }
+
     // Enforce global memory capacity limit
     if state.config.memory_max_global_entries > 0 {
         let max_global = state.config.memory_max_global_entries;
