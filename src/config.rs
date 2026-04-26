@@ -159,6 +159,24 @@ fn default_working_dir() -> String {
 fn default_working_dir_isolation() -> WorkingDirIsolation {
     WorkingDirIsolation::Chat
 }
+fn default_bash_dangerous_patterns() -> Vec<String> {
+    vec![
+        // Destructive recursive deletes against root or wildcards.
+        r"\brm\s+(-[a-zA-Z]*[rfRF][a-zA-Z]*\s+)+(/|\*|~|\$HOME)".into(),
+        // Pipe-to-shell installer pattern.
+        r"\b(curl|wget|fetch)\b[^|]*\|\s*(sudo\s+)?(sh|bash|zsh|fish)\b".into(),
+        // Privilege escalation.
+        r"\bsudo\b".into(),
+        // Disk-overwrite.
+        r"\bdd\s+if=".into(),
+        // Forkbomb.
+        r":\(\)\s*\{\s*:\s*\|\s*:&\s*\}\s*;\s*:".into(),
+        // Filesystem format.
+        r"\bmkfs(\.[a-z0-9]+)?\b".into(),
+        // Recursive chmod/chown on root.
+        r"\bch(mod|own)\s+-R\s+[^/]*\s+/(\s|$)".into(),
+    ]
+}
 fn default_high_risk_tool_user_confirmation_required() -> bool {
     true
 }
@@ -959,6 +977,14 @@ pub struct Config {
     pub working_dir_isolation: WorkingDirIsolation,
     #[serde(default = "default_high_risk_tool_user_confirmation_required")]
     pub high_risk_tool_user_confirmation_required: bool,
+    /// Regex patterns that always require operator approval before bash will
+    /// run, even in non-control chats. Extends the per-chat risk policy with
+    /// command-content inspection so destructive shell snippets cannot slip
+    /// through just because the caller happens to be in a permissive chat.
+    /// Patterns are matched case-insensitively against the full command
+    /// string. Set to an empty list to disable command-content gating.
+    #[serde(default = "default_bash_dangerous_patterns")]
+    pub bash_dangerous_patterns: Vec<String>,
     #[serde(default)]
     pub sandbox: SandboxConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1506,6 +1532,7 @@ impl Config {
             working_dir: default_working_dir(),
             working_dir_isolation: WorkingDirIsolation::Chat,
             high_risk_tool_user_confirmation_required: true,
+            bash_dangerous_patterns: default_bash_dangerous_patterns(),
             sandbox: SandboxConfig::default(),
             openai_api_key: None,
             override_timezone: None,

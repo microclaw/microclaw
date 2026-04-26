@@ -1451,6 +1451,7 @@ async fn process_with_agent_logic(
                 tool_auth: tool_auth.clone(),
                 waiting_for_user_approval: false,
                 waiting_approval_tool: None,
+                waiting_approval_preview: None,
             };
             let mut tool_metrics = crate::tool_executor::ToolMetrics {
                 tool_calls: 0,
@@ -1571,8 +1572,13 @@ async fn process_with_agent_logic(
                 )
                 .await;
                 let tool_name = batch_ctx.waiting_approval_tool.unwrap_or_else(|| "this tool".to_string());
+                let preview_block = batch_ctx
+                    .waiting_approval_preview
+                    .as_deref()
+                    .map(|p| format!("\n\n```\n{p}\n```"))
+                    .unwrap_or_default();
                 let text = format!(
-                    "High-risk tool '{tool_name}' is waiting for your confirmation. Reply with \"批准\" or \"approve\" to continue."
+                    "High-risk tool '{tool_name}' is waiting for your confirmation.{preview_block}\n\nReply with \"批准\" or \"approve\" to continue, or send any other instruction to deny."
                 );
                 if let Some(tx) = event_tx {
                     let _ = tx.send(AgentEvent::FinalResponse { text: text.clone() });

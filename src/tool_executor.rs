@@ -42,6 +42,10 @@ pub struct ToolBatchContext {
     pub tool_auth: ToolAuthContext,
     pub waiting_for_user_approval: bool,
     pub waiting_approval_tool: Option<String>,
+    /// Human-readable preview of the operation requesting approval (e.g., the
+    /// exact bash command). Surfaced to the operator so they can confirm
+    /// without having to scroll back through tool-call JSON.
+    pub waiting_approval_preview: Option<String>,
 }
 
 /// Metrics counters for tool execution.
@@ -432,6 +436,7 @@ async fn execute_single_tool(
         } else if state.config.high_risk_tool_user_confirmation_required {
             ctx.waiting_for_user_approval = true;
             ctx.waiting_approval_tool = Some(name.clone());
+            ctx.waiting_approval_preview = approval_preview(name, &executed_input);
         }
     }
 
@@ -795,6 +800,32 @@ async fn execute_wave_parallel(
     }
 
     results
+}
+
+/// Build a short, operator-readable preview of the action awaiting approval.
+/// For bash this is the actual command; for any other future high-risk tool
+/// we fall back to a truncated JSON dump so the operator can still see what
+/// is queued instead of just the tool name.
+fn approval_preview(name: &str, input: &Value) -> Option<String> {
+    if name == "bash" {
+        if let Some(cmd) = input
+            .get("command")
+            .or_else(|| input.get("cmd"))
+            .and_then(|v| v.as_str())
+        {
+            let trimmed = cmd.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            return Some(truncate_for_log(trimmed, 400));
+        }
+    }
+    let dump = input.to_string();
+    if dump == "{}" || dump == "null" {
+        None
+    } else {
+        Some(truncate_for_log(&dump, 400))
+    }
 }
 
 fn with_high_risk_approval_marker(input: &Value) -> Value {
