@@ -724,22 +724,14 @@ fn require_mutable_target<'a>(
 }
 
 fn validate_skill_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("skill name cannot be empty".into());
-    }
-    if name.len() > 64 {
-        return Err("skill name too long (max 64 chars)".into());
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err("skill name must be alphanumeric / hyphen / underscore only".into());
-    }
+    // Path traversal first: gives a clearer diagnostic than the spec
+    // validator's "invalid character" message for `/` or `\`.
     if name.contains("..") || name.contains('/') || name.contains('\\') {
         return Err("invalid skill name: path traversal detected".into());
     }
-    Ok(())
+    // Defer to the agentskills.io spec validator so reviewer-proposed
+    // skills are portable to other Agent Skills clients out of the box.
+    crate::skills::validate_agentskills_name(name)
 }
 
 fn scan_or_reject(content: &str) -> Result<(), String> {

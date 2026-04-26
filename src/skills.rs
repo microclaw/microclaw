@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub struct SkillMetadata {
@@ -205,6 +206,7 @@ impl SkillManager {
             }
             if let Ok(content) = std::fs::read_to_string(&skill_md) {
                 if let Some((meta, _body)) = parse_skill_md(&content, &path) {
+                    warn_once_if_legacy_name(&meta.name);
                     if matches!(state.get(&meta.name), Some(false)) {
                         statuses.push(SkillAvailability {
                             meta,
@@ -465,6 +467,7 @@ impl SkillManager {
                 "• {} — {} [{}]\n",
                 skill.name, skill.description, skill.source
             ));
+            append_agentskills_metadata(&mut output, skill);
         }
         output
     }
@@ -485,6 +488,7 @@ impl SkillManager {
                 "• {} — {} [{}]\n",
                 skill.meta.name, skill.meta.description, skill.meta.source
             ));
+            append_agentskills_metadata(&mut output, &skill.meta);
         }
         output.push('\n');
         output.push_str(&format!("Unavailable skills ({}):\n\n", unavailable.len()));
@@ -795,6 +799,44 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
     ))
 }
 
+/// Warn once per process per non-spec-compliant skill name. Legacy skills
+/// with underscores or uppercase still load fine, but operators get a
+/// portability nudge so they know newly published skills should rename
+/// before pushing to agentskills.io-compatible registries.
+fn warn_once_if_legacy_name(name: &str) {
+    static SEEN: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    if validate_agentskills_name(name).is_ok() {
+        return;
+    }
+    let seen = SEEN.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    let mut guard = match seen.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if guard.insert(name.to_string()) {
+        tracing::warn!(
+            skill = %name,
+            "skill name is not agentskills.io spec-compliant (lowercase a-z, 0-9, '-' only; no leading/trailing/consecutive '-'); rename before publishing"
+        );
+    }
+}
+
+/// Append agentskills.io optional metadata to a multi-line skill listing
+/// entry — license / spec compatibility string / allowed-tools — only when
+/// they were actually populated, so the existing per-skill line stays
+/// terse for skills that don't declare them.
+fn append_agentskills_metadata(output: &mut String, meta: &SkillMetadata) {
+    if let Some(license) = meta.license.as_deref() {
+        output.push_str(&format!("    license: {license}\n"));
+    }
+    if let Some(compat) = meta.compatibility.as_deref() {
+        output.push_str(&format!("    compatibility: {compat}\n"));
+    }
+    if let Some(tools) = meta.allowed_tools.as_deref() {
+        output.push_str(&format!("    allowed-tools: {tools}\n"));
+    }
+}
+
 /// Validate a skill name against the agentskills.io spec rules:
 /// 1-64 characters, lowercase a-z, digits, and hyphens only, must not
 /// start/end with a hyphen and must not contain consecutive hyphens.
@@ -967,6 +1009,37 @@ Instructions.
     #[test]
     fn test_platform_allowed_empty_means_all() {
         assert!(platform_allowed(&[]));
+    }
+
+    #[test]
+    fn test_list_skills_formatted_surfaces_agentskills_metadata() {
+        let dir = std::env::temp_dir().join(format!(
+            "microclaw_skills_meta_{}",
+            uuid::Uuid::new_v4()
+        ));
+        // SkillManager joins `skills/` onto the data_dir; write the skill
+        // there so it gets discovered.
+        let pdf = dir.join("skills").join("pdf-processing");
+        std::fs::create_dir_all(&pdf).unwrap();
+        std::fs::write(
+            pdf.join("SKILL.md"),
+            "---\n\
+             name: pdf-processing\n\
+             description: Extract PDF text\n\
+             license: Apache-2.0\n\
+             compatibility: Requires git, docker\n\
+             allowed-tools: Bash(git:*) Read\n\
+             ---\nbody",
+        )
+        .unwrap();
+
+        let sm = SkillManager::new(dir.to_str().unwrap());
+        let listed = sm.list_skills_formatted();
+        assert!(listed.contains("license: Apache-2.0"), "listing: {listed}");
+        assert!(listed.contains("compatibility: Requires git, docker"));
+        assert!(listed.contains("allowed-tools: Bash(git:*) Read"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
