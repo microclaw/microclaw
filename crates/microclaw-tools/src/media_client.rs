@@ -96,10 +96,15 @@ impl std::fmt::Debug for MediaClient {
 
 /// Resolve a "location" (absolute URL, file path, or `data:` URI) into
 /// bytes + optional mime-type. Applies SSRF check when fetching over HTTP.
+///
+/// File-path resolution is bounded to `working_dir` plus any explicit
+/// directories in `extra_allowed_dirs`. Absolute paths outside both sets
+/// are rejected.
 pub async fn load_bytes_from_location(
     client: &Client,
     location: &str,
     working_dir: &std::path::Path,
+    extra_allowed_dirs: &[PathBuf],
 ) -> Result<(Vec<u8>, Option<String>), String> {
     if let Some(stripped) = location.strip_prefix("data:") {
         return parse_data_uri(stripped);
@@ -126,8 +131,8 @@ pub async fn load_bytes_from_location(
             .map_err(|e| format!("body read failed: {e}"))?;
         return Ok((bytes.to_vec(), mime));
     }
-    // File path: must be inside working_dir (reuse existing path guard).
-    let canonical = resolve_and_guard_path(location, working_dir)?;
+    // File path: must be inside working_dir or an explicit allowlist entry.
+    let canonical = resolve_and_guard_path(location, working_dir, extra_allowed_dirs)?;
     let bytes = std::fs::read(&canonical).map_err(|e| format!("read failed: {e}"))?;
     let mime = guess_mime_from_extension(&canonical);
     Ok((bytes, mime))
@@ -158,7 +163,11 @@ fn parse_data_uri(rest: &str) -> Result<(Vec<u8>, Option<String>), String> {
     Ok((bytes, mime))
 }
 
-fn resolve_and_guard_path(path: &str, working_dir: &std::path::Path) -> Result<PathBuf, String> {
+fn resolve_and_guard_path(
+    path: &str,
+    working_dir: &std::path::Path,
+    extra_allowed_dirs: &[PathBuf],
+) -> Result<PathBuf, String> {
     let p = std::path::Path::new(path);
     let joined = if p.is_absolute() {
         p.to_path_buf()
@@ -169,9 +178,15 @@ fn resolve_and_guard_path(path: &str, working_dir: &std::path::Path) -> Result<P
         .map_err(|e| format!("cannot resolve {}: {e}", joined.display()))?;
     let wd_canonical = std::fs::canonicalize(working_dir)
         .map_err(|e| format!("cannot resolve working_dir: {e}"))?;
-    if !canonical.starts_with(&wd_canonical) {
+    let mut roots: Vec<PathBuf> = vec![wd_canonical];
+    for d in extra_allowed_dirs {
+        if let Ok(c) = std::fs::canonicalize(d) {
+            roots.push(c);
+        }
+    }
+    if !roots.iter().any(|root| canonical.starts_with(root)) {
         return Err(format!(
-            "path {} is outside working_dir",
+            "path {} is outside working_dir and media.allowed_read_dirs",
             canonical.display()
         ));
     }

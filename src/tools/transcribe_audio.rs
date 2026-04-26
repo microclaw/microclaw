@@ -16,6 +16,7 @@ use crate::config::{Config, MediaConfig, SttConfig};
 /// Disabled by default.
 pub struct TranscribeAudioTool {
     working_dir: PathBuf,
+    allowed_read_dirs: Vec<PathBuf>,
     cfg: SttConfig,
     media: MediaConfig,
     openai_api_key: Option<String>,
@@ -27,6 +28,12 @@ impl TranscribeAudioTool {
     pub fn new(config: &Config) -> Self {
         Self {
             working_dir: PathBuf::from(&config.working_dir),
+            allowed_read_dirs: config
+                .media
+                .allowed_read_dirs
+                .iter()
+                .map(PathBuf::from)
+                .collect(),
             cfg: config.media.stt.clone(),
             media: config.media.clone(),
             openai_api_key: config.openai_api_key.clone(),
@@ -131,8 +138,14 @@ impl Tool for TranscribeAudioTool {
             Err(e) => return ToolResult::error(e),
         };
 
-        let (bytes, mime) =
-            match load_bytes_from_location(client.client(), &audio, &self.working_dir).await {
+        let (bytes, mime) = match load_bytes_from_location(
+            client.client(),
+            &audio,
+            &self.working_dir,
+            &self.allowed_read_dirs,
+        )
+        .await
+        {
                 Ok(v) => v,
                 Err(e) => return ToolResult::error(format!("audio fetch failed: {e}")),
             };
