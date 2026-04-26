@@ -294,10 +294,11 @@ Rules:
 - Category must be exactly one of: PROFILE (user attributes/preferences), KNOWLEDGE (facts/expertise), EVENT (significant things that happened)
 - If a new memory updates or supersedes an existing one, add "supersedes_id": <id> to replace it
 
-Output format — a JSON object with two arrays:
+Output format — a JSON object with three fields:
 {
   "memories": [{"content":"...","category":"PROFILE","supersedes_id":null}],
-  "triples": [{"subject":"User","predicate":"prefers","object":"Rust"}]
+  "triples": [{"subject":"User","predicate":"prefers","object":"Rust"}],
+  "user_model": "..." | null
 }
 
 "memories" — flat text memories (same as before).
@@ -306,8 +307,12 @@ Output format — a JSON object with two arrays:
   - predicate: a relationship (uses, prefers, located_at, version_is, works_on, manages, depends_on)
   - object: the related entity or value
   Only extract triples with clear, factual relationships. Skip vague or uncertain ones.
+"user_model" — an updated USER.md narrative (single short paragraph or bullet list) describing who the user is: role, expertise, working style, preferences, ongoing goals.
+  - Set to a string when you have new durable information that materially improves the current USER.md, or when none exists yet and there is enough signal to draft one.
+  - Set to null when the existing USER.md is still accurate; do not rewrite cosmetically.
+  - Output ONLY the file content — no commentary, no code fences. Drop stale or contradicted facts. Never invent.
 
-If nothing worth remembering: {"memories":[],"triples":[]}
+If nothing worth remembering: {"memories":[],"triples":[],"user_model":null}
 
 CRITICAL — how to memorize bugs and problems:
 - NEVER describe broken behavior as a fact (e.g. "tool calls were broken", "agent typed tool calls as text"). This causes the agent to repeat the broken behavior in future sessions.
@@ -385,64 +390,93 @@ fn strip_reflector_thinking_tags(input: &str) -> String {
 /// 2. Legacy array: `[{"content":"...","category":"..."}]`
 ///
 /// Returns `(memory_extractions, kg_triples)`.
-fn parse_reflector_response(
-    raw_text: &str,
-    chat_id: i64,
-) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+/// Reflector LLM response decomposed into the three output channels:
+/// memory rows, knowledge-graph triples, and an optional updated USER.md
+/// narrative. The user_model is None when the model judged the existing
+/// file accurate and did not propose a rewrite.
+struct ReflectorOutputs {
+    memories: Vec<serde_json::Value>,
+    triples: Vec<serde_json::Value>,
+    user_model: Option<String>,
+}
+
+fn extract_obj_outputs(obj: &serde_json::Map<String, serde_json::Value>) -> ReflectorOutputs {
+    let memories = obj
+        .get("memories")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let triples = obj
+        .get("triples")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let user_model = obj
+        .get("user_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    ReflectorOutputs {
+        memories,
+        triples,
+        user_model,
+    }
+}
+
+fn parse_reflector_response(raw_text: &str, chat_id: i64) -> ReflectorOutputs {
     let cleaned = strip_reflector_thinking_tags(raw_text);
     let trimmed = cleaned.trim();
 
-    // Try parsing as the new object format first
-    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if let Some(obj) = obj.as_object() {
-            let memories = obj
-                .get("memories")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let triples = obj
-                .get("triples")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            return (memories, triples);
+    // 1. Try parsing the trimmed text as a top-level JSON value: object →
+    //    new schema, array → legacy memories. We branch on the value type
+    //    rather than on `as_object()` alone so a legacy array doesn't fall
+    //    through to the embedded-object scan below (which would match the
+    //    first array element and silently drop the rest).
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(obj) = value.as_object() {
+            return extract_obj_outputs(obj);
+        }
+        if let Some(arr) = value.as_array() {
+            return ReflectorOutputs {
+                memories: arr.clone(),
+                triples: Vec::new(),
+                user_model: None,
+            };
         }
     }
 
-    // Try extracting JSON object from noise
+    // 2. Extract JSON object embedded in surrounding noise (e.g. ```json
+    //    fences). Only attempted when the top-level parse failed, so a
+    //    legacy array can't reach this branch.
     if let Some(start) = trimmed.find('{') {
         if let Some(end) = trimmed.rfind('}') {
             if end > start {
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]) {
                     if let Some(obj) = obj.as_object() {
-                        let memories = obj
-                            .get("memories")
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default();
-                        let triples = obj
-                            .get("triples")
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default();
-                        return (memories, triples);
+                        return extract_obj_outputs(obj);
                     }
                 }
             }
         }
     }
 
-    // Fall back to legacy array format (no triples)
+    // 3. Legacy array embedded in noise.
     if let Ok(arr) = parse_reflector_json_array(trimmed) {
-        return (arr, Vec::new());
+        return ReflectorOutputs {
+            memories: arr,
+            triples: Vec::new(),
+            user_model: None,
+        };
     }
-
-    // Last resort: find array in noise
     let start = trimmed.find('[').unwrap_or(0);
     let end = trimmed.rfind(']').map(|i| i + 1).unwrap_or(trimmed.len());
     if start < end {
         if let Ok(arr) = parse_reflector_json_array(&trimmed[start..end]) {
-            return (arr, Vec::new());
+            return ReflectorOutputs {
+                memories: arr,
+                triples: Vec::new(),
+                user_model: None,
+            };
         }
     }
 
@@ -450,7 +484,11 @@ fn parse_reflector_response(
         "Reflector: parse failed for chat {}: no valid JSON found",
         chat_id
     );
-    (Vec::new(), Vec::new())
+    ReflectorOutputs {
+        memories: Vec::new(),
+        triples: Vec::new(),
+        user_model: None,
+    }
 }
 
 fn parse_reflector_json_array(text: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {
@@ -649,11 +687,34 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         format!("\n\nExisting memories (use supersedes_id to replace stale ones):\n{lines}")
     };
 
+    // 4b. Look up channel + current USER.md so the same LLM call can also
+    //     curate the per-chat user model, avoiding a second round trip.
+    let channel = call_blocking(state.db.clone(), move |db| db.get_chat_channel(chat_id))
+        .await
+        .ok()
+        .flatten();
+    let existing_user_model = channel
+        .as_deref()
+        .and_then(|ch| state.memory.read_chat_user_model(ch, chat_id));
+    let user_model_cap = state.config.user_model_max_chars;
+    let user_model_block = if user_model_cap == 0 {
+        String::new()
+    } else {
+        let body = existing_user_model
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("(none yet)");
+        format!(
+            "\n\nCurrent USER.md (rewrite only if you have new durable signal; cap {user_model_cap} chars):\n```\n{body}\n```"
+        )
+    };
+
     // 5. Call LLM directly (no tools, no session)
     let user_msg = Message {
         role: "user".into(),
         content: MessageContent::Text(format!(
-            "Extract memories from this conversation (chat_id={chat_id}):{existing_hint}\n\nConversation:\n{conversation}"
+            "Extract memories from this conversation (chat_id={chat_id}):{existing_hint}{user_model_block}\n\nConversation:\n{conversation}"
         )),
     };
     let response = match state
@@ -700,9 +761,28 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         .collect::<Vec<_>>()
         .join("");
 
-    // 7. Parse response — supports both new object format {"memories":[...],"triples":[...]}
-    //    and legacy array format [{"content":"...","category":"..."}]
-    let (extracted, kg_triples) = parse_reflector_response(&text, chat_id);
+    // 7. Parse response — supports the new object format
+    //    {"memories":[...],"triples":[...],"user_model":...} and the legacy
+    //    array format [{"content":"...","category":"..."}].
+    let ReflectorOutputs {
+        memories: extracted,
+        triples: kg_triples,
+        user_model: proposed_user_model,
+    } = parse_reflector_response(&text, chat_id);
+
+    // Persist any user_model the LLM proposed before the early-return path,
+    // so a USER.md-only update isn't dropped on the floor when no new
+    // memories or triples were extracted.
+    if let (Some(model), Some(ch)) = (proposed_user_model.as_ref(), channel.as_deref()) {
+        persist_curated_user_model(
+            state,
+            chat_id,
+            ch,
+            existing_user_model.as_deref(),
+            model,
+            user_model_cap,
+        );
+    }
 
     if extracted.is_empty() && kg_triples.is_empty() {
         if let Some(ts) = latest_message_ts {
@@ -859,11 +939,8 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         );
     }
 
-    // 12. Curate USER.md — keep a single coherent narrative of who this user
-    //     is, separate from the bag of atomic PROFILE memories so the agent
-    //     always has a stable identity context regardless of query-driven
-    //     memory ranking.
-    curate_user_model_for_chat(state, chat_id, &conversation).await;
+    // USER.md curation now rides on the same reflector LLM call (see step 4b
+    // / step 7 above), so no separate round trip is needed here.
 
     let finished_at = Utc::now().to_rfc3339();
     let _ = call_blocking(state.db.clone(), move |db| {
@@ -884,182 +961,43 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
     .await;
 }
 
-/// Decide whether USER.md needs a fresh curation pass for this chat. Used
-/// by the reflector to amortize the LLM-call cost across multiple ticks
-/// rather than rewriting the file every time a new message arrives.
-fn user_model_curation_due(
-    existing: Option<&str>,
-    last_modified: Option<std::time::SystemTime>,
-    has_profile_signal: bool,
-    interval_mins: u32,
-) -> bool {
-    let exists = existing.map(|s| !s.trim().is_empty()).unwrap_or(false);
-    if !exists {
-        return has_profile_signal;
-    }
-    if interval_mins == 0 {
-        return true;
-    }
-    let Some(last) = last_modified else {
-        return true;
-    };
-    match std::time::SystemTime::now().duration_since(last) {
-        Ok(elapsed) => elapsed.as_secs() >= (interval_mins as u64) * 60,
-        Err(_) => true,
-    }
-}
-
-const USER_MODEL_CURATOR_SYSTEM_PROMPT: &str =
-    "You are a USER.md curator. You receive the current USER.md file (may be empty), \
-     a list of PROFILE-category memories about the user, and a recent conversation excerpt. \
-     Your job: produce an updated USER.md that captures who this user is — role, expertise, \
-     working style, preferences, ongoing goals — as a single short narrative.\n\n\
-     STRICT RULES:\n\
-     - Output ONLY the new file content. No preamble, no commentary, no code fences.\n\
-     - Stay under the character cap noted in the user message. If you must cut, drop the \
-       least durable details first (today's task < user's role).\n\
-     - Curate, don't accumulate: rewrite into a coherent paragraph or short bullet list, \
-       not an append-only log. Drop stale or contradicted facts.\n\
-     - Never invent facts. If the inputs don't establish something, don't include it.\n\
-     - If the inputs are too thin to write anything useful, output an empty string.";
-
-async fn curate_user_model_for_chat(
+/// Persist a USER.md narrative the reflector LLM proposed inside its
+/// combined memory/triples/user_model output. Returns silently on a no-op:
+/// when the layer is disabled (`user_model_max_chars == 0`), when the
+/// proposed text is empty, or when it is byte-identical to the existing
+/// file (avoid touching mtime for nothing).
+fn persist_curated_user_model(
     state: &Arc<AppState>,
     chat_id: i64,
-    recent_conversation: &str,
+    channel: &str,
+    existing: Option<&str>,
+    proposed: &str,
+    cap: usize,
 ) {
-    let cap = state.config.user_model_max_chars;
     if cap == 0 {
         return;
     }
-
-    let channel = match call_blocking(state.db.clone(), move |db| db.get_chat_channel(chat_id))
-        .await
-    {
-        Ok(Some(ch)) => ch,
-        _ => return,
-    };
-
-    let memories = match state
-        .memory_backend
-        .get_all_memories_for_chat(Some(chat_id))
-        .await
-    {
-        Ok(m) => m,
-        Err(_) => return,
-    };
-    let profile_lines: Vec<String> = memories
-        .iter()
-        .filter(|m| m.category == "PROFILE" && !m.is_archived)
-        .map(|m| format!("- {}", m.content.trim()))
-        .collect();
-    let has_profile_signal = !profile_lines.is_empty();
-
-    let existing = state.memory.read_chat_user_model(&channel, chat_id);
-    let last_modified = std::fs::metadata(
-        std::path::PathBuf::from(state.config.runtime_data_dir())
-            .join("groups")
-            .join(channel.trim())
-            .join(chat_id.to_string())
-            .join("USER.md"),
-    )
-    .and_then(|m| m.modified())
-    .ok();
-
-    let interval_mins = state
-        .config
-        .reflector_interval_mins
-        .saturating_mul(state.config.user_model_curation_interval as u64) as u32;
-    if !user_model_curation_due(
-        existing.as_deref(),
-        last_modified,
-        has_profile_signal,
-        interval_mins,
-    ) {
-        return;
-    }
-
-    let existing_block = existing
-        .as_deref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| format!("Current USER.md:\n```\n{s}\n```\n\n"))
-        .unwrap_or_default();
-    let profile_block = if profile_lines.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "PROFILE memories:\n{}\n\n",
-            profile_lines.join("\n")
-        )
-    };
-    let cut = floor_char_boundary(recent_conversation, 2000);
-    let convo_excerpt = &recent_conversation[..cut];
-    let convo_block = if convo_excerpt.trim().is_empty() {
-        String::new()
-    } else {
-        format!("Recent conversation excerpt:\n```\n{convo_excerpt}\n```\n\n")
-    };
-
-    if existing_block.is_empty() && profile_block.is_empty() {
-        // Nothing to curate from. Avoid burning an LLM call to produce empty
-        // output.
-        return;
-    }
-
-    let user_msg = Message {
-        role: "user".into(),
-        content: MessageContent::Text(format!(
-            "{existing_block}{profile_block}{convo_block}\
-             Produce an updated USER.md, max {cap} characters. Output the file content only."
-        )),
-    };
-
-    let response = match state
-        .llm
-        .send_message(USER_MODEL_CURATOR_SYSTEM_PROMPT, vec![user_msg], None)
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Reflector: USER.md curation LLM call failed for chat {chat_id}: {e}");
-            return;
-        }
-    };
-
-    let raw = response
-        .content
-        .iter()
-        .filter_map(|b| {
-            if let ResponseContentBlock::Text { text } = b {
-                Some(text.as_str())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    let cleaned = strip_reflector_thinking_tags(&raw);
-    let trimmed = cleaned.trim();
+    let trimmed = proposed.trim();
     if trimmed.is_empty() {
         return;
     }
-
-    let mut final_text = trimmed.to_string();
-    if final_text.chars().count() > cap {
-        final_text = final_text.chars().take(cap).collect();
-    }
-
-    if let Err(e) = state
-        .memory
-        .write_chat_user_model(&channel, chat_id, &final_text)
-    {
-        warn!("Reflector: USER.md write failed for chat {chat_id}: {e}");
+    let capped: String = if trimmed.chars().count() > cap {
+        trimmed.chars().take(cap).collect()
     } else {
-        info!(
-            "Reflector: USER.md curated for chat {chat_id} ({} chars)",
-            final_text.chars().count()
-        );
+        trimmed.to_string()
+    };
+    if existing
+        .map(|s| s.trim() == capped.as_str())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    match state.memory.write_chat_user_model(channel, chat_id, &capped) {
+        Ok(()) => info!(
+            "Reflector: USER.md updated for chat {chat_id} ({} chars)",
+            capped.chars().count()
+        ),
+        Err(e) => warn!("Reflector: USER.md write failed for chat {chat_id}: {e}"),
     }
 }
 
@@ -1068,46 +1006,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_user_model_curation_due_first_run_with_signal() {
-        assert!(super::user_model_curation_due(None, None, true, 30));
+    fn test_parse_reflector_response_extracts_user_model() {
+        let raw = r#"{
+            "memories": [{"content":"likes Rust","category":"PROFILE"}],
+            "triples": [],
+            "user_model": "Senior Rust engineer at Acme."
+        }"#;
+        let out = super::parse_reflector_response(raw, 1);
+        assert_eq!(out.memories.len(), 1);
+        assert_eq!(out.user_model.as_deref(), Some("Senior Rust engineer at Acme."));
     }
 
     #[test]
-    fn test_user_model_curation_due_first_run_no_signal_skips() {
-        assert!(!super::user_model_curation_due(None, None, false, 30));
+    fn test_parse_reflector_response_user_model_null_yields_none() {
+        let raw = r#"{"memories": [], "triples": [], "user_model": null}"#;
+        let out = super::parse_reflector_response(raw, 1);
+        assert!(out.user_model.is_none());
     }
 
     #[test]
-    fn test_user_model_curation_due_skips_when_recent() {
-        let recent = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
-        assert!(!super::user_model_curation_due(
-            Some("existing"),
-            Some(recent),
-            true,
-            30,
-        ));
+    fn test_parse_reflector_response_legacy_array_has_no_user_model() {
+        let raw = r#"[{"content":"x","category":"PROFILE"}]"#;
+        let out = super::parse_reflector_response(raw, 1);
+        assert_eq!(out.memories.len(), 1);
+        assert!(out.user_model.is_none());
     }
 
     #[test]
-    fn test_user_model_curation_due_runs_when_stale() {
-        let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60);
-        assert!(super::user_model_curation_due(
-            Some("existing"),
-            Some(stale),
-            false,
-            30,
-        ));
-    }
-
-    #[test]
-    fn test_user_model_curation_due_zero_interval_always_runs() {
-        let recent = std::time::SystemTime::now();
-        assert!(super::user_model_curation_due(
-            Some("existing"),
-            Some(recent),
-            false,
-            0,
-        ));
+    fn test_parse_reflector_response_user_model_empty_string_yields_none() {
+        let raw = r#"{"memories": [], "triples": [], "user_model": "   "}"#;
+        let out = super::parse_reflector_response(raw, 1);
+        assert!(out.user_model.is_none());
     }
 
     #[test]

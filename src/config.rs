@@ -299,9 +299,6 @@ fn default_context_max_chars() -> usize {
 fn default_user_model_max_chars() -> usize {
     1500
 }
-fn default_user_model_curation_interval() -> u32 {
-    3
-}
 fn default_clawhub_registry() -> String {
     "https://clawhub.ai".into()
 }
@@ -1086,15 +1083,12 @@ pub struct Config {
     /// Hard cap on USER.md size. Hermes ships a 1375-char limit on its
     /// equivalent file to force the curator to summarize rather than append.
     /// Set to 0 to disable the user-model layer entirely; the chat falls
-    /// back to PROFILE memories alone.
+    /// back to PROFILE memories alone. Curation is folded into the
+    /// reflector LLM call (see scheduler.rs), so there is no per-tick
+    /// amortization knob: the LLM itself returns null when no rewrite is
+    /// warranted.
     #[serde(default = "default_user_model_max_chars")]
     pub user_model_max_chars: usize,
-    /// How many reflector ticks may pass before the user-model curator runs
-    /// for a chat. 1 = every tick (highest fidelity, highest LLM cost).
-    /// Larger values amortize the curator call across multiple reflector
-    /// runs.
-    #[serde(default = "default_user_model_curation_interval")]
-    pub user_model_curation_interval: u32,
 
     // --- ClawHub ---
     #[serde(flatten)]
@@ -1598,7 +1592,6 @@ impl Config {
             context_dir: None,
             context_max_chars: 8000,
             user_model_max_chars: 1500,
-            user_model_curation_interval: 3,
             clawhub: ClawHubConfig::default(),
             plugins: PluginsConfig::default(),
             media: MediaConfig::default(),
