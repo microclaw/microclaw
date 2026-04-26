@@ -648,6 +648,12 @@ pub(crate) async fn apply_reflector_extractions(
             Some(c) => c,
             None => continue,
         };
+        // Strip credentials / PII before the row is persisted, deduped by
+        // topic key, or shipped to the embedding model. Reflector-extracted
+        // memories quote conversation content verbatim; without this gate a
+        // user pasting an API key into chat would land that key in
+        // long-lived memory and any downstream embedding store.
+        let content = microclaw_core::redact::redact(&content);
         if should_skip_memory_poisoning_risk(&content) {
             skipped += 1;
             continue;

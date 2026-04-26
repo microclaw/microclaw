@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use microclaw_core::redact;
+
 pub struct MemoryManager {
     data_dir: PathBuf,
 }
@@ -57,7 +59,11 @@ impl MemoryManager {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)
+        // Redact PII / credentials before USER.md hits disk. The reflector
+        // LLM was asked to never invent facts, but raw conversation excerpts
+        // include things like API keys and emails the model might have
+        // verbatim-quoted into the narrative.
+        std::fs::write(path, redact::redact(content))
     }
 
     pub fn read_chat_memory(&self, channel: &str, chat_id: i64) -> Option<String> {
@@ -76,7 +82,7 @@ impl MemoryManager {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)
+        std::fs::write(path, redact::redact(content))
     }
 
     #[allow(dead_code)]
@@ -90,7 +96,7 @@ impl MemoryManager {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)
+        std::fs::write(path, redact::redact(content))
     }
 
     #[allow(dead_code)]
@@ -99,7 +105,7 @@ impl MemoryManager {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)
+        std::fs::write(path, redact::redact(content))
     }
 
     pub fn build_memory_context(&self, channel: &str, chat_id: i64) -> String {
@@ -182,6 +188,32 @@ mod tests {
                 .join("feishu.ops")
                 .join("AGENTS.md")
         ));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_writes_redact_credentials_before_persist() {
+        let (mm, dir) = test_memory_manager();
+        // USER.md path: secrets get masked before hitting disk.
+        mm.write_chat_user_model(
+            "telegram",
+            7,
+            "User shared sk-proj-ABCDEFGHIJKLMNOP1234567890 and email a@b.com",
+        )
+        .expect("write");
+        let stored = mm.read_chat_user_model("telegram", 7).expect("read");
+        assert!(!stored.contains("sk-proj-ABCDEFGHIJKLMNOP"));
+        assert!(stored.contains("sk-<redacted>"));
+        assert!(!stored.contains("a@b.com"));
+        assert!(stored.contains("<redacted>@b.com"));
+
+        // Same guarantee for chat AGENTS.md.
+        mm.write_chat_memory("telegram", 7, "ghp_abcdefghij1234567890ABCDE leaked")
+            .expect("write");
+        let mem = mm.read_chat_memory("telegram", 7).expect("read");
+        assert!(!mem.contains("ghp_abcdefghij"));
+        assert!(mem.contains("gh<redacted>"));
+
         cleanup(&dir);
     }
 
