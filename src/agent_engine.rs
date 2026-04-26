@@ -773,7 +773,7 @@ async fn process_with_agent_logic(
         .build_skills_catalog_for_query(&query, state.config.skills_catalog_top_k);
     let soul_content = load_soul_content(&state.config, context.caller_channel, chat_id);
     let user_model = load_user_model(state, context.caller_channel, chat_id);
-    let project_context = load_project_context(&state.config, chat_id);
+    let project_context = load_project_context(&state.config, context.caller_channel, chat_id);
     let bot_username = state
         .config
         .bot_username_for_channel(context.caller_channel);
@@ -1781,11 +1781,14 @@ pub(crate) fn load_user_model(
 /// Load project-level context files and concatenate them for system-prompt
 /// injection. Reads `*.md` files (alphabetical order) from the configured
 /// `context_dir` (default: `<data_dir>/context/`). Also appends chat-scoped
-/// files from `<runtime_data_dir>/groups/<chat_id>/context/`. Combined output
-/// is truncated to `context_max_chars`. Returns `None` when nothing was found
-/// or the layer is disabled (`context_max_chars == 0`).
+/// files from `<runtime_data_dir>/groups/<channel>/<chat_id>/context/`,
+/// matching the AGENTS.md / USER.md per-chat layout so operators only have
+/// to learn one path scheme. Combined output is truncated to
+/// `context_max_chars`. Returns `None` when nothing was found or the layer
+/// is disabled (`context_max_chars == 0`).
 pub(crate) fn load_project_context(
     config: &crate::config::Config,
+    caller_channel: &str,
     chat_id: i64,
 ) -> Option<String> {
     if config.context_max_chars == 0 {
@@ -1800,6 +1803,7 @@ pub(crate) fn load_project_context(
     };
     let chat_dir = runtime_root
         .join("groups")
+        .join(caller_channel.trim())
         .join(chat_id.to_string())
         .join("context");
 
@@ -3724,7 +3728,7 @@ mod tests {
         config.data_dir = tmp.to_string_lossy().to_string();
         config.context_max_chars = 1000;
 
-        let loaded = super::load_project_context(&config, 42).expect("should load");
+        let loaded = super::load_project_context(&config, "telegram", 42).expect("should load");
         assert!(loaded.contains("Rust + Tokio"));
         assert!(loaded.contains("UTC+8"));
         assert!(!loaded.contains("should be skipped"));
@@ -3732,6 +3736,36 @@ mod tests {
         let stack_pos = loaded.find("Rust + Tokio").unwrap();
         let team_pos = loaded.find("UTC+8").unwrap();
         assert!(stack_pos < team_pos);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_project_context_picks_up_per_chat_overlay() {
+        let tmp = std::env::temp_dir().join(format!("mc_ctx_overlay_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join("context")).unwrap();
+        std::fs::write(tmp.join("context").join("global.md"), "global note").unwrap();
+        let chat_ctx = tmp
+            .join("runtime")
+            .join("groups")
+            .join("telegram")
+            .join("99")
+            .join("context");
+        std::fs::create_dir_all(&chat_ctx).unwrap();
+        std::fs::write(chat_ctx.join("scoped.md"), "chat-only note").unwrap();
+
+        let mut config = crate::config::Config::test_defaults();
+        config.data_dir = tmp.to_string_lossy().to_string();
+        config.context_max_chars = 1000;
+
+        let loaded = super::load_project_context(&config, "telegram", 99).expect("loads");
+        assert!(loaded.contains("global note"));
+        assert!(loaded.contains("chat-only note"));
+
+        // A different channel/chat sees only the global file.
+        let other = super::load_project_context(&config, "discord", 99).expect("loads");
+        assert!(other.contains("global note"));
+        assert!(!other.contains("chat-only note"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -3747,7 +3781,7 @@ mod tests {
         config.data_dir = tmp.to_string_lossy().to_string();
         config.context_max_chars = 0;
 
-        assert!(super::load_project_context(&config, 1).is_none());
+        assert!(super::load_project_context(&config, "telegram", 1).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
