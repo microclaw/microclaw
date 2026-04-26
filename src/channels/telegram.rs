@@ -804,14 +804,7 @@ async fn handle_message(
 
     // Handle voice messages
     if let Some(voice) = msg.voice() {
-        // Check if voice transcription is configured
-        let can_transcribe = if state.config.voice_provider == "local" {
-            state.config.voice_transcription_command.is_some()
-        } else {
-            state.config.openai_api_key.is_some()
-        };
-
-        if can_transcribe {
+        if crate::voice::can_transcribe(&state.config) {
             match download_telegram_file(&bot, &voice.file.id.0).await {
                 Ok(bytes) => {
                     let sender_name = msg
@@ -819,19 +812,18 @@ async fn handle_message(
                         .as_ref()
                         .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone()))
                         .unwrap_or_else(|| "Unknown".into());
-                    match transcribe_audio(&state.config, &bytes).await {
+                    match crate::voice::transcribe_audio(&state.config, &bytes).await {
                         Ok(transcription) => {
-                            text = format!(
-                                "[voice message from {}]: {}",
-                                sanitize_xml(&sender_name),
-                                sanitize_xml(&transcription)
+                            text = crate::voice::format_voice_inbound(
+                                &sanitize_xml(&sender_name),
+                                &sanitize_xml(&transcription),
                             );
                         }
                         Err(e) => {
                             error!("Voice transcription failed: {e}");
-                            text = format!(
-                                "[voice message from {}]: [transcription failed: {e}]",
-                                sanitize_xml(&sender_name)
+                            text = crate::voice::format_voice_inbound_error(
+                                &sanitize_xml(&sender_name),
+                                &e,
                             );
                         }
                     }
@@ -1251,61 +1243,9 @@ async fn download_telegram_file(
     Ok(buf)
 }
 
-/// Transcribe audio using configured provider (openai or local)
-pub async fn transcribe_audio(
-    config: &crate::config::Config,
-    audio_bytes: &[u8],
-) -> Result<String, String> {
-    let provider = &config.voice_provider;
-
-    if provider == "local" {
-        // Use local transcription command
-        let Some(ref command) = config.voice_transcription_command else {
-            return Err(
-                "Local voice transcription configured but voice_transcription_command not set"
-                    .into(),
-            );
-        };
-
-        // Write audio to a temp file
-        let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join(format!("voice_{}.ogg", uuid::Uuid::new_v4()));
-        tokio::fs::write(&temp_file, audio_bytes)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        // Replace {file} placeholder with actual path
-        let cmd = command.replace("{file}", temp_file.to_str().unwrap_or(""));
-
-        // Execute the command
-        let output_result = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .output()
-            .await;
-
-        // Clean up temp file
-        let _ = tokio::fs::remove_file(&temp_file).await;
-
-        let output =
-            output_result.map_err(|e| format!("Failed to run transcription command: {}", e))?;
-
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        } else {
-            Err(format!(
-                "Transcription command failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ))
-        }
-    } else {
-        // Default to OpenAI Whisper API
-        let Some(ref openai_key) = config.openai_api_key else {
-            return Err("Voice transcription requires openai_api_key".into());
-        };
-        microclaw_app::transcribe::transcribe_audio(openai_key, audio_bytes).await
-    }
-}
+/// Backwards-compat re-export. Real implementation lives in `crate::voice`
+/// so other channels can share it.
+pub use crate::voice::transcribe_audio;
 
 fn base64_encode(data: &[u8]) -> String {
     use base64::Engine;

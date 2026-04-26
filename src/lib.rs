@@ -30,6 +30,7 @@ pub mod title_generator;
 pub mod tls;
 pub mod tool_executor;
 pub mod tools;
+pub mod voice;
 pub mod web;
 
 pub use channels::discord;
