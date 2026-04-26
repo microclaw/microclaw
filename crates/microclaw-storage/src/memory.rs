@@ -26,9 +26,38 @@ impl MemoryManager {
         self.data_dir.join(channel.trim()).join("AGENTS.md")
     }
 
+    /// Per-chat user-model file. Mirrors Hermes' USER.md split from
+    /// MEMORY.md: a single curated narrative about who the user is, kept
+    /// separate from atomic memories so it can be loaded as one coherent
+    /// block at the top of the system prompt.
+    fn chat_user_model_path(&self, channel: &str, chat_id: i64) -> PathBuf {
+        self.data_dir
+            .join(channel.trim())
+            .join(chat_id.to_string())
+            .join("USER.md")
+    }
+
     pub fn read_global_memory(&self) -> Option<String> {
         let path = self.global_memory_path();
         std::fs::read_to_string(path).ok()
+    }
+
+    pub fn read_chat_user_model(&self, channel: &str, chat_id: i64) -> Option<String> {
+        let path = self.chat_user_model_path(channel, chat_id);
+        std::fs::read_to_string(path).ok()
+    }
+
+    pub fn write_chat_user_model(
+        &self,
+        channel: &str,
+        chat_id: i64,
+        content: &str,
+    ) -> std::io::Result<()> {
+        let path = self.chat_user_model_path(channel, chat_id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, content)
     }
 
     pub fn read_chat_memory(&self, channel: &str, chat_id: i64) -> Option<String> {
@@ -153,6 +182,28 @@ mod tests {
                 .join("feishu.ops")
                 .join("AGENTS.md")
         ));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_chat_user_model_path_and_round_trip() {
+        let (mm, dir) = test_memory_manager();
+        let path = mm.chat_user_model_path("telegram", 42);
+        assert!(path.ends_with(
+            std::path::Path::new("groups")
+                .join("telegram")
+                .join("42")
+                .join("USER.md")
+        ));
+        // Empty round-trip: read returns None when file does not exist.
+        assert!(mm.read_chat_user_model("telegram", 42).is_none());
+        // Write then read back.
+        mm.write_chat_user_model("telegram", 42, "Senior Rust engineer.")
+            .expect("write");
+        let got = mm
+            .read_chat_user_model("telegram", 42)
+            .expect("read after write");
+        assert_eq!(got, "Senior Rust engineer.");
         cleanup(&dir);
     }
 

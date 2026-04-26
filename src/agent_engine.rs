@@ -772,6 +772,7 @@ async fn process_with_agent_logic(
         .skills
         .build_skills_catalog_for_query(&query, state.config.skills_catalog_top_k);
     let soul_content = load_soul_content(&state.config, context.caller_channel, chat_id);
+    let user_model = load_user_model(state, context.caller_channel, chat_id);
     let project_context = load_project_context(&state.config, chat_id);
     let bot_username = state
         .config
@@ -785,6 +786,7 @@ async fn process_with_agent_logic(
         &state.config.timezone,
         soul_content.as_deref(),
         project_context.as_deref(),
+        user_model.as_deref(),
     );
     let plugin_context = crate::plugins::collect_plugin_context_injections(
         &state.config,
@@ -1746,6 +1748,36 @@ fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::Path
     }
 }
 
+/// Load the per-chat user model document (USER.md). Hermes splits a
+/// single curated user-narrative file from the bag of atomic memories so
+/// the agent always sees a coherent description of who the user is, even
+/// when no individual memory row matched the current query. Returns `None`
+/// when the file does not exist or `user_model_max_chars == 0`. Content is
+/// truncated to the cap with a marker so callers can rely on a stable upper
+/// bound on token cost.
+pub(crate) fn load_user_model(
+    state: &crate::runtime::AppState,
+    caller_channel: &str,
+    chat_id: i64,
+) -> Option<String> {
+    if state.config.user_model_max_chars == 0 {
+        return None;
+    }
+    let raw = state.memory.read_chat_user_model(caller_channel, chat_id)?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let cap = state.config.user_model_max_chars;
+    if trimmed.chars().count() <= cap {
+        Some(trimmed.to_string())
+    } else {
+        let mut clipped: String = trimmed.chars().take(cap).collect();
+        clipped.push_str("\n…[user model truncated]");
+        Some(clipped)
+    }
+}
+
 /// Load project-level context files and concatenate them for system-prompt
 /// injection. Reads `*.md` files (alphabetical order) from the configured
 /// `context_dir` (default: `<data_dir>/context/`). Also appends chat-scoped
@@ -1918,6 +1950,7 @@ pub(crate) fn build_system_prompt(
     configured_timezone: &str,
     soul_content: Option<&str>,
     project_context: Option<&str>,
+    user_model: Option<&str>,
 ) -> String {
     let now_utc = chrono::Utc::now();
     let tz_label = configured_timezone
@@ -2057,6 +2090,14 @@ Built-in execution playbook:
 
     if let Some(channel_prompt) = crate::channels::system_prompt_extension(caller_channel) {
         prompt.push_str(channel_prompt);
+    }
+
+    if let Some(model) = user_model {
+        if !model.trim().is_empty() {
+            prompt.push_str("\n# User Model\n\nA curated narrative of who this user is — preferences, expertise, working style, ongoing goals. Treat as durable identity context, distinct from the volatile Memories section below.\n\n<user_model>\n");
+            prompt.push_str(model);
+            prompt.push_str("\n</user_model>\n");
+        }
     }
 
     if let Some(ctx) = project_context {
@@ -3583,7 +3624,7 @@ mod tests {
     fn test_build_system_prompt_with_soul() {
         let soul = "I am a friendly pirate assistant. I speak in pirate lingo and love adventure.";
         let prompt =
-            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", Some(soul), None);
+            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", Some(soul), None, None);
         assert!(prompt.contains("<soul>"));
         assert!(prompt.contains("pirate"));
         assert!(prompt.contains("</soul>"));
@@ -3594,14 +3635,14 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_without_soul() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(!prompt.contains("<soul>"));
         assert!(prompt.contains("a helpful AI assistant across chat channels"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_direct_tool_calls_for_simple_read_only_requests() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(prompt.contains("simple, low-risk, read-only requests"));
         assert!(prompt.contains("call the tool immediately and return the result directly"));
         assert!(prompt.contains("Do not ask confirmation questions"));
@@ -3609,7 +3650,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_prefers_chat_working_dir_over_tmp() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(prompt.contains("current chat working directory"));
         assert!(prompt.contains("use the current chat working directory's `tmp/` subdirectory"));
         assert!(prompt.contains("Do not use absolute `/tmp/...` paths"));
@@ -3617,7 +3658,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_discourages_invented_machine_paths() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(prompt.contains("prefer relative paths rooted there"));
         assert!(prompt.contains("Do not invent machine-specific absolute paths"));
         assert!(prompt.contains("/home/..."));
@@ -3637,11 +3678,37 @@ mod tests {
             "UTC",
             None,
             Some(ctx),
+            None,
         );
         assert!(prompt.contains("# Project Context"));
         assert!(prompt.contains("<project_context>"));
         assert!(prompt.contains("us-west-2"));
         assert!(prompt.contains("</project_context>"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_user_model() {
+        let user_model = "Senior Rust engineer at Acme. Prefers terse PRs, test-first, no AI fluff.";
+        let prompt = super::build_system_prompt(
+            "testbot",
+            "telegram",
+            "",
+            42,
+            "",
+            "UTC",
+            None,
+            None,
+            Some(user_model),
+        );
+        assert!(prompt.contains("# User Model"));
+        assert!(prompt.contains("<user_model>"));
+        assert!(prompt.contains("Senior Rust engineer"));
+        assert!(prompt.contains("</user_model>"));
+        // User model section should appear before any Memories section so it
+        // anchors the prefix cache regardless of query-driven memory ranking.
+        if prompt.contains("# Memories") {
+            assert!(prompt.find("# User Model").unwrap() < prompt.find("# Memories").unwrap());
+        }
     }
 
     #[test]
@@ -3738,7 +3805,7 @@ mod tests {
 
     #[test]
     fn test_append_plugin_context_sections_splits_prompt_and_documents() {
-        let mut prompt = super::build_system_prompt("testbot", "web", "", 1, "", "UTC", None, None);
+        let mut prompt = super::build_system_prompt("testbot", "web", "", 1, "", "UTC", None, None, None);
         let injections = vec![
             crate::plugins::PluginContextInjection {
                 plugin_name: "p1".to_string(),

@@ -296,6 +296,12 @@ fn default_souls_dir() -> Option<String> {
 fn default_context_max_chars() -> usize {
     8000
 }
+fn default_user_model_max_chars() -> usize {
+    1500
+}
+fn default_user_model_curation_interval() -> u32 {
+    3
+}
 fn default_clawhub_registry() -> String {
     "https://clawhub.ai".into()
 }
@@ -1076,6 +1082,20 @@ pub struct Config {
     #[serde(default = "default_context_max_chars")]
     pub context_max_chars: usize,
 
+    // --- Per-chat user model (USER.md) ---
+    /// Hard cap on USER.md size. Hermes ships a 1375-char limit on its
+    /// equivalent file to force the curator to summarize rather than append.
+    /// Set to 0 to disable the user-model layer entirely; the chat falls
+    /// back to PROFILE memories alone.
+    #[serde(default = "default_user_model_max_chars")]
+    pub user_model_max_chars: usize,
+    /// How many reflector ticks may pass before the user-model curator runs
+    /// for a chat. 1 = every tick (highest fidelity, highest LLM cost).
+    /// Larger values amortize the curator call across multiple reflector
+    /// runs.
+    #[serde(default = "default_user_model_curation_interval")]
+    pub user_model_curation_interval: u32,
+
     // --- ClawHub ---
     #[serde(flatten)]
     pub clawhub: ClawHubConfig,
@@ -1577,6 +1597,8 @@ impl Config {
             souls_dir: None,
             context_dir: None,
             context_max_chars: 8000,
+            user_model_max_chars: 1500,
+            user_model_curation_interval: 3,
             clawhub: ClawHubConfig::default(),
             plugins: PluginsConfig::default(),
             media: MediaConfig::default(),

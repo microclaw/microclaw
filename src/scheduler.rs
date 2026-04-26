@@ -859,6 +859,12 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         );
     }
 
+    // 12. Curate USER.md — keep a single coherent narrative of who this user
+    //     is, separate from the bag of atomic PROFILE memories so the agent
+    //     always has a stable identity context regardless of query-driven
+    //     memory ranking.
+    curate_user_model_for_chat(state, chat_id, &conversation).await;
+
     let finished_at = Utc::now().to_rfc3339();
     let _ = call_blocking(state.db.clone(), move |db| {
         db.log_reflector_run(
@@ -878,9 +884,231 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
     .await;
 }
 
+/// Decide whether USER.md needs a fresh curation pass for this chat. Used
+/// by the reflector to amortize the LLM-call cost across multiple ticks
+/// rather than rewriting the file every time a new message arrives.
+fn user_model_curation_due(
+    existing: Option<&str>,
+    last_modified: Option<std::time::SystemTime>,
+    has_profile_signal: bool,
+    interval_mins: u32,
+) -> bool {
+    let exists = existing.map(|s| !s.trim().is_empty()).unwrap_or(false);
+    if !exists {
+        return has_profile_signal;
+    }
+    if interval_mins == 0 {
+        return true;
+    }
+    let Some(last) = last_modified else {
+        return true;
+    };
+    match std::time::SystemTime::now().duration_since(last) {
+        Ok(elapsed) => elapsed.as_secs() >= (interval_mins as u64) * 60,
+        Err(_) => true,
+    }
+}
+
+const USER_MODEL_CURATOR_SYSTEM_PROMPT: &str =
+    "You are a USER.md curator. You receive the current USER.md file (may be empty), \
+     a list of PROFILE-category memories about the user, and a recent conversation excerpt. \
+     Your job: produce an updated USER.md that captures who this user is — role, expertise, \
+     working style, preferences, ongoing goals — as a single short narrative.\n\n\
+     STRICT RULES:\n\
+     - Output ONLY the new file content. No preamble, no commentary, no code fences.\n\
+     - Stay under the character cap noted in the user message. If you must cut, drop the \
+       least durable details first (today's task < user's role).\n\
+     - Curate, don't accumulate: rewrite into a coherent paragraph or short bullet list, \
+       not an append-only log. Drop stale or contradicted facts.\n\
+     - Never invent facts. If the inputs don't establish something, don't include it.\n\
+     - If the inputs are too thin to write anything useful, output an empty string.";
+
+async fn curate_user_model_for_chat(
+    state: &Arc<AppState>,
+    chat_id: i64,
+    recent_conversation: &str,
+) {
+    let cap = state.config.user_model_max_chars;
+    if cap == 0 {
+        return;
+    }
+
+    let channel = match call_blocking(state.db.clone(), move |db| db.get_chat_channel(chat_id))
+        .await
+    {
+        Ok(Some(ch)) => ch,
+        _ => return,
+    };
+
+    let memories = match state
+        .memory_backend
+        .get_all_memories_for_chat(Some(chat_id))
+        .await
+    {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let profile_lines: Vec<String> = memories
+        .iter()
+        .filter(|m| m.category == "PROFILE" && !m.is_archived)
+        .map(|m| format!("- {}", m.content.trim()))
+        .collect();
+    let has_profile_signal = !profile_lines.is_empty();
+
+    let existing = state.memory.read_chat_user_model(&channel, chat_id);
+    let last_modified = std::fs::metadata(
+        std::path::PathBuf::from(state.config.runtime_data_dir())
+            .join("groups")
+            .join(channel.trim())
+            .join(chat_id.to_string())
+            .join("USER.md"),
+    )
+    .and_then(|m| m.modified())
+    .ok();
+
+    let interval_mins = state
+        .config
+        .reflector_interval_mins
+        .saturating_mul(state.config.user_model_curation_interval as u64) as u32;
+    if !user_model_curation_due(
+        existing.as_deref(),
+        last_modified,
+        has_profile_signal,
+        interval_mins,
+    ) {
+        return;
+    }
+
+    let existing_block = existing
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("Current USER.md:\n```\n{s}\n```\n\n"))
+        .unwrap_or_default();
+    let profile_block = if profile_lines.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "PROFILE memories:\n{}\n\n",
+            profile_lines.join("\n")
+        )
+    };
+    let cut = floor_char_boundary(recent_conversation, 2000);
+    let convo_excerpt = &recent_conversation[..cut];
+    let convo_block = if convo_excerpt.trim().is_empty() {
+        String::new()
+    } else {
+        format!("Recent conversation excerpt:\n```\n{convo_excerpt}\n```\n\n")
+    };
+
+    if existing_block.is_empty() && profile_block.is_empty() {
+        // Nothing to curate from. Avoid burning an LLM call to produce empty
+        // output.
+        return;
+    }
+
+    let user_msg = Message {
+        role: "user".into(),
+        content: MessageContent::Text(format!(
+            "{existing_block}{profile_block}{convo_block}\
+             Produce an updated USER.md, max {cap} characters. Output the file content only."
+        )),
+    };
+
+    let response = match state
+        .llm
+        .send_message(USER_MODEL_CURATOR_SYSTEM_PROMPT, vec![user_msg], None)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Reflector: USER.md curation LLM call failed for chat {chat_id}: {e}");
+            return;
+        }
+    };
+
+    let raw = response
+        .content
+        .iter()
+        .filter_map(|b| {
+            if let ResponseContentBlock::Text { text } = b {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let cleaned = strip_reflector_thinking_tags(&raw);
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let mut final_text = trimmed.to_string();
+    if final_text.chars().count() > cap {
+        final_text = final_text.chars().take(cap).collect();
+    }
+
+    if let Err(e) = state
+        .memory
+        .write_chat_user_model(&channel, chat_id, &final_text)
+    {
+        warn!("Reflector: USER.md write failed for chat {chat_id}: {e}");
+    } else {
+        info!(
+            "Reflector: USER.md curated for chat {chat_id} ({} chars)",
+            final_text.chars().count()
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_user_model_curation_due_first_run_with_signal() {
+        assert!(super::user_model_curation_due(None, None, true, 30));
+    }
+
+    #[test]
+    fn test_user_model_curation_due_first_run_no_signal_skips() {
+        assert!(!super::user_model_curation_due(None, None, false, 30));
+    }
+
+    #[test]
+    fn test_user_model_curation_due_skips_when_recent() {
+        let recent = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        assert!(!super::user_model_curation_due(
+            Some("existing"),
+            Some(recent),
+            true,
+            30,
+        ));
+    }
+
+    #[test]
+    fn test_user_model_curation_due_runs_when_stale() {
+        let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60);
+        assert!(super::user_model_curation_due(
+            Some("existing"),
+            Some(stale),
+            false,
+            30,
+        ));
+    }
+
+    #[test]
+    fn test_user_model_curation_due_zero_interval_always_runs() {
+        let recent = std::time::SystemTime::now();
+        assert!(super::user_model_curation_due(
+            Some("existing"),
+            Some(recent),
+            false,
+            0,
+        ));
+    }
 
     #[test]
     fn test_jaccard_similar_identical() {
