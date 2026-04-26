@@ -1271,6 +1271,9 @@ mod tests {
             version: version.map(|v| v.to_string()),
             updated_at: None,
             env_file: None,
+            license: None,
+            compatibility: None,
+            allowed_tools: None,
         }
     }
 
@@ -1285,6 +1288,9 @@ mod tests {
             version: Some("1".into()),
             updated_at: None,
             env_file: None,
+            license: None,
+            compatibility: None,
+            allowed_tools: None,
         }
     }
 

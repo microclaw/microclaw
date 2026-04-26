@@ -38,8 +38,10 @@ impl SkillManageTool {
     }
 
     fn validate_skill_name(name: &str) -> Result<(), String> {
-        if name.is_empty() {
-            return Err("Skill name cannot be empty".into());
+        // Path traversal guard runs first so we get a clear diagnostic even
+        // for inputs the spec validator would reject for other reasons.
+        if name.contains("..") || name.contains('/') || name.contains('\\') {
+            return Err("Invalid skill name: path traversal detected".into());
         }
         if name.len() > MAX_SKILL_NAME_CHARS {
             return Err(format!(
@@ -47,21 +49,10 @@ impl SkillManageTool {
                 MAX_SKILL_NAME_CHARS
             ));
         }
-        // Only allow alphanumeric, hyphens, underscores
-        if !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(
-                "Skill name must contain only alphanumeric characters, hyphens, and underscores"
-                    .into(),
-            );
-        }
-        // Prevent path traversal
-        if name.contains("..") || name.contains('/') || name.contains('\\') {
-            return Err("Invalid skill name: path traversal detected".into());
-        }
-        Ok(())
+        // Defer to the agentskills.io spec rules so newly created skills are
+        // portable to other Agent Skills clients (Claude, OpenCode, Codex,
+        // etc.) without further renaming.
+        crate::skills::validate_agentskills_name(name)
     }
 
     fn validate_content(content: &str) -> Result<(), String> {
@@ -380,11 +371,17 @@ mod tests {
     #[test]
     fn test_validate_skill_name() {
         assert!(SkillManageTool::validate_skill_name("my-skill").is_ok());
-        assert!(SkillManageTool::validate_skill_name("my_skill_v2").is_ok());
+        assert!(SkillManageTool::validate_skill_name("pdf-processing").is_ok());
         assert!(SkillManageTool::validate_skill_name("").is_err());
         assert!(SkillManageTool::validate_skill_name("../bad").is_err());
         assert!(SkillManageTool::validate_skill_name("has spaces").is_err());
         assert!(SkillManageTool::validate_skill_name("has/slash").is_err());
+        // Following agentskills.io spec: underscores and uppercase are no
+        // longer accepted on creation, even though the parser still loads
+        // legacy skills that use them.
+        assert!(SkillManageTool::validate_skill_name("my_skill_v2").is_err());
+        assert!(SkillManageTool::validate_skill_name("My-Skill").is_err());
+        assert!(SkillManageTool::validate_skill_name("-leading").is_err());
     }
 
     #[test]

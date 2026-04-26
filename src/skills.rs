@@ -13,6 +13,20 @@ pub struct SkillMetadata {
     pub version: Option<String>,
     pub updated_at: Option<String>,
     pub env_file: Option<String>,
+    /// agentskills.io spec field. License of the skill (free-form, e.g.
+    /// "Apache-2.0" or a reference to a bundled LICENSE file).
+    pub license: Option<String>,
+    /// agentskills.io spec field. Free-form compatibility string when the
+    /// skill author used the spec's flat form (e.g.
+    /// "Requires git, docker, jq, and access to the internet"). When the
+    /// MicroClaw nested form was used, this is None and the structured
+    /// requirements live in `platforms` and `deps`.
+    pub compatibility: Option<String>,
+    /// agentskills.io spec field (kebab-case in YAML: `allowed-tools`).
+    /// Space-separated string of pre-approved tools the skill may use.
+    /// Experimental in the spec; surfaced verbatim for clients that wish
+    /// to honor it.
+    pub allowed_tools: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,7 +47,7 @@ struct SkillFrontmatter {
     #[serde(default)]
     deps: Vec<String>,
     #[serde(default)]
-    compatibility: SkillCompatibility,
+    compatibility: CompatibilityField,
     #[serde(default)]
     source: Option<String>,
     #[serde(default)]
@@ -44,6 +58,29 @@ struct SkillFrontmatter {
     env_file: Option<String>,
     #[serde(default)]
     metadata: SkillFrontmatterMetadata,
+    /// agentskills.io spec field.
+    #[serde(default)]
+    license: Option<String>,
+    /// agentskills.io spec field, kebab-case in YAML.
+    #[serde(default, rename = "allowed-tools")]
+    allowed_tools: Option<String>,
+}
+
+/// Accept either MicroClaw's structured `compatibility: { os: [...], deps:
+/// [...] }` form or the agentskills.io spec's flat string form
+/// (`compatibility: "Requires git, docker..."`). Defaults to structured-empty
+/// so existing skills keep parsing.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CompatibilityField {
+    Structured(SkillCompatibility),
+    Free(String),
+}
+
+impl Default for CompatibilityField {
+    fn default() -> Self {
+        CompatibilityField::Structured(SkillCompatibility::default())
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -673,10 +710,22 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
         return None;
     }
 
+    let (compat_os, compat_deps, compatibility_str) = match fm.compatibility {
+        CompatibilityField::Structured(c) => (c.os, c.deps, None),
+        CompatibilityField::Free(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                (Vec::new(), Vec::new(), None)
+            } else {
+                (Vec::new(), Vec::new(), Some(trimmed.to_string()))
+            }
+        }
+    };
+
     let mut platforms: Vec<String> = fm
         .platforms
         .into_iter()
-        .chain(fm.compatibility.os)
+        .chain(compat_os)
         .map(|p| normalize_platform(&p))
         .filter(|p| !p.is_empty())
         .collect();
@@ -686,7 +735,7 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
     let mut deps: Vec<String> = fm
         .deps
         .into_iter()
-        .chain(fm.compatibility.deps)
+        .chain(compat_deps)
         .map(|d| d.trim().to_string())
         .filter(|d| !d.is_empty())
         .collect();
@@ -732,9 +781,47 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
                 .env_file
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
+            license: fm
+                .license
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            compatibility: compatibility_str,
+            allowed_tools: fm
+                .allowed_tools
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         },
         body,
     ))
+}
+
+/// Validate a skill name against the agentskills.io spec rules:
+/// 1-64 characters, lowercase a-z, digits, and hyphens only, must not
+/// start/end with a hyphen and must not contain consecutive hyphens.
+/// Returns Ok(()) on conformance, otherwise a human-readable diagnostic.
+/// Used by skill-creation tooling so newly-authored skills are spec-clean
+/// without rejecting any pre-existing locally installed skills.
+pub fn validate_agentskills_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(format!(
+            "skill name must be 1-64 characters (got {})",
+            name.len()
+        ));
+    }
+    if name.starts_with('-') || name.ends_with('-') {
+        return Err("skill name must not start or end with a hyphen".into());
+    }
+    if name.contains("--") {
+        return Err("skill name must not contain consecutive hyphens".into());
+    }
+    for ch in name.chars() {
+        if !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') {
+            return Err(format!(
+                "skill name contains invalid character '{ch}'; only lowercase a-z, 0-9, and '-' are allowed"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -761,6 +848,70 @@ Use this skill to convert documents.
         assert_eq!(meta.deps, vec!["pandoc"]);
         assert_eq!(meta.source, "local");
         assert!(body.contains("Use this skill"));
+    }
+
+    #[test]
+    fn test_parse_skill_md_agentskills_minimal_spec() {
+        // The spec requires only `name` and `description`; everything else is
+        // optional. A minimal spec-compliant SKILL.md must round-trip.
+        let content = r#"---
+name: pdf-processing
+description: Extract text and tables from PDF files. Use when working with PDFs.
+---
+Body.
+"#;
+        let dir = PathBuf::from("/tmp/skills/pdf-processing");
+        let (meta, body) = parse_skill_md(content, &dir).expect("minimal spec form should parse");
+        assert_eq!(meta.name, "pdf-processing");
+        assert!(meta.description.starts_with("Extract text"));
+        assert!(meta.license.is_none());
+        assert!(meta.compatibility.is_none());
+        assert!(meta.allowed_tools.is_none());
+        assert_eq!(body, "Body.");
+    }
+
+    #[test]
+    fn test_parse_skill_md_agentskills_optional_fields() {
+        let content = r#"---
+name: pdf-processing
+description: Extract PDF text, fill forms, merge files. Use when handling PDFs.
+license: Apache-2.0
+compatibility: Requires git, docker, jq, and access to the internet
+allowed-tools: Bash(git:*) Bash(jq:*) Read
+metadata:
+  author: example-org
+  version: "1.0"
+---
+Body.
+"#;
+        let dir = PathBuf::from("/tmp/skills/pdf-processing");
+        let (meta, _) = parse_skill_md(content, &dir).expect("spec optional fields should parse");
+        assert_eq!(meta.license.as_deref(), Some("Apache-2.0"));
+        assert_eq!(
+            meta.compatibility.as_deref(),
+            Some("Requires git, docker, jq, and access to the internet")
+        );
+        assert_eq!(meta.allowed_tools.as_deref(), Some("Bash(git:*) Bash(jq:*) Read"));
+    }
+
+    #[test]
+    fn test_validate_agentskills_name_accepts_valid_names() {
+        assert!(validate_agentskills_name("pdf-processing").is_ok());
+        assert!(validate_agentskills_name("data-analysis").is_ok());
+        assert!(validate_agentskills_name("a").is_ok());
+        assert!(validate_agentskills_name("a1").is_ok());
+    }
+
+    #[test]
+    fn test_validate_agentskills_name_rejects_invalid_names() {
+        assert!(validate_agentskills_name("").is_err());
+        assert!(validate_agentskills_name("PDF-Processing").is_err());
+        assert!(validate_agentskills_name("-pdf").is_err());
+        assert!(validate_agentskills_name("pdf-").is_err());
+        assert!(validate_agentskills_name("pdf--processing").is_err());
+        assert!(validate_agentskills_name("pdf_processing").is_err());
+        assert!(validate_agentskills_name("pdf processing").is_err());
+        assert!(validate_agentskills_name(&"a".repeat(65)).is_err());
     }
 
     #[test]
