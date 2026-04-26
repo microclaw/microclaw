@@ -275,6 +275,9 @@ fn default_soul_path() -> Option<String> {
 fn default_souls_dir() -> Option<String> {
     None
 }
+fn default_context_max_chars() -> usize {
+    8000
+}
 fn default_clawhub_registry() -> String {
     "https://clawhub.ai".into()
 }
@@ -1033,6 +1036,20 @@ pub struct Config {
     #[serde(default = "default_souls_dir")]
     pub souls_dir: Option<String>,
 
+    // --- Project context files ---
+    /// Directory of project-level context Markdown files injected into the
+    /// system prompt for every chat. Use this for workspace-wide facts that
+    /// belong above per-chat memory but are not personality (which lives in
+    /// SOUL.md). Defaults to `<data_dir>/context/` when unset; missing
+    /// directories are silently skipped.
+    #[serde(default)]
+    pub context_dir: Option<String>,
+    /// Hard cap (in characters) on the combined size of all loaded context
+    /// files, to keep prefix-cache friendly system prompts from blowing up.
+    /// Set to 0 to disable the project-context layer entirely.
+    #[serde(default = "default_context_max_chars")]
+    pub context_max_chars: usize,
+
     // --- ClawHub ---
     #[serde(flatten)]
     pub clawhub: ClawHubConfig,
@@ -1531,6 +1548,8 @@ impl Config {
             skill_review_min_tool_calls: 5,
             soul_path: None,
             souls_dir: None,
+            context_dir: None,
+            context_max_chars: 8000,
             clawhub: ClawHubConfig::default(),
             plugins: PluginsConfig::default(),
             media: MediaConfig::default(),

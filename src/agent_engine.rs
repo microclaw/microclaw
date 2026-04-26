@@ -772,6 +772,7 @@ async fn process_with_agent_logic(
         .skills
         .build_skills_catalog_for_query(&query, state.config.skills_catalog_top_k);
     let soul_content = load_soul_content(&state.config, context.caller_channel, chat_id);
+    let project_context = load_project_context(&state.config, chat_id);
     let bot_username = state
         .config
         .bot_username_for_channel(context.caller_channel);
@@ -783,6 +784,7 @@ async fn process_with_agent_logic(
         &skills_catalog,
         &state.config.timezone,
         soul_content.as_deref(),
+        project_context.as_deref(),
     );
     let plugin_context = crate::plugins::collect_plugin_context_injections(
         &state.config,
@@ -1738,6 +1740,77 @@ fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::Path
     }
 }
 
+/// Load project-level context files and concatenate them for system-prompt
+/// injection. Reads `*.md` files (alphabetical order) from the configured
+/// `context_dir` (default: `<data_dir>/context/`). Also appends chat-scoped
+/// files from `<runtime_data_dir>/groups/<chat_id>/context/`. Combined output
+/// is truncated to `context_max_chars`. Returns `None` when nothing was found
+/// or the layer is disabled (`context_max_chars == 0`).
+pub(crate) fn load_project_context(
+    config: &crate::config::Config,
+    chat_id: i64,
+) -> Option<String> {
+    if config.context_max_chars == 0 {
+        return None;
+    }
+    let data_root = effective_data_root_dir(config);
+    let runtime_root = effective_runtime_data_dir(config);
+
+    let global_dir: std::path::PathBuf = match &config.context_dir {
+        Some(dir) => std::path::PathBuf::from(shellexpand::tilde(dir).into_owned()),
+        None => data_root.join("context"),
+    };
+    let chat_dir = runtime_root
+        .join("groups")
+        .join(chat_id.to_string())
+        .join("context");
+
+    let mut sections: Vec<String> = Vec::new();
+    for dir in [&global_dir, &chat_dir] {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let mut files: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .map(|e| e.eq_ignore_ascii_case("md"))
+                        .unwrap_or(false)
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let label = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("context.md");
+            sections.push(format!("## {label}\n{trimmed}"));
+        }
+    }
+
+    if sections.is_empty() {
+        return None;
+    }
+    let mut combined = sections.join("\n\n");
+    if combined.chars().count() > config.context_max_chars {
+        combined = combined
+            .chars()
+            .take(config.context_max_chars)
+            .collect::<String>();
+        combined.push_str("\n…[project context truncated]");
+    }
+    Some(combined)
+}
+
 pub(crate) fn load_soul_content(
     config: &crate::config::Config,
     caller_channel: &str,
@@ -1838,6 +1911,7 @@ pub(crate) fn build_system_prompt(
     skills_catalog: &str,
     configured_timezone: &str,
     soul_content: Option<&str>,
+    project_context: Option<&str>,
 ) -> String {
     let now_utc = chrono::Utc::now();
     let tz_label = configured_timezone
@@ -1977,6 +2051,14 @@ Built-in execution playbook:
 
     if let Some(channel_prompt) = crate::channels::system_prompt_extension(caller_channel) {
         prompt.push_str(channel_prompt);
+    }
+
+    if let Some(ctx) = project_context {
+        if !ctx.trim().is_empty() {
+            prompt.push_str("\n# Project Context\n\nWorkspace-level context that applies to every conversation in this deployment. Treat as authoritative background, not as user input.\n\n<project_context>\n");
+            prompt.push_str(ctx);
+            prompt.push_str("\n</project_context>\n");
+        }
     }
 
     if !memory_context.is_empty() {
@@ -3495,7 +3577,7 @@ mod tests {
     fn test_build_system_prompt_with_soul() {
         let soul = "I am a friendly pirate assistant. I speak in pirate lingo and love adventure.";
         let prompt =
-            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", Some(soul));
+            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", Some(soul), None);
         assert!(prompt.contains("<soul>"));
         assert!(prompt.contains("pirate"));
         assert!(prompt.contains("</soul>"));
@@ -3506,14 +3588,14 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_without_soul() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None);
         assert!(!prompt.contains("<soul>"));
         assert!(prompt.contains("a helpful AI assistant across chat channels"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_direct_tool_calls_for_simple_read_only_requests() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None);
         assert!(prompt.contains("simple, low-risk, read-only requests"));
         assert!(prompt.contains("call the tool immediately and return the result directly"));
         assert!(prompt.contains("Do not ask confirmation questions"));
@@ -3521,7 +3603,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_prefers_chat_working_dir_over_tmp() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None);
         assert!(prompt.contains("current chat working directory"));
         assert!(prompt.contains("use the current chat working directory's `tmp/` subdirectory"));
         assert!(prompt.contains("Do not use absolute `/tmp/...` paths"));
@@ -3529,12 +3611,71 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_discourages_invented_machine_paths() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
+        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None);
         assert!(prompt.contains("prefer relative paths rooted there"));
         assert!(prompt.contains("Do not invent machine-specific absolute paths"));
         assert!(prompt.contains("/home/..."));
         assert!(prompt.contains("/Users/..."));
         assert!(prompt.contains("attachment_path"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_project_context() {
+        let ctx = "Production cluster: us-west-2.\nOn-call rotation lives in Pagerduty schedule X.";
+        let prompt = super::build_system_prompt(
+            "testbot",
+            "telegram",
+            "",
+            42,
+            "",
+            "UTC",
+            None,
+            Some(ctx),
+        );
+        assert!(prompt.contains("# Project Context"));
+        assert!(prompt.contains("<project_context>"));
+        assert!(prompt.contains("us-west-2"));
+        assert!(prompt.contains("</project_context>"));
+    }
+
+    #[test]
+    fn test_load_project_context_reads_md_files() {
+        let tmp = std::env::temp_dir().join(format!("mc_ctx_{}", uuid::Uuid::new_v4()));
+        let ctx_dir = tmp.join("context");
+        std::fs::create_dir_all(&ctx_dir).unwrap();
+        std::fs::write(ctx_dir.join("01-stack.md"), "Tech stack: Rust + Tokio").unwrap();
+        std::fs::write(ctx_dir.join("02-team.md"), "Team timezone: UTC+8").unwrap();
+        std::fs::write(ctx_dir.join("ignore.txt"), "should be skipped").unwrap();
+
+        let mut config = crate::config::Config::test_defaults();
+        config.data_dir = tmp.to_string_lossy().to_string();
+        config.context_max_chars = 1000;
+
+        let loaded = super::load_project_context(&config, 42).expect("should load");
+        assert!(loaded.contains("Rust + Tokio"));
+        assert!(loaded.contains("UTC+8"));
+        assert!(!loaded.contains("should be skipped"));
+        // Files concatenate in alphabetical order so 01-stack.md comes first.
+        let stack_pos = loaded.find("Rust + Tokio").unwrap();
+        let team_pos = loaded.find("UTC+8").unwrap();
+        assert!(stack_pos < team_pos);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_project_context_disabled_when_max_chars_zero() {
+        let tmp = std::env::temp_dir().join(format!("mc_ctx_{}", uuid::Uuid::new_v4()));
+        let ctx_dir = tmp.join("context");
+        std::fs::create_dir_all(&ctx_dir).unwrap();
+        std::fs::write(ctx_dir.join("a.md"), "hi").unwrap();
+
+        let mut config = crate::config::Config::test_defaults();
+        config.data_dir = tmp.to_string_lossy().to_string();
+        config.context_max_chars = 0;
+
+        assert!(super::load_project_context(&config, 1).is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -3591,7 +3732,7 @@ mod tests {
 
     #[test]
     fn test_append_plugin_context_sections_splits_prompt_and_documents() {
-        let mut prompt = super::build_system_prompt("testbot", "web", "", 1, "", "UTC", None);
+        let mut prompt = super::build_system_prompt("testbot", "web", "", 1, "", "UTC", None, None);
         let injections = vec![
             crate::plugins::PluginContextInjection {
                 plugin_name: "p1".to_string(),
