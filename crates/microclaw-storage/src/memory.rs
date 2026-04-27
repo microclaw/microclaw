@@ -49,6 +49,18 @@ impl MemoryManager {
         std::fs::read_to_string(path).ok()
     }
 
+    /// Remove the per-chat USER.md file. Returns Ok(true) when a file was
+    /// removed, Ok(false) when there was nothing to remove. Used by the
+    /// `/user clear` slash command so the curator can rebuild from scratch.
+    pub fn clear_chat_user_model(&self, channel: &str, chat_id: i64) -> std::io::Result<bool> {
+        let path = self.chat_user_model_path(channel, chat_id);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn write_chat_user_model(
         &self,
         channel: &str,
@@ -214,6 +226,19 @@ mod tests {
         assert!(!mem.contains("ghp_abcdefghij"));
         assert!(mem.contains("gh<redacted>"));
 
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_clear_chat_user_model_returns_true_when_present_false_when_absent() {
+        let (mm, dir) = test_memory_manager();
+        // Absent → false, no error.
+        assert!(matches!(mm.clear_chat_user_model("telegram", 5), Ok(false)));
+        // Write then clear → true, file is gone.
+        mm.write_chat_user_model("telegram", 5, "narrative").unwrap();
+        assert!(mm.read_chat_user_model("telegram", 5).is_some());
+        assert!(matches!(mm.clear_chat_user_model("telegram", 5), Ok(true)));
+        assert!(mm.read_chat_user_model("telegram", 5).is_none());
         cleanup(&dir);
     }
 
