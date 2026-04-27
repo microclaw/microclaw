@@ -9,12 +9,10 @@ use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{error, info, warn};
 
-use crate::agent_engine::maybe_rerun_for_pending;
-use crate::agent_engine::process_with_agent_with_events_guarded;
+use crate::agent_engine::process_with_agent_with_events;
 use crate::agent_engine::should_suppress_user_error;
 use crate::agent_engine::AgentEvent;
 use crate::agent_engine::AgentRequestContext;
-use crate::chat_turn_queue::PendingMessage;
 use crate::channels::startup_guard::should_drop_recent_duplicate_message;
 use crate::chat_commands::maybe_handle_plugin_command;
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
@@ -167,8 +165,6 @@ pub struct FeishuChannelConfig {
     pub accounts: HashMap<String, FeishuAccountConfig>,
     #[serde(default)]
     pub default_account: Option<String>,
-    #[serde(default)]
-    pub ack_reaction: bool,
 }
 
 fn pick_default_account_id(
@@ -234,7 +230,6 @@ pub fn build_feishu_runtime_contexts(config: &crate::config::Config) -> Vec<Feis
             show_progress: account_cfg.show_progress,
             accounts: HashMap::new(),
             default_account: None,
-            ack_reaction: feishu_cfg.ack_reaction,
         };
         let bot_username = if account_cfg.bot_username.trim().is_empty() {
             config.bot_username_for_channel(&channel_name)
@@ -284,6 +279,8 @@ async fn maybe_plugin_slash_response(
     maybe_handle_plugin_command(config, text, chat_id, channel_name).await
 }
 
+static FEISHU_CHAT_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
 static FEISHU_RUNTIME_START_MS: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
 static FEISHU_RUNTIME_BOT_OPEN_ID: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
@@ -323,6 +320,18 @@ fn runtime_bot_open_id(channel_name: &str) -> Option<String> {
         .lock()
         .ok()
         .and_then(|map| map.get(channel_name).cloned())
+}
+
+fn feishu_chat_lock(channel_name: &str, external_chat_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let key = format!("{channel_name}:{external_chat_id}");
+    let cache = FEISHU_CHAT_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut guard) = cache.lock() else {
+        return Arc::new(tokio::sync::Mutex::new(()));
+    };
+    guard
+        .entry(key)
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -1326,9 +1335,117 @@ pub(crate) fn system_prompt_extension(caller_channel: &str) -> Option<&'static s
 // ACK Reaction (已读标记)
 // ---------------------------------------------------------------------------
 
-const FEISHU_ACK_REACTIONS: &[&str] = &[
-    "OK", "THUMBSUP", "DONE", "SMILE", "APPLAUSE", "MUSCLE",
+const FEISHU_ACK_REACTIONS_ZH_CN: &[&str] = &[
+    "OK", "JIAYI", "APPLAUSE", "THUMBSUP", "MUSCLE", "SMILE", "DONE",
 ];
+const FEISHU_ACK_REACTIONS_ZH_TW: &[&str] = &[
+    "OK",
+    "JIAYI",
+    "APPLAUSE",
+    "THUMBSUP",
+    "FINGERHEART",
+    "SMILE",
+    "DONE",
+];
+const FEISHU_ACK_REACTIONS_EN: &[&str] = &[
+    "OK",
+    "THUMBSUP",
+    "THANKS",
+    "MUSCLE",
+    "FINGERHEART",
+    "APPLAUSE",
+    "SMILE",
+    "DONE",
+];
+const FEISHU_ACK_REACTIONS_JA: &[&str] = &[
+    "OK",
+    "THUMBSUP",
+    "THANKS",
+    "MUSCLE",
+    "FINGERHEART",
+    "APPLAUSE",
+    "SMILE",
+    "DONE",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeishuAckLocale {
+    ZhCn,
+    ZhTw,
+    En,
+    Ja,
+}
+
+fn is_japanese_kana(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3040..=0x309F | // Hiragana
+        0x30A0..=0x30FF | // Katakana
+        0x31F0..=0x31FF // Katakana Phonetic Extensions
+    )
+}
+
+fn is_cjk_han(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF | // CJK Extension A
+        0x4E00..=0x9FFF // CJK Unified Ideographs
+    )
+}
+
+fn is_traditional_only_han(ch: char) -> bool {
+    matches!(
+        ch,
+        '奮' | '鬥'
+            | '強'
+            | '體'
+            | '國'
+            | '臺'
+            | '萬'
+            | '與'
+            | '為'
+            | '這'
+            | '學'
+            | '機'
+            | '開'
+            | '裡'
+    )
+}
+
+fn is_simplified_only_han(ch: char) -> bool {
+    matches!(
+        ch,
+        '奋' | '斗'
+            | '强'
+            | '体'
+            | '国'
+            | '台'
+            | '万'
+            | '与'
+            | '为'
+            | '这'
+            | '学'
+            | '机'
+            | '开'
+            | '里'
+    )
+}
+
+fn detect_feishu_ack_locale(text: &str) -> FeishuAckLocale {
+    if text.chars().any(is_japanese_kana) {
+        return FeishuAckLocale::Ja;
+    }
+    if text.chars().any(is_traditional_only_han) {
+        return FeishuAckLocale::ZhTw;
+    }
+    if text.chars().any(is_simplified_only_han) {
+        return FeishuAckLocale::ZhCn;
+    }
+    if text.chars().any(is_cjk_han) {
+        return FeishuAckLocale::ZhCn;
+    }
+    FeishuAckLocale::En
+}
 
 fn pick_uniform_index(len: usize, seed: &str) -> usize {
     debug_assert!(len > 0);
@@ -1338,7 +1455,14 @@ fn pick_uniform_index(len: usize, seed: &str) -> usize {
 }
 
 fn random_feishu_ack_reaction(text: &str) -> &'static str {
-    FEISHU_ACK_REACTIONS[pick_uniform_index(FEISHU_ACK_REACTIONS.len(), text)]
+    let locale = detect_feishu_ack_locale(text);
+    let pool = match locale {
+        FeishuAckLocale::ZhCn => FEISHU_ACK_REACTIONS_ZH_CN,
+        FeishuAckLocale::ZhTw => FEISHU_ACK_REACTIONS_ZH_TW,
+        FeishuAckLocale::En => FEISHU_ACK_REACTIONS_EN,
+        FeishuAckLocale::Ja => FEISHU_ACK_REACTIONS_JA,
+    };
+    pool[pick_uniform_index(pool.len(), text)]
 }
 
 fn normalize_reaction_alias(input: &str) -> String {
@@ -2184,9 +2308,6 @@ async fn run_ws_connection(
 
     info!("Feishu WS: connecting (service_id={service_id}, ping_interval={ping_secs}s)");
 
-    crate::tls::ensure_rustls_crypto_provider()
-        .map_err(|e| format!("WebSocket TLS init failed: {e}"))?;
-
     let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
         .await
         .map_err(|e| format!("WebSocket connect failed: {e}"))?;
@@ -2455,8 +2576,7 @@ async fn handle_feishu_event(
         return;
     }
 
-    // Send ACK reaction (已读标记) — only when enabled in config
-    if feishu_cfg.ack_reaction {
+    // Send ACK reaction (已读标记)
     let ack_http_client = http_client.clone();
     let ack_base_url = base_url.to_string();
     let ack_app_id = feishu_cfg.app_id.clone();
@@ -2489,7 +2609,6 @@ async fn handle_feishu_event(
             warn!("Feishu: ACK reaction failed for {}: {}", ack_message_id, e);
         }
     });
-    }
 
     // Group mentions: direct @bot and @all are treated as mention signals.
     let mention_flags = if !is_dm {
@@ -2818,6 +2937,9 @@ async fn handle_feishu_message(
         return;
     }
 
+    let chat_lock = feishu_chat_lock(&runtime.channel_name, external_chat_id);
+    let _guard = chat_lock.lock().await;
+
     // Determine if we should respond
     if !should_respond {
         info!(
@@ -2826,31 +2948,6 @@ async fn handle_feishu_message(
         );
         return;
     }
-
-    let feishu_chat_type = if is_dm { "private" } else { "group" };
-    let turn_guard = match app_state
-        .chat_turn_queue
-        .try_start_or_enqueue(
-            &runtime.channel_name,
-            chat_id,
-            PendingMessage {
-                sender_name: user.to_string(),
-                content: inbound_text.clone(),
-                message_id: inbound_message_id.clone(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            },
-        )
-        .await
-    {
-        Some(guard) => guard,
-        None => {
-            info!(
-                "Feishu: message queued (chat busy): chat_id={}, message_id={}",
-                chat_id, inbound_message_id
-            );
-            return;
-        }
-    };
 
     info!(
         "Feishu message from {} in {}: {}",
@@ -2988,17 +3085,16 @@ async fn handle_feishu_message(
             });
         });
 
-        match process_with_agent_with_events_guarded(
+        match process_with_agent_with_events(
             &app_state,
             AgentRequestContext {
                 caller_channel: &runtime.channel_name,
                 chat_id,
-                chat_type: feishu_chat_type,
+                chat_type: if is_dm { "private" } else { "group" },
             },
             None,
             image_data,
             Some(&event_tx),
-            Some(turn_guard),
         )
         .await
         {
@@ -3181,17 +3277,16 @@ async fn handle_feishu_message(
             }
         }
     } else {
-        match process_with_agent_with_events_guarded(
+        match process_with_agent_with_events(
             &app_state,
             AgentRequestContext {
                 caller_channel: &runtime.channel_name,
                 chat_id,
-                chat_type: feishu_chat_type,
+                chat_type: if is_dm { "private" } else { "group" },
             },
             None,
             image_data,
             Some(&event_tx),
-            Some(turn_guard),
         )
         .await
         {
@@ -3375,9 +3470,6 @@ async fn handle_feishu_message(
             }
         }
     }
-
-    // If messages were queued during this run, re-dispatch to process them.
-    maybe_rerun_for_pending(app_state, &runtime.channel_name, chat_id, feishu_chat_type);
 }
 
 #[cfg(test)]
@@ -3636,19 +3728,5 @@ accounts:
         let runtimes = build_feishu_runtime_contexts(&cfg);
         assert_eq!(runtimes.len(), 1);
         assert!(runtimes[0].config.topic_mode);
-    }
-
-    #[test]
-    fn pick_uniform_index_is_deterministic() {
-        let idx1 = pick_uniform_index(6, "hello");
-        let idx2 = pick_uniform_index(6, "hello");
-        assert_eq!(idx1, idx2);
-        assert!(idx1 < 6);
-    }
-
-    #[test]
-    fn random_feishu_ack_reaction_returns_valid_emoji() {
-        let emoji = random_feishu_ack_reaction("test message");
-        assert!(FEISHU_ACK_REACTIONS.contains(&emoji));
     }
 }

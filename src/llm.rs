@@ -269,7 +269,10 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(config: &Config) -> Self {
         AnthropicProvider {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .unwrap_or_default(),
             api_key: config.api_key.clone(),
             model: config.model.clone(),
             max_tokens: config.max_tokens,
@@ -1108,10 +1111,14 @@ impl OpenAiProvider {
         OpenAiProvider {
             http: reqwest::Client::builder()
                 .user_agent(llm_user_agent(&config.llm_user_agent))
+                .timeout(std::time::Duration::from_secs(300))
                 .build()
                 .unwrap_or_else(|e| {
                     warn!("Failed to build LLM HTTP client with user-agent: {e}");
-                    reqwest::Client::new()
+                    reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(300))
+                        .build()
+                        .unwrap_or_default()
                 }),
             api_key,
             codex_account_id,

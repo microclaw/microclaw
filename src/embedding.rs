@@ -171,7 +171,10 @@ pub fn create_provider(config: &Config) -> Option<Arc<dyn EmbeddingProvider>> {
         let dim = config
             .embedding_dim
             .unwrap_or_else(|| infer_default_dim(&provider, &model));
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .unwrap_or_default();
 
         match provider.as_str() {
             "openai" => {
