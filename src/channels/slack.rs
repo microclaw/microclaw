@@ -530,6 +530,56 @@ impl ChannelAdapter for SlackAdapter {
     }
 }
 
+/// Upload a synthesized voice reply via the same files.upload endpoint the
+/// SlackAdapter uses for generic attachments. Standalone helper because the
+/// inbound message handler doesn't have a SlackAdapter in scope.
+async fn upload_slack_voice_reply(
+    bot_token: &str,
+    channel: &str,
+    thread_ts: Option<&str>,
+    file_path: &std::path::Path,
+) -> Result<(), String> {
+    let filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("reply.mp3")
+        .to_string();
+    let bytes = tokio::fs::read(file_path)
+        .await
+        .map_err(|e| format!("Failed to read voice reply file: {e}"))?;
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("channels", channel.to_string())
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes).file_name(filename),
+        );
+    if let Some(ts) = thread_ts {
+        form = form.text("thread_ts", ts.to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://slack.com/api/files.upload")
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {bot_token}"))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to upload voice reply: {e}"))?;
+    let resp_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Slack upload response: {e}"))?;
+    if resp_json.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = resp_json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("Slack files.upload error: {err}"));
+    }
+    Ok(())
+}
+
 /// Request a WebSocket URL from Slack's apps.connections.open endpoint.
 async fn open_socket_mode_connection(app_token: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
@@ -1119,7 +1169,7 @@ async fn handle_slack_message(
 
     // Inject voice/audio transcription into the inbound text so the agent sees
     // the transcribed message instead of an empty file-only event.
-    let text_owned = match maybe_inject_slack_audio_transcripts(
+    let injected = maybe_inject_slack_audio_transcripts(
         &app_state,
         bot_token,
         &files,
@@ -1127,11 +1177,9 @@ async fn handle_slack_message(
         text,
         runtime.inbound_image_max_bytes,
     )
-    .await
-    {
-        Some(t) => t,
-        None => text.to_string(),
-    };
+    .await;
+    let voice_inbound = injected.is_some();
+    let text_owned = injected.unwrap_or_else(|| text.to_string());
     let text: &str = &text_owned;
 
     let trimmed = text.trim();
@@ -1329,6 +1377,7 @@ async fn handle_slack_message(
     {
         Ok(response) => {
             drop(event_tx);
+            let response_for_voice = response.clone();
             let mut used_send_message_tool = false;
             while let Some(event) = event_rx.recv().await {
                 if let AgentEvent::ToolStart { name, .. } = event {
@@ -1377,6 +1426,32 @@ async fn handle_slack_message(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+            }
+
+            // Voice round-trip: synthesize the reply as audio and upload via
+            // files.upload so Slack renders it as an inline audio file.
+            if voice_inbound
+                && crate::voice::round_trip_enabled(&app_state.config)
+                && !response_for_voice.trim().is_empty()
+            {
+                match crate::voice::synth_speech_to_temp(&app_state.config, &response_for_voice)
+                    .await
+                {
+                    Ok(audio_path) => {
+                        if let Err(e) = upload_slack_voice_reply(
+                            bot_token,
+                            channel,
+                            normalized_thread_ts,
+                            &audio_path,
+                        )
+                        .await
+                        {
+                            warn!("Slack voice round-trip: upload failed: {e}");
+                        }
+                        let _ = tokio::fs::remove_file(&audio_path).await;
+                    }
+                    Err(e) => warn!("Slack voice round-trip: synth failed: {e}"),
+                }
             }
         }
         Err(e) => {

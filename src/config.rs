@@ -1080,6 +1080,14 @@ pub struct Config {
     pub context_max_chars: usize,
 
     // --- Per-chat user model (USER.md) ---
+    /// When a turn was triggered by an inbound voice message and this is
+    /// true, the bot's text reply is also rendered to audio via the TTS
+    /// layer and sent back through the same channel. Off by default — opt
+    /// in explicitly because each round trip burns one extra TTS call.
+    /// Has no effect unless `media.tts.enabled` is also true.
+    #[serde(default)]
+    pub voice_round_trip: bool,
+
     /// Hard cap on USER.md size. Hermes ships a 1375-char limit on its
     /// equivalent file to force the curator to summarize rather than append.
     /// Set to 0 to disable the user-model layer entirely; the chat falls
@@ -1592,6 +1600,7 @@ impl Config {
             context_dir: None,
             context_max_chars: 8000,
             user_model_max_chars: 1500,
+            voice_round_trip: false,
             clawhub: ClawHubConfig::default(),
             plugins: PluginsConfig::default(),
             media: MediaConfig::default(),

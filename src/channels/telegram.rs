@@ -803,6 +803,7 @@ async fn handle_message(
     }
 
     // Handle voice messages
+    let mut voice_inbound = false;
     if let Some(voice) = msg.voice() {
         if crate::voice::can_transcribe(&state.config) {
             match download_telegram_file(&bot, &voice.file.id.0).await {
@@ -818,6 +819,7 @@ async fn handle_message(
                                 &sanitize_xml(&sender_name),
                                 &sanitize_xml(&transcription),
                             );
+                            voice_inbound = true;
                         }
                         Err(e) => {
                             error!("Voice transcription failed: {e}");
@@ -1125,6 +1127,10 @@ async fn handle_message(
             typing_handle.abort();
             // Important: close local sender before reading all events to avoid hanging recv loop.
             drop(event_tx);
+            // Captured up front so the voice-round-trip block at the bottom
+            // can still see the reply text after `response` has been moved
+            // into a StoredMessage on the regular send path.
+            let response_for_voice = response.clone();
             // Try streaming if enabled
             let mut used_streaming = false;
             if use_streaming && !response.is_empty() {
@@ -1209,6 +1215,32 @@ async fn handle_message(
                     };
                     let _ =
                         call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                }
+            }
+
+            // Voice round-trip: when the inbound was a voice message and the
+            // operator opted in, synthesize the reply as audio and send it
+            // back so the user can listen to the response on the same surface
+            // they spoke into.
+            if voice_inbound
+                && crate::voice::round_trip_enabled(&state.config)
+                && !response_for_voice.trim().is_empty()
+            {
+                match crate::voice::synth_speech_to_temp(&state.config, &response_for_voice).await {
+                    Ok(audio_path) => {
+                        let mut req = bot.send_voice(
+                            msg.chat.id,
+                            teloxide::types::InputFile::file(&audio_path),
+                        );
+                        if let Some(tid) = msg.thread_id {
+                            req = req.message_thread_id(tid);
+                        }
+                        if let Err(e) = req.await {
+                            warn!("voice round-trip: send_voice failed: {e}");
+                        }
+                        let _ = tokio::fs::remove_file(&audio_path).await;
+                    }
+                    Err(e) => warn!("voice round-trip: synth failed: {e}"),
                 }
             }
         }

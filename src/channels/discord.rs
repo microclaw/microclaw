@@ -372,6 +372,7 @@ impl EventHandler for Handler {
             .unwrap_or(external_channel_id as i64)
         };
         let sender_name = msg.author.name.clone();
+        let mut voice_inbound = false;
 
         // Discord voice messages and audio attachments arrive as Attachment
         // entries with `content_type` starting with "audio/". Download them
@@ -435,6 +436,7 @@ impl EventHandler for Handler {
                     } else {
                         format!("{}\n\n{}", text.trim(), joined)
                     };
+                    voice_inbound = true;
                 }
             }
         }
@@ -675,6 +677,7 @@ impl EventHandler for Handler {
             Ok(response) => {
                 drop(typing);
                 drop(event_tx);
+                let response_for_voice = response.clone();
                 let mut used_send_message_tool = false;
                 while let Some(event) = event_rx.recv().await {
                     if let AgentEvent::ToolStart { name, .. } = event {
@@ -723,6 +726,44 @@ impl EventHandler for Handler {
                         db.store_message(&bot_msg)
                     })
                     .await;
+                }
+
+                // Voice round-trip: synthesize reply audio and send as a
+                // file attachment so the user hears the response on the
+                // same surface they spoke into.
+                if voice_inbound
+                    && crate::voice::round_trip_enabled(&self.app_state.config)
+                    && !response_for_voice.trim().is_empty()
+                {
+                    match crate::voice::synth_speech_to_temp(
+                        &self.app_state.config,
+                        &response_for_voice,
+                    )
+                    .await
+                    {
+                        Ok(audio_path) => {
+                            let attachments = [serenity::builder::CreateAttachment::path(
+                                &audio_path,
+                            )
+                            .await];
+                            match attachments {
+                                [Ok(att)] => {
+                                    let builder = serenity::builder::CreateMessage::new()
+                                        .add_file(att);
+                                    if let Err(e) =
+                                        msg.channel_id.send_message(&ctx.http, builder).await
+                                    {
+                                        warn!("Discord voice round-trip: send failed: {e}");
+                                    }
+                                }
+                                [Err(e)] => {
+                                    warn!("Discord voice round-trip: attach failed: {e}");
+                                }
+                            }
+                            let _ = tokio::fs::remove_file(&audio_path).await;
+                        }
+                        Err(e) => warn!("Discord voice round-trip: synth failed: {e}"),
+                    }
                 }
             }
             Err(e) => {
