@@ -768,6 +768,7 @@ async fn fetch_models_from_provider_api(
         let url = resolve_anthropic_models_url(profile);
         let client = reqwest::Client::builder()
             .user_agent(llm_user_agent(&profile.llm_user_agent))
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| e.to_string())?;
         let response = client
@@ -791,6 +792,7 @@ async fn fetch_models_from_provider_api(
     let url = resolve_openai_models_url(profile);
     let client = reqwest::Client::builder()
         .user_agent(llm_user_agent(&profile.llm_user_agent))
+        .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| e.to_string())?;
     let mut request = client.get(&url);
