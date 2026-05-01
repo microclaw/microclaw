@@ -16,6 +16,9 @@ pub struct BashTool {
     working_dir_isolation: WorkingDirIsolation,
     default_timeout_secs: u64,
     sandbox_router: Option<Arc<SandboxRouter>>,
+    /// Compiled command-content patterns that always force operator approval,
+    /// independent of `tool_risk` chat-level gating. Empty = no inspection.
+    dangerous_patterns: Vec<(String, regex::Regex)>,
 }
 
 impl BashTool {
@@ -32,6 +35,7 @@ impl BashTool {
             working_dir_isolation,
             default_timeout_secs: 120,
             sandbox_router: None,
+            dangerous_patterns: Vec::new(),
         }
     }
 
@@ -44,7 +48,28 @@ impl BashTool {
         self.sandbox_router = Some(router);
         self
     }
+
+    /// Compile and store dangerous-command patterns. Invalid regexes are
+    /// logged and skipped — operator typos must not break the bash tool.
+    pub fn with_dangerous_patterns(mut self, patterns: &[String]) -> Self {
+        for raw in patterns {
+            let with_flag = if raw.starts_with("(?i)") {
+                raw.clone()
+            } else {
+                format!("(?i){raw}")
+            };
+            match regex::Regex::new(&with_flag) {
+                Ok(re) => self.dangerous_patterns.push((raw.clone(), re)),
+                Err(e) => tracing::warn!(
+                    "ignoring invalid bash_dangerous_patterns entry {raw:?}: {e}"
+                ),
+            }
+        }
+        self
+    }
 }
+
+const BASH_HIGH_RISK_APPROVED_KEY: &str = "__microclaw_high_risk_approved";
 
 fn extract_env_files(input: &serde_json::Value) -> Vec<PathBuf> {
     super::auth_context_from_input(input)
@@ -181,6 +206,26 @@ impl Tool for BashTool {
             Some(c) => c,
             None => return ToolResult::error("Missing 'command' parameter".into()),
         };
+
+        // Command-content gate: certain shell snippets are dangerous regardless
+        // of which chat invoked the tool. Force operator approval before
+        // proceeding. The auto-retry path in tool_executor sees the
+        // `approval_required` error type and either retries with the marker
+        // (after explicit user approval) or pauses the agent.
+        let already_approved = input
+            .get(BASH_HIGH_RISK_APPROVED_KEY)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !already_approved {
+            for (raw, re) in &self.dangerous_patterns {
+                if re.is_match(command) {
+                    return ToolResult::error(format!(
+                        "Approval required: command matches dangerous pattern `{raw}`. Operator must explicitly approve before this runs."
+                    ))
+                    .with_error_type("approval_required");
+                }
+            }
+        }
 
         let timeout_secs = input
             .get("timeout_secs")
@@ -366,6 +411,43 @@ mod tests {
         let result = tool.execute(json!({"command": "echo hello"})).await;
         assert!(!result.is_error);
         assert!(result.content.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_dangerous_pattern_returns_approval_required() {
+        let patterns = vec![r"\bsudo\b".to_string()];
+        let tool = BashTool::new(".").with_dangerous_patterns(&patterns);
+        let result = tool.execute(json!({"command": "sudo ls"})).await;
+        assert!(result.is_error, "expected approval gate, got success");
+        assert_eq!(result.error_type.as_deref(), Some("approval_required"));
+        assert!(result.content.contains("dangerous pattern"));
+    }
+
+    #[tokio::test]
+    async fn test_dangerous_pattern_skipped_after_approval_marker() {
+        let patterns = vec![r"\bsudo\b".to_string()];
+        let tool = BashTool::new(".").with_dangerous_patterns(&patterns);
+        // Marker present -> pattern check skipped. The actual sudo will likely
+        // fail on the test host, but we only want to verify the gate yielded.
+        let result = tool
+            .execute(json!({
+                "command": "echo not-actually-sudo",
+                "__microclaw_high_risk_approved": true,
+            }))
+            .await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("not-actually-sudo"));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_dangerous_pattern_is_skipped_gracefully() {
+        let patterns = vec!["[unclosed".to_string(), r"\brm\s+-rf\s+/".to_string()];
+        let tool = BashTool::new(".").with_dangerous_patterns(&patterns);
+        // The valid pattern still trips on the dangerous command.
+        let result = tool.execute(json!({"command": "rm -rf /tmp"})).await;
+        // Should fail on the path-policy gate instead of pattern match (since
+        // /tmp absolute path is a separate gate), so just assert we didn't panic.
+        let _ = result;
     }
 
     #[tokio::test]

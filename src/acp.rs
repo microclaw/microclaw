@@ -65,6 +65,8 @@ pub async fn serve(
     let chat_turn_queue = Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(
         config.chat_turn_queue_max_pending,
     ));
+    let (skill_review_queue, skill_review_worker) =
+        crate::skill_review::build_skill_review_channel();
     let app_state = Arc::new(AppState {
         config: config.clone(),
         channel_registry,
@@ -79,6 +81,7 @@ pub async fn serve(
         memory_backend,
         tools,
         chat_turn_queue,
+        skill_review_queue,
         metric_exporter: None,
         trace_exporter: None,
         log_exporter: None,
@@ -86,6 +89,13 @@ pub async fn serve(
 
     crate::scheduler::spawn_scheduler(app_state.clone());
     crate::scheduler::spawn_reflector(app_state.clone());
+    {
+        let review_state = app_state.clone();
+        tokio::spawn(async move {
+            crate::skill_review::spawn_skill_review_worker(review_state, skill_review_worker)
+                .await;
+        });
+    }
 
     let local = tokio::task::LocalSet::new();
     local

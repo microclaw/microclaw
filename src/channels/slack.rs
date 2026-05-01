@@ -530,6 +530,56 @@ impl ChannelAdapter for SlackAdapter {
     }
 }
 
+/// Upload a synthesized voice reply via the same files.upload endpoint the
+/// SlackAdapter uses for generic attachments. Standalone helper because the
+/// inbound message handler doesn't have a SlackAdapter in scope.
+async fn upload_slack_voice_reply(
+    bot_token: &str,
+    channel: &str,
+    thread_ts: Option<&str>,
+    file_path: &std::path::Path,
+) -> Result<(), String> {
+    let filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("reply.mp3")
+        .to_string();
+    let bytes = tokio::fs::read(file_path)
+        .await
+        .map_err(|e| format!("Failed to read voice reply file: {e}"))?;
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("channels", channel.to_string())
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes).file_name(filename),
+        );
+    if let Some(ts) = thread_ts {
+        form = form.text("thread_ts", ts.to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://slack.com/api/files.upload")
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {bot_token}"))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to upload voice reply: {e}"))?;
+    let resp_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Slack upload response: {e}"))?;
+    if resp_json.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = resp_json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("Slack files.upload error: {err}"));
+    }
+    Ok(())
+}
+
 /// Request a WebSocket URL from Slack's apps.connections.open endpoint.
 async fn open_socket_mode_connection(app_token: &str) -> Result<String, String> {
     let client = reqwest::Client::new();
@@ -604,6 +654,103 @@ async fn resolve_bot_user_id(bot_token: &str) -> Result<String, String> {
 }
 
 /// Send a text response to a Slack channel, splitting at 4000 chars.
+/// Download all audio attachments from a Slack `files` array, transcribe them
+/// via the configured STT provider, and return inbound-formatted text. Returns
+/// `None` if no audio attachments are present (so the caller keeps the original
+/// text). When transcription is not configured this is a no-op as well — the
+/// original message is preserved verbatim.
+async fn maybe_inject_slack_audio_transcripts(
+    app_state: &AppState,
+    bot_token: &str,
+    files: &[serde_json::Value],
+    user: &str,
+    original_text: &str,
+    max_bytes: u64,
+) -> Option<String> {
+    let audio_files: Vec<&serde_json::Value> = files
+        .iter()
+        .filter(|f| {
+            f.get("mimetype")
+                .and_then(|v| v.as_str())
+                .map(|m| m.starts_with("audio/"))
+                .unwrap_or(false)
+        })
+        .collect();
+    if audio_files.is_empty() {
+        return None;
+    }
+    if !crate::voice::can_transcribe(&app_state.config) {
+        return None;
+    }
+
+    let client = reqwest::Client::new();
+    let mut transcripts: Vec<String> = Vec::new();
+    for file in audio_files {
+        let url = file
+            .get("url_private")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if url.is_empty() {
+            continue;
+        }
+        if let Some(content_length) = file.get("size").and_then(|v| v.as_u64()) {
+            if content_length > max_bytes {
+                warn!(
+                    "Slack: skipping audio download; size={} exceeds max_bytes={}",
+                    content_length, max_bytes
+                );
+                continue;
+            }
+        }
+        let bytes = match client
+            .get(url)
+            .header("Authorization", format!("Bearer {bot_token}"))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(b) if b.len() as u64 <= max_bytes => b.to_vec(),
+                Ok(b) => {
+                    warn!(
+                        "Slack: skipping audio; size={} exceeds max_bytes={}",
+                        b.len(),
+                        max_bytes
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    warn!("Slack: failed to read audio bytes: {e}");
+                    continue;
+                }
+            },
+            Ok(resp) => {
+                warn!("Slack: audio download returned HTTP {}", resp.status());
+                continue;
+            }
+            Err(e) => {
+                warn!("Slack: failed to download audio: {e}");
+                continue;
+            }
+        };
+        match crate::voice::transcribe_audio(&app_state.config, &bytes).await {
+            Ok(t) => transcripts.push(crate::voice::format_voice_inbound(user, &t)),
+            Err(e) => {
+                warn!("Slack: voice transcription failed: {e}");
+                transcripts.push(crate::voice::format_voice_inbound_error(user, &e));
+            }
+        }
+    }
+    if transcripts.is_empty() {
+        return None;
+    }
+    let joined = transcripts.join("\n");
+    if original_text.trim().is_empty() {
+        Some(joined)
+    } else {
+        Some(format!("{}\n\n{}", original_text.trim(), joined))
+    }
+}
+
 /// Download the first image from a Slack `files` array and return it as (base64, media_type).
 /// Slack requires the bot token as a Bearer header to access `url_private`.
 async fn download_first_slack_image(
@@ -1020,6 +1167,21 @@ async fn handle_slack_message(
         return;
     }
 
+    // Inject voice/audio transcription into the inbound text so the agent sees
+    // the transcribed message instead of an empty file-only event.
+    let injected = maybe_inject_slack_audio_transcripts(
+        &app_state,
+        bot_token,
+        &files,
+        user,
+        text,
+        runtime.inbound_image_max_bytes,
+    )
+    .await;
+    let voice_inbound = injected.is_some();
+    let text_owned = injected.unwrap_or_else(|| text.to_string());
+    let text: &str = &text_owned;
+
     let trimmed = text.trim();
     let mention_tag = format!("<@{bot_user_id}>");
     let should_respond = is_dm || is_app_mention || text.contains(&mention_tag);
@@ -1215,6 +1377,7 @@ async fn handle_slack_message(
     {
         Ok(response) => {
             drop(event_tx);
+            let response_for_voice = response.clone();
             let mut used_send_message_tool = false;
             while let Some(event) = event_rx.recv().await {
                 if let AgentEvent::ToolStart { name, .. } = event {
@@ -1263,6 +1426,32 @@ async fn handle_slack_message(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+            }
+
+            // Voice round-trip: synthesize the reply as audio and upload via
+            // files.upload so Slack renders it as an inline audio file.
+            if voice_inbound
+                && crate::voice::round_trip_enabled(&app_state.config)
+                && !response_for_voice.trim().is_empty()
+            {
+                match crate::voice::synth_speech_to_temp(&app_state.config, &response_for_voice)
+                    .await
+                {
+                    Ok(audio_path) => {
+                        if let Err(e) = upload_slack_voice_reply(
+                            bot_token,
+                            channel,
+                            normalized_thread_ts,
+                            &audio_path,
+                        )
+                        .await
+                        {
+                            warn!("Slack voice round-trip: upload failed: {e}");
+                        }
+                        let _ = tokio::fs::remove_file(&audio_path).await;
+                    }
+                    Err(e) => warn!("Slack voice round-trip: synth failed: {e}"),
+                }
             }
         }
         Err(e) => {

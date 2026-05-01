@@ -85,14 +85,15 @@ impl Tool for ReadFileTool {
             .get("offset")
             .and_then(|v| v.as_u64())
             .map(|o| (o as usize).saturating_sub(1))
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .min(lines.len());
         let limit = input
             .get("limit")
             .and_then(|v| v.as_u64())
             .map(|l| l as usize)
             .unwrap_or(2000);
 
-        let end = (offset + limit).min(lines.len());
+        let end = offset.saturating_add(limit).min(lines.len());
         let selected: Vec<String> = lines[offset..end]
             .iter()
             .enumerate()
@@ -155,6 +156,27 @@ mod tests {
         assert!(result.content.contains("b"));
         assert!(result.content.contains("c"));
         assert!(!result.content.contains("\ta\n") && !result.content.contains("\td"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_read_file_offset_past_end_returns_empty() {
+        // Regression: when offset exceeds the file's line count, slicing
+        // lines[offset..end] used to panic with "range start index N out of
+        // range for slice of length M" because offset wasn't clamped.
+        let dir =
+            std::env::temp_dir().join(format!("microclaw_rf_offset_past_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("short.txt");
+        std::fs::write(&file, "a\nb\nc").unwrap();
+
+        let tool = ReadFileTool::new(".");
+        let result = tool
+            .execute(json!({"path": file.to_str().unwrap(), "offset": 369, "limit": 100}))
+            .await;
+        assert!(!result.is_error, "expected ok, got: {}", result.content);
+        assert!(result.content.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

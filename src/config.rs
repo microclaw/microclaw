@@ -99,6 +99,36 @@ fn default_memory_max_global_entries() -> usize {
 fn default_kg_max_triples_per_chat() -> usize {
     1000
 }
+fn default_tool_result_truncation_threshold_chars() -> usize {
+    4000
+}
+fn default_tool_result_truncation_head_chars() -> usize {
+    1500
+}
+fn default_tool_result_truncation_tail_chars() -> usize {
+    500
+}
+fn default_tool_result_artifact_ttl_hours() -> u64 {
+    24
+}
+fn default_memory_recency_half_life_days() -> f64 {
+    30.0
+}
+fn default_tool_repeat_window() -> usize {
+    10
+}
+fn default_tool_repeat_limit() -> usize {
+    3
+}
+fn default_skill_archive_after_days() -> u64 {
+    30
+}
+fn default_skills_catalog_top_k() -> usize {
+    3
+}
+fn default_skill_review_min_tool_calls() -> usize {
+    5
+}
 fn default_data_dir() -> String {
     default_data_root().to_string_lossy().to_string()
 }
@@ -128,6 +158,24 @@ fn default_working_dir() -> String {
 }
 fn default_working_dir_isolation() -> WorkingDirIsolation {
     WorkingDirIsolation::Chat
+}
+fn default_bash_dangerous_patterns() -> Vec<String> {
+    vec![
+        // Destructive recursive deletes against root or wildcards.
+        r"\brm\s+(-[a-zA-Z]*[rfRF][a-zA-Z]*\s+)+(/|\*|~|\$HOME)".into(),
+        // Pipe-to-shell installer pattern.
+        r"\b(curl|wget|fetch)\b[^|]*\|\s*(sudo\s+)?(sh|bash|zsh|fish)\b".into(),
+        // Privilege escalation.
+        r"\bsudo\b".into(),
+        // Disk-overwrite.
+        r"\bdd\s+if=".into(),
+        // Forkbomb.
+        r":\(\)\s*\{\s*:\s*\|\s*:&\s*\}\s*;\s*:".into(),
+        // Filesystem format.
+        r"\bmkfs(\.[a-z0-9]+)?\b".into(),
+        // Recursive chmod/chown on root.
+        r"\bch(mod|own)\s+-R\s+[^/]*\s+/(\s|$)".into(),
+    ]
 }
 fn default_high_risk_tool_user_confirmation_required() -> bool {
     true
@@ -245,6 +293,12 @@ fn default_soul_path() -> Option<String> {
 fn default_souls_dir() -> Option<String> {
     None
 }
+fn default_context_max_chars() -> usize {
+    8000
+}
+fn default_user_model_max_chars() -> usize {
+    1500
+}
 fn default_clawhub_registry() -> String {
     "https://clawhub.ai".into()
 }
@@ -286,6 +340,182 @@ pub struct ModelPrice {
     pub model: String,
     pub input_per_million_usd: f64,
     pub output_per_million_usd: f64,
+}
+
+/// Configuration for multimedia tools (image generation, vision, TTS, STT).
+///
+/// All four tools are **disabled by default** — operators opt in per-tool.
+/// Credential resolution order for each tool (first non-empty wins):
+/// 1. `media.api_key` (plaintext in config; discouraged but supported)
+/// 2. Environment variable `MICROCLAW_OPENAI_API_KEY`
+/// 3. Environment variable `OPENAI_API_KEY`
+/// 4. `config.openai_api_key` (existing top-level field; used by transcribe)
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MediaConfig {
+    /// Optional explicit API key. Prefer env vars (`MICROCLAW_OPENAI_API_KEY`
+    /// or `OPENAI_API_KEY`) over plaintext here.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional per-module base URL override. Falls back to `openai_base_url`
+    /// then to `https://api.openai.com/v1`.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Extra directories that `describe_image` / `transcribe_audio` may read
+    /// from, beyond the working_dir default. Absolute paths only. Empty by
+    /// default — matches the previous working-dir-only behavior.
+    #[serde(default)]
+    pub allowed_read_dirs: Vec<String>,
+    #[serde(default)]
+    pub image_gen: ImageGenConfig,
+    #[serde(default)]
+    pub vision: VisionConfig,
+    #[serde(default)]
+    pub tts: TtsConfig,
+    #[serde(default)]
+    pub stt: SttConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImageGenConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_image_model")]
+    pub model: String,
+    #[serde(default = "default_image_size")]
+    pub default_size: String,
+}
+
+impl Default for ImageGenConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_image_model(),
+            default_size: default_image_size(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VisionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_vision_model")]
+    pub model: String,
+    #[serde(default = "default_vision_max_tokens")]
+    pub max_tokens: u32,
+}
+
+impl Default for VisionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_vision_model(),
+            max_tokens: default_vision_max_tokens(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TtsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_tts_model")]
+    pub model: String,
+    #[serde(default = "default_tts_voice")]
+    pub default_voice: String,
+    #[serde(default = "default_tts_format")]
+    pub default_format: String,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_tts_model(),
+            default_voice: default_tts_voice(),
+            default_format: default_tts_format(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SttConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_stt_model")]
+    pub model: String,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+impl Default for SttConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_stt_model(),
+            language: None,
+        }
+    }
+}
+
+fn default_image_model() -> String {
+    "gpt-image-1".into()
+}
+fn default_image_size() -> String {
+    "1024x1024".into()
+}
+fn default_vision_model() -> String {
+    "gpt-4o-mini".into()
+}
+fn default_vision_max_tokens() -> u32 {
+    1024
+}
+fn default_tts_model() -> String {
+    "tts-1".into()
+}
+fn default_tts_voice() -> String {
+    "alloy".into()
+}
+fn default_tts_format() -> String {
+    "mp3".into()
+}
+fn default_stt_model() -> String {
+    "whisper-1".into()
+}
+
+impl MediaConfig {
+    /// Resolve the API key using the documented priority order. Returns
+    /// `None` if no source is configured. Never logs the value.
+    pub fn resolve_api_key(&self, fallback_openai_key: Option<&str>) -> Option<String> {
+        if let Some(k) = self.api_key.as_deref().filter(|s| !s.trim().is_empty()) {
+            return Some(k.to_string());
+        }
+        if let Ok(k) = std::env::var("MICROCLAW_OPENAI_API_KEY") {
+            if !k.trim().is_empty() {
+                return Some(k);
+            }
+        }
+        if let Ok(k) = std::env::var("OPENAI_API_KEY") {
+            if !k.trim().is_empty() {
+                return Some(k);
+            }
+        }
+        fallback_openai_key
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
+    }
+
+    /// Resolve the base URL using the documented priority order. Always
+    /// returns a non-empty value (defaults to OpenAI).
+    pub fn resolve_base_url(&self, fallback: Option<&str>) -> String {
+        if let Some(u) = self.base_url.as_deref().filter(|s| !s.trim().is_empty()) {
+            return u.trim_end_matches('/').to_string();
+        }
+        if let Some(u) = fallback.filter(|s| !s.trim().is_empty()) {
+            return u.trim_end_matches('/').to_string();
+        }
+        "https://api.openai.com/v1".to_string()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -648,6 +878,52 @@ pub struct Config {
     /// Maximum active triples per chat in the knowledge graph. 0 = unlimited. Default: 1000.
     #[serde(default = "default_kg_max_triples_per_chat")]
     pub kg_max_triples_per_chat: usize,
+    /// Tool-result content over this many Unicode characters is truncated in
+    /// the message history and the full body is stored as an artifact the
+    /// agent can read via `fetch_artifact`. Set to 0 to disable. Default: 4000.
+    #[serde(default = "default_tool_result_truncation_threshold_chars")]
+    pub tool_result_truncation_threshold_chars: usize,
+    /// When truncating, keep this many leading characters of the original
+    /// content in the message history. Default: 1500.
+    #[serde(default = "default_tool_result_truncation_head_chars")]
+    pub tool_result_truncation_head_chars: usize,
+    /// When truncating, keep this many trailing characters (so the agent
+    /// still sees errors/summaries that often live at the end). Default: 500.
+    #[serde(default = "default_tool_result_truncation_tail_chars")]
+    pub tool_result_truncation_tail_chars: usize,
+    /// Lifetime for stashed tool-result artifacts before they're pruned.
+    /// Long enough to span a typical multi-turn task. Default: 24 hours.
+    #[serde(default = "default_tool_result_artifact_ttl_hours")]
+    pub tool_result_artifact_ttl_hours: u64,
+    /// Half-life (in days) of the recency-decay multiplier applied to
+    /// non-PROFILE memories during L1/L2 ranking. After `half_life_days`,
+    /// a memory's effective score is half of its raw confidence; PROFILE
+    /// memories never decay. Set to 0 to disable decay. Default: 30.
+    #[serde(default = "default_memory_recency_half_life_days")]
+    pub memory_recency_half_life_days: f64,
+    /// Sliding-window size (in past tool calls) used by the duplicate-call
+    /// circuit breaker. When the same `(tool_name, args)` shows up
+    /// `tool_repeat_limit` times within this many recent calls, the next
+    /// invocation is short-circuited with an error so the agent picks a
+    /// different approach. Set to 0 to disable. Default: 10.
+    #[serde(default = "default_tool_repeat_window")]
+    pub tool_repeat_window: usize,
+    /// Repeat threshold for the duplicate-call circuit breaker. Default: 3.
+    #[serde(default = "default_tool_repeat_limit")]
+    pub tool_repeat_limit: usize,
+    /// Auto-archive `agent-created` skills that haven't been activated in
+    /// this many days and are themselves at least this old. The skill dir
+    /// is moved under `<skills_dir>/.archived/` (recoverable). Set to 0
+    /// to disable. Default: 30 days.
+    #[serde(default = "default_skill_archive_after_days")]
+    pub skill_archive_after_days: u64,
+    /// When building the skills section of the system prompt, inline the
+    /// full body of the top-K skills whose descriptions match the user
+    /// query and list the rest as `name: description` only. Cuts prompt
+    /// cost as the skill library grows. Set to 0 to fall back to the
+    /// flat catalog. Default: 3.
+    #[serde(default = "default_skills_catalog_top_k")]
+    pub skills_catalog_top_k: usize,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
     #[serde(default = "default_compact_keep_recent")]
@@ -704,6 +980,14 @@ pub struct Config {
     pub working_dir_isolation: WorkingDirIsolation,
     #[serde(default = "default_high_risk_tool_user_confirmation_required")]
     pub high_risk_tool_user_confirmation_required: bool,
+    /// Regex patterns that always require operator approval before bash will
+    /// run, even in non-control chats. Extends the per-chat risk policy with
+    /// command-content inspection so destructive shell snippets cannot slip
+    /// through just because the caller happens to be in a permissive chat.
+    /// Patterns are matched case-insensitively against the full command
+    /// string. Set to an empty list to disable command-content gating.
+    #[serde(default = "default_bash_dangerous_patterns")]
+    pub bash_dangerous_patterns: Vec<String>,
     #[serde(default)]
     pub sandbox: SandboxConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -766,9 +1050,10 @@ pub struct Config {
     pub reflector_enabled: bool,
     #[serde(default = "default_reflector_interval_mins")]
     pub reflector_interval_mins: u64,
-    /// Minimum number of tool calls in a conversation before skill review is triggered.
-    /// Set to 0 to disable autonomous skill creation. Default: 0 (disabled).
-    #[serde(default)]
+    /// Minimum tool_use blocks in a turn before the end-of-turn skill
+    /// review fires. Autonomous skill creation is on by default; set to
+    /// 0 to disable entirely. Default: 5.
+    #[serde(default = "default_skill_review_min_tool_calls")]
     pub skill_review_min_tool_calls: usize,
 
     // --- Soul ---
@@ -780,6 +1065,39 @@ pub struct Config {
     #[serde(default = "default_souls_dir")]
     pub souls_dir: Option<String>,
 
+    // --- Project context files ---
+    /// Directory of project-level context Markdown files injected into the
+    /// system prompt for every chat. Use this for workspace-wide facts that
+    /// belong above per-chat memory but are not personality (which lives in
+    /// SOUL.md). Defaults to `<data_dir>/context/` when unset; missing
+    /// directories are silently skipped.
+    #[serde(default)]
+    pub context_dir: Option<String>,
+    /// Hard cap (in characters) on the combined size of all loaded context
+    /// files, to keep prefix-cache friendly system prompts from blowing up.
+    /// Set to 0 to disable the project-context layer entirely.
+    #[serde(default = "default_context_max_chars")]
+    pub context_max_chars: usize,
+
+    // --- Per-chat user model (USER.md) ---
+    /// When a turn was triggered by an inbound voice message and this is
+    /// true, the bot's text reply is also rendered to audio via the TTS
+    /// layer and sent back through the same channel. Off by default — opt
+    /// in explicitly because each round trip burns one extra TTS call.
+    /// Has no effect unless `media.tts.enabled` is also true.
+    #[serde(default)]
+    pub voice_round_trip: bool,
+
+    /// Hard cap on USER.md size. Hermes ships a 1375-char limit on its
+    /// equivalent file to force the curator to summarize rather than append.
+    /// Set to 0 to disable the user-model layer entirely; the chat falls
+    /// back to PROFILE memories alone. Curation is folded into the
+    /// reflector LLM call (see scheduler.rs), so there is no per-tick
+    /// amortization knob: the LLM itself returns null when no rewrite is
+    /// warranted.
+    #[serde(default = "default_user_model_max_chars")]
+    pub user_model_max_chars: usize,
+
     // --- ClawHub ---
     #[serde(flatten)]
     pub clawhub: ClawHubConfig,
@@ -787,6 +1105,19 @@ pub struct Config {
     // --- Plugins ---
     #[serde(default)]
     pub plugins: PluginsConfig,
+
+    // --- Media tools (OpenAI-compatible) ---
+    /// Multimedia tool configuration (image generation / vision / TTS / STT).
+    /// When unset, each tool defaults to `enabled: false`. API key and base URL
+    /// fall back to `openai_api_key` / `openai_base_url`, so users who already
+    /// have their OpenAI credential wired up get zero-config.
+    #[serde(default)]
+    pub media: MediaConfig,
+
+    /// Override for the OpenAI-compatible base URL used by media tools. When
+    /// unset, media tools use `https://api.openai.com/v1`.
+    #[serde(default)]
+    pub openai_base_url: Option<String>,
 
     // --- Voice / Speech-to-text ---
     /// Voice transcription provider: "openai" uses OpenAI Whisper API, "local" uses voice_transcription_command
@@ -1209,11 +1540,21 @@ impl Config {
             memory_max_entries_per_chat: 200,
             memory_max_global_entries: 500,
             kg_max_triples_per_chat: 1000,
+            tool_result_truncation_threshold_chars: 4000,
+            tool_result_truncation_head_chars: 1500,
+            tool_result_truncation_tail_chars: 500,
+            tool_result_artifact_ttl_hours: 24,
+            memory_recency_half_life_days: 30.0,
+            tool_repeat_window: 10,
+            tool_repeat_limit: 3,
+            skill_archive_after_days: 30,
+            skills_catalog_top_k: 3,
             data_dir: default_data_dir(),
             skills_dir: None,
             working_dir: default_working_dir(),
             working_dir_isolation: WorkingDirIsolation::Chat,
             high_risk_tool_user_confirmation_required: true,
+            bash_dangerous_patterns: default_bash_dangerous_patterns(),
             sandbox: SandboxConfig::default(),
             openai_api_key: None,
             override_timezone: None,
@@ -1253,11 +1594,17 @@ impl Config {
             embedding_dim: None,
             reflector_enabled: true,
             reflector_interval_mins: 15,
-            skill_review_min_tool_calls: 0,
+            skill_review_min_tool_calls: 5,
             soul_path: None,
             souls_dir: None,
+            context_dir: None,
+            context_max_chars: 8000,
+            user_model_max_chars: 1500,
+            voice_round_trip: false,
             clawhub: ClawHubConfig::default(),
             plugins: PluginsConfig::default(),
+            media: MediaConfig::default(),
+            openai_base_url: None,
             voice_provider: "openai".into(),
             voice_transcription_command: None,
             observability: None,

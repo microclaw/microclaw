@@ -803,15 +803,9 @@ async fn handle_message(
     }
 
     // Handle voice messages
+    let mut voice_inbound = false;
     if let Some(voice) = msg.voice() {
-        // Check if voice transcription is configured
-        let can_transcribe = if state.config.voice_provider == "local" {
-            state.config.voice_transcription_command.is_some()
-        } else {
-            state.config.openai_api_key.is_some()
-        };
-
-        if can_transcribe {
+        if crate::voice::can_transcribe(&state.config) {
             match download_telegram_file(&bot, &voice.file.id.0).await {
                 Ok(bytes) => {
                     let sender_name = msg
@@ -819,19 +813,19 @@ async fn handle_message(
                         .as_ref()
                         .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone()))
                         .unwrap_or_else(|| "Unknown".into());
-                    match transcribe_audio(&state.config, &bytes).await {
+                    match crate::voice::transcribe_audio(&state.config, &bytes).await {
                         Ok(transcription) => {
-                            text = format!(
-                                "[voice message from {}]: {}",
-                                sanitize_xml(&sender_name),
-                                sanitize_xml(&transcription)
+                            text = crate::voice::format_voice_inbound(
+                                &sanitize_xml(&sender_name),
+                                &sanitize_xml(&transcription),
                             );
+                            voice_inbound = true;
                         }
                         Err(e) => {
                             error!("Voice transcription failed: {e}");
-                            text = format!(
-                                "[voice message from {}]: [transcription failed: {e}]",
-                                sanitize_xml(&sender_name)
+                            text = crate::voice::format_voice_inbound_error(
+                                &sanitize_xml(&sender_name),
+                                &e,
                             );
                         }
                     }
@@ -1133,6 +1127,10 @@ async fn handle_message(
             typing_handle.abort();
             // Important: close local sender before reading all events to avoid hanging recv loop.
             drop(event_tx);
+            // Captured up front so the voice-round-trip block at the bottom
+            // can still see the reply text after `response` has been moved
+            // into a StoredMessage on the regular send path.
+            let response_for_voice = response.clone();
             // Try streaming if enabled
             let mut used_streaming = false;
             if use_streaming && !response.is_empty() {
@@ -1219,6 +1217,32 @@ async fn handle_message(
                         call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
                 }
             }
+
+            // Voice round-trip: when the inbound was a voice message and the
+            // operator opted in, synthesize the reply as audio and send it
+            // back so the user can listen to the response on the same surface
+            // they spoke into.
+            if voice_inbound
+                && crate::voice::round_trip_enabled(&state.config)
+                && !response_for_voice.trim().is_empty()
+            {
+                match crate::voice::synth_speech_to_temp(&state.config, &response_for_voice).await {
+                    Ok(audio_path) => {
+                        let mut req = bot.send_voice(
+                            msg.chat.id,
+                            teloxide::types::InputFile::file(&audio_path),
+                        );
+                        if let Some(tid) = msg.thread_id {
+                            req = req.message_thread_id(tid);
+                        }
+                        if let Err(e) = req.await {
+                            warn!("voice round-trip: send_voice failed: {e}");
+                        }
+                        let _ = tokio::fs::remove_file(&audio_path).await;
+                    }
+                    Err(e) => warn!("voice round-trip: synth failed: {e}"),
+                }
+            }
         }
         Err(e) => {
             typing_handle.abort();
@@ -1251,61 +1275,9 @@ async fn download_telegram_file(
     Ok(buf)
 }
 
-/// Transcribe audio using configured provider (openai or local)
-pub async fn transcribe_audio(
-    config: &crate::config::Config,
-    audio_bytes: &[u8],
-) -> Result<String, String> {
-    let provider = &config.voice_provider;
-
-    if provider == "local" {
-        // Use local transcription command
-        let Some(ref command) = config.voice_transcription_command else {
-            return Err(
-                "Local voice transcription configured but voice_transcription_command not set"
-                    .into(),
-            );
-        };
-
-        // Write audio to a temp file
-        let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join(format!("voice_{}.ogg", uuid::Uuid::new_v4()));
-        tokio::fs::write(&temp_file, audio_bytes)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        // Replace {file} placeholder with actual path
-        let cmd = command.replace("{file}", temp_file.to_str().unwrap_or(""));
-
-        // Execute the command
-        let output_result = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .output()
-            .await;
-
-        // Clean up temp file
-        let _ = tokio::fs::remove_file(&temp_file).await;
-
-        let output =
-            output_result.map_err(|e| format!("Failed to run transcription command: {}", e))?;
-
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        } else {
-            Err(format!(
-                "Transcription command failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ))
-        }
-    } else {
-        // Default to OpenAI Whisper API
-        let Some(ref openai_key) = config.openai_api_key else {
-            return Err("Voice transcription requires openai_api_key".into());
-        };
-        microclaw_app::transcribe::transcribe_audio(openai_key, audio_bytes).await
-    }
-}
+/// Backwards-compat re-export. Real implementation lives in `crate::voice`
+/// so other channels can share it.
+pub use crate::voice::transcribe_audio;
 
 fn base64_encode(data: &[u8]) -> String {
     use base64::Engine;
@@ -1848,7 +1820,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_basic() {
-        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None, None, None);
         assert!(prompt.contains("testbot"));
         assert!(prompt.contains("12345"));
         assert!(prompt.contains("bash commands"));
@@ -1859,7 +1831,7 @@ mod tests {
     #[test]
     fn test_build_system_prompt_with_memory() {
         let memory = "<global_memory>\nUser likes Rust\n</global_memory>";
-        let prompt = build_system_prompt("testbot", "telegram", memory, 42, "", "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", memory, 42, "", "UTC", None, None, None);
         assert!(prompt.contains("# Memories"));
         assert!(prompt.contains("User likes Rust"));
     }
@@ -1867,7 +1839,7 @@ mod tests {
     #[test]
     fn test_build_system_prompt_with_skills() {
         let catalog = "<available_skills>\n- pdf: Convert to PDF\n</available_skills>";
-        let prompt = build_system_prompt("testbot", "telegram", "", 42, catalog, "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", "", 42, catalog, "UTC", None, None, None);
         assert!(prompt.contains("# Agent Skills"));
         assert!(prompt.contains("activate_skill"));
         assert!(prompt.contains("pdf: Convert to PDF"));
@@ -1875,7 +1847,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_without_skills() {
-        let prompt = build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(!prompt.contains("# Agent Skills"));
     }
 
@@ -2174,7 +2146,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_subagent_tools() {
-        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None, None, None);
         assert!(prompt.contains("sessions_spawn"));
         assert!(prompt.contains("subagents_list"));
     }
@@ -2210,7 +2182,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_xml_security() {
-        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None, None, None);
         assert!(prompt.contains("user_message"));
         assert!(prompt.contains("untrusted"));
     }
@@ -2404,7 +2376,7 @@ mod tests {
     fn test_build_system_prompt_with_memory_and_skills() {
         let memory = "<global_memory>\nTest\n</global_memory>";
         let skills = "- translate: Translate text";
-        let prompt = build_system_prompt("bot", "telegram", memory, 42, skills, "UTC", None);
+        let prompt = build_system_prompt("bot", "telegram", memory, 42, skills, "UTC", None, None, None);
         assert!(prompt.contains("# Memories"));
         assert!(prompt.contains("Test"));
         assert!(prompt.contains("# Agent Skills"));
@@ -2413,20 +2385,20 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_mentions_todo() {
-        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None, None, None);
         assert!(prompt.contains("todo_read"));
         assert!(prompt.contains("todo_write"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_export() {
-        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None, None, None);
         assert!(prompt.contains("export_chat"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_schedule() {
-        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None);
+        let prompt = build_system_prompt("testbot", "telegram", "", 12345, "", "UTC", None, None, None);
         assert!(prompt.contains("schedule_task"));
         assert!(prompt.contains("6-field cron"));
     }

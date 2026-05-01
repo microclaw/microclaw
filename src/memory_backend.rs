@@ -1269,6 +1269,10 @@ fn parse_single_memory_strict(value: &serde_json::Value) -> Result<Memory, Strin
             .get("archived_at")
             .and_then(|v| v.as_str())
             .map(|v| v.to_string()),
+        expires_at: obj
+            .get("expires_at")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string()),
     })
 }
 
@@ -1317,6 +1321,7 @@ mod tests {
             last_seen_at: "2026-03-10T00:00:00Z".to_string(),
             is_archived: false,
             archived_at: None,
+            expires_at: None,
         }
     }
 

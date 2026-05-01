@@ -409,6 +409,8 @@ fn build_report() -> DoctorReport {
     check_config(&mut report);
     check_acp_subagent_config(&mut report);
     check_web_fetch_validation(&mut report);
+    check_context_layers(&mut report);
+    check_bash_dangerous_patterns(&mut report);
     check_path(&mut report);
     check_shell(&mut report);
     check_browser_dependency(&mut report);
@@ -752,6 +754,109 @@ fn check_acp_subagent_config(report: &mut DoctorReport) {
                     .to_string(),
             ),
         ),
+    }
+}
+
+fn check_context_layers(report: &mut DoctorReport) {
+    let config = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+
+    // Project context cap. Honor 0 as an explicit "disabled" signal — that's
+    // a deliberate operator choice, not a misconfiguration.
+    let ctx_cap = config.context_max_chars;
+    let ctx_status = if ctx_cap == 0 || ctx_cap > 32_000 {
+        CheckStatus::Warn
+    } else {
+        CheckStatus::Pass
+    };
+    let ctx_fix = if ctx_cap == 0 {
+        Some("context_max_chars=0 disables project context entirely; set a positive cap (default 8000) to re-enable.".to_string())
+    } else if ctx_cap > 32_000 {
+        Some("context_max_chars > 32000 risks blowing the prefix-cache budget; consider 8000–16000.".to_string())
+    } else {
+        None
+    };
+    report.push(
+        "context.max_chars",
+        "Project Context cap",
+        ctx_status,
+        format!("context_max_chars={ctx_cap}"),
+        ctx_fix,
+    );
+
+    // USER.md cap. 0 disables the layer; very large caps defeat curation.
+    let um_cap = config.user_model_max_chars;
+    let um_status = if um_cap == 0 || um_cap > 8_000 {
+        CheckStatus::Warn
+    } else {
+        CheckStatus::Pass
+    };
+    let um_fix = if um_cap == 0 {
+        Some("user_model_max_chars=0 disables USER.md curation; set a positive cap (default 1500).".to_string())
+    } else if um_cap > 8_000 {
+        Some("user_model_max_chars > 8000 defeats the point of a curated narrative; Hermes ships 1375.".to_string())
+    } else {
+        None
+    };
+    report.push(
+        "user_model.max_chars",
+        "USER.md cap",
+        um_status,
+        format!("user_model_max_chars={um_cap}"),
+        um_fix,
+    );
+}
+
+fn check_bash_dangerous_patterns(report: &mut DoctorReport) {
+    let config = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+
+    let patterns = &config.bash_dangerous_patterns;
+    if patterns.is_empty() {
+        report.push(
+            "bash.dangerous_patterns",
+            "Bash command-content gate",
+            CheckStatus::Warn,
+            "bash_dangerous_patterns is empty".to_string(),
+            Some("Empty list disables command-content approval — restore the default set or add at least sudo / rm -rf / pipe-to-shell patterns.".to_string()),
+        );
+        return;
+    }
+
+    let mut bad: Vec<String> = Vec::new();
+    for raw in patterns {
+        let with_flag = if raw.starts_with("(?i)") {
+            raw.clone()
+        } else {
+            format!("(?i){raw}")
+        };
+        if let Err(e) = regex::Regex::new(&with_flag) {
+            bad.push(format!("{raw:?}: {e}"));
+        }
+    }
+    if bad.is_empty() {
+        report.push(
+            "bash.dangerous_patterns",
+            "Bash command-content gate",
+            CheckStatus::Pass,
+            format!("{} pattern(s), all valid", patterns.len()),
+            None,
+        );
+    } else {
+        report.push(
+            "bash.dangerous_patterns",
+            "Bash command-content gate",
+            CheckStatus::Fail,
+            format!("{} invalid regex(es): {}", bad.len(), bad.join("; ")),
+            Some(
+                "Fix or remove invalid bash_dangerous_patterns entries — invalid ones are silently skipped at runtime, leaving the gate weaker than intended."
+                    .to_string(),
+            ),
+        );
     }
 }
 
@@ -1568,6 +1673,57 @@ mod tests {
             .iter()
             .any(|c| c.id == "web_fetch.content_validation"));
         assert!(report.checks.iter().any(|c| c.id == "web_fetch.url_policy"));
+    }
+
+    #[test]
+    fn test_build_report_flags_invalid_bash_dangerous_pattern() {
+        let _guard = env_lock();
+        let path = std::env::temp_dir().join(format!(
+            "microclaw_doctor_bash_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let mut cfg = Config::test_defaults();
+        cfg.bash_dangerous_patterns = vec!["[unclosed".to_string()];
+        cfg.save_yaml(path.to_string_lossy().as_ref()).unwrap();
+        std::env::set_var("MICROCLAW_CONFIG", &path);
+
+        let report = build_report();
+
+        std::env::remove_var("MICROCLAW_CONFIG");
+        let _ = std::fs::remove_file(path);
+
+        let bash_check = report
+            .checks
+            .iter()
+            .find(|c| c.id == "bash.dangerous_patterns")
+            .expect("bash.dangerous_patterns check should exist");
+        assert!(matches!(bash_check.status, CheckStatus::Fail));
+        assert!(bash_check.detail.contains("invalid"));
+    }
+
+    #[test]
+    fn test_build_report_warns_when_user_model_disabled() {
+        let _guard = env_lock();
+        let path = std::env::temp_dir().join(format!(
+            "microclaw_doctor_user_model_{}.yaml",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let mut cfg = Config::test_defaults();
+        cfg.user_model_max_chars = 0;
+        cfg.save_yaml(path.to_string_lossy().as_ref()).unwrap();
+        std::env::set_var("MICROCLAW_CONFIG", &path);
+
+        let report = build_report();
+
+        std::env::remove_var("MICROCLAW_CONFIG");
+        let _ = std::fs::remove_file(path);
+
+        let check = report
+            .checks
+            .iter()
+            .find(|c| c.id == "user_model.max_chars")
+            .expect("user_model.max_chars check should exist");
+        assert!(matches!(check.status, CheckStatus::Warn));
     }
 
     #[test]

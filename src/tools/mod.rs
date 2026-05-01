@@ -2,22 +2,31 @@ pub mod a2a;
 pub mod activate_skill;
 pub mod bash;
 pub mod browser;
+pub mod clarify;
+pub mod describe_image;
 pub mod edit_file;
 pub mod export_chat;
+pub mod fetch_artifact;
+pub mod generate_image;
 pub mod glob;
 pub mod grep;
+pub mod insights;
 pub mod knowledge_graph;
 pub mod mcp;
 pub mod memory;
+pub mod osv_check;
 pub mod read_file;
 pub mod schedule;
 pub mod send_message;
+pub mod session_search;
 pub mod skill_manage;
 pub mod structured_memory;
 pub mod subagents;
 pub mod sync_skills;
+pub mod text_to_speech;
 pub mod time_math;
 pub mod todo;
+pub mod transcribe_audio;
 pub mod web_fetch;
 pub mod web_search;
 pub mod write_file;
@@ -64,6 +73,7 @@ impl ToolRegistry {
                 | "subagents_focused"
                 | "subagents_send"
                 | "subagents_orchestrate"
+                | "session_search"
         )
     }
 
@@ -121,7 +131,8 @@ impl ToolRegistry {
                     config.working_dir_isolation,
                 )
                 .with_default_timeout_secs(config.tool_timeout_secs("bash", 120))
-                .with_sandbox_router(sandbox_router.clone()),
+                .with_sandbox_router(sandbox_router.clone())
+                .with_dangerous_patterns(&config.bash_dangerous_patterns),
             ),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
@@ -240,10 +251,13 @@ impl ToolRegistry {
                 db.clone(),
                 channel_registry.clone(),
             )),
-            Box::new(activate_skill::ActivateSkillTool::new_with_runtime(
-                &skills_data_dir,
-                &config.data_dir,
-            )),
+            Box::new(
+                activate_skill::ActivateSkillTool::new_with_runtime(
+                    &skills_data_dir,
+                    &config.data_dir,
+                )
+                .with_db(db.clone()),
+            ),
             Box::new(skill_manage::SkillManageTool::new(
                 &skills_data_dir,
                 config.control_chat_ids.clone(),
@@ -265,6 +279,35 @@ impl ToolRegistry {
             )),
             Box::new(knowledge_graph::KnowledgeGraphQueryTool::new(db.clone())),
             Box::new(knowledge_graph::KnowledgeGraphAddTool::new(db.clone())),
+            Box::new(session_search::SessionSearchTool::new(db.clone())),
+            Box::new(
+                osv_check::OsvCheckTool::new(config.tool_timeout_secs("osv_check", 10))
+                    .with_cache(db.clone()),
+            ),
+            Box::new(clarify::ClarifyTool::new(
+                channel_registry.clone(),
+                db.clone(),
+                if config.bot_username.trim().is_empty() {
+                    "bot".to_string()
+                } else {
+                    config.bot_username.clone()
+                },
+                config.bot_username_overrides(),
+            )),
+            Box::new(generate_image::GenerateImageTool::new(
+                config,
+                channel_registry.clone(),
+                db.clone(),
+            )),
+            Box::new(describe_image::DescribeImageTool::new(config)),
+            Box::new(text_to_speech::TextToSpeechTool::new(
+                config,
+                channel_registry.clone(),
+                db.clone(),
+            )),
+            Box::new(transcribe_audio::TranscribeAudioTool::new(config)),
+            Box::new(insights::InsightsTool::new(db.clone())),
+            Box::new(fetch_artifact::FetchArtifactTool::new(db.clone())),
         ];
 
         // Add ClawHub tools if enabled
@@ -316,7 +359,8 @@ impl ToolRegistry {
                     config.working_dir_isolation,
                 )
                 .with_default_timeout_secs(config.tool_timeout_secs("bash", 120))
-                .with_sandbox_router(sandbox_router.clone()),
+                .with_sandbox_router(sandbox_router.clone())
+                .with_dangerous_patterns(&config.bash_dangerous_patterns),
             ),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
@@ -354,14 +398,23 @@ impl ToolRegistry {
             Box::new(time_math::GetCurrentTimeTool::new(config.timezone.clone())),
             Box::new(time_math::CompareTimeTool::new(config.timezone.clone())),
             Box::new(time_math::CalculateTool::new()),
-            Box::new(activate_skill::ActivateSkillTool::new_with_runtime(
-                &skills_data_dir,
-                &config.data_dir,
-            )),
+            Box::new(
+                activate_skill::ActivateSkillTool::new_with_runtime(
+                    &skills_data_dir,
+                    &config.data_dir,
+                )
+                .with_db(db.clone()),
+            ),
             Box::new(structured_memory::StructuredMemorySearchTool::new(
                 db.clone(),
                 memory_backend,
             )),
+            Box::new(session_search::SessionSearchTool::new(db.clone())),
+            Box::new(
+                osv_check::OsvCheckTool::new(config.tool_timeout_secs("osv_check", 10))
+                    .with_cache(db.clone()),
+            ),
+            Box::new(fetch_artifact::FetchArtifactTool::new(db.clone())),
         ];
         if allow_session_tools {
             if let Some(channel_registry) = channel_registry {

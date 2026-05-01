@@ -353,7 +353,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let text = msg.content.clone();
+        let mut text = msg.content.clone();
         let external_channel_id = msg.channel_id.get();
         let channel_id = {
             let external_chat_id = external_channel_id.to_string();
@@ -372,6 +372,74 @@ impl EventHandler for Handler {
             .unwrap_or(external_channel_id as i64)
         };
         let sender_name = msg.author.name.clone();
+        let mut voice_inbound = false;
+
+        // Discord voice messages and audio attachments arrive as Attachment
+        // entries with `content_type` starting with "audio/". Download them
+        // and substitute the transcription so the agent sees the message.
+        if !msg.attachments.is_empty() {
+            let audio_attachments: Vec<&serenity::model::channel::Attachment> = msg
+                .attachments
+                .iter()
+                .filter(|a| {
+                    a.content_type
+                        .as_deref()
+                        .map(|c| c.starts_with("audio/"))
+                        .unwrap_or(false)
+                })
+                .collect();
+            if !audio_attachments.is_empty()
+                && crate::voice::can_transcribe(&self.app_state.config)
+            {
+                let max_bytes: u32 = 25 * 1024 * 1024;
+                let client = reqwest::Client::new();
+                let mut transcripts: Vec<String> = Vec::new();
+                for att in audio_attachments {
+                    if att.size > max_bytes {
+                        warn!(
+                            "Discord: skipping audio attachment {}; size={} exceeds 25MB",
+                            att.filename, att.size
+                        );
+                        continue;
+                    }
+                    let bytes = match client.get(&att.url).send().await {
+                        Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                            Ok(b) => b.to_vec(),
+                            Err(e) => {
+                                warn!("Discord: failed to read audio bytes: {e}");
+                                continue;
+                            }
+                        },
+                        Ok(resp) => {
+                            warn!("Discord: audio download HTTP {}", resp.status());
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!("Discord: failed to download audio: {e}");
+                            continue;
+                        }
+                    };
+                    match crate::voice::transcribe_audio(&self.app_state.config, &bytes).await {
+                        Ok(t) => transcripts
+                            .push(crate::voice::format_voice_inbound(&sender_name, &t)),
+                        Err(e) => {
+                            warn!("Discord: voice transcription failed: {e}");
+                            transcripts
+                                .push(crate::voice::format_voice_inbound_error(&sender_name, &e));
+                        }
+                    }
+                }
+                if !transcripts.is_empty() {
+                    let joined = transcripts.join("\n");
+                    text = if text.trim().is_empty() {
+                        joined
+                    } else {
+                        format!("{}\n\n{}", text.trim(), joined)
+                    };
+                    voice_inbound = true;
+                }
+            }
+        }
 
         // Check allowed channels (empty = all)
         if !self.runtime.allowed_channels.is_empty()
@@ -609,6 +677,7 @@ impl EventHandler for Handler {
             Ok(response) => {
                 drop(typing);
                 drop(event_tx);
+                let response_for_voice = response.clone();
                 let mut used_send_message_tool = false;
                 while let Some(event) = event_rx.recv().await {
                     if let AgentEvent::ToolStart { name, .. } = event {
@@ -657,6 +726,44 @@ impl EventHandler for Handler {
                         db.store_message(&bot_msg)
                     })
                     .await;
+                }
+
+                // Voice round-trip: synthesize reply audio and send as a
+                // file attachment so the user hears the response on the
+                // same surface they spoke into.
+                if voice_inbound
+                    && crate::voice::round_trip_enabled(&self.app_state.config)
+                    && !response_for_voice.trim().is_empty()
+                {
+                    match crate::voice::synth_speech_to_temp(
+                        &self.app_state.config,
+                        &response_for_voice,
+                    )
+                    .await
+                    {
+                        Ok(audio_path) => {
+                            let attachments = [serenity::builder::CreateAttachment::path(
+                                &audio_path,
+                            )
+                            .await];
+                            match attachments {
+                                [Ok(att)] => {
+                                    let builder = serenity::builder::CreateMessage::new()
+                                        .add_file(att);
+                                    if let Err(e) =
+                                        msg.channel_id.send_message(&ctx.http, builder).await
+                                    {
+                                        warn!("Discord voice round-trip: send failed: {e}");
+                                    }
+                                }
+                                [Err(e)] => {
+                                    warn!("Discord voice round-trip: attach failed: {e}");
+                                }
+                            }
+                            let _ = tokio::fs::remove_file(&audio_path).await;
+                        }
+                        Err(e) => warn!("Discord voice round-trip: synth failed: {e}"),
+                    }
                 }
             }
             Err(e) => {

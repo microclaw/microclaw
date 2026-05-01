@@ -292,6 +292,13 @@ For a deeper dive into the architecture and design decisions, read: **[Building 
 - **Mention catch-up (Telegram groups)** -- when mentioned in a Telegram group, the bot reads all messages since its last reply (not just the last N)
 - **Continuous typing indicator** -- typing indicator stays active for the full duration of processing
 - **Persistent memory** -- AGENTS.md files at global, bot/account, and per-chat scopes, loaded into every request
+- **Per-chat user model (USER.md)** -- a curated narrative of who the user in this chat is (preferences, expertise, working style); reflector-managed and capped to keep prompts compact
+- **Cross-session recall** -- `session_search` tool runs SQLite FTS5 over stored messages, so the agent can find facts from older conversations
+- **Cross-channel voice** -- inbound voice messages on Telegram / Discord / Slack / Feishu are auto-transcribed; opt-in TTS round-trip sends audio replies back through the same surface
+- **Multimedia tools** -- `generate_image`, `describe_image`, `text_to_speech`, `transcribe_audio` — all OpenAI-compatible
+- **Defensive defaults** -- web_fetch blocks private/loopback/cloud-metadata IPs (every redirect hop), bash gates known-dangerous patterns, PII is redacted before writes to USER.md / memory rows
+- **Tool result truncation + artifacts** -- oversized tool outputs auto-stash to disk with head/tail kept in context; the agent can pull slices by id via `fetch_artifact`
+- **Skill lifecycle** -- end-of-turn review can patch existing skills (not just create), activation is tracked, unused skills auto-archive after 30 days, and the prompt-side catalog is retrieval-gated to top-K matches
 - **Message splitting** -- long responses are automatically split at newline boundaries to fit channel limits (Telegram 4096 / Discord 2000 / Slack 4000 / Feishu 4000 / IRC ~380)
 
 ## Tools
@@ -330,6 +337,15 @@ For a deeper dive into the architecture and design decisions, read: **[Building 
 | `sync_skills` | Sync a skill from external registry (e.g. vercel-labs/skills) and normalize local frontmatter |
 | `todo_read` | Read the current task/plan list for a chat |
 | `todo_write` | Create or update the task/plan list for a chat |
+| `session_search` | Full-text search (SQLite FTS5) over stored messages — cross-conversation recall, scoped to caller's chat by default |
+| `clarify` | Ask the user a structured multi-choice or open-ended question; releases the turn so the next user message supplies the answer |
+| `osv_check` | Query [osv.dev](https://osv.dev) for vulnerability advisories against a package + ecosystem + version (npm, PyPI, crates.io, Go, Maven, etc.) |
+| `insights` | Summarize tool/skill usage and token cost over a trailing window |
+| `fetch_artifact` | Pull a slice of a previously truncated tool result by `artifact_id` |
+| `generate_image` | Text-to-image via OpenAI-compatible `/images/generations` |
+| `describe_image` | Vision/image understanding via OpenAI-compatible chat with image content |
+| `text_to_speech` | TTS via OpenAI-compatible `/audio/speech` (multiple voices and formats) |
+| `transcribe_audio` | STT via OpenAI-compatible `/audio/transcriptions` |
 
 Generated reference (source-of-truth, anti-drift):
 - `docs/generated/tools.md`

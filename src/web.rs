@@ -2338,6 +2338,7 @@ mod tests {
             memory_backend: memory_backend.clone(),
             tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
             chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
+            skill_review_queue: crate::skill_review::build_skill_review_channel().0,
             metric_exporter: None,
             trace_exporter: None,
             log_exporter: None,

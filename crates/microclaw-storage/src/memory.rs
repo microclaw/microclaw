@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use microclaw_core::redact;
+
 pub struct MemoryManager {
     data_dir: PathBuf,
 }
@@ -26,9 +28,54 @@ impl MemoryManager {
         self.data_dir.join(channel.trim()).join("AGENTS.md")
     }
 
+    /// Per-chat user-model file. Mirrors Hermes' USER.md split from
+    /// MEMORY.md: a single curated narrative about who the user is, kept
+    /// separate from atomic memories so it can be loaded as one coherent
+    /// block at the top of the system prompt.
+    fn chat_user_model_path(&self, channel: &str, chat_id: i64) -> PathBuf {
+        self.data_dir
+            .join(channel.trim())
+            .join(chat_id.to_string())
+            .join("USER.md")
+    }
+
     pub fn read_global_memory(&self) -> Option<String> {
         let path = self.global_memory_path();
         std::fs::read_to_string(path).ok()
+    }
+
+    pub fn read_chat_user_model(&self, channel: &str, chat_id: i64) -> Option<String> {
+        let path = self.chat_user_model_path(channel, chat_id);
+        std::fs::read_to_string(path).ok()
+    }
+
+    /// Remove the per-chat USER.md file. Returns Ok(true) when a file was
+    /// removed, Ok(false) when there was nothing to remove. Used by the
+    /// `/user clear` slash command so the curator can rebuild from scratch.
+    pub fn clear_chat_user_model(&self, channel: &str, chat_id: i64) -> std::io::Result<bool> {
+        let path = self.chat_user_model_path(channel, chat_id);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn write_chat_user_model(
+        &self,
+        channel: &str,
+        chat_id: i64,
+        content: &str,
+    ) -> std::io::Result<()> {
+        let path = self.chat_user_model_path(channel, chat_id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Redact PII / credentials before USER.md hits disk. The reflector
+        // LLM was asked to never invent facts, but raw conversation excerpts
+        // include things like API keys and emails the model might have
+        // verbatim-quoted into the narrative.
+        std::fs::write(path, redact::redact(content))
     }
 
     pub fn read_chat_memory(&self, channel: &str, chat_id: i64) -> Option<String> {
@@ -47,7 +94,7 @@ impl MemoryManager {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)
+        std::fs::write(path, redact::redact(content))
     }
 
     #[allow(dead_code)]
@@ -61,7 +108,7 @@ impl MemoryManager {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)
+        std::fs::write(path, redact::redact(content))
     }
 
     #[allow(dead_code)]
@@ -70,7 +117,7 @@ impl MemoryManager {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)
+        std::fs::write(path, redact::redact(content))
     }
 
     pub fn build_memory_context(&self, channel: &str, chat_id: i64) -> String {
@@ -153,6 +200,67 @@ mod tests {
                 .join("feishu.ops")
                 .join("AGENTS.md")
         ));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_writes_redact_credentials_before_persist() {
+        let (mm, dir) = test_memory_manager();
+        // USER.md path: secrets get masked before hitting disk.
+        mm.write_chat_user_model(
+            "telegram",
+            7,
+            "User shared sk-proj-ABCDEFGHIJKLMNOP1234567890 and email a@b.com",
+        )
+        .expect("write");
+        let stored = mm.read_chat_user_model("telegram", 7).expect("read");
+        assert!(!stored.contains("sk-proj-ABCDEFGHIJKLMNOP"));
+        assert!(stored.contains("sk-<redacted>"));
+        assert!(!stored.contains("a@b.com"));
+        assert!(stored.contains("<redacted>@b.com"));
+
+        // Same guarantee for chat AGENTS.md.
+        mm.write_chat_memory("telegram", 7, "ghp_abcdefghij1234567890ABCDE leaked")
+            .expect("write");
+        let mem = mm.read_chat_memory("telegram", 7).expect("read");
+        assert!(!mem.contains("ghp_abcdefghij"));
+        assert!(mem.contains("gh<redacted>"));
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_clear_chat_user_model_returns_true_when_present_false_when_absent() {
+        let (mm, dir) = test_memory_manager();
+        // Absent → false, no error.
+        assert!(matches!(mm.clear_chat_user_model("telegram", 5), Ok(false)));
+        // Write then clear → true, file is gone.
+        mm.write_chat_user_model("telegram", 5, "narrative").unwrap();
+        assert!(mm.read_chat_user_model("telegram", 5).is_some());
+        assert!(matches!(mm.clear_chat_user_model("telegram", 5), Ok(true)));
+        assert!(mm.read_chat_user_model("telegram", 5).is_none());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_chat_user_model_path_and_round_trip() {
+        let (mm, dir) = test_memory_manager();
+        let path = mm.chat_user_model_path("telegram", 42);
+        assert!(path.ends_with(
+            std::path::Path::new("groups")
+                .join("telegram")
+                .join("42")
+                .join("USER.md")
+        ));
+        // Empty round-trip: read returns None when file does not exist.
+        assert!(mm.read_chat_user_model("telegram", 42).is_none());
+        // Write then read back.
+        mm.write_chat_user_model("telegram", 42, "Senior Rust engineer.")
+            .expect("write");
+        let got = mm
+            .read_chat_user_model("telegram", 42)
+            .expect("read after write");
+        assert_eq!(got, "Senior Rust engineer.");
         cleanup(&dir);
     }
 

@@ -50,6 +50,40 @@ pub fn unknown_command_response() -> String {
     "Unknown command.".to_string()
 }
 
+/// Show or clear the per-chat USER.md user model. Backs the `/user` slash
+/// command. Lives outside `handle_chat_command` so it can be unit-tested
+/// without spinning up the full AppState match arm.
+fn handle_user_command(
+    state: &AppState,
+    caller_channel: &str,
+    chat_id: i64,
+    args: &str,
+) -> String {
+    let args = args.trim();
+    if args == "clear" {
+        match state.memory.clear_chat_user_model(caller_channel, chat_id) {
+            Ok(true) => "USER.md cleared. The reflector will rebuild it on the next tick.".into(),
+            Ok(false) => "No USER.md to clear for this chat.".into(),
+            Err(e) => format!("Failed to clear USER.md: {e}"),
+        }
+    } else if args.is_empty() {
+        match state.memory.read_chat_user_model(caller_channel, chat_id) {
+            Some(content) if !content.trim().is_empty() => {
+                let cap = state.config.user_model_max_chars;
+                let cap_note = if cap == 0 {
+                    "(layer disabled — user_model_max_chars=0)".to_string()
+                } else {
+                    format!("({}/{} chars)", content.chars().count(), cap)
+                };
+                format!("USER.md {cap_note}:\n\n{}", content.trim())
+            }
+            _ => "No USER.md yet — the reflector populates it from PROFILE memories. Send a few personal facts and check back after the next reflector tick.".into(),
+        }
+    } else {
+        "Usage: /user            show current USER.md\n       /user clear     remove USER.md so the reflector rebuilds it".into()
+    }
+}
+
 #[derive(Clone, Copy)]
 enum PersistedOverride<'a> {
     Unchanged,
@@ -153,6 +187,10 @@ pub async fn handle_chat_command(
 
     if trimmed == "/skills" {
         return Some(state.skills.list_skills_formatted());
+    }
+
+    if let Some(args) = trimmed.strip_prefix("/user") {
+        return Some(handle_user_command(state, caller_channel, chat_id, args));
     }
 
     if trimmed == "/reload-skills" {

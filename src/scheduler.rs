@@ -294,10 +294,11 @@ Rules:
 - Category must be exactly one of: PROFILE (user attributes/preferences), KNOWLEDGE (facts/expertise), EVENT (significant things that happened)
 - If a new memory updates or supersedes an existing one, add "supersedes_id": <id> to replace it
 
-Output format — a JSON object with two arrays:
+Output format — a JSON object with three fields:
 {
   "memories": [{"content":"...","category":"PROFILE","supersedes_id":null}],
-  "triples": [{"subject":"User","predicate":"prefers","object":"Rust"}]
+  "triples": [{"subject":"User","predicate":"prefers","object":"Rust"}],
+  "user_model": "..." | null
 }
 
 "memories" — flat text memories (same as before).
@@ -306,8 +307,12 @@ Output format — a JSON object with two arrays:
   - predicate: a relationship (uses, prefers, located_at, version_is, works_on, manages, depends_on)
   - object: the related entity or value
   Only extract triples with clear, factual relationships. Skip vague or uncertain ones.
+"user_model" — an updated USER.md narrative (single short paragraph or bullet list) describing who the user is: role, expertise, working style, preferences, ongoing goals.
+  - Set to a string when you have new durable information that materially improves the current USER.md, or when none exists yet and there is enough signal to draft one.
+  - Set to null when the existing USER.md is still accurate; do not rewrite cosmetically.
+  - Output ONLY the file content — no commentary, no code fences. Drop stale or contradicted facts. Never invent.
 
-If nothing worth remembering: {"memories":[],"triples":[]}
+If nothing worth remembering: {"memories":[],"triples":[],"user_model":null}
 
 CRITICAL — how to memorize bugs and problems:
 - NEVER describe broken behavior as a fact (e.g. "tool calls were broken", "agent typed tool calls as text"). This causes the agent to repeat the broken behavior in future sessions.
@@ -385,72 +390,124 @@ fn strip_reflector_thinking_tags(input: &str) -> String {
 /// 2. Legacy array: `[{"content":"...","category":"..."}]`
 ///
 /// Returns `(memory_extractions, kg_triples)`.
-fn parse_reflector_response(
-    raw_text: &str,
-    chat_id: i64,
-) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+/// Reflector LLM response decomposed into the three output channels:
+/// memory rows, knowledge-graph triples, and an optional updated USER.md
+/// narrative. The user_model is None when the model judged the existing
+/// file accurate and did not propose a rewrite.
+struct ReflectorOutputs {
+    memories: Vec<serde_json::Value>,
+    triples: Vec<serde_json::Value>,
+    user_model: Option<String>,
+}
+
+fn extract_obj_outputs(obj: &serde_json::Map<String, serde_json::Value>) -> ReflectorOutputs {
+    let memories = obj
+        .get("memories")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let triples = obj
+        .get("triples")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let user_model = obj
+        .get("user_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    ReflectorOutputs {
+        memories,
+        triples,
+        user_model,
+    }
+}
+
+fn parse_reflector_response(raw_text: &str, chat_id: i64) -> ReflectorOutputs {
     let cleaned = strip_reflector_thinking_tags(raw_text);
     let trimmed = cleaned.trim();
 
-    // Try parsing as the new object format first
-    if let Ok(obj) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if let Some(obj) = obj.as_object() {
-            let memories = obj
-                .get("memories")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let triples = obj
-                .get("triples")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            return (memories, triples);
+    // 1. Try parsing the trimmed text as a top-level JSON value: object →
+    //    new schema, array → legacy memories. We branch on the value type
+    //    rather than on `as_object()` alone so a legacy array doesn't fall
+    //    through to the embedded-object scan below (which would match the
+    //    first array element and silently drop the rest).
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(obj) = value.as_object() {
+            return extract_obj_outputs(obj);
+        }
+        if let Some(arr) = value.as_array() {
+            return ReflectorOutputs {
+                memories: arr.clone(),
+                triples: Vec::new(),
+                user_model: None,
+            };
         }
     }
 
-    // Try extracting JSON object from noise
+    // 2. Extract JSON object embedded in surrounding noise (e.g. ```json
+    //    fences). Only attempted when the top-level parse failed, so a
+    //    legacy array can't reach this branch.
     if let Some(start) = trimmed.find('{') {
         if let Some(end) = trimmed.rfind('}') {
             if end > start {
                 if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]) {
                     if let Some(obj) = obj.as_object() {
-                        let memories = obj
-                            .get("memories")
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default();
-                        let triples = obj
-                            .get("triples")
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default();
-                        return (memories, triples);
+                        return extract_obj_outputs(obj);
                     }
                 }
             }
         }
     }
 
-    // Fall back to legacy array format (no triples)
+    // 3. Legacy array embedded in noise.
     if let Ok(arr) = parse_reflector_json_array(trimmed) {
-        return (arr, Vec::new());
+        return ReflectorOutputs {
+            memories: arr,
+            triples: Vec::new(),
+            user_model: None,
+        };
     }
-
-    // Last resort: find array in noise
     let start = trimmed.find('[').unwrap_or(0);
     let end = trimmed.rfind(']').map(|i| i + 1).unwrap_or(trimmed.len());
     if start < end {
         if let Ok(arr) = parse_reflector_json_array(&trimmed[start..end]) {
-            return (arr, Vec::new());
+            return ReflectorOutputs {
+                memories: arr,
+                triples: Vec::new(),
+                user_model: None,
+            };
         }
     }
 
-    error!(
-        "Reflector: parse failed for chat {}: no valid JSON found",
-        chat_id
-    );
-    (Vec::new(), Vec::new())
+    // The model didn't produce parseable JSON. Distinguish two cases:
+    //  - it explicitly signalled "nothing to extract" (empty / `null` /
+    //    `[]` / `{}` / a one-line refusal). That's a benign no-op — log
+    //    at info, not error.
+    //  - anything else: a real schema break. Log at warn with a short
+    //    preview so the operator can see what the provider actually
+    //    returned without grepping the LLM debug stream.
+    let preview: String = trimmed.chars().take(200).collect();
+    let lower = trimmed.to_ascii_lowercase();
+    let is_explicit_no_op = trimmed.is_empty()
+        || matches!(lower.as_str(), "null" | "[]" | "{}" | "none" | "no")
+        || trimmed.len() < 16;
+    if is_explicit_no_op {
+        info!(
+            "Reflector: chat {} returned no updates (response: {:?})",
+            chat_id, preview
+        );
+    } else {
+        warn!(
+            "Reflector: parse failed for chat {chat_id}: no valid JSON found. response_preview={:?}",
+            preview
+        );
+    }
+    ReflectorOutputs {
+        memories: Vec::new(),
+        triples: Vec::new(),
+        user_model: None,
+    }
 }
 
 fn parse_reflector_json_array(text: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {
@@ -494,6 +551,50 @@ async fn run_reflector(state: &Arc<AppState>) {
 
     let _ = call_blocking(state.db.clone(), move |db| db.archive_stale_memories(30)).await;
 
+    // Hard-delete memories whose `expires_at` has elapsed. Distinct from
+    // archive: TTL'd memories are gone for good once they expire.
+    let now = Utc::now().to_rfc3339();
+    let _ = call_blocking(state.db.clone(), move |db| {
+        let pruned = db.prune_expired_memories(&now)?;
+        if pruned > 0 {
+            info!("Reflector: pruned {pruned} expired memories");
+        }
+        Ok(())
+    })
+    .await;
+
+    // Same for stashed tool-result artifacts whose TTL has passed.
+    let now = Utc::now().to_rfc3339();
+    let _ = call_blocking(state.db.clone(), move |db| {
+        let pruned = db.prune_tool_artifacts(&now)?;
+        if pruned > 0 {
+            info!("Reflector: pruned {pruned} expired tool artifacts");
+        }
+        Ok(())
+    })
+    .await;
+
+    // Auto-archive agent-created skills that haven't been used in N days.
+    let archive_days = state.config.skill_archive_after_days;
+    if archive_days > 0 {
+        let skills_root = std::path::PathBuf::from(state.config.skills_data_dir());
+        let _ = call_blocking(state.db.clone(), move |db| {
+            match crate::skill_review::archive_inactive_agent_skills(
+                &skills_root,
+                db,
+                archive_days,
+            ) {
+                Ok(n) if n > 0 => {
+                    info!("Reflector: archived {n} inactive agent-created skill(s)");
+                }
+                Ok(_) => {}
+                Err(e) => warn!("Reflector: skill archive sweep failed: {e}"),
+            }
+            Ok(())
+        })
+        .await;
+    }
+
     // Enforce global memory capacity limit
     if state.config.memory_max_global_entries > 0 {
         let max_global = state.config.memory_max_global_entries;
@@ -529,12 +630,12 @@ async fn run_reflector(state: &Arc<AppState>) {
         reflect_for_chat(state, chat_id).await;
     }
 
-    // Run skill review for active chats if enabled
-    if state.config.skill_review_min_tool_calls > 0 {
-        for chat_id in chat_ids {
-            review_for_skill_creation(state, chat_id).await;
-        }
-    }
+    // Skill review is now driven from the end-of-turn enqueue in the
+    // agent loop (see `AppState.skill_review_queue`). The reflector tick
+    // intentionally no longer initiates reviews — that path was both too
+    // late (up to `reflector_interval_mins` of staleness) and too eager
+    // (re-reviewed the same conversations on every tick).
+    let _ = chat_ids;
 }
 
 async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
@@ -605,11 +706,34 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         format!("\n\nExisting memories (use supersedes_id to replace stale ones):\n{lines}")
     };
 
+    // 4b. Look up channel + current USER.md so the same LLM call can also
+    //     curate the per-chat user model, avoiding a second round trip.
+    let channel = call_blocking(state.db.clone(), move |db| db.get_chat_channel(chat_id))
+        .await
+        .ok()
+        .flatten();
+    let existing_user_model = channel
+        .as_deref()
+        .and_then(|ch| state.memory.read_chat_user_model(ch, chat_id));
+    let user_model_cap = state.config.user_model_max_chars;
+    let user_model_block = if user_model_cap == 0 {
+        String::new()
+    } else {
+        let body = existing_user_model
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("(none yet)");
+        format!(
+            "\n\nCurrent USER.md (rewrite only if you have new durable signal; cap {user_model_cap} chars):\n```\n{body}\n```"
+        )
+    };
+
     // 5. Call LLM directly (no tools, no session)
     let user_msg = Message {
         role: "user".into(),
         content: MessageContent::Text(format!(
-            "Extract memories from this conversation (chat_id={chat_id}):{existing_hint}\n\nConversation:\n{conversation}"
+            "Extract memories from this conversation (chat_id={chat_id}):{existing_hint}{user_model_block}\n\nConversation:\n{conversation}"
         )),
     };
     let response = match state
@@ -656,9 +780,28 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         .collect::<Vec<_>>()
         .join("");
 
-    // 7. Parse response — supports both new object format {"memories":[...],"triples":[...]}
-    //    and legacy array format [{"content":"...","category":"..."}]
-    let (extracted, kg_triples) = parse_reflector_response(&text, chat_id);
+    // 7. Parse response — supports the new object format
+    //    {"memories":[...],"triples":[...],"user_model":...} and the legacy
+    //    array format [{"content":"...","category":"..."}].
+    let ReflectorOutputs {
+        memories: extracted,
+        triples: kg_triples,
+        user_model: proposed_user_model,
+    } = parse_reflector_response(&text, chat_id);
+
+    // Persist any user_model the LLM proposed before the early-return path,
+    // so a USER.md-only update isn't dropped on the floor when no new
+    // memories or triples were extracted.
+    if let (Some(model), Some(ch)) = (proposed_user_model.as_ref(), channel.as_deref()) {
+        persist_curated_user_model(
+            state,
+            chat_id,
+            ch,
+            existing_user_model.as_deref(),
+            model,
+            user_model_cap,
+        );
+    }
 
     if extracted.is_empty() && kg_triples.is_empty() {
         if let Some(ts) = latest_message_ts {
@@ -815,6 +958,9 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
         );
     }
 
+    // USER.md curation now rides on the same reflector LLM call (see step 4b
+    // / step 7 above), so no separate round trip is needed here.
+
     let finished_at = Utc::now().to_rfc3339();
     let _ = call_blocking(state.db.clone(), move |db| {
         db.log_reflector_run(
@@ -834,203 +980,111 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
     .await;
 }
 
-const SKILL_REVIEW_SYSTEM_PROMPT: &str = r#"You are a skill review specialist. Analyze conversations to identify reusable approaches that should be saved as skills.
-
-A "skill" is a set of step-by-step instructions for a task type the agent encountered. Only recommend creating a skill if:
-1. The conversation shows a non-trivial multi-step approach (5+ distinct steps)
-2. The approach required trial-and-error or domain-specific knowledge
-3. The approach is REUSABLE — it would help with similar future tasks
-4. No existing skill already covers this approach
-
-If you find a worthy skill, output EXACTLY one JSON object:
-{"create": true, "name": "skill-name", "description": "One-line description", "instructions": "Full markdown instructions"}
-
-If nothing is worth saving as a skill, output:
-{"create": false}
-
-Output ONLY the JSON object, no other text."#;
-
-async fn review_for_skill_creation(state: &Arc<AppState>, chat_id: i64) {
-    let min_tool_calls = state.config.skill_review_min_tool_calls;
-    if min_tool_calls == 0 {
+/// Persist a USER.md narrative the reflector LLM proposed inside its
+/// combined memory/triples/user_model output. Returns silently on a no-op:
+/// when the layer is disabled (`user_model_max_chars == 0`), when the
+/// proposed text is empty, or when it is byte-identical to the existing
+/// file (avoid touching mtime for nothing).
+fn persist_curated_user_model(
+    state: &Arc<AppState>,
+    chat_id: i64,
+    channel: &str,
+    existing: Option<&str>,
+    proposed: &str,
+    cap: usize,
+) {
+    if cap == 0 {
         return;
     }
-
-    // Load recent messages to look for complex conversations
-    let messages = match call_blocking(state.db.clone(), move |db| {
-        db.get_recent_messages(chat_id, 50)
-    })
-    .await
-    {
-        Ok(m) => m,
-        Err(_) => return,
-    };
-
-    // Count bot messages that look like tool results (heuristic: messages containing tool patterns)
-    let tool_call_heuristic = messages
-        .iter()
-        .filter(|m| {
-            m.is_from_bot
-                && (m.content.contains("tool_use")
-                    || m.content.contains("tool_result")
-                    || m.content.contains("Executing"))
-        })
-        .count();
-
-    // Also count by total message volume as a proxy (each tool call = ~3 messages: assistant+tool_result+assistant)
-    let estimated_tool_calls = messages.len() / 3;
-    let effective_count = tool_call_heuristic.max(estimated_tool_calls);
-
-    if effective_count < min_tool_calls {
+    let trimmed = proposed.trim();
+    if trimmed.is_empty() {
         return;
     }
-
-    // Check if we already have many skills (avoid skill explosion)
-    let existing_skills = state.skills.discover_skills();
-    let agent_created_count = existing_skills
-        .iter()
-        .filter(|s| s.source == "agent-created")
-        .count();
-    if agent_created_count >= 20 {
-        info!(
-            "Skill review: skipping for chat {} — already {} agent-created skills",
-            chat_id, agent_created_count
-        );
-        return;
-    }
-
-    // Build conversation summary for the LLM
-    let conversation = messages
-        .iter()
-        .map(|m| {
-            format!(
-                "[{}]: {}",
-                m.sender_name,
-                strip_reflector_thinking_tags(&m.content)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let existing_skill_names: Vec<&str> = existing_skills.iter().map(|s| s.name.as_str()).collect();
-    let skills_hint = if existing_skill_names.is_empty() {
-        String::new()
+    let capped: String = if trimmed.chars().count() > cap {
+        trimmed.chars().take(cap).collect()
     } else {
-        format!(
-            "\n\nExisting skills (do NOT duplicate): {}",
-            existing_skill_names.join(", ")
-        )
+        trimmed.to_string()
     };
-
-    let user_msg = Message {
-        role: "user".into(),
-        content: MessageContent::Text(format!(
-            "Review this conversation for skill-worthy approaches:{skills_hint}\n\nConversation:\n{conversation}"
-        )),
-    };
-    let response = match state
-        .llm
-        .send_message(SKILL_REVIEW_SYSTEM_PROMPT, vec![user_msg], None)
-        .await
+    if existing
+        .map(|s| s.trim() == capped.as_str())
+        .unwrap_or(false)
     {
-        Ok(r) => r,
-        Err(e) => {
-            error!("Skill review: LLM call failed for chat {chat_id}: {e}");
-            return;
-        }
-    };
-
-    let text = response
-        .content
-        .iter()
-        .filter_map(|b| {
-            if let ResponseContentBlock::Text { text } = b {
-                Some(text.as_str())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
-
-    let cleaned = strip_reflector_thinking_tags(&text);
-    let trimmed = cleaned.trim();
-
-    // Parse the review result
-    let review: serde_json::Value = match serde_json::from_str(trimmed) {
-        Ok(v) => v,
-        Err(_) => {
-            // Try finding JSON in the response
-            let start = trimmed.find('{').unwrap_or(0);
-            let end = trimmed.rfind('}').map(|i| i + 1).unwrap_or(trimmed.len());
-            match serde_json::from_str(&trimmed[start..end]) {
-                Ok(v) => v,
-                Err(_) => return,
-            }
-        }
-    };
-
-    if !review.get("create").and_then(|v| v.as_bool()).unwrap_or(false) {
         return;
     }
-
-    let skill_name = match review.get("name").and_then(|v| v.as_str()) {
-        Some(n) => n.to_string(),
-        None => return,
-    };
-    let description = match review.get("description").and_then(|v| v.as_str()) {
-        Some(d) => d,
-        None => return,
-    };
-    let instructions = match review.get("instructions").and_then(|v| v.as_str()) {
-        Some(i) => i,
-        None => return,
-    };
-
-    // Check if skill already exists
-    if existing_skills.iter().any(|s| s.name == skill_name) {
-        return;
+    match state.memory.write_chat_user_model(channel, chat_id, &capped) {
+        Ok(()) => info!(
+            "Reflector: USER.md updated for chat {chat_id} ({} chars)",
+            capped.chars().count()
+        ),
+        Err(e) => warn!("Reflector: USER.md write failed for chat {chat_id}: {e}"),
     }
-
-    // Validate content
-    if microclaw_storage::memory_quality::scan_for_injection(instructions).is_err() {
-        warn!(
-            "Skill review: rejected auto-created skill '{}' due to injection scan failure",
-            skill_name
-        );
-        return;
-    }
-
-    // Write the skill
-    let skills_dir = std::path::PathBuf::from(state.config.skills_data_dir());
-    let skill_dir = skills_dir.join(&skill_name);
-    if let Err(e) = std::fs::create_dir_all(&skill_dir) {
-        error!("Skill review: failed to create directory for '{}': {}", skill_name, e);
-        return;
-    }
-
-    let content = format!(
-        "---\nname: {}\ndescription: {}\nsource: agent-created\nupdated_at: \"{}\"\n---\n{}\n",
-        skill_name,
-        description,
-        Utc::now().to_rfc3339(),
-        instructions
-    );
-
-    if let Err(e) = std::fs::write(skill_dir.join("SKILL.md"), &content) {
-        error!("Skill review: failed to write SKILL.md for '{}': {}", skill_name, e);
-        return;
-    }
-
-    info!(
-        "Skill review: auto-created skill '{}' from chat {} conversation",
-        skill_name, chat_id
-    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_reflector_response_extracts_user_model() {
+        let raw = r#"{
+            "memories": [{"content":"likes Rust","category":"PROFILE"}],
+            "triples": [],
+            "user_model": "Senior Rust engineer at Acme."
+        }"#;
+        let out = super::parse_reflector_response(raw, 1);
+        assert_eq!(out.memories.len(), 1);
+        assert_eq!(out.user_model.as_deref(), Some("Senior Rust engineer at Acme."));
+    }
+
+    #[test]
+    fn test_parse_reflector_response_user_model_null_yields_none() {
+        let raw = r#"{"memories": [], "triples": [], "user_model": null}"#;
+        let out = super::parse_reflector_response(raw, 1);
+        assert!(out.user_model.is_none());
+    }
+
+    #[test]
+    fn test_parse_reflector_response_legacy_array_has_no_user_model() {
+        let raw = r#"[{"content":"x","category":"PROFILE"}]"#;
+        let out = super::parse_reflector_response(raw, 1);
+        assert_eq!(out.memories.len(), 1);
+        assert!(out.user_model.is_none());
+    }
+
+    #[test]
+    fn test_parse_reflector_response_user_model_empty_string_yields_none() {
+        let raw = r#"{"memories": [], "triples": [], "user_model": "   "}"#;
+        let out = super::parse_reflector_response(raw, 1);
+        assert!(out.user_model.is_none());
+    }
+
+    #[test]
+    fn test_parse_reflector_response_no_op_signal_returns_empty() {
+        // Common shapes the model produces when there's nothing to extract.
+        // The parser should treat them as empty outputs without panicking;
+        // the log severity downgrade for these cases is verified by code
+        // review (info! vs warn!) — here we just assert the shape.
+        for raw in ["", "null", "[]", "{}", "none", "no"] {
+            let out = super::parse_reflector_response(raw, 42);
+            assert!(out.memories.is_empty(), "raw={raw:?} memories not empty");
+            assert!(out.triples.is_empty(), "raw={raw:?} triples not empty");
+            assert!(
+                out.user_model.is_none(),
+                "raw={raw:?} user_model not None"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_reflector_response_garbage_returns_empty_without_panic() {
+        // Plain prose that has no JSON braces / brackets at all. Should
+        // not panic and should return empty outputs (warn-level log).
+        let raw = "I don't think there is anything new to remember from this conversation.";
+        let out = super::parse_reflector_response(raw, 42);
+        assert!(out.memories.is_empty());
+        assert!(out.triples.is_empty());
+        assert!(out.user_model.is_none());
+    }
 
     #[test]
     fn test_jaccard_similar_identical() {

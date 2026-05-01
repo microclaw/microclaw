@@ -2714,10 +2714,43 @@ async fn handle_feishu_message(
         "audio" => {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(content_raw) {
                 if let Some(file_key) = v.get("file_key").and_then(|k| k.as_str()) {
-                    text = format!(
-                        "[audio message] file_key={} (audio transcription not yet supported for Feishu)",
-                        file_key
-                    );
+                    if crate::voice::can_transcribe(&app_state.config) {
+                        match download_feishu_resource(
+                            &http_client,
+                            base_url,
+                            &token,
+                            message_id,
+                            file_key,
+                            "file",
+                        )
+                        .await
+                        {
+                            Ok(bytes) => {
+                                match crate::voice::transcribe_audio(&app_state.config, &bytes)
+                                    .await
+                                {
+                                    Ok(transcription) => {
+                                        text = crate::voice::format_voice_inbound(
+                                            user,
+                                            &transcription,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!("Feishu: voice transcription failed: {e}");
+                                        text = crate::voice::format_voice_inbound_error(user, &e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Feishu: failed to download audio {file_key}: {e}");
+                                text = crate::voice::format_voice_inbound_error(user, &e);
+                            }
+                        }
+                    } else {
+                        text = format!(
+                            "[audio message] file_key={file_key} (transcription disabled — set openai_api_key or voice_transcription_command)"
+                        );
+                    }
                 }
             }
         }

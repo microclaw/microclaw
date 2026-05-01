@@ -72,6 +72,28 @@ pub struct TaskRunLog {
     pub result_summary: Option<String>,
 }
 
+/// A row returned from the tool result cache lookup.
+#[derive(Debug, Clone)]
+pub struct CachedToolResult {
+    pub tool_name: String,
+    pub content: String,
+    pub is_error: bool,
+    pub metadata_json: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+/// Metadata for a stored tool-result artifact.
+#[derive(Debug, Clone)]
+pub struct ToolArtifactMeta {
+    pub artifact_id: String,
+    pub chat_id: i64,
+    pub tool_name: String,
+    pub total_chars: i64,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmUsageSummary {
     pub requests: i64,
@@ -104,6 +126,10 @@ pub struct Memory {
     pub last_seen_at: String,
     pub is_archived: bool,
     pub archived_at: Option<String>,
+    /// Optional RFC3339 timestamp at which this memory expires. NULL means
+    /// the memory is durable; expired rows are filtered from retrieval and
+    /// pruned by the reflector.
+    pub expires_at: Option<String>,
 }
 
 /// A single triple in the temporal knowledge graph.
@@ -208,7 +234,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 20;
+const SCHEMA_VERSION_CURRENT: i64 = 25;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -368,6 +394,9 @@ fn ensure_memory_schema(conn: &Connection) -> Result<(), MicroClawError> {
     }
     if !table_has_column(conn, "memories", "archived_at")? {
         conn.execute("ALTER TABLE memories ADD COLUMN archived_at TEXT", [])?;
+    }
+    if !table_has_column(conn, "memories", "expires_at")? {
+        conn.execute("ALTER TABLE memories ADD COLUMN expires_at TEXT", [])?;
     }
     conn.execute(
         "UPDATE memories
@@ -900,6 +929,125 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 20)?;
         version = 20;
+    }
+    if version < 21 {
+        // Session search: FTS5 virtual table over messages, with triggers to
+        // keep it in sync on INSERT/UPDATE/DELETE. The table is created as
+        // contentless (`content=''`) to avoid duplicating text on disk; we
+        // manually keep it in sync via triggers rather than rely on the
+        // external-content mode so that deletions of individual messages are
+        // still cleanly reflected.
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                sender_name,
+                chat_id UNINDEXED,
+                message_id UNINDEXED,
+                timestamp UNINDEXED,
+                is_from_bot UNINDEXED,
+                tokenize = 'unicode61 remove_diacritics 2'
+            );",
+        )?;
+        // Backfill existing messages into the FTS index. rowid pattern uses
+        // a composite of chat_id and message_id to stay unique.
+        conn.execute_batch(
+            "INSERT INTO messages_fts(content, sender_name, chat_id, message_id, timestamp, is_from_bot)
+             SELECT content, sender_name, chat_id, id, timestamp, is_from_bot FROM messages;",
+        )?;
+        conn.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(content, sender_name, chat_id, message_id, timestamp, is_from_bot)
+                VALUES (new.content, new.sender_name, new.chat_id, new.id, new.timestamp, new.is_from_bot);
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+                DELETE FROM messages_fts WHERE chat_id = old.chat_id AND message_id = old.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+                DELETE FROM messages_fts WHERE chat_id = old.chat_id AND message_id = old.id;
+                INSERT INTO messages_fts(content, sender_name, chat_id, message_id, timestamp, is_from_bot)
+                VALUES (new.content, new.sender_name, new.chat_id, new.id, new.timestamp, new.is_from_bot);
+            END;",
+        )?;
+        set_schema_version(conn, 21)?;
+        version = 21;
+    }
+    if version < 22 {
+        // Tool result cache — keyed by SHA-256 of (tool_name + normalized
+        // input JSON). Tools opt in by name; rows are purged lazily via TTL.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tool_result_cache (
+                cache_key TEXT PRIMARY KEY,
+                tool_name TEXT NOT NULL,
+                result_content TEXT NOT NULL,
+                is_error INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tool_result_cache_tool_expires
+                ON tool_result_cache(tool_name, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_tool_result_cache_expires
+                ON tool_result_cache(expires_at);",
+        )?;
+        set_schema_version(conn, 22)?;
+        version = 22;
+    }
+    if version < 23 {
+        // Tool result artifacts — full content stash for results that exceed
+        // the in-context truncation threshold. The agent reads slices via
+        // the `fetch_artifact` tool. Rows expire after a TTL to bound
+        // storage growth.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tool_result_artifacts (
+                artifact_id TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                tool_name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                total_chars INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tool_result_artifacts_chat
+                ON tool_result_artifacts(chat_id, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_tool_result_artifacts_expires
+                ON tool_result_artifacts(expires_at);",
+        )?;
+        set_schema_version(conn, 23)?;
+        version = 23;
+    }
+    if version < 24 {
+        // Memory TTL: per-row expiration for time-bounded facts (NULL = never).
+        // Distinct from `valid_to` (knowledge-graph temporal validity) and
+        // `is_archived` (manual demotion).
+        if !table_has_column(conn, "memories", "expires_at")? {
+            conn.execute("ALTER TABLE memories ADD COLUMN expires_at TEXT", [])?;
+        }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_expires ON memories(expires_at)
+             WHERE expires_at IS NOT NULL",
+            [],
+        )?;
+        set_schema_version(conn, 24)?;
+        version = 24;
+    }
+    if version < 25 {
+        // Skill activation log — drives the auto-archive of agent-created
+        // skills that haven't been used in N days, and surfaces usage
+        // counts in the insights tool.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS skill_activation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_name TEXT NOT NULL,
+                chat_id INTEGER,
+                activated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_activation_name_time
+                ON skill_activation_logs(skill_name, activated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_activation_time
+                ON skill_activation_logs(activated_at);",
+        )?;
+        set_schema_version(conn, 25)?;
+        version = 25;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -2108,6 +2256,254 @@ impl Database {
         }
     }
 
+    /// Look up a cached tool result by key; returns `None` if missing or
+    /// past its TTL. Passing `now` as an RFC3339 string lets callers
+    /// control "now" deterministically in tests.
+    pub fn get_cached_tool_result(
+        &self,
+        cache_key: &str,
+        now: &str,
+    ) -> Result<Option<CachedToolResult>, MicroClawError> {
+        let conn = self.lock_conn();
+        let row = conn
+            .query_row(
+                "SELECT tool_name, result_content, is_error, metadata_json, created_at, expires_at
+                 FROM tool_result_cache
+                 WHERE cache_key = ?1 AND expires_at > ?2",
+                params![cache_key, now],
+                |r| {
+                    Ok(CachedToolResult {
+                        tool_name: r.get(0)?,
+                        content: r.get(1)?,
+                        is_error: r.get::<_, i64>(2)? != 0,
+                        metadata_json: r.get::<_, Option<String>>(3)?,
+                        created_at: r.get(4)?,
+                        expires_at: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Insert or replace a cached tool result. Only non-error results
+    /// should be cached in practice; the `is_error` flag is exposed so
+    /// callers can choose a policy.
+    pub fn put_cached_tool_result(
+        &self,
+        cache_key: &str,
+        tool_name: &str,
+        content: &str,
+        is_error: bool,
+        metadata_json: Option<&str>,
+        expires_at: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO tool_result_cache
+                (cache_key, tool_name, result_content, is_error, metadata_json, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(cache_key) DO UPDATE SET
+                tool_name = excluded.tool_name,
+                result_content = excluded.result_content,
+                is_error = excluded.is_error,
+                metadata_json = excluded.metadata_json,
+                created_at = excluded.created_at,
+                expires_at = excluded.expires_at",
+            params![cache_key, tool_name, content, is_error as i64, metadata_json, now, expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// Delete all expired cache rows. Returns number of rows deleted.
+    pub fn prune_tool_result_cache(&self, now: &str) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let n = conn.execute(
+            "DELETE FROM tool_result_cache WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        Ok(n)
+    }
+
+    /// Persist a tool-result artifact (full content) so the agent can fetch
+    /// slices later via `fetch_artifact`. The caller is responsible for
+    /// generating a unique `artifact_id`.
+    pub fn save_tool_artifact(
+        &self,
+        artifact_id: &str,
+        chat_id: i64,
+        tool_name: &str,
+        content: &str,
+        expires_at: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let total_chars = content.chars().count() as i64;
+        conn.execute(
+            "INSERT INTO tool_result_artifacts
+                (artifact_id, chat_id, tool_name, content, total_chars, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![artifact_id, chat_id, tool_name, content, total_chars, now, expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch a character-range slice of a stored artifact. Returns
+    /// `(meta, slice, returned_chars)` if the artifact exists and is not
+    /// expired. `offset` and `length` are interpreted as Unicode code
+    /// points to keep the cap predictable across multi-byte content.
+    pub fn get_tool_artifact_slice(
+        &self,
+        artifact_id: &str,
+        offset: usize,
+        length: usize,
+        now: &str,
+    ) -> Result<Option<(ToolArtifactMeta, String)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let row = conn
+            .query_row(
+                "SELECT artifact_id, chat_id, tool_name, content, total_chars, created_at, expires_at
+                 FROM tool_result_artifacts
+                 WHERE artifact_id = ?1 AND expires_at > ?2",
+                params![artifact_id, now],
+                |r| {
+                    let content: String = r.get(3)?;
+                    Ok((
+                        ToolArtifactMeta {
+                            artifact_id: r.get(0)?,
+                            chat_id: r.get(1)?,
+                            tool_name: r.get(2)?,
+                            total_chars: r.get(4)?,
+                            created_at: r.get(5)?,
+                            expires_at: r.get(6)?,
+                        },
+                        content,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((meta, content)) = row else {
+            return Ok(None);
+        };
+        let slice: String = content.chars().skip(offset).take(length).collect();
+        Ok(Some((meta, slice)))
+    }
+
+    /// Delete expired artifact rows. Returns number of rows deleted.
+    pub fn prune_tool_artifacts(&self, now: &str) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let n = conn.execute(
+            "DELETE FROM tool_result_artifacts WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        Ok(n)
+    }
+
+    /// Append a row to the skill activation log. `chat_id` may be 0 for
+    /// channel-less invocations (e.g. tests).
+    pub fn log_skill_activation(
+        &self,
+        skill_name: &str,
+        chat_id: i64,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO skill_activation_logs (skill_name, chat_id, activated_at)
+             VALUES (?1, ?2, ?3)",
+            params![skill_name, chat_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// Most-recent activation timestamp for a skill, or `None` if never
+    /// activated. Used by the auto-archive job.
+    pub fn last_skill_activation_at(
+        &self,
+        skill_name: &str,
+    ) -> Result<Option<String>, MicroClawError> {
+        let conn = self.lock_conn();
+        let result = conn.query_row(
+            "SELECT activated_at FROM skill_activation_logs
+             WHERE skill_name = ?1
+             ORDER BY activated_at DESC
+             LIMIT 1",
+            params![skill_name],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(ts) => Ok(Some(ts)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Activation counts for every skill seen in the last `since` window.
+    /// Returns `(skill_name, count)` rows ordered by count descending.
+    /// Used by the insights surface and operator dashboards.
+    pub fn skill_activation_counts_since(
+        &self,
+        since: &str,
+    ) -> Result<Vec<(String, i64)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT skill_name, COUNT(*) AS n
+             FROM skill_activation_logs
+             WHERE activated_at >= ?1
+             GROUP BY skill_name
+             ORDER BY n DESC, skill_name ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![since], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Overwrite the session label for a chat. No-op if the chat has no
+    /// session row yet. Used by the title generator background task.
+    pub fn set_session_label(
+        &self,
+        chat_id: i64,
+        label: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE sessions SET label = ?1 WHERE chat_id = ?2",
+            params![label, chat_id],
+        )?;
+        Ok(())
+    }
+
+    /// Return the current session label + message count for a chat. Used
+    /// to decide whether the title generator should run.
+    pub fn get_session_label_and_length(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<(Option<String>, usize)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let result = conn
+            .query_row(
+                "SELECT label, messages_json FROM sessions WHERE chat_id = ?1",
+                params![chat_id],
+                |row| {
+                    let label: Option<String> = row.get(0)?;
+                    let json: String = row.get(1)?;
+                    Ok((label, json))
+                },
+            )
+            .optional()?;
+        let Some((label, json)) = result else {
+            return Ok(None);
+        };
+        let count = serde_json::from_str::<Vec<serde_json::Value>>(&json)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        Ok(Some((label, count)))
+    }
+
     pub fn save_session_settings(
         &self,
         chat_id: i64,
@@ -2756,6 +3152,68 @@ impl Database {
         Ok(messages)
     }
 
+    /// Full-text search over stored messages using the SQLite FTS5 index.
+    ///
+    /// `query` must be a valid FTS5 match expression (simple words are OK,
+    /// e.g. `"rust async"`). Returns ranked matches newest-first for
+    /// equally-ranked rows. When `chat_id` is `Some`, the search is scoped to
+    /// that chat; otherwise it spans all chats. When `since` is `Some`, only
+    /// messages with timestamp >= that value are returned. Results are
+    /// truncated to `limit` rows.
+    pub fn search_messages_fts(
+        &self,
+        query: &str,
+        chat_id: Option<i64>,
+        since: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>, MicroClawError> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 200) as i64;
+        let conn = self.lock_conn();
+
+        let mut sql = String::from(
+            "SELECT m.id, m.chat_id, m.sender_name, m.content, m.is_from_bot, m.timestamp
+             FROM messages_fts f
+             JOIN messages m ON m.id = f.message_id AND m.chat_id = f.chat_id
+             WHERE f.content MATCH ?1",
+        );
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(query.to_string())];
+        if let Some(cid) = chat_id {
+            sql.push_str(" AND m.chat_id = ?");
+            sql.push_str(&(binds.len() + 1).to_string());
+            binds.push(Box::new(cid));
+        }
+        if let Some(ts) = since {
+            sql.push_str(" AND m.timestamp >= ?");
+            sql.push_str(&(binds.len() + 1).to_string());
+            binds.push(Box::new(ts.to_string()));
+        }
+        sql.push_str(" ORDER BY bm25(messages_fts), m.timestamp DESC LIMIT ?");
+        sql.push_str(&(binds.len() + 1).to_string());
+        binds.push(Box::new(limit));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let bind_refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b.as_ref()).collect();
+        let messages = stmt
+            .query_map(
+                rusqlite::params_from_iter(bind_refs.iter().copied()),
+                |row| {
+                    Ok(StoredMessage {
+                        id: row.get(0)?,
+                        chat_id: row.get(1)?,
+                        sender_name: row.get(2)?,
+                        content: row.get(3)?,
+                        is_from_bot: row.get::<_, i32>(4)? != 0,
+                        timestamp: row.get(5)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
     pub fn get_reflector_cursor(&self, chat_id: i64) -> Result<Option<String>, MicroClawError> {
         let conn = self.lock_conn();
         let result = conn.query_row(
@@ -3061,18 +3519,20 @@ impl Database {
         limit: usize,
     ) -> Result<Vec<Memory>, MicroClawError> {
         let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model,
-                    confidence, source, last_seen_at, is_archived, archived_at
+                    confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories
              WHERE (chat_id = ?1 OR chat_id IS NULL)
                AND is_archived = 0
                AND confidence >= 0.45
+               AND (expires_at IS NULL OR expires_at > ?3)
              ORDER BY updated_at DESC
              LIMIT ?2",
         )?;
         let memories = stmt
-            .query_map(params![chat_id, limit as i64], |row| {
+            .query_map(params![chat_id, limit as i64, now], |row| {
                 Ok(Memory {
                     id: row.get(0)?,
                     chat_id: row.get(1)?,
@@ -3086,6 +3546,7 @@ impl Database {
                     last_seen_at: row.get(9)?,
                     is_archived: row.get::<_, i64>(10)? != 0,
                     archived_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3099,7 +3560,7 @@ impl Database {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model,
-                    confidence, source, last_seen_at, is_archived, archived_at
+                    confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories
              WHERE (chat_id = ?1 OR (?1 IS NULL AND chat_id IS NULL))",
         )?;
@@ -3118,6 +3579,7 @@ impl Database {
                     last_seen_at: row.get(9)?,
                     is_archived: row.get::<_, i64>(10)? != 0,
                     archived_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3155,12 +3617,14 @@ impl Database {
     ) -> Result<Vec<Memory>, MicroClawError> {
         let conn = self.lock_conn();
         let pattern = format!("%{}%", query.to_lowercase());
+        let now = chrono::Utc::now().to_rfc3339();
         let mut sql = String::from(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model,
-                    confidence, source, last_seen_at, is_archived, archived_at
+                    confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories
              WHERE (chat_id = ?1 OR chat_id IS NULL)
-               AND LOWER(content) LIKE ?2",
+               AND LOWER(content) LIKE ?2
+               AND (expires_at IS NULL OR expires_at > ?4)",
         );
         if !include_archived {
             sql.push_str(" AND is_archived = 0");
@@ -3171,7 +3635,7 @@ impl Database {
         sql.push_str(" ORDER BY confidence DESC, updated_at DESC LIMIT ?3");
         let mut stmt = conn.prepare(&sql)?;
         let memories = stmt
-            .query_map(params![chat_id, pattern, limit as i64], |row| {
+            .query_map(params![chat_id, pattern, limit as i64, now], |row| {
                 Ok(Memory {
                     id: row.get(0)?,
                     chat_id: row.get(1)?,
@@ -3185,6 +3649,7 @@ impl Database {
                     last_seen_at: row.get(9)?,
                     is_archived: row.get::<_, i64>(10)? != 0,
                     archived_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3196,6 +3661,32 @@ impl Database {
         let conn = self.lock_conn();
         let rows = conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         Ok(rows > 0)
+    }
+
+    /// Set or clear the `expires_at` of a memory. Pass `None` to clear.
+    pub fn set_memory_expires_at(
+        &self,
+        id: i64,
+        expires_at: Option<&str>,
+    ) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let rows = conn.execute(
+            "UPDATE memories SET expires_at = ?1 WHERE id = ?2",
+            params![expires_at, id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Hard-delete memories whose `expires_at` is at or before `now`.
+    /// Returns the number of rows deleted. Called from the reflector on its
+    /// scheduled tick.
+    pub fn prune_expired_memories(&self, now: &str) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let n = conn.execute(
+            "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+            params![now],
+        )?;
+        Ok(n)
     }
 
     /// Update content and category of an existing memory. Returns true if found.
@@ -3278,7 +3769,7 @@ impl Database {
         let conn = self.lock_conn();
         let mut query = String::from(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model
-             , confidence, source, last_seen_at, is_archived, archived_at
+             , confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories
              WHERE embedding_model IS NULL
                AND is_archived = 0",
@@ -3304,6 +3795,7 @@ impl Database {
                 last_seen_at: row.get(9)?,
                 is_archived: row.get::<_, i64>(10)? != 0,
                 archived_at: row.get(11)?,
+                expires_at: row.get(12)?,
             })
         };
 
@@ -3410,7 +3902,7 @@ impl Database {
         let conn = self.lock_conn();
         let result = conn.query_row(
             "SELECT id, chat_id, content, category, created_at, updated_at, embedding_model,
-                    confidence, source, last_seen_at, is_archived, archived_at
+                    confidence, source, last_seen_at, is_archived, archived_at, expires_at
              FROM memories WHERE id = ?1",
             params![id],
             |row| {
@@ -3427,6 +3919,7 @@ impl Database {
                     last_seen_at: row.get(9)?,
                     is_archived: row.get::<_, i64>(10)? != 0,
                     archived_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             },
         );
@@ -5126,6 +5619,60 @@ mod tests {
     }
 
     #[test]
+    fn test_search_messages_fts_basic() {
+        let (db, dir) = test_db();
+        let now = chrono::Utc::now();
+        let messages = [
+            ("chat-1", 101, "alice", "Rust async futures are awesome"),
+            ("chat-2", 101, "bot", "I agree, tokio makes them easy"),
+            ("chat-3", 101, "alice", "Let's talk about JavaScript promises instead"),
+            ("chat-4", 202, "bob", "Discussing Rust borrow checker"),
+        ];
+        for (i, (id, chat, sender, content)) in messages.iter().enumerate() {
+            let msg = StoredMessage {
+                id: (*id).into(),
+                chat_id: *chat,
+                sender_name: (*sender).into(),
+                content: (*content).into(),
+                is_from_bot: *sender == "bot",
+                timestamp: (now + chrono::Duration::seconds(i as i64)).to_rfc3339(),
+            };
+            db.store_message(&msg).unwrap();
+        }
+
+        let rust_hits = db.search_messages_fts("rust", None, None, 10).unwrap();
+        assert!(rust_hits.len() >= 2, "expected at least 2 rust matches");
+        assert!(rust_hits.iter().all(|m| m.content.to_lowercase().contains("rust")));
+
+        let scoped = db.search_messages_fts("rust", Some(101), None, 10).unwrap();
+        assert!(scoped.iter().all(|m| m.chat_id == 101));
+
+        let empty = db.search_messages_fts("", None, None, 10).unwrap();
+        assert!(empty.is_empty());
+
+        let no_match = db
+            .search_messages_fts("nothingmatchesthis", None, None, 10)
+            .unwrap();
+        assert!(no_match.is_empty());
+
+        // Delete and confirm the FTS row is also removed via trigger.
+        {
+            let conn = db.lock_conn();
+            conn.execute(
+                "DELETE FROM messages WHERE id = ?1 AND chat_id = ?2",
+                params!["chat-1", 101i64],
+            )
+            .unwrap();
+        }
+        let after_delete = db
+            .search_messages_fts("awesome", None, None, 10)
+            .unwrap();
+        assert!(after_delete.is_empty());
+
+        cleanup(&dir);
+    }
+
+    #[test]
     fn test_store_message_upsert() {
         let (db, dir) = test_db();
         let msg = StoredMessage {
@@ -6751,6 +7298,116 @@ mod tests {
         let logs = db.list_audit_logs(Some("operator"), 20).unwrap();
         assert!(!logs.is_empty());
 
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_skill_activation_log_and_query() {
+        let (db, dir) = test_db();
+        // No activations yet → None
+        assert!(db.last_skill_activation_at("alpha").unwrap().is_none());
+
+        db.log_skill_activation("alpha", 7).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        db.log_skill_activation("alpha", 7).unwrap();
+        db.log_skill_activation("beta", 8).unwrap();
+
+        let last_alpha = db.last_skill_activation_at("alpha").unwrap().unwrap();
+        let last_beta = db.last_skill_activation_at("beta").unwrap().unwrap();
+        assert!(last_alpha >= last_beta || last_alpha <= last_beta);
+
+        let counts = db
+            .skill_activation_counts_since("1970-01-01T00:00:00Z")
+            .unwrap();
+        let alpha = counts.iter().find(|(n, _)| n == "alpha").unwrap();
+        let beta = counts.iter().find(|(n, _)| n == "beta").unwrap();
+        assert_eq!(alpha.1, 2);
+        assert_eq!(beta.1, 1);
+        // Counts ordered by n DESC then name — alpha first.
+        assert_eq!(counts[0].0, "alpha");
+
+        // Cutoff in the future → no rows.
+        let future = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+        let none = db.skill_activation_counts_since(&future).unwrap();
+        assert!(none.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_memory_ttl_filters_and_prunes() {
+        let (db, dir) = test_db();
+        let durable = db
+            .insert_memory(Some(7), "durable fact", "KNOWLEDGE")
+            .unwrap();
+        let expiring = db
+            .insert_memory(Some(7), "transient fact", "KNOWLEDGE")
+            .unwrap();
+        let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+
+        // Future expiry — still surfaced in retrieval.
+        db.set_memory_expires_at(durable, Some(&future)).unwrap();
+        // Past expiry — gets filtered from retrieval right away.
+        db.set_memory_expires_at(expiring, Some(&past)).unwrap();
+
+        let ctx = db.get_memories_for_context(7, 50).unwrap();
+        let ids: Vec<i64> = ctx.iter().map(|m| m.id).collect();
+        assert!(ids.contains(&durable), "durable memory should be visible");
+        assert!(
+            !ids.contains(&expiring),
+            "expired memory must not appear in context retrieval"
+        );
+
+        // Search also filters.
+        let hits = db.search_memories(7, "fact", 50).unwrap();
+        assert!(hits.iter().all(|m| m.id != expiring));
+
+        // Prune deletes the row.
+        let now = chrono::Utc::now().to_rfc3339();
+        let pruned = db.prune_expired_memories(&now).unwrap();
+        assert_eq!(pruned, 1);
+        assert!(db.get_memory_by_id(expiring).unwrap().is_none());
+        assert!(db.get_memory_by_id(durable).unwrap().is_some());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_tool_artifact_save_and_slice() {
+        let (db, dir) = test_db();
+        let now = chrono::Utc::now();
+        let expires = (now + chrono::Duration::hours(1)).to_rfc3339();
+        let body: String = "0123456789".repeat(20); // 200 chars
+        db.save_tool_artifact("art_x", 42, "bash", &body, &expires)
+            .unwrap();
+
+        // First slice from offset 0
+        let (meta, slice) = db
+            .get_tool_artifact_slice("art_x", 0, 50, &now.to_rfc3339())
+            .unwrap()
+            .expect("artifact present");
+        assert_eq!(meta.chat_id, 42);
+        assert_eq!(meta.tool_name, "bash");
+        assert_eq!(meta.total_chars, 200);
+        assert_eq!(slice.chars().count(), 50);
+        assert!(body.starts_with(&slice));
+
+        // Slice past the end clamps to remaining
+        let (_, tail) = db
+            .get_tool_artifact_slice("art_x", 190, 50, &now.to_rfc3339())
+            .unwrap()
+            .unwrap();
+        assert_eq!(tail.chars().count(), 10);
+
+        // Expired artifact returns None
+        let future = (now + chrono::Duration::hours(2)).to_rfc3339();
+        let missing = db
+            .get_tool_artifact_slice("art_x", 0, 10, &future)
+            .unwrap();
+        assert!(missing.is_none());
+
+        // Prune removes expired rows
+        let pruned = db.prune_tool_artifacts(&future).unwrap();
+        assert_eq!(pruned, 1);
         cleanup(&dir);
     }
 

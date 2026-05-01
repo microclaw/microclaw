@@ -1,27 +1,40 @@
 use async_trait::async_trait;
 use serde_json::json;
-use tracing::info;
+use std::sync::Arc;
+use tracing::{info, warn};
 
 use crate::skills::SkillManager;
 use microclaw_core::llm_types::ToolDefinition;
+use microclaw_storage::db::Database;
 
-use super::{schema_object, Tool, ToolResult};
+use super::{auth_context_from_input, schema_object, Tool, ToolResult};
 
 pub struct ActivateSkillTool {
     skill_manager: SkillManager,
+    db: Option<Arc<Database>>,
 }
 
 impl ActivateSkillTool {
     pub fn new(skills_dir: &str) -> Self {
         ActivateSkillTool {
             skill_manager: SkillManager::from_skills_dir(skills_dir),
+            db: None,
         }
     }
 
     pub fn new_with_runtime(skills_dir: &str, runtime_dir: &str) -> Self {
         ActivateSkillTool {
             skill_manager: SkillManager::from_skills_and_runtime(skills_dir, runtime_dir),
+            db: None,
         }
+    }
+
+    /// Attach the storage handle so successful activations get logged to
+    /// `skill_activation_logs`. Optional: tests / standalone uses can
+    /// skip the DB and the tool just won't track usage.
+    pub fn with_db(mut self, db: Arc<Database>) -> Self {
+        self.db = Some(db);
+        self
     }
 }
 
@@ -57,6 +70,14 @@ impl Tool for ActivateSkillTool {
 
         match self.skill_manager.load_skill_checked(skill_name) {
             Ok((meta, body)) => {
+                if let Some(db) = &self.db {
+                    let chat_id = auth_context_from_input(&input)
+                        .map(|a| a.caller_chat_id)
+                        .unwrap_or(0);
+                    if let Err(e) = db.log_skill_activation(&meta.name, chat_id) {
+                        warn!(skill = %meta.name, "Failed to log skill activation: {e}");
+                    }
+                }
                 let mut result = format!("# Skill: {}\n\n", meta.name);
                 result.push_str(&format!("Description: {}\n", meta.description));
                 result.push_str(&format!("Skill directory: {}\n", meta.dir_path.display()));

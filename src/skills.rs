@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub struct SkillMetadata {
@@ -13,6 +14,20 @@ pub struct SkillMetadata {
     pub version: Option<String>,
     pub updated_at: Option<String>,
     pub env_file: Option<String>,
+    /// agentskills.io spec field. License of the skill (free-form, e.g.
+    /// "Apache-2.0" or a reference to a bundled LICENSE file).
+    pub license: Option<String>,
+    /// agentskills.io spec field. Free-form compatibility string when the
+    /// skill author used the spec's flat form (e.g.
+    /// "Requires git, docker, jq, and access to the internet"). When the
+    /// MicroClaw nested form was used, this is None and the structured
+    /// requirements live in `platforms` and `deps`.
+    pub compatibility: Option<String>,
+    /// agentskills.io spec field (kebab-case in YAML: `allowed-tools`).
+    /// Space-separated string of pre-approved tools the skill may use.
+    /// Experimental in the spec; surfaced verbatim for clients that wish
+    /// to honor it.
+    pub allowed_tools: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,7 +48,7 @@ struct SkillFrontmatter {
     #[serde(default)]
     deps: Vec<String>,
     #[serde(default)]
-    compatibility: SkillCompatibility,
+    compatibility: CompatibilityField,
     #[serde(default)]
     source: Option<String>,
     #[serde(default)]
@@ -44,6 +59,29 @@ struct SkillFrontmatter {
     env_file: Option<String>,
     #[serde(default)]
     metadata: SkillFrontmatterMetadata,
+    /// agentskills.io spec field.
+    #[serde(default)]
+    license: Option<String>,
+    /// agentskills.io spec field, kebab-case in YAML.
+    #[serde(default, rename = "allowed-tools")]
+    allowed_tools: Option<String>,
+}
+
+/// Accept either MicroClaw's structured `compatibility: { os: [...], deps:
+/// [...] }` form or the agentskills.io spec's flat string form
+/// (`compatibility: "Requires git, docker..."`). Defaults to structured-empty
+/// so existing skills keep parsing.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CompatibilityField {
+    Structured(SkillCompatibility),
+    Free(String),
+}
+
+impl Default for CompatibilityField {
+    fn default() -> Self {
+        CompatibilityField::Structured(SkillCompatibility::default())
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -92,6 +130,12 @@ const MAX_SKILLS_CATALOG_ITEMS: usize = 40;
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 120;
 const COMPACT_SKILLS_MODE_THRESHOLD: usize = 20;
 const SKILLS_STATE_FILENAME: &str = "skills_state.json";
+
+/// Per-skill body cap when a hot match's full SKILL.md is inlined into
+/// the system prompt. Keeps the prompt-cost predictable as the skill
+/// library grows; the agent can still call `activate_skill` to read the
+/// full body if it needs more.
+const MAX_INLINED_SKILL_BODY_CHARS: usize = 1500;
 
 impl SkillManager {
     pub fn from_skills_dir(skills_dir: &str) -> Self {
@@ -162,6 +206,7 @@ impl SkillManager {
             }
             if let Ok(content) = std::fs::read_to_string(&skill_md) {
                 if let Some((meta, _body)) = parse_skill_md(&content, &path) {
+                    warn_once_if_legacy_name(&meta.name);
                     if matches!(state.get(&meta.name), Some(false)) {
                         statuses.push(SkillAvailability {
                             meta,
@@ -316,6 +361,100 @@ impl SkillManager {
         catalog
     }
 
+    /// Build a query-aware skills catalog: inline the full body of the
+    /// top-`top_k` skills whose descriptions overlap the query, and fall
+    /// back to a compact `name: description` listing for the rest.
+    ///
+    /// Tradeoff vs `build_skills_catalog`: spending a bigger token slice
+    /// on the most-relevant skills (so the agent has the procedural
+    /// knowledge inline and doesn't need an extra `activate_skill`
+    /// round-trip) while keeping the long tail cheap.
+    ///
+    /// `top_k = 0` falls back to [`build_skills_catalog`] verbatim. An
+    /// empty `query` also falls back — without a query the relevance
+    /// score is meaningless.
+    pub fn build_skills_catalog_for_query(&self, query: &str, top_k: usize) -> String {
+        if top_k == 0 || query.trim().is_empty() {
+            return self.build_skills_catalog();
+        }
+        let mut skills = self.discover_skills();
+        if skills.is_empty() {
+            return String::new();
+        }
+
+        let query_tokens = crate::memory_service::tokenize_for_relevance(query);
+        // Score by description-token overlap. Name is also factored in so
+        // a query like "tokyo-deploy" matches a skill literally named
+        // `tokyo-deploy`.
+        let mut scored: Vec<(usize, SkillMetadata)> = skills
+            .drain(..)
+            .map(|s| {
+                let blob = format!("{} {}", s.name, s.description);
+                let blob_tokens = crate::memory_service::tokenize_for_relevance(&blob);
+                let score = blob_tokens
+                    .iter()
+                    .filter(|t| query_tokens.contains(*t))
+                    .count();
+                (score, s)
+            })
+            .collect();
+        // Higher score first; tie-break by name for stability.
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+
+        // Hot bucket: top_k entries with score > 0.
+        let mut hot: Vec<SkillMetadata> = Vec::new();
+        let mut cold: Vec<SkillMetadata> = Vec::new();
+        for (score, meta) in scored {
+            if score > 0 && hot.len() < top_k {
+                hot.push(meta);
+            } else {
+                cold.push(meta);
+            }
+        }
+        if hot.is_empty() {
+            // No relevant matches — degenerate to the plain catalog.
+            return self.build_skills_catalog();
+        }
+
+        let mut out = String::from("<available_skills>\n");
+        out.push_str("<!-- Hot matches: full body inlined for the most relevant skills. -->\n");
+        for meta in &hot {
+            out.push_str(&format!("## {}\n", meta.name));
+            out.push_str(&format!("Description: {}\n", meta.description));
+            if let Some(version) = &meta.version {
+                out.push_str(&format!("Version: {}\n", version));
+            }
+            let skill_md = meta.dir_path.join("SKILL.md");
+            if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                let body = strip_frontmatter(&content);
+                let body = truncate_chars(body, MAX_INLINED_SKILL_BODY_CHARS);
+                out.push_str("Instructions:\n");
+                out.push_str(&body);
+                if !body.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            out.push('\n');
+        }
+        if !cold.is_empty() {
+            out.push_str("<!-- Other available skills (call activate_skill to load full body): -->\n");
+            cold.sort_by_key(|s| s.name.to_ascii_lowercase());
+            let total_cold = cold.len();
+            let omitted = total_cold.saturating_sub(MAX_SKILLS_CATALOG_ITEMS);
+            for skill in cold.into_iter().take(MAX_SKILLS_CATALOG_ITEMS) {
+                let desc = truncate_chars(&skill.description, MAX_SKILL_DESCRIPTION_CHARS);
+                out.push_str(&format!("- {}: {}\n", skill.name, desc));
+            }
+            if omitted > 0 {
+                out.push_str(&format!(
+                    "- ... ({omitted} additional skills omitted for prompt budget)\n"
+                ));
+            }
+        }
+        out.push_str("</available_skills>");
+        out
+    }
+
     /// Build a user-facing formatted list of available skills.
     pub fn list_skills_formatted(&self) -> String {
         let skills = self.discover_skills();
@@ -328,6 +467,7 @@ impl SkillManager {
                 "• {} — {} [{}]\n",
                 skill.name, skill.description, skill.source
             ));
+            append_agentskills_metadata(&mut output, skill);
         }
         output
     }
@@ -348,6 +488,7 @@ impl SkillManager {
                 "• {} — {} [{}]\n",
                 skill.meta.name, skill.meta.description, skill.meta.source
             ));
+            append_agentskills_metadata(&mut output, &skill.meta);
         }
         output.push('\n');
         output.push_str(&format!("Unavailable skills ({}):\n\n", unavailable.len()));
@@ -480,6 +621,19 @@ fn missing_deps(deps: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Return the SKILL.md body with its YAML frontmatter (`---\n…\n---\n`)
+/// removed. If no frontmatter is present, the input is returned as-is.
+fn strip_frontmatter(content: &str) -> &str {
+    let trimmed = content.trim_start_matches('\u{feff}');
+    if !trimmed.starts_with("---\n") {
+        return trimmed;
+    }
+    match trimmed[4..].find("\n---\n") {
+        Some(end) => trimmed[4 + end + 5..].trim_start_matches('\n'),
+        None => trimmed,
+    }
+}
+
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         return s.to_string();
@@ -560,10 +714,22 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
         return None;
     }
 
+    let (compat_os, compat_deps, compatibility_str) = match fm.compatibility {
+        CompatibilityField::Structured(c) => (c.os, c.deps, None),
+        CompatibilityField::Free(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                (Vec::new(), Vec::new(), None)
+            } else {
+                (Vec::new(), Vec::new(), Some(trimmed.to_string()))
+            }
+        }
+    };
+
     let mut platforms: Vec<String> = fm
         .platforms
         .into_iter()
-        .chain(fm.compatibility.os)
+        .chain(compat_os)
         .map(|p| normalize_platform(&p))
         .filter(|p| !p.is_empty())
         .collect();
@@ -573,7 +739,7 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
     let mut deps: Vec<String> = fm
         .deps
         .into_iter()
-        .chain(fm.compatibility.deps)
+        .chain(compat_deps)
         .map(|d| d.trim().to_string())
         .filter(|d| !d.is_empty())
         .collect();
@@ -619,9 +785,85 @@ fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMet
                 .env_file
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
+            license: fm
+                .license
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            compatibility: compatibility_str,
+            allowed_tools: fm
+                .allowed_tools
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         },
         body,
     ))
+}
+
+/// Warn once per process per non-spec-compliant skill name. Legacy skills
+/// with underscores or uppercase still load fine, but operators get a
+/// portability nudge so they know newly published skills should rename
+/// before pushing to agentskills.io-compatible registries.
+fn warn_once_if_legacy_name(name: &str) {
+    static SEEN: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    if validate_agentskills_name(name).is_ok() {
+        return;
+    }
+    let seen = SEEN.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    let mut guard = match seen.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if guard.insert(name.to_string()) {
+        tracing::warn!(
+            skill = %name,
+            "skill name is not agentskills.io spec-compliant (lowercase a-z, 0-9, '-' only; no leading/trailing/consecutive '-'); rename before publishing"
+        );
+    }
+}
+
+/// Append agentskills.io optional metadata to a multi-line skill listing
+/// entry — license / spec compatibility string / allowed-tools — only when
+/// they were actually populated, so the existing per-skill line stays
+/// terse for skills that don't declare them.
+fn append_agentskills_metadata(output: &mut String, meta: &SkillMetadata) {
+    if let Some(license) = meta.license.as_deref() {
+        output.push_str(&format!("    license: {license}\n"));
+    }
+    if let Some(compat) = meta.compatibility.as_deref() {
+        output.push_str(&format!("    compatibility: {compat}\n"));
+    }
+    if let Some(tools) = meta.allowed_tools.as_deref() {
+        output.push_str(&format!("    allowed-tools: {tools}\n"));
+    }
+}
+
+/// Validate a skill name against the agentskills.io spec rules:
+/// 1-64 characters, lowercase a-z, digits, and hyphens only, must not
+/// start/end with a hyphen and must not contain consecutive hyphens.
+/// Returns Ok(()) on conformance, otherwise a human-readable diagnostic.
+/// Used by skill-creation tooling so newly-authored skills are spec-clean
+/// without rejecting any pre-existing locally installed skills.
+pub fn validate_agentskills_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(format!(
+            "skill name must be 1-64 characters (got {})",
+            name.len()
+        ));
+    }
+    if name.starts_with('-') || name.ends_with('-') {
+        return Err("skill name must not start or end with a hyphen".into());
+    }
+    if name.contains("--") {
+        return Err("skill name must not contain consecutive hyphens".into());
+    }
+    for ch in name.chars() {
+        if !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-') {
+            return Err(format!(
+                "skill name contains invalid character '{ch}'; only lowercase a-z, 0-9, and '-' are allowed"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -648,6 +890,70 @@ Use this skill to convert documents.
         assert_eq!(meta.deps, vec!["pandoc"]);
         assert_eq!(meta.source, "local");
         assert!(body.contains("Use this skill"));
+    }
+
+    #[test]
+    fn test_parse_skill_md_agentskills_minimal_spec() {
+        // The spec requires only `name` and `description`; everything else is
+        // optional. A minimal spec-compliant SKILL.md must round-trip.
+        let content = r#"---
+name: pdf-processing
+description: Extract text and tables from PDF files. Use when working with PDFs.
+---
+Body.
+"#;
+        let dir = PathBuf::from("/tmp/skills/pdf-processing");
+        let (meta, body) = parse_skill_md(content, &dir).expect("minimal spec form should parse");
+        assert_eq!(meta.name, "pdf-processing");
+        assert!(meta.description.starts_with("Extract text"));
+        assert!(meta.license.is_none());
+        assert!(meta.compatibility.is_none());
+        assert!(meta.allowed_tools.is_none());
+        assert_eq!(body, "Body.");
+    }
+
+    #[test]
+    fn test_parse_skill_md_agentskills_optional_fields() {
+        let content = r#"---
+name: pdf-processing
+description: Extract PDF text, fill forms, merge files. Use when handling PDFs.
+license: Apache-2.0
+compatibility: Requires git, docker, jq, and access to the internet
+allowed-tools: Bash(git:*) Bash(jq:*) Read
+metadata:
+  author: example-org
+  version: "1.0"
+---
+Body.
+"#;
+        let dir = PathBuf::from("/tmp/skills/pdf-processing");
+        let (meta, _) = parse_skill_md(content, &dir).expect("spec optional fields should parse");
+        assert_eq!(meta.license.as_deref(), Some("Apache-2.0"));
+        assert_eq!(
+            meta.compatibility.as_deref(),
+            Some("Requires git, docker, jq, and access to the internet")
+        );
+        assert_eq!(meta.allowed_tools.as_deref(), Some("Bash(git:*) Bash(jq:*) Read"));
+    }
+
+    #[test]
+    fn test_validate_agentskills_name_accepts_valid_names() {
+        assert!(validate_agentskills_name("pdf-processing").is_ok());
+        assert!(validate_agentskills_name("data-analysis").is_ok());
+        assert!(validate_agentskills_name("a").is_ok());
+        assert!(validate_agentskills_name("a1").is_ok());
+    }
+
+    #[test]
+    fn test_validate_agentskills_name_rejects_invalid_names() {
+        assert!(validate_agentskills_name("").is_err());
+        assert!(validate_agentskills_name("PDF-Processing").is_err());
+        assert!(validate_agentskills_name("-pdf").is_err());
+        assert!(validate_agentskills_name("pdf-").is_err());
+        assert!(validate_agentskills_name("pdf--processing").is_err());
+        assert!(validate_agentskills_name("pdf_processing").is_err());
+        assert!(validate_agentskills_name("pdf processing").is_err());
+        assert!(validate_agentskills_name(&"a".repeat(65)).is_err());
     }
 
     #[test]
@@ -706,6 +1012,37 @@ Instructions.
     }
 
     #[test]
+    fn test_list_skills_formatted_surfaces_agentskills_metadata() {
+        let dir = std::env::temp_dir().join(format!(
+            "microclaw_skills_meta_{}",
+            uuid::Uuid::new_v4()
+        ));
+        // SkillManager joins `skills/` onto the data_dir; write the skill
+        // there so it gets discovered.
+        let pdf = dir.join("skills").join("pdf-processing");
+        std::fs::create_dir_all(&pdf).unwrap();
+        std::fs::write(
+            pdf.join("SKILL.md"),
+            "---\n\
+             name: pdf-processing\n\
+             description: Extract PDF text\n\
+             license: Apache-2.0\n\
+             compatibility: Requires git, docker\n\
+             allowed-tools: Bash(git:*) Read\n\
+             ---\nbody",
+        )
+        .unwrap();
+
+        let sm = SkillManager::new(dir.to_str().unwrap());
+        let listed = sm.list_skills_formatted();
+        assert!(listed.contains("license: Apache-2.0"), "listing: {listed}");
+        assert!(listed.contains("compatibility: Requires git, docker"));
+        assert!(listed.contains("allowed-tools: Bash(git:*) Read"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_build_skills_catalog_empty() {
         let dir =
             std::env::temp_dir().join(format!("microclaw_skills_test_{}", uuid::Uuid::new_v4()));
@@ -749,6 +1086,117 @@ ok
         assert!(alpha_pos < zeta_pos);
         assert!(catalog.contains("..."));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_skill(root: &std::path::Path, name: &str, description: &str, body: &str) {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let content = format!(
+            "---\nname: {name}\ndescription: {description}\nsource: agent-created\n---\n{body}\n"
+        );
+        std::fs::write(dir.join("SKILL.md"), content).unwrap();
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_falls_back_when_top_k_zero() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_top_k_zero_{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_skill(&dir, "alpha", "alpha skill", "ok");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        let plain = sm.build_skills_catalog();
+        let queried = sm.build_skills_catalog_for_query("alpha", 0);
+        assert_eq!(plain, queried);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_inlines_relevant_skill_body() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_inline_{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_skill(&dir, "deploy-helper", "kubernetes rolling deploy", "Step 1: kubectl apply\nStep 2: verify");
+        write_skill(&dir, "irrelevant", "make tea", "boil water");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        let out = sm.build_skills_catalog_for_query("how do i do a kubernetes deploy?", 3);
+        assert!(out.contains("## deploy-helper"), "got: {out}");
+        assert!(out.contains("Step 1: kubectl apply"), "body not inlined: {out}");
+        // Irrelevant skill ends up in the cold list with just name+desc.
+        assert!(out.contains("- irrelevant: make tea"), "got: {out}");
+        assert!(!out.contains("boil water"), "irrelevant body leaked: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_falls_back_when_no_match() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_nomatch_{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_skill(&dir, "alpha", "alpha skill", "ok");
+        write_skill(&dir, "beta", "beta skill", "ok");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        // Query has no overlap with any skill description.
+        let out = sm.build_skills_catalog_for_query("xyz unrelated", 3);
+        // No "## name" inlined-body sections.
+        assert!(!out.contains("## alpha"));
+        assert!(!out.contains("## beta"));
+        // Plain catalog still lists both.
+        assert!(out.contains("- alpha: alpha skill"));
+        assert!(out.contains("- beta: beta skill"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_caps_inlined_body() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_cap_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let big_body = "x".repeat(MAX_INLINED_SKILL_BODY_CHARS + 500);
+        write_skill(&dir, "matchme", "matchme description", &big_body);
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        let out = sm.build_skills_catalog_for_query("matchme description", 3);
+        assert!(out.contains("## matchme"));
+        // Body got truncated with the "..." sentinel from truncate_chars.
+        assert!(out.contains("..."), "expected truncation marker: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_for_query_respects_top_k_bucket() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc_skills_query_top_k_{}",
+            uuid::Uuid::new_v4()
+        ));
+        // Five skills all matching "deploy"; top_k=2 should inline 2 hot
+        // bodies, others go to the cold list.
+        for n in 0..5 {
+            let name = format!("deploy-{n}");
+            write_skill(&dir, &name, "deploy stuff", &format!("body {n}"));
+        }
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        let out = sm.build_skills_catalog_for_query("deploy", 2);
+        let inlined = out.matches("## deploy-").count();
+        assert_eq!(inlined, 2, "expected 2 inlined hot matches; got: {out}");
+        // Remaining 3 should be in the cold list with name+description.
+        let cold = out.matches("- deploy-").count();
+        assert_eq!(cold, 3, "expected 3 cold entries; got: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strip_frontmatter_removes_yaml_block() {
+        let body = "---\nname: x\ndescription: y\n---\nthe body\n";
+        assert_eq!(strip_frontmatter(body), "the body\n");
+    }
+
+    #[test]
+    fn strip_frontmatter_returns_input_when_no_frontmatter() {
+        let body = "no frontmatter here\n";
+        assert_eq!(strip_frontmatter(body), body);
     }
 
     #[test]
