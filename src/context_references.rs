@@ -255,9 +255,23 @@ fn resolve_path_safe(target: &str, cwd: &Path) -> Result<PathBuf, String> {
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("@{} not found: {e}", target))?;
-    // Sensitive-path block list, evaluated against canonical.
+    // Sensitive-path block list, evaluated against canonical. We walk the
+    // resolved path's components and reject when any component name matches
+    // a known sensitive directory — works on both Unix and Windows because
+    // we never split on a separator string.
+    let component_names: Vec<String> = canonical
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+    for d in SENSITIVE_HOME_DIRS {
+        if component_names.iter().any(|name| name == d) {
+            return Err(format!("@{} blocked: refuses to read inside `{d}`", target));
+        }
+    }
     if let Some(home) = dirs_home() {
-        let canonical_str = canonical.to_string_lossy().to_string();
         for d in SENSITIVE_HOME_DIRS {
             let blocked = home.join(d);
             if canonical.starts_with(&blocked) {
@@ -266,12 +280,6 @@ fn resolve_path_safe(target: &str, cwd: &Path) -> Result<PathBuf, String> {
                     target,
                     blocked.display()
                 ));
-            }
-            // Also block when path *contains* the sensitive dir in any segment
-            if canonical_str.contains(&format!("/{d}/"))
-                || canonical_str.ends_with(&format!("/{d}"))
-            {
-                return Err(format!("@{} blocked: refuses to read inside `{d}`", target));
             }
         }
         for f in SENSITIVE_HOME_FILES {
@@ -487,33 +495,43 @@ mod tests {
 
     #[test]
     fn sensitive_path_blocked() {
-        // Path-segment block list works regardless of HOME. Sync test (no
-        // .await across the env_lock) so the lock doesn't bridge async work.
-        let _guard = crate::test_support::env_lock();
+        // Component-based block list works on both Unix and Windows. We
+        // run the expansion under env_lock and then drop the lock before
+        // asserting, so a failed assertion can't poison the lock for other
+        // tests.
         let home = std::env::temp_dir().join(format!("fake_home_{}", uuid::Uuid::new_v4()));
         let secrets = home.join(".ssh");
         std::fs::create_dir_all(&secrets).unwrap();
         std::fs::write(secrets.join("id_rsa"), "secret").unwrap();
-
-        let prev_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
-
         let target = format!("@file:{}/id_rsa", secrets.display());
-        let r = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(expand_references(&target, &home));
 
-        if let Some(prev) = prev_home {
-            std::env::set_var("HOME", prev);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let r = {
+            let _guard = crate::test_support::env_lock();
+            let prev_home = std::env::var_os("HOME");
+            std::env::set_var("HOME", &home);
 
-        assert!(!r.expanded);
-        assert!(r.warnings.iter().any(|w| w.contains("blocked")));
+            let r = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(expand_references(&target, &home));
+
+            if let Some(prev) = prev_home {
+                std::env::set_var("HOME", prev);
+            } else {
+                std::env::remove_var("HOME");
+            }
+            r
+            // _guard dropped here, before any assert!
+        };
+
         let _ = std::fs::remove_dir_all(&home);
+        assert!(!r.expanded, "expected expansion to be blocked");
+        assert!(
+            r.warnings.iter().any(|w| w.contains("blocked")),
+            "expected a 'blocked' warning, got: {:?}",
+            r.warnings
+        );
     }
 
     #[test]
