@@ -930,7 +930,7 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Xiaomi (MiMo)",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.xiaomimimo.com/v1",
-        models: &["MiMo-V2.5-Pro", "MiMo-V2.5"],
+        models: &["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni"],
     },
     ProviderPreset {
         id: "cohere",
@@ -10773,7 +10773,7 @@ sandbox:
 
     #[test]
     fn test_default_model_for_xiaomi_is_mimo_v2_5_pro() {
-        assert_eq!(default_model_for_provider("xiaomi"), "MiMo-V2.5-Pro");
+        assert_eq!(default_model_for_provider("xiaomi"), "mimo-v2.5-pro");
     }
 
     #[test]
