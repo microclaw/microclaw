@@ -480,10 +480,29 @@ fn parse_reflector_response(raw_text: &str, chat_id: i64) -> ReflectorOutputs {
         }
     }
 
-    error!(
-        "Reflector: parse failed for chat {}: no valid JSON found",
-        chat_id
-    );
+    // The model didn't produce parseable JSON. Distinguish two cases:
+    //  - it explicitly signalled "nothing to extract" (empty / `null` /
+    //    `[]` / `{}` / a one-line refusal). That's a benign no-op — log
+    //    at info, not error.
+    //  - anything else: a real schema break. Log at warn with a short
+    //    preview so the operator can see what the provider actually
+    //    returned without grepping the LLM debug stream.
+    let preview: String = trimmed.chars().take(200).collect();
+    let lower = trimmed.to_ascii_lowercase();
+    let is_explicit_no_op = trimmed.is_empty()
+        || matches!(lower.as_str(), "null" | "[]" | "{}" | "none" | "no")
+        || trimmed.len() < 16;
+    if is_explicit_no_op {
+        info!(
+            "Reflector: chat {} returned no updates (response: {:?})",
+            chat_id, preview
+        );
+    } else {
+        warn!(
+            "Reflector: parse failed for chat {chat_id}: no valid JSON found. response_preview={:?}",
+            preview
+        );
+    }
     ReflectorOutputs {
         memories: Vec::new(),
         triples: Vec::new(),
@@ -1036,6 +1055,34 @@ mod tests {
     fn test_parse_reflector_response_user_model_empty_string_yields_none() {
         let raw = r#"{"memories": [], "triples": [], "user_model": "   "}"#;
         let out = super::parse_reflector_response(raw, 1);
+        assert!(out.user_model.is_none());
+    }
+
+    #[test]
+    fn test_parse_reflector_response_no_op_signal_returns_empty() {
+        // Common shapes the model produces when there's nothing to extract.
+        // The parser should treat them as empty outputs without panicking;
+        // the log severity downgrade for these cases is verified by code
+        // review (info! vs warn!) — here we just assert the shape.
+        for raw in ["", "null", "[]", "{}", "none", "no"] {
+            let out = super::parse_reflector_response(raw, 42);
+            assert!(out.memories.is_empty(), "raw={raw:?} memories not empty");
+            assert!(out.triples.is_empty(), "raw={raw:?} triples not empty");
+            assert!(
+                out.user_model.is_none(),
+                "raw={raw:?} user_model not None"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_reflector_response_garbage_returns_empty_without_panic() {
+        // Plain prose that has no JSON braces / brackets at all. Should
+        // not panic and should return empty outputs (warn-level log).
+        let raw = "I don't think there is anything new to remember from this conversation.";
+        let out = super::parse_reflector_response(raw, 42);
+        assert!(out.memories.is_empty());
+        assert!(out.triples.is_empty());
         assert!(out.user_model.is_none());
     }
 
