@@ -926,6 +926,13 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         models: &["MiniMax-M2.5", "MiniMax-M2.5-Thinking", "MiniMax-M2.1"],
     },
     ProviderPreset {
+        id: "xiaomi",
+        label: "Xiaomi (MiMo)",
+        protocol: ProviderProtocol::OpenAiCompat,
+        default_base_url: "https://api.xiaomimimo.com/v1",
+        models: &["MiMo-V2.5-Pro", "MiMo-V2.5"],
+    },
+    ProviderPreset {
         id: "cohere",
         label: "Cohere",
         protocol: ProviderProtocol::OpenAiCompat,
@@ -10762,6 +10769,11 @@ sandbox:
     #[test]
     fn test_default_model_for_minimax_is_m2_5() {
         assert_eq!(default_model_for_provider("minimax"), "MiniMax-M2.5");
+    }
+
+    #[test]
+    fn test_default_model_for_xiaomi_is_mimo_v2_5_pro() {
+        assert_eq!(default_model_for_provider("xiaomi"), "MiMo-V2.5-Pro");
     }
 
     #[test]
