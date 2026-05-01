@@ -53,12 +53,7 @@ pub fn unknown_command_response() -> String {
 /// Show or clear the per-chat USER.md user model. Backs the `/user` slash
 /// command. Lives outside `handle_chat_command` so it can be unit-tested
 /// without spinning up the full AppState match arm.
-fn handle_user_command(
-    state: &AppState,
-    caller_channel: &str,
-    chat_id: i64,
-    args: &str,
-) -> String {
+fn handle_user_command(state: &AppState, caller_channel: &str, chat_id: i64, args: &str) -> String {
     let args = args.trim();
     if args == "clear" {
         match state.memory.clear_chat_user_model(caller_channel, chat_id) {
@@ -81,6 +76,54 @@ fn handle_user_command(
         }
     } else {
         "Usage: /user            show current USER.md\n       /user clear     remove USER.md so the reflector rebuilds it".into()
+    }
+}
+
+/// Handle `/rewind` (list checkpoints) or `/rewind <hash>` (restore).
+async fn handle_rewind_command(
+    state: &AppState,
+    caller_channel: &str,
+    chat_id: i64,
+    args: &str,
+) -> String {
+    if !state.config.checkpoints_enabled {
+        return "Checkpoints are disabled. Set `checkpoints_enabled: true` in microclaw.config.yaml \
+                to record per-turn snapshots of this chat's working directory."
+            .into();
+    }
+
+    let working_dir = microclaw_tools::runtime::chat_working_dir(
+        std::path::Path::new(&state.config.working_dir),
+        caller_channel,
+        chat_id,
+    );
+    let shadow_root = std::path::PathBuf::from(&state.config.data_dir).join("checkpoints");
+    let shadow_repo = crate::checkpoint::shadow_repo_path(&shadow_root, &working_dir);
+
+    if args.is_empty() {
+        match crate::checkpoint::list(&shadow_repo, &working_dir, 20).await {
+            Ok(entries) if entries.is_empty() => {
+                "No checkpoints yet — they're created at the start of each agent turn that modifies files."
+                    .into()
+            }
+            Ok(entries) => {
+                let mut out = String::from("Recent checkpoints (newest first):\n\n");
+                for e in entries {
+                    out.push_str(&format!(
+                        "  {}  {}  {}\n",
+                        e.commit, e.timestamp, e.label
+                    ));
+                }
+                out.push_str("\nUse `/rewind <hash>` to restore.");
+                out
+            }
+            Err(e) => format!("Failed to list checkpoints: {e}"),
+        }
+    } else {
+        match crate::checkpoint::restore(&shadow_repo, &working_dir, args).await {
+            Ok(()) => format!("Restored working directory to checkpoint {args}."),
+            Err(e) => format!("Restore failed: {e}"),
+        }
     }
 }
 
@@ -187,6 +230,10 @@ pub async fn handle_chat_command(
 
     if trimmed == "/skills" {
         return Some(state.skills.list_skills_formatted());
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("/rewind") {
+        return Some(handle_rewind_command(state, caller_channel, chat_id, rest.trim()).await);
     }
 
     if let Some(args) = trimmed.strip_prefix("/user") {

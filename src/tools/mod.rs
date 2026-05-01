@@ -7,6 +7,7 @@ pub mod describe_image;
 pub mod edit_file;
 pub mod export_chat;
 pub mod fetch_artifact;
+pub mod fuzzy_match;
 pub mod generate_image;
 pub mod glob;
 pub mod grep;
@@ -33,6 +34,27 @@ pub mod write_file;
 
 use std::sync::{Arc, OnceLock};
 use std::{path::PathBuf, time::Instant};
+
+/// Tools that are read-only / side-effect-free for the same arguments. Used
+/// by the per-turn guardrail controller (`tool_guardrails.rs`) to detect
+/// "no progress" loops where the model keeps re-running the same query and
+/// getting the same result. NOT a security boundary — that's `tool_risk` /
+/// `tool_execution_policy` in the runtime crate.
+pub const IDEMPOTENT_TOOLS: &[&str] = &[
+    "describe_image",
+    "export_chat",
+    "fetch_artifact",
+    "glob",
+    "grep",
+    "insights",
+    "osv_check",
+    "read_file",
+    "session_search",
+    "time_math",
+    "transcribe_audio",
+    "web_fetch",
+    "web_search",
+];
 
 use crate::config::Config;
 use crate::memory_backend::MemoryBackend;

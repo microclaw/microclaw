@@ -141,7 +141,15 @@ pub async fn process_with_agent_with_events(
     image_data: Option<(String, String)>,
     event_tx: Option<&UnboundedSender<AgentEvent>>,
 ) -> anyhow::Result<String> {
-    process_with_agent_with_events_guarded(state, context, override_prompt, image_data, event_tx, None).await
+    process_with_agent_with_events_guarded(
+        state,
+        context,
+        override_prompt,
+        image_data,
+        event_tx,
+        None,
+    )
+    .await
 }
 
 pub async fn process_with_agent_with_events_guarded(
@@ -155,10 +163,12 @@ pub async fn process_with_agent_with_events_guarded(
     // Use provided guard, or acquire per-chat turn lock.
     let _turn_guard = match turn_guard {
         Some(g) => Some(g),
-        None => state
-            .chat_turn_queue
-            .acquire(context.caller_channel, context.chat_id)
-            .await,
+        None => {
+            state
+                .chat_turn_queue
+                .acquire(context.caller_channel, context.chat_id)
+                .await
+        }
     };
 
     let source_message_id = call_blocking(state.db.clone(), move |db| {
@@ -217,10 +227,7 @@ pub fn maybe_rerun_for_pending(state: Arc<AppState>, channel: &str, chat_id: i64
         // The agent run will pick them up via get_new_user_messages_since because
         // the channel adapter already stored them in DB.
         // We just need to trigger a new run.
-        let pending = state
-            .chat_turn_queue
-            .drain_pending(&channel, chat_id)
-            .await;
+        let pending = state.chat_turn_queue.drain_pending(&channel, chat_id).await;
         if pending.is_empty() {
             return;
         }
@@ -305,7 +312,6 @@ fn tool_use_fingerprint(blocks: &[ResponseContentBlock]) -> Option<String> {
 fn duplicate_call_key(name: &str, input: &serde_json::Value) -> String {
     microclaw_tools::tool_cache::cache_key(name, input)
 }
-
 
 pub fn should_suppress_user_error(err: &anyhow::Error) -> bool {
     let text = err.to_string().to_ascii_lowercase();
@@ -724,6 +730,26 @@ async fn process_with_agent_logic(
         });
     }
 
+    // Expand `@`-prefix context references in the most recent user message
+    // (e.g. `@file:src/main.rs`, `@diff`, `@url:https://…`). Quietly no-ops
+    // if the message contains no `@` tokens. Older turns are historical so
+    // we don't re-expand them.
+    if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
+        if let MessageContent::Text(text) = messages[idx].content.clone() {
+            if text.contains('@') {
+                let chat_cwd = microclaw_tools::runtime::chat_working_dir(
+                    std::path::Path::new(&state.config.working_dir),
+                    context.caller_channel,
+                    chat_id,
+                );
+                let result = crate::context_references::expand_references(&text, &chat_cwd).await;
+                if result.expanded || !result.warnings.is_empty() {
+                    messages[idx].content = MessageContent::Text(result.final_message);
+                }
+            }
+        }
+    }
+
     // Extract the latest user message text for relevance-based memory scoring
     let query: String = messages
         .iter()
@@ -901,6 +927,53 @@ async fn process_with_agent_logic(
     // already been issued too many times.
     let mut recent_tool_call_keys: std::collections::VecDeque<String> =
         std::collections::VecDeque::with_capacity(state.config.tool_repeat_window.max(1));
+    // Per-turn guardrail controller — emits warnings (not blocks) for two
+    // patterns the simpler circuit breaker can't see: idempotent tools that
+    // return the same result repeatedly, and tools that fail many times in
+    // a row across different args.
+    let mut guardrails = crate::tool_guardrails::GuardrailController::new();
+    // Per-turn subdirectory hint tracker — lazy-loads `AGENTS.md` /
+    // `CLAUDE.md` / `.cursorrules` from subdirs the agent visits via tool
+    // calls and appends them to the relevant tool result. The chat's working
+    // directory itself is excluded (its hint file is already in the system
+    // prompt via `load_project_context`).
+    let mut subdir_hints = crate::subdirectory_hints::SubdirectoryHintTracker::new(
+        microclaw_tools::runtime::chat_working_dir(
+            std::path::Path::new(&state.config.working_dir),
+            context.caller_channel,
+            chat_id,
+        ),
+    );
+
+    // Per-turn filesystem checkpoint via shadow git — opt-in via config.
+    // Snapshots the chat's working directory once at turn start so users can
+    // /rewind. Failure here is logged and ignored; checkpoints must never
+    // block the agent loop.
+    if state.config.checkpoints_enabled {
+        let working_dir = microclaw_tools::runtime::chat_working_dir(
+            std::path::Path::new(&state.config.working_dir),
+            context.caller_channel,
+            chat_id,
+        );
+        let shadow_root = std::path::PathBuf::from(&state.config.data_dir).join("checkpoints");
+        let shadow_repo = crate::checkpoint::shadow_repo_path(&shadow_root, &working_dir);
+        let label = format!(
+            "turn @ {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        );
+        match crate::checkpoint::snapshot(&shadow_repo, &working_dir, &label).await {
+            Ok(Some(commit)) => {
+                tracing::debug!(
+                    chat_id,
+                    commit = %commit,
+                    "checkpoint snapshot taken"
+                );
+            }
+            Ok(None) => {} // no changes; skip
+            Err(e) => warn!(chat_id, "checkpoint snapshot failed: {e}"),
+        }
+    }
+
     for iteration in 0..state.config.max_tool_iterations {
         if let Some(tx) = event_tx {
             let _ = tx.send(AgentEvent::Iteration {
@@ -1385,7 +1458,10 @@ async fn process_with_agent_logic(
                 .content
                 .iter()
                 .filter_map(|block| {
-                    if let ResponseContentBlock::ToolUse { id, name, input, .. } = block {
+                    if let ResponseContentBlock::ToolUse {
+                        id, name, input, ..
+                    } = block
+                    {
                         Some(crate::tool_executor::PendingToolCall {
                             id: id.clone(),
                             name: name.clone(),
@@ -1482,6 +1558,32 @@ async fn process_with_agent_logic(
                 tool_results.push(block);
             }
 
+            // Per-turn guardrails: append guidance suffixes to tool_result
+            // contents when the controller spots no-progress loops or
+            // same-tool failure streaks. Pure observation — the result still
+            // goes back to the model, just with an extra hint.
+            for call in &pending_calls {
+                let key = duplicate_call_key(&call.name, &call.input);
+                let result_block = tool_results.iter_mut().find(|b| {
+                    matches!(
+                        b,
+                        ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == &call.id
+                    )
+                });
+                if let Some(ContentBlock::ToolResult {
+                    content, is_error, ..
+                }) = result_block
+                {
+                    let failed = is_error.unwrap_or(false);
+                    if let Some(suffix) = guardrails.after_call(&call.name, &key, content, failed) {
+                        content.push_str(&suffix);
+                    }
+                    if let Some(hint) = subdir_hints.check_tool_call(&call.name, &call.input) {
+                        content.push_str(&hint);
+                    }
+                }
+            }
+
             // Record the (tool, args) keys that actually executed in the
             // sliding-window history. Short-circuited calls are intentionally
             // omitted so the breaker only counts real attempts.
@@ -1573,7 +1675,9 @@ async fn process_with_agent_logic(
                     &skill_env_files,
                 )
                 .await;
-                let tool_name = batch_ctx.waiting_approval_tool.unwrap_or_else(|| "this tool".to_string());
+                let tool_name = batch_ctx
+                    .waiting_approval_tool
+                    .unwrap_or_else(|| "this tool".to_string());
                 let preview_block = batch_ctx
                     .waiting_approval_preview
                     .as_deref()
@@ -2812,7 +2916,9 @@ mod tests {
             .unwrap();
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
-        let context = build_db_memory_context(&memory_backend, &db, None, 100, "short", 20, 20, 30, 30.0).await;
+        let context =
+            build_db_memory_context(&memory_backend, &db, None, 100, "short", 20, 20, 30, 30.0)
+                .await;
         assert!(context.contains("<structured_memories>"));
         // With a tiny budget (20 tokens), not all memories fit — some are available via deep search
         assert!(
@@ -2833,8 +2939,18 @@ mod tests {
             .unwrap();
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
-        let context =
-            build_db_memory_context(&memory_backend, &db, None, 100, "likes", 10_000, 20, 30, 30.0).await;
+        let context = build_db_memory_context(
+            &memory_backend,
+            &db,
+            None,
+            100,
+            "likes",
+            10_000,
+            20,
+            30,
+            30.0,
+        )
+        .await;
         assert!(context.contains("user likes rust"));
         assert!(context.contains("user likes coffee"));
         assert!(!context.contains("memories available via"));
@@ -2851,8 +2967,18 @@ mod tests {
             .unwrap();
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
-        let context =
-            build_db_memory_context(&memory_backend, &db, None, 100, "喜欢 咖啡", 10_000, 20, 30, 30.0).await;
+        let context = build_db_memory_context(
+            &memory_backend,
+            &db,
+            None,
+            100,
+            "喜欢 咖啡",
+            10_000,
+            20,
+            30,
+            30.0,
+        )
+        .await;
         // Both PROFILE memories should be in L0 (Identity layer)
         assert!(
             context.contains("用户喜欢咖啡和编程"),
@@ -3628,8 +3754,17 @@ mod tests {
     #[test]
     fn test_build_system_prompt_with_soul() {
         let soul = "I am a friendly pirate assistant. I speak in pirate lingo and love adventure.";
-        let prompt =
-            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", Some(soul), None, None);
+        let prompt = super::build_system_prompt(
+            "testbot",
+            "telegram",
+            "",
+            42,
+            "",
+            "UTC",
+            Some(soul),
+            None,
+            None,
+        );
         assert!(prompt.contains("<soul>"));
         assert!(prompt.contains("pirate"));
         assert!(prompt.contains("</soul>"));
@@ -3640,14 +3775,16 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_without_soul() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
+        let prompt =
+            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(!prompt.contains("<soul>"));
         assert!(prompt.contains("a helpful AI assistant across chat channels"));
     }
 
     #[test]
     fn test_build_system_prompt_mentions_direct_tool_calls_for_simple_read_only_requests() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
+        let prompt =
+            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(prompt.contains("simple, low-risk, read-only requests"));
         assert!(prompt.contains("call the tool immediately and return the result directly"));
         assert!(prompt.contains("Do not ask confirmation questions"));
@@ -3655,7 +3792,8 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_prefers_chat_working_dir_over_tmp() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
+        let prompt =
+            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(prompt.contains("current chat working directory"));
         assert!(prompt.contains("use the current chat working directory's `tmp/` subdirectory"));
         assert!(prompt.contains("Do not use absolute `/tmp/...` paths"));
@@ -3663,7 +3801,8 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_discourages_invented_machine_paths() {
-        let prompt = super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
+        let prompt =
+            super::build_system_prompt("testbot", "telegram", "", 42, "", "UTC", None, None, None);
         assert!(prompt.contains("prefer relative paths rooted there"));
         assert!(prompt.contains("Do not invent machine-specific absolute paths"));
         assert!(prompt.contains("/home/..."));
@@ -3693,7 +3832,8 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_with_user_model() {
-        let user_model = "Senior Rust engineer at Acme. Prefers terse PRs, test-first, no AI fluff.";
+        let user_model =
+            "Senior Rust engineer at Acme. Prefers terse PRs, test-first, no AI fluff.";
         let prompt = super::build_system_prompt(
             "testbot",
             "telegram",
@@ -3840,7 +3980,8 @@ mod tests {
 
     #[test]
     fn test_append_plugin_context_sections_splits_prompt_and_documents() {
-        let mut prompt = super::build_system_prompt("testbot", "web", "", 1, "", "UTC", None, None, None);
+        let mut prompt =
+            super::build_system_prompt("testbot", "web", "", 1, "", "UTC", None, None, None);
         let injections = vec![
             crate::plugins::PluginContextInjection {
                 plugin_name: "p1".to_string(),

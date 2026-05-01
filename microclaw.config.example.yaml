@@ -67,6 +67,22 @@ timezone: "UTC"
 max_session_messages: 40
 compact_keep_recent: 20
 
+# Anthropic prompt caching (system_and_3 strategy).
+# When enabled, microclaw inserts up to 4 cache_control breakpoints per
+# request — system prompt + last 3 messages — so multi-turn chats hit the
+# Anthropic prompt cache and re-use prior input tokens (~75% input cost
+# reduction on long sessions). Anthropic-only; no effect on OpenAI-compat
+# providers.
+anthropic_prompt_cache_enabled: true
+# "5m" or "1h". 1h requires extended-cache opt-in on the API key.
+anthropic_prompt_cache_ttl: "5m"
+
+# Filesystem checkpoints (off by default).
+# When on, microclaw snapshots the chat's working_dir at the start of every
+# agent turn into a shadow git repo under <data_dir>/checkpoints. Use
+# `/rewind` to list, `/rewind <hash>` to restore. Requires `git` on PATH.
+checkpoints_enabled: false
+
 # Control chats can operate across chats (send_message/schedule/memory global/export/todo).
 # Non-control chats are restricted to their own chat_id.
 # control_chat_ids: []

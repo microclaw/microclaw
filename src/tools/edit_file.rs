@@ -38,7 +38,7 @@ impl Tool for EditFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "edit_file".into(),
-            description: "Edit a file by replacing an exact string match with new content. The old_string must be unique in the file. Prefer paths relative to the current chat working directory; do not invent machine-specific absolute paths unless the user or a tool already provided them.".into(),
+            description: "Edit a file by replacing a string match with new content. The match must be unique. The tool first tries an exact match; if that fails it falls back to whitespace/indentation-flexible, escape-normalized, smart-quote-aware, and block-anchor matching, and tells you which strategy succeeded. Prefer paths relative to the current chat working directory; do not invent machine-specific absolute paths unless the user or a tool already provided them.".into(),
             input_schema: schema_object(
                 json!({
                     "path": {
@@ -89,22 +89,24 @@ impl Tool for EditFileTool {
             Err(e) => return ToolResult::error(format!("Failed to read file: {e}")),
         };
 
-        let count = content.matches(old_string).count();
-        if count == 0 {
-            return ToolResult::error(
-                "old_string not found in file. Make sure the string matches exactly.".into(),
-            );
-        }
-        if count > 1 {
-            return ToolResult::error(format!(
-                "old_string found {count} times in file. It must be unique. Provide more context to make it unique."
-            ));
-        }
+        let fm = match super::fuzzy_match::fuzzy_find_and_replace(&content, old_string, new_string)
+        {
+            Ok(fm) => fm,
+            Err(msg) => return ToolResult::error(msg),
+        };
 
-        let new_content = content.replacen(old_string, new_string, 1);
-        match tokio::fs::write(&resolved_path, new_content).await {
+        match tokio::fs::write(&resolved_path, &fm.new_content).await {
             Ok(()) => {
-                ToolResult::success(format!("Successfully edited {}", resolved_path.display()))
+                let suffix = if fm.strategy == "exact" {
+                    String::new()
+                } else {
+                    format!(" (matched via `{}` strategy — re-read the file if you want to confirm the byte-exact form)", fm.strategy)
+                };
+                ToolResult::success(format!(
+                    "Successfully edited {}{}",
+                    resolved_path.display(),
+                    suffix
+                ))
             }
             Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
         }
@@ -174,12 +176,12 @@ mod tests {
         let result = tool
             .execute(json!({
                 "path": file.to_str().unwrap(),
-                "old_string": "xyz",
+                "old_string": "completely different content xyz",
                 "new_string": "abc"
             }))
             .await;
         assert!(result.is_error);
-        assert!(result.content.contains("not found in file"));
+        assert!(result.content.contains("Could not find a match"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -195,7 +197,32 @@ mod tests {
             }))
             .await;
         assert!(result.is_error);
-        assert!(result.content.contains("2 times"));
+        assert!(result.content.contains("2 matches"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_fuzzy_indentation() {
+        // File has 4-space indent; LLM provided 0-space indent.
+        let (dir, file) = setup_file("    let x = 1;\n    let y = 2;\n");
+        let tool = EditFileTool::new(".");
+        let result = tool
+            .execute(json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "let x = 1;\nlet y = 2;",
+                "new_string": "let x = 1;\nlet y = 99;"
+            }))
+            .await;
+        assert!(!result.is_error, "got error: {}", result.content);
+        // Either line_trimmed or indentation_flexible can win; both fix the issue.
+        assert!(
+            result.content.contains("line_trimmed")
+                || result.content.contains("indentation_flexible"),
+            "expected fuzzy strategy hint, got: {}",
+            result.content
+        );
+        let after = std::fs::read_to_string(&file).unwrap();
+        assert!(after.contains("let y = 99"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

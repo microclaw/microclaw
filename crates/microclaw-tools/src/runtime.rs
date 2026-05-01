@@ -318,7 +318,7 @@ fn sanitize_channel_segment(channel: &str) -> String {
     }
 }
 
-fn chat_working_dir(base_working_dir: &Path, channel: &str, chat_id: i64) -> PathBuf {
+pub fn chat_working_dir(base_working_dir: &Path, channel: &str, chat_id: i64) -> PathBuf {
     let chat_segment = if chat_id < 0 {
         format!("neg{}", chat_id.unsigned_abs())
     } else {

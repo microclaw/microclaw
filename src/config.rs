@@ -120,6 +120,15 @@ fn default_tool_repeat_window() -> usize {
 fn default_tool_repeat_limit() -> usize {
     3
 }
+fn default_anthropic_prompt_cache_enabled() -> bool {
+    true
+}
+fn default_anthropic_prompt_cache_ttl() -> String {
+    "5m".to_string()
+}
+fn default_checkpoints_enabled() -> bool {
+    false
+}
 fn default_skill_archive_after_days() -> u64 {
     30
 }
@@ -911,6 +920,22 @@ pub struct Config {
     /// Repeat threshold for the duplicate-call circuit breaker. Default: 3.
     #[serde(default = "default_tool_repeat_limit")]
     pub tool_repeat_limit: usize,
+    /// Enable Anthropic prompt-cache breakpoints (system + last 3 messages).
+    /// Cuts repeat-turn input cost ~75% for multi-turn chats. Anthropic-only;
+    /// no effect on OpenAI-compatible providers. Default: true.
+    #[serde(default = "default_anthropic_prompt_cache_enabled")]
+    pub anthropic_prompt_cache_enabled: bool,
+    /// Cache TTL for Anthropic prompt cache. "5m" (default) or "1h".
+    /// "1h" requires extended-cache opt-in on the API key.
+    #[serde(default = "default_anthropic_prompt_cache_ttl")]
+    pub anthropic_prompt_cache_ttl: String,
+    /// Enable transparent filesystem checkpoints via a shadow git repo.
+    /// When on, microclaw snapshots each chat's working directory at the
+    /// start of every agent turn so users can `/rewind` to a prior state.
+    /// Off by default — opt in per chat or via global config. Requires `git`
+    /// on PATH.
+    #[serde(default = "default_checkpoints_enabled")]
+    pub checkpoints_enabled: bool,
     /// Auto-archive `agent-created` skills that haven't been activated in
     /// this many days and are themselves at least this old. The skill dir
     /// is moved under `<skills_dir>/.archived/` (recoverable). Set to 0
@@ -1547,6 +1572,9 @@ impl Config {
             memory_recency_half_life_days: 30.0,
             tool_repeat_window: 10,
             tool_repeat_limit: 3,
+            anthropic_prompt_cache_enabled: true,
+            anthropic_prompt_cache_ttl: "5m".into(),
+            checkpoints_enabled: false,
             skill_archive_after_days: 30,
             skills_catalog_top_k: 3,
             data_dir: default_data_dir(),

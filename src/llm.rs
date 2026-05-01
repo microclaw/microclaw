@@ -264,6 +264,8 @@ pub struct AnthropicProvider {
     model: String,
     max_tokens: u32,
     base_url: String,
+    prompt_cache_enabled: bool,
+    prompt_cache_ttl: String,
 }
 
 impl AnthropicProvider {
@@ -274,7 +276,24 @@ impl AnthropicProvider {
             model: config.model.clone(),
             max_tokens: config.max_tokens,
             base_url: resolve_anthropic_messages_url(config.llm_base_url.as_deref().unwrap_or("")),
+            prompt_cache_enabled: config.anthropic_prompt_cache_enabled,
+            prompt_cache_ttl: config.anthropic_prompt_cache_ttl.clone(),
         }
+    }
+
+    /// Serialize the request and, if prompt caching is enabled, mutate the
+    /// JSON body to add cache_control breakpoints.
+    fn build_request_body(
+        &self,
+        request: &MessagesRequest,
+    ) -> Result<serde_json::Value, MicroClawError> {
+        let mut body = serde_json::to_value(request).map_err(|e| {
+            MicroClawError::LlmApi(format!("failed to serialize Anthropic request: {e}"))
+        })?;
+        if self.prompt_cache_enabled {
+            crate::prompt_cache::apply_anthropic_prompt_cache(&mut body, &self.prompt_cache_ttl);
+        }
+        Ok(body)
     }
 
     async fn send_message_stream_single_pass(
@@ -293,13 +312,14 @@ impl AnthropicProvider {
             "Sending LLM stream request"
         );
 
+        let body = self.build_request_body(&streamed_request)?;
         let response = self
             .http
             .post(&self.base_url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
-            .json(&streamed_request)
+            .json(&body)
             .send()
             .await?;
 
@@ -952,6 +972,7 @@ impl LlmProvider for AnthropicProvider {
 
         let mut retries = 0u32;
         let max_retries = 3;
+        let body = self.build_request_body(&request)?;
 
         loop {
             let response = self
@@ -960,7 +981,7 @@ impl LlmProvider for AnthropicProvider {
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
-                .json(&request)
+                .json(&body)
                 .send()
                 .await?;
 
@@ -1614,7 +1635,8 @@ impl LlmProvider for OpenAiProvider {
             if let Ok(err) = serde_json::from_str::<OaiErrorResponse>(&text) {
                 return Err(MicroClawError::LlmApi(format!(
                     "{} (url={})",
-                    err.error.display(), self.chat_url
+                    err.error.display(),
+                    self.chat_url
                 )));
             }
             return Err(MicroClawError::LlmApi(format!(
@@ -1755,7 +1777,8 @@ impl LlmProvider for OpenAiProvider {
             if let Ok(err) = serde_json::from_str::<OaiErrorResponse>(&text) {
                 return Err(MicroClawError::LlmApi(format!(
                     "{} (url={})",
-                    err.error.display(), self.chat_url
+                    err.error.display(),
+                    self.chat_url
                 )));
             }
             return Err(MicroClawError::LlmApi(format!(
@@ -2944,7 +2967,10 @@ mod tests {
         assert_eq!(out[1]["type"], "function_call_output");
         assert_eq!(out[2]["type"], "message");
         assert_eq!(out[2]["role"], "user");
-        assert_eq!(out[2]["content"], "<system_notice>follow-up</system_notice>");
+        assert_eq!(
+            out[2]["content"],
+            "<system_notice>follow-up</system_notice>"
+        );
     }
 
     #[test]
