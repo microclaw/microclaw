@@ -1945,6 +1945,7 @@ pub(crate) fn load_soul_content(
     global_soul
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_system_prompt(
     bot_username: &str,
     caller_channel: &str,

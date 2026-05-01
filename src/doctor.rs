@@ -766,9 +766,7 @@ fn check_context_layers(report: &mut DoctorReport) {
     // Project context cap. Honor 0 as an explicit "disabled" signal — that's
     // a deliberate operator choice, not a misconfiguration.
     let ctx_cap = config.context_max_chars;
-    let ctx_status = if ctx_cap == 0 {
-        CheckStatus::Warn
-    } else if ctx_cap > 32_000 {
+    let ctx_status = if ctx_cap == 0 || ctx_cap > 32_000 {
         CheckStatus::Warn
     } else {
         CheckStatus::Pass
@@ -790,9 +788,7 @@ fn check_context_layers(report: &mut DoctorReport) {
 
     // USER.md cap. 0 disables the layer; very large caps defeat curation.
     let um_cap = config.user_model_max_chars;
-    let um_status = if um_cap == 0 {
-        CheckStatus::Warn
-    } else if um_cap > 8_000 {
+    let um_status = if um_cap == 0 || um_cap > 8_000 {
         CheckStatus::Warn
     } else {
         CheckStatus::Pass
