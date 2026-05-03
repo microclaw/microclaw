@@ -84,11 +84,11 @@ function Ensure-UserPathContains([string]$dir) {
   return $true
 }
 
-function Wait-ForProcessExit([int]$pid) {
-  if ($pid -le 0) { return }
+function Wait-ForProcessExit([int]$ProcessId) {
+  if ($ProcessId -le 0) { return }
 
   try {
-    $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if ($null -ne $process) {
       $process.WaitForExit()
     }
@@ -132,7 +132,7 @@ try {
   $targetPath = Join-Path $InstallDir $BinName
   $stagedTargetPath = Join-Path $InstallDir ".$BinName.tmp.$PID"
 
-  Wait-ForProcessExit -pid $WaitForPid
+  Wait-ForProcessExit -ProcessId $WaitForPid
 
   Copy-Item -Path $bin.FullName -Destination $stagedTargetPath -Force
   if (Test-Path $targetPath) {
