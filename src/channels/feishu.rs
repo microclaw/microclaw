@@ -2953,6 +2953,12 @@ async fn handle_feishu_message(
                             dirty = true;
                         }
                     }
+                    Ok(Some(AgentEvent::MidTurnInjection { count })) => {
+                        lines.push(
+                            crate::channels::event_tap::mid_turn_injection_ack_text(count),
+                        );
+                        dirty = true;
+                    }
                     Ok(Some(_)) => {}
                     Ok(None) => break,
                     Err(_) => {}
@@ -3214,6 +3220,45 @@ async fn handle_feishu_message(
             }
         }
     } else {
+        // Live event tap: echo MidTurnInjection acks concurrently with the
+        // agent loop. `used_send_message_tool` is still detected post-hoc
+        // below via ToolResult (Feishu uses the success-only signal).
+        let injection_ack: Option<crate::channels::event_tap::InjectionAck> =
+            if app_state.config.mid_turn_injection_echo {
+                let http_for_tap = http_client.clone();
+                let base_for_tap = base_url.to_string();
+                let token_for_tap = token.clone();
+                let chat_for_tap = external_chat_id.to_string();
+                let reply_to_for_tap = message_id.to_string();
+                let topic_mode_for_tap = topic_mode;
+                Some(Box::new(move |count| {
+                    let http = http_for_tap.clone();
+                    let base = base_for_tap.clone();
+                    let token = token_for_tap.clone();
+                    let chat = chat_for_tap.clone();
+                    let reply_to = reply_to_for_tap.clone();
+                    Box::pin(async move {
+                        let text =
+                            crate::channels::event_tap::mid_turn_injection_ack_text(count);
+                        if let Err(e) = send_feishu_response(
+                            &http,
+                            &base,
+                            &token,
+                            &chat,
+                            &text,
+                            &reply_to,
+                            topic_mode_for_tap,
+                        )
+                        .await
+                        {
+                            warn!("Feishu: failed to send mid-turn injection ack: {e}");
+                        }
+                    })
+                }))
+            } else {
+                None
+            };
+        let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, injection_ack);
         match process_with_agent_with_events_guarded(
             &app_state,
             AgentRequestContext {
@@ -3231,13 +3276,14 @@ async fn handle_feishu_message(
             Ok(response) => {
                 drop(event_tx);
                 let mut used_send_message_tool = false;
-                while let Some(event) = event_rx.recv().await {
+                while let Some(event) = tap.replay_rx.recv().await {
                     if let AgentEvent::ToolResult { name, is_error, .. } = event {
                         if name == "send_message" && !is_error {
                             used_send_message_tool = true;
                         }
                     }
                 }
+                let _ = tap.join.await;
                 let (visible_response, thinking_text) =
                     split_feishu_visible_and_thinking(&response);
                 if !thinking_text.is_empty() {

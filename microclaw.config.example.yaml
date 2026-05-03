@@ -25,6 +25,10 @@ max_tokens: 8192
 max_tool_iterations: 100
 # Inject pending messages into the active agent loop between iterations (mid-turn injection)
 enable_mid_turn_injection: true
+# On non-web channels (Telegram, Discord, Slack, Feishu, Matrix, WeChat),
+# send a small ack message when a mid-turn injection happens so the user
+# sees their follow-up was received instead of waiting for the turn to end.
+mid_turn_injection_echo: true
 # Chat history context size
 max_history_messages: 50
 # Maximum inbound Telegram document size in MB

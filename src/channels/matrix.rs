@@ -2181,11 +2181,35 @@ async fn handle_matrix_message(
         msg.body.chars().take(100).collect::<String>()
     );
 
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
 
     // Check if streaming is enabled for this room
     let streaming_config = runtime.streaming.clone();
     let use_streaming = streaming_config.enabled;
+
+    // Live event tap: echo MidTurnInjection acks and detect send_message
+    // tool usage concurrently with the running agent loop.
+    let injection_ack: Option<crate::channels::event_tap::InjectionAck> =
+        if app_state.config.mid_turn_injection_echo {
+            let runtime_for_tap = runtime.clone();
+            let room_for_tap = msg.room_id.clone();
+            let prefer_sdk = msg.prefer_sdk_send;
+            Some(Box::new(move |count| {
+                let runtime = runtime_for_tap.clone();
+                let room = room_for_tap.clone();
+                Box::pin(async move {
+                    let text = crate::channels::event_tap::mid_turn_injection_ack_text(count);
+                    if let Err(e) =
+                        send_matrix_text_runtime(&runtime, &room, &text, prefer_sdk).await
+                    {
+                        warn!("Matrix: failed to send mid-turn injection ack: {e}");
+                    }
+                })
+            }))
+        } else {
+            None
+        };
+    let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, injection_ack);
 
     match process_with_agent_with_events_guarded(
         &app_state,
@@ -2209,7 +2233,7 @@ async fn handle_matrix_message(
                 match send_matrix_streaming_response(
                     &runtime,
                     &msg.room_id,
-                    &mut event_rx,
+                    &mut tap.replay_rx,
                     &streaming_config,
                     msg.prefer_sdk_send,
                 )
@@ -2243,15 +2267,14 @@ async fn handle_matrix_message(
                 }
             }
 
-            // Regular (non-streaming) handling
-            let mut used_send_message_tool = false;
-            while let Some(event) = event_rx.recv().await {
-                if let AgentEvent::ToolStart { name, .. } = event {
-                    if name == "send_message" {
-                        used_send_message_tool = true;
-                    }
-                }
-            }
+            // Regular (non-streaming) handling. Drain whatever events the tap
+            // forwarded; `used_send_message_tool` is detected by the tap.
+            while tap.replay_rx.recv().await.is_some() {}
+            let used_send_message_tool = tap
+                .join
+                .await
+                .map(|r| r.used_send_message_tool)
+                .unwrap_or(false);
 
             if used_send_message_tool {
                 if !response.is_empty() {

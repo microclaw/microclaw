@@ -1,6 +1,7 @@
 pub mod dingtalk;
 pub mod discord;
 pub mod email;
+pub mod event_tap;
 pub mod feishu;
 pub mod imessage;
 pub mod irc;

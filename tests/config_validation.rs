@@ -89,6 +89,7 @@ fn minimal_config() -> Config {
         channels: std::collections::HashMap::new(),
         chat_turn_queue_max_pending: 20,
         enable_mid_turn_injection: true,
+        mid_turn_injection_echo: true,
         parallel_tool_max_concurrency: 8,
         tool_concurrency_overrides: std::collections::HashMap::new(),
         tool_result_truncation_threshold_chars: 4000,

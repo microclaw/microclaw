@@ -32,40 +32,25 @@ Give users on non-web channels real-time feedback during long turns:
 - Add a comment on `send_streaming_response` noting it is post-hoc replay, to prevent regressions.
 - Add a regression test: long tool loop + `MidTurnInjection` event, assert no outbound message is sent before `end_turn` today (locks current behavior until Phase 1 flips it).
 
-### Phase 1 — Concurrent event consumption (~1-1.5 days, **critical path**)
+### Phase 1 — Concurrent event consumption (shipped)
 
-Refactor `src/channels/telegram.rs:1117-1148` so the agent future and event consumer run concurrently (`tokio::select!` or a dedicated consumer task).
+Implemented as `src/channels/event_tap.rs::EventTap` — a small dedicated-task helper that owns the agent's `event_rx`, runs an optional async callback on each event, and forwards events to a replay channel so existing post-hoc consumers (e.g. `send_streaming_response` in Telegram) keep working without any change to their drain pattern.
 
-Introduce a `ChannelProgressSink` trait in `src/channels/mod.rs`:
+Decision diff from the original plan:
 
-```rust
-pub trait ChannelProgressSink: Send + Sync {
-    async fn emit_ack(&self, text: &str);          // send a new message
-    async fn update_progress(&self, text: &str);   // edit the progress message in place
-    async fn on_injection(&self, count: usize);    // mid-turn injection callback
-}
-```
+- We did not introduce a `ChannelProgressSink` trait. The set of shared signals across channels is currently small (just the injection ack and a `send_message` tool flag), and each channel already has its own send primitives. A shared trait would be more abstraction than the call sites need today. If Phase 3 (heartbeat) adds an `update_progress` axis we can revisit and extract the trait then.
+- Streaming consumers (`send_streaming_response` in Telegram, `send_matrix_streaming_response` in Matrix) now read from `tap.replay_rx` instead of the raw `event_rx`. The forwarder preserves event order and still returns `None` once the agent's senders are dropped, so the streaming UI behaves identically.
 
-Telegram implements it first. Must preserve the existing behavior of `send_streaming_response` / `stream_with_reasoning` as a regression guarantee (snapshot the final rendered output before and after the refactor).
+### Phase 2 — Mid-turn injection echo (shipped)
 
-Edit rate limiting: Telegram caps edits at 20/min/message. All edit paths route through a shared throttle.
+Implemented as a shared concurrent tap (`src/channels/event_tap.rs`) reused by Telegram, Discord, Slack, Matrix, Feishu, and WeChat. The tap consumes `AgentEvent`s concurrently with the agent loop, fires a per-channel callback on `MidTurnInjection { count }`, and forwards every event to a replay channel so existing post-hoc consumers (Telegram streaming, `send_message` tool detection, ...) keep working unchanged.
 
-### Phase 2 — Mid-turn injection echo (~0.5 day)
+The actual implementation diverged from the original design in two ways:
 
-Subscribe to `AgentEvent::MidTurnInjection { count }` in the concurrent consumer. Send a short standalone message: `"收到 {count} 条补充消息，会纳入当前任务"`.
+- A single global config flag — `mid_turn_injection_echo: bool` (default `true`) — replaces the per-channel/private/groups matrix. If operators need finer control they can disable it globally; per-channel split can be added later if real usage shows group noise.
+- Message copy lives in `event_tap::mid_turn_injection_ack_text` rather than `microclaw-core::text` because it is only consumed by channel-side acks today. If more shared copy grows it can move into core.
 
-Config:
-
-```yaml
-channels:
-  telegram:
-    mid_turn_injection_echo:
-      enabled: true
-      private: true    # on by default for DMs
-      groups: false    # off by default for groups
-```
-
-Message copy lives in `microclaw-core::text`.
+Feishu's existing concurrent progress task in topic-progress mode picks up the ack as an additional progress line (still goes through the same edit-rate budget).
 
 ### Phase 3 — Progress heartbeat (~1.5 days)
 
