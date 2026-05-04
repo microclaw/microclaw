@@ -769,9 +769,9 @@ curl -N "http://127.0.0.1:10961/api/stream?run_id=<RUN_ID>" \
 
 Concurrency note:
 
-- one run is still sequential through the shared agent loop
-- the runtime is not one global blocking session
-- web streamed runs, scheduler jobs, reflector passes, and session-native subagents already execute on separate async lanes
+- the runtime is multi-lane: web streamed runs, scheduler jobs, reflector passes, and session-native subagents execute on separate async lanes
+- inside one turn, ReadOnly tool calls run in parallel waves and mid-turn user follow-ups are injected into the active loop (default on)
+- per-chat turn serialization is universal across channel adapters
 
 See [docs/operations/concurrency-and-responsiveness.md](docs/operations/concurrency-and-responsiveness.md) for the current model, limits, and practical tuning guidance.
 

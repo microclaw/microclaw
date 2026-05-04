@@ -1359,7 +1359,31 @@ async fn handle_slack_message(
         }
     };
 
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    // Live event tap: echo MidTurnInjection acks and detect send_message tool
+    // usage concurrently with the running agent loop.
+    let injection_ack: Option<crate::channels::event_tap::InjectionAck> =
+        if app_state.config.mid_turn_injection_echo {
+            let token_for_tap = bot_token.to_string();
+            let channel_for_tap = channel.to_string();
+            let thread_for_tap = normalized_thread_ts.map(|s| s.to_string());
+            Some(Box::new(move |count| {
+                let token = token_for_tap.clone();
+                let channel = channel_for_tap.clone();
+                let thread = thread_for_tap.clone();
+                Box::pin(async move {
+                    let text = crate::channels::event_tap::mid_turn_injection_ack_text(count);
+                    if let Err(e) =
+                        send_slack_response(&token, &channel, thread.as_deref(), &text).await
+                    {
+                        warn!("Slack: failed to send mid-turn injection ack: {e}");
+                    }
+                })
+            }))
+        } else {
+            None
+        };
+    let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, injection_ack);
 
     match process_with_agent_with_events_guarded(
         &app_state,
@@ -1378,14 +1402,12 @@ async fn handle_slack_message(
         Ok(response) => {
             drop(event_tx);
             let response_for_voice = response.clone();
-            let mut used_send_message_tool = false;
-            while let Some(event) = event_rx.recv().await {
-                if let AgentEvent::ToolStart { name, .. } = event {
-                    if name == "send_message" {
-                        used_send_message_tool = true;
-                    }
-                }
-            }
+            while tap.replay_rx.recv().await.is_some() {}
+            let used_send_message_tool = tap
+                .join
+                .await
+                .map(|r| r.used_send_message_tool)
+                .unwrap_or(false);
 
             if used_send_message_tool {
                 if !response.is_empty() {

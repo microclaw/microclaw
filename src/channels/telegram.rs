@@ -1108,7 +1108,34 @@ async fn handle_message(
     let use_streaming = streaming_config.enabled;
 
     // Process through platform-agnostic agent engine.
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    // Live event tap: echo MidTurnInjection acks back to the user concurrently
+    // with the running agent loop, and detect `send_message` tool usage
+    // without waiting for the turn to finish.
+    let injection_ack: Option<crate::channels::event_tap::InjectionAck> =
+        if state.config.mid_turn_injection_echo {
+            let bot_for_tap = bot.clone();
+            let chat_for_tap = msg.chat.id;
+            let thread_for_tap = msg.thread_id;
+            Some(Box::new(move |count| {
+                let bot = bot_for_tap.clone();
+                let chat = chat_for_tap;
+                let tid = thread_for_tap;
+                Box::pin(async move {
+                    let text = crate::channels::event_tap::mid_turn_injection_ack_text(count);
+                    let mut req = bot.send_message(chat, text);
+                    if let Some(tid) = tid {
+                        req = req.message_thread_id(tid);
+                    }
+                    if let Err(e) = req.await {
+                        warn!("Telegram: failed to send mid-turn injection ack: {e}");
+                    }
+                })
+            }))
+        } else {
+            None
+        };
+    let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, injection_ack);
     match process_with_agent_with_events_guarded(
         &state,
         AgentRequestContext {
@@ -1137,7 +1164,7 @@ async fn handle_message(
                 match send_streaming_response(
                     &bot,
                     msg.chat.id,
-                    &mut event_rx,
+                    &mut tap.replay_rx,
                     &response,
                     msg.thread_id,
                     &streaming_config,
@@ -1167,14 +1194,14 @@ async fn handle_message(
             }
 
             if !used_streaming {
-                let mut used_send_message_tool = false;
-                while let Some(event) = event_rx.recv().await {
-                    if let AgentEvent::ToolStart { name, .. } = event {
-                        if name == "send_message" {
-                            used_send_message_tool = true;
-                        }
-                    }
-                }
+                // Drain whatever events the tap forwarded; `used_send_message_tool`
+                // is detected by the tap concurrently with the agent loop.
+                while tap.replay_rx.recv().await.is_some() {}
+                let used_send_message_tool = tap
+                    .join
+                    .await
+                    .map(|r| r.used_send_message_tool)
+                    .unwrap_or(false);
 
                 if used_send_message_tool {
                     if !response.is_empty() {

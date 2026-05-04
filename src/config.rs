@@ -974,6 +974,11 @@ pub struct Config {
     /// rather than queuing them for a separate re-run. Default: true.
     #[serde(default = "default_true")]
     pub enable_mid_turn_injection: bool,
+    /// On non-web channels (Telegram/Discord/Slack), send a small ack message
+    /// when a follow-up arrives mid-turn and is folded into the active loop.
+    /// Default: true. Has no effect when `enable_mid_turn_injection` is false.
+    #[serde(default = "default_true")]
+    pub mid_turn_injection_echo: bool,
     /// Maximum number of tools to execute concurrently in a single wave.
     #[serde(default = "default_parallel_tool_max_concurrency")]
     pub parallel_tool_max_concurrency: usize,
@@ -1639,6 +1644,7 @@ impl Config {
             channels: HashMap::new(),
             chat_turn_queue_max_pending: 20,
             enable_mid_turn_injection: true,
+            mid_turn_injection_echo: true,
             parallel_tool_max_concurrency: 8,
             tool_concurrency_overrides: HashMap::new(),
         }
