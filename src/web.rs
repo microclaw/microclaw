@@ -2384,11 +2384,7 @@ mod tests {
     async fn seed_test_api_key_with_scopes(state: &WebState, secret: &str, scopes: &[String]) {
         let secret_owned = secret.to_string();
         let key_hash = sha256_hex(&secret_owned);
-        let max_bytes = secret_owned.len().min(6);
-        let safe_end = secret_owned.char_indices()
-            .skip_while(|(idx, _)| *idx < max_bytes)
-            .next()
-            .map_or(secret_owned.len(), |(idx, _)| idx);
+        let safe_end = microclaw_core::text::floor_char_boundary(&secret_owned, 6);
         let prefix = secret_owned[..safe_end].to_string();
         let scopes = scopes.to_vec();
         call_blocking(state.app_state.db.clone(), move |db| {
