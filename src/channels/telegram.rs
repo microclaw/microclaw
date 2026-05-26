@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use serde::Deserialize;
 use teloxide::prelude::*;
-use teloxide::types::{ChatAction, InputFile, MessageId, ParseMode, ThreadId};
+use teloxide::types::{ChatAction, InputFile, MessageId, ParseMode, ReplyParameters, ThreadId};
 use tracing::{debug, error, info, warn};
 
 use crate::agent_engine::{
@@ -235,7 +235,7 @@ impl ChannelAdapter for TelegramAdapter {
     async fn send_text(&self, external_chat_id: &str, text: &str) -> Result<(), String> {
         let (telegram_chat_id, thread_id) =
             Self::parse_telegram_external_chat_id(external_chat_id)?;
-        send_response(&self.bot, telegram_chat_id, text, thread_id).await;
+        send_response(&self.bot, telegram_chat_id, text, thread_id, None).await;
         Ok(())
     }
 
@@ -277,7 +277,7 @@ impl ChannelAdapter for TelegramAdapter {
         }
 
         if let Some(extra) = overflow_text {
-            send_response(&self.bot, telegram_chat_id, &extra, thread_id).await;
+            send_response(&self.bot, telegram_chat_id, &extra, thread_id, None).await;
         }
 
         Ok(match caption {
@@ -1040,7 +1040,7 @@ async fn handle_message(
                             .map(|id| format!("Routed to focused subagent run `{id}`."))
                     })
                     .unwrap_or_else(|| "Routed to focused subagent continuation run.".to_string());
-                send_response(&bot, msg.chat.id, &route_ack, msg.thread_id).await;
+                send_response(&bot, msg.chat.id, &route_ack, msg.thread_id, Some(msg.id)).await;
                 let bot_msg = StoredMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     chat_id,
@@ -1167,6 +1167,7 @@ async fn handle_message(
                     &mut tap.replay_rx,
                     &response,
                     msg.thread_id,
+                    Some(msg.id),
                     &streaming_config,
                 )
                 .await
@@ -1216,7 +1217,7 @@ async fn handle_message(
                         );
                     }
                 } else if !response.is_empty() {
-                    send_response(&bot, msg.chat.id, &response, msg.thread_id).await;
+                    send_response(&bot, msg.chat.id, &response, msg.thread_id, Some(msg.id)).await;
 
                     // Store bot response
                     let bot_msg = StoredMessage {
@@ -1231,7 +1232,7 @@ async fn handle_message(
                         call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
                 } else {
                     let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.".to_string();
-                    send_response(&bot, msg.chat.id, &fallback, msg.thread_id).await;
+                    send_response(&bot, msg.chat.id, &fallback, msg.thread_id, Some(msg.id)).await;
                     let bot_msg = StoredMessage {
                         id: uuid::Uuid::new_v4().to_string(),
                         chat_id,
@@ -1279,6 +1280,7 @@ async fn handle_message(
                 if let Some(tid) = msg.thread_id {
                     req = req.message_thread_id(tid);
                 }
+                req = req.reply_parameters(ReplyParameters::new(msg.id));
                 let _ = req.await;
             }
         }
@@ -1530,6 +1532,7 @@ async fn send_streaming_response(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     final_response: &str,
     message_thread_id: Option<ThreadId>,
+    reply_to_message_id: Option<MessageId>,
     config: &TelegramStreamingConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Send initial placeholder
@@ -1542,6 +1545,9 @@ async fn send_streaming_response(
     let mut initial_req = bot.send_message(chat_id, initial_text);
     if let Some(tid) = message_thread_id {
         initial_req = initial_req.message_thread_id(tid);
+    }
+    if let Some(reply_id) = reply_to_message_id {
+        initial_req = initial_req.reply_parameters(ReplyParameters::new(reply_id));
     }
 
     let initial_msg = initial_req.await?;
@@ -1696,11 +1702,15 @@ async fn send_telegram_markdown_or_plain(
     chat_id: ChatId,
     text: &str,
     message_thread_id: Option<ThreadId>,
+    reply_to_message_id: Option<MessageId>,
 ) {
     if should_prefer_plain_text(text) {
         let mut plain_req = bot.send_message(chat_id, text);
         if let Some(tid) = message_thread_id {
             plain_req = plain_req.message_thread_id(tid);
+        }
+        if let Some(reply_id) = reply_to_message_id {
+            plain_req = plain_req.reply_parameters(ReplyParameters::new(reply_id));
         }
         if let Err(err) = plain_req.await {
             warn!("Telegram plain text send failed: {err}");
@@ -1716,12 +1726,18 @@ async fn send_telegram_markdown_or_plain(
     if let Some(tid) = message_thread_id {
         req = req.message_thread_id(tid);
     }
+    if let Some(reply_id) = reply_to_message_id {
+        req = req.reply_parameters(ReplyParameters::new(reply_id));
+    }
 
     if let Err(err) = req.await {
         warn!("Telegram MarkdownV2 send failed, falling back to plain text: {err}");
         let mut plain_req = bot.send_message(chat_id, text);
         if let Some(tid) = message_thread_id {
             plain_req = plain_req.message_thread_id(tid);
+        }
+        if let Some(reply_id) = reply_to_message_id {
+            plain_req = plain_req.reply_parameters(ReplyParameters::new(reply_id));
         }
         if let Err(err) = plain_req.await {
             warn!("Telegram plain text fallback send failed: {err}");
@@ -1734,9 +1750,12 @@ pub async fn send_response(
     chat_id: ChatId,
     text: &str,
     message_thread_id: Option<ThreadId>,
+    reply_to_message_id: Option<MessageId>,
 ) {
-    for chunk in split_response_text(text) {
-        send_telegram_markdown_or_plain(bot, chat_id, &chunk, message_thread_id).await;
+    let chunks = split_response_text(text);
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let reply_id = if idx == 0 { reply_to_message_id } else { None };
+        send_telegram_markdown_or_plain(bot, chat_id, chunk, message_thread_id, reply_id).await;
     }
 }
 
