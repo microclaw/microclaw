@@ -276,6 +276,7 @@ struct RunSubAgentTaskParams {
     run_token_budget: i64,
     task: String,
     context: String,
+    specialist: String,
     local_cancel: Arc<AtomicBool>,
 }
 
@@ -294,6 +295,7 @@ async fn run_sub_agent_task(
         run_token_budget,
         task,
         context,
+        specialist,
         local_cancel,
     } = params;
     if matches!(runtime, SubagentExecutionRuntime::Acp) {
@@ -325,7 +327,11 @@ async fn run_sub_agent_task(
     );
     let tool_defs = tools.definitions().to_vec();
 
-    let system_prompt = "You are a sub-agent assistant. Complete the task thoroughly with tool use when needed.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {type,path,description}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.".to_string();
+    let profile = crate::tools::specialists::resolve_specialist(Some(specialist.as_str()));
+    let system_prompt = format!(
+        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {{type,path,description}}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.",
+        persona = profile.persona
+    );
 
     let user_content = if context.is_empty() {
         task.to_string()
@@ -637,7 +643,10 @@ impl Tool for SessionsSpawnTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "sessions_spawn".into(),
-            description: "Spawn an asynchronous sub-agent run for long tasks. Returns immediately with a run id. Use subagents_list/subagents_info/subagents_kill to manage runs.".into(),
+            description: format!(
+                "Spawn an asynchronous sub-agent run for long tasks. Returns immediately with a run id. Use subagents_list/subagents_info/subagents_kill to manage runs. Pick a `specialist` to route the work to a focused expert. Available specialists: {}.",
+                crate::tools::specialists::specialist_catalog()
+            ),
             input_schema: schema_object(
                 json!({
                     "task": {
@@ -647,6 +656,11 @@ impl Tool for SessionsSpawnTool {
                     "context": {
                         "type": "string",
                         "description": "Optional extra context passed to the sub-agent"
+                    },
+                    "specialist": {
+                        "type": "string",
+                        "enum": crate::tools::specialists::specialist_names(),
+                        "description": "Which specialist persona the sub-agent adopts. Defaults to generalist."
                     },
                     "runtime": {
                         "type": "string",
@@ -699,6 +713,12 @@ impl Tool for SessionsSpawnTool {
             .unwrap_or("")
             .trim()
             .to_string();
+        // Resolve the requested specialist (falls back to generalist for unknown/empty).
+        let specialist = crate::tools::specialists::resolve_specialist(
+            input.get("specialist").and_then(|v| v.as_str()),
+        )
+        .name
+        .to_string();
         let parent_meta = subagent_runtime_meta_from_input(&input);
         let execution_runtime =
             match SubagentExecutionRuntime::from_input(&input, parent_meta.as_ref()) {
@@ -845,7 +865,7 @@ impl Tool for SessionsSpawnTool {
             &run_id,
             "accepted",
             Some(format!(
-                "depth={child_depth} runtime={}{}",
+                "depth={child_depth} runtime={} specialist={specialist}{}",
                 execution_runtime.as_str(),
                 runtime_target
                     .as_deref()
@@ -862,6 +882,7 @@ impl Tool for SessionsSpawnTool {
         let run_id_async = run_id.clone();
         let task_async = task.clone();
         let context_async = context.clone();
+        let specialist_async = specialist.clone();
         let auth_async = ToolAuthContext {
             caller_channel: auth.caller_channel.clone(),
             caller_chat_id: chat_id,
@@ -919,6 +940,7 @@ impl Tool for SessionsSpawnTool {
                 run_token_budget: child_token_budget,
                 task: task_async,
                 context: context_async,
+                specialist: specialist_async,
                 local_cancel,
             });
 
@@ -1033,6 +1055,7 @@ impl Tool for SessionsSpawnTool {
                 "run_id": run_id,
                 "chat_id": chat_id,
                 "depth": child_depth,
+                "specialist": specialist,
                 "runtime": execution_runtime.as_str(),
                 "runtime_target": runtime_target,
                 "token_budget": child_token_budget,
