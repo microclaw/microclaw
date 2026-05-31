@@ -266,7 +266,40 @@ mod tests {
         let skills_root = root.join("skills");
         ensure_builtin_skills(&skills_root).unwrap();
 
-        for skill in ["pdf", "docx", "xlsx", "pptx", "skill-creator"] {
+        for skill in [
+            "pdf",
+            "docx",
+            "xlsx",
+            "pptx",
+            "skill-creator",
+            // factory-ready cross-platform skills bundled for a one-stop default set
+            "calculator",
+            "planning",
+            "code-review",
+            "regex",
+            "unit-converter",
+            "datetime",
+            "csv-tools",
+            "json-tools",
+            "debugging",
+            "shell-scripting",
+            "api-design",
+            "testing",
+            "git",
+            "research",
+            "wikipedia",
+            "define",
+            "brainstorming",
+            "decision-matrix",
+            "meeting-notes",
+            "goal-setting",
+            "mermaid",
+            "color-tools",
+            "writing-editor",
+            "summarize",
+            "email-drafting",
+            "translate",
+        ] {
             let skill_file = skills_root.join(skill).join("SKILL.md");
             assert!(skill_file.exists(), "missing built-in skill: {skill}");
             let content = std::fs::read_to_string(skill_file).unwrap();

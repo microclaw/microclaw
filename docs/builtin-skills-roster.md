@@ -153,12 +153,17 @@ MicroClaw 用的是 **Anthropic Agent Skills 标准**：一个 skill = 一个文
 
 | 批次 | 内容 | 风险 | 状态 |
 |---|---|---|---|
-| **Batch 1** | calculator / planning / code-review / regex（P0） | 极低（纯增量） | ✅ 本次完成 |
-| Batch 2 | 计算数据补全：unit-converter / datetime / csv-tools / json-tools | 低 | 待开发 |
-| Batch 3 | 编码补全：debugging / shell-scripting / api-design / testing / git | 低 | 待开发 |
-| Batch 4 | 检索 + 规划补全：research / wikipedia / define + brainstorming / decision-matrix / meeting-notes | 低 | 待开发 |
-| Batch 5 | 创意/写作：mermaid / color-tools / writing-editor / summarize / email-drafting / translate | 低 | 待开发 |
+| **Batch 1** | calculator / planning / code-review / regex（P0） | 极低（纯增量） | ✅ 完成 |
+| **Batch 2** | 计算数据：unit-converter / datetime / csv-tools / json-tools | 低 | ✅ 完成 |
+| **Batch 3** | 编码：debugging / shell-scripting / api-design / testing / git | 低 | ✅ 完成 |
+| **Batch 4** | 检索 + 规划：research / wikipedia / define / brainstorming / decision-matrix / meeting-notes / goal-setting | 低 | ✅ 完成 |
+| **Batch 5** | 创意/写作：mermaid / color-tools / writing-editor / summarize / email-drafting / translate | 低 | ✅ 完成 |
 | Batch 6（可选） | P1/P2 重依赖：sql / qrcode / algorithmic-art / data-analysis | 中（依赖检测） | 待评估 |
+
+> **已落地 26 个内置 skill**（含原有 12 个，共 38 个）。`test_ensure_builtin_skills_includes_*`
+> 断言全部新 skill 正确嵌入并安装，作为回归保护。所有新 skill 采用字符串 `compatibility`
+> 约定（与现有 weather/github 一致）→ 始终安装；带外部命令的（git/jq/curl）在缺失时由 skill
+> 正文内的兜底逻辑处理，不会因依赖检测被误跳过。
 
 > 每批都是"丢文件夹"级别的增量，可独立合入、独立回滚。建议按 Batch 顺序推进，
 > 每批合入后跑一次构建确认 `include_dir!` 正常嵌入即可。
