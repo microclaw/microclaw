@@ -113,8 +113,9 @@ pub fn detect_mood(text: &str) -> Option<Mood> {
             "受不了",
             "服了",
         ],
-    ) || (strong_punct && contains_any(&lower, &["why", "still", "again"])
-        || strong_punct && contains_any(t, &["为什么", "怎么", "又"]))
+    ) || (strong_punct
+        && (contains_any(&lower, &["why", "still", "again"])
+            || contains_any(t, &["为什么", "怎么", "又"])))
     {
         return Some(Mood::Frustrated);
     }
