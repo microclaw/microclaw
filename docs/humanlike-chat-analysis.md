@@ -100,12 +100,13 @@ MicroClaw 已有等价机制，要保住。
 - 配套：从 reflector 抽取"未完成承诺 / ongoing goals / 习惯"作为主动触发源
   （例："上次你说下周给反馈"）。
 
-**B. 情绪 / 语气动态状态**
-- 在 `sessions` 表加一个 `mood_state`（或存进 memory），每轮做轻量情感判断
-  （用户沮丧 / 兴奋 / 着急），在 `build_system_prompt` 注入 `<conversation_mood>` 标签，
-  指导 LLM 调语气。
-- 落点：`src/agent_engine.rs` 的 `build_system_prompt`，与现有 L0/L1/L2 注入同一处。
-- 原则：**SOUL.md 管"性格不变"，mood 管"此刻的语气"**——人就是这样：人格稳定、情绪流动。
+**B. 情绪 / 语气动态状态** ✅ 已实现
+- 实现：新增 `src/mood.rs` —— 零额外开销的启发式情绪识别（中英双语线索，保守触发：
+  frustrated / urgent / sad / confused / grateful / excited / playful，识别不到就不注入）。
+- 每轮从最近用户消息识别 mood，在系统提示词追加 `<conversation_mood>` 段指导语气
+  （落点：`src/agent_engine.rs` 调用点，与 plugin context 同处追加，无需改 `build_system_prompt` 签名）。
+- 原则：**SOUL.md 管"性格不变"，mood 管"此刻的语气"**——人格稳定、情绪流动。
+- 后续可选增强：用 LLM/reflector 维护跨轮 mood、存 `sessions`（当前为单轮启发式，零延迟零成本）。
 
 **C. 打字节奏 / 把回复拆成"人类大小的轮次"**
 现在最终回复是一口气发出。让它更像人：

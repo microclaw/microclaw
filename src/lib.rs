@@ -20,6 +20,7 @@ pub mod llm;
 pub mod mcp;
 pub mod memory_backend;
 pub mod memory_service;
+pub mod mood;
 pub mod plugins;
 pub mod prompt_cache;
 pub(crate) mod run_control;

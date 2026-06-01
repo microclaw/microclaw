@@ -823,6 +823,16 @@ async fn process_with_agent_logic(
     .await;
     append_plugin_context_sections(&mut system_prompt, &plugin_context);
 
+    // Fluid tone layer: read the user's current mood and adapt tone (personality
+    // stays fixed via SOUL). Heuristic, zero extra cost; injects nothing when neutral.
+    if let Some(mood) = crate::mood::mood_hint(&latest_user_text_for_approval) {
+        system_prompt.push_str(
+            "\n# Current mood read\n\nA quick read of the user's tone right now. Your personality stays the same — just adapt your tone, and never mention this analysis.\n\n<conversation_mood>\n",
+        );
+        system_prompt.push_str(&mood);
+        system_prompt.push_str("\n</conversation_mood>\n");
+    }
+
     debug!(
         chat_id,
         system_prompt_len = system_prompt.len(),
