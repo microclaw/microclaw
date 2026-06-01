@@ -4284,6 +4284,128 @@ impl Database {
         Ok(rows)
     }
 
+    /// Distinct active entities (subjects and objects) for a chat, used to find
+    /// which graph nodes a query mentions so retrieval can be seeded from them.
+    pub fn kg_distinct_entities(
+        &self,
+        chat_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<String>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT entity FROM (
+                 SELECT subject AS entity FROM knowledge_graph
+                 WHERE (?1 IS NULL OR chat_id = ?1 OR chat_id IS NULL) AND valid_to IS NULL
+                 UNION
+                 SELECT object AS entity FROM knowledge_graph
+                 WHERE (?1 IS NULL OR chat_id = ?1 OR chat_id IS NULL) AND valid_to IS NULL
+             )
+             ORDER BY LENGTH(entity) DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id, limit as i64], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Bounded breadth-first expansion of the knowledge graph from `seed`
+    /// entities, returning the active triples reachable within `max_hops`. This
+    /// is the graph-augmented retrieval primitive: seed from entities a query
+    /// mentions, then pull in directly-connected facts (and their neighbours)
+    /// so multi-hop context surfaces without the agent having to query the graph
+    /// by hand. Bounded by `total_limit` triples and a per-hop frontier cap, so
+    /// it stays cheap even on large graphs.
+    pub fn kg_neighborhood(
+        &self,
+        chat_id: Option<i64>,
+        seeds: &[String],
+        max_hops: usize,
+        total_limit: usize,
+    ) -> Result<Vec<KgTriple>, MicroClawError> {
+        if seeds.is_empty() || total_limit == 0 || max_hops == 0 {
+            return Ok(Vec::new());
+        }
+        const FRONTIER_CAP: usize = 32;
+        const PER_NODE_LIMIT: i64 = 8;
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, subject, predicate, object, chat_id, valid_from, valid_to, confidence, source, source_memory_id, created_at
+             FROM knowledge_graph
+             WHERE (LOWER(subject) = LOWER(?1) OR LOWER(object) = LOWER(?1))
+               AND (?2 IS NULL OR chat_id = ?2 OR chat_id IS NULL)
+               AND valid_to IS NULL
+             ORDER BY confidence DESC
+             LIMIT ?3",
+        )?;
+        let map_row = |row: &rusqlite::Row| -> rusqlite::Result<KgTriple> {
+            Ok(KgTriple {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                predicate: row.get(2)?,
+                object: row.get(3)?,
+                chat_id: row.get(4)?,
+                valid_from: row.get(5)?,
+                valid_to: row.get(6)?,
+                confidence: row.get(7)?,
+                source: row.get(8)?,
+                source_memory_id: row.get(9)?,
+                created_at: row.get(10)?,
+            })
+        };
+
+        let mut visited_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seen_triples: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut frontier: Vec<String> = Vec::new();
+        for s in seeds {
+            let lc = s.to_lowercase();
+            if visited_entities.insert(lc) {
+                frontier.push(s.clone());
+            }
+        }
+        let mut out: Vec<KgTriple> = Vec::new();
+
+        for _hop in 0..max_hops {
+            if out.len() >= total_limit || frontier.is_empty() {
+                break;
+            }
+            frontier.truncate(FRONTIER_CAP);
+            let mut next: Vec<String> = Vec::new();
+            for entity in &frontier {
+                let rows = stmt
+                    .query_map(params![entity, chat_id, PER_NODE_LIMIT], map_row)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                for t in rows {
+                    if !seen_triples.insert(t.id) {
+                        continue;
+                    }
+                    for endpoint in [&t.subject, &t.object] {
+                        let lc = endpoint.to_lowercase();
+                        if visited_entities.insert(lc) {
+                            next.push(endpoint.clone());
+                        }
+                    }
+                    out.push(t);
+                    if out.len() >= total_limit {
+                        break;
+                    }
+                }
+                if out.len() >= total_limit {
+                    break;
+                }
+            }
+            frontier = next;
+        }
+
+        out.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out.truncate(total_limit);
+        Ok(out)
+    }
+
     /// Get a timeline of all triples for a subject, including invalidated ones.
     pub fn kg_timeline(
         &self,
@@ -7057,6 +7179,45 @@ mod tests {
         assert_eq!(external.as_deref(), Some("200"));
         drop(conn);
 
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_kg_neighborhood_bounded_multihop_expansion() {
+        let (db, dir) = test_db();
+        let chat = Some(7i64);
+        let vf = "2026-01-01T00:00:00Z";
+        // Alice -works_at-> Acme -located_in-> Berlin ; plus a noise edge.
+        db.kg_insert_triple("Alice", "works_at", "Acme", chat, vf, 0.9, "test", None)
+            .unwrap();
+        db.kg_insert_triple("Acme", "located_in", "Berlin", chat, vf, 0.8, "test", None)
+            .unwrap();
+        db.kg_insert_triple("Berlin", "capital_of", "Germany", chat, vf, 0.7, "test", None)
+            .unwrap();
+        db.kg_insert_triple("Zoe", "likes", "Tea", chat, vf, 0.6, "test", None)
+            .unwrap();
+
+        // Distinct entities should include all nodes, longest-first.
+        let ents = db.kg_distinct_entities(chat, 100).unwrap();
+        assert!(ents.iter().any(|e| e == "Acme"));
+        assert!(ents.iter().any(|e| e == "Germany"));
+
+        // 1 hop from Alice reaches the works_at edge but not located_in.
+        let one = db.kg_neighborhood(chat, &["Alice".to_string()], 1, 10).unwrap();
+        assert!(one.iter().any(|t| t.predicate == "works_at"));
+        assert!(!one.iter().any(|t| t.predicate == "located_in"));
+
+        // 2 hops from Alice pulls in Acme's edges (multi-hop), but never Zoe's.
+        let two = db.kg_neighborhood(chat, &["Alice".to_string()], 2, 10).unwrap();
+        assert!(two.iter().any(|t| t.predicate == "located_in"));
+        assert!(!two.iter().any(|t| t.subject == "Zoe"));
+
+        // total_limit is respected.
+        let capped = db.kg_neighborhood(chat, &["Alice".to_string()], 3, 1).unwrap();
+        assert_eq!(capped.len(), 1);
+
+        // Empty seeds → empty result, no panic.
+        assert!(db.kg_neighborhood(chat, &[], 2, 10).unwrap().is_empty());
         cleanup(&dir);
     }
 

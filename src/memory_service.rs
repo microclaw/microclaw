@@ -7,7 +7,7 @@ use crate::agent_engine::is_slash_command_text;
 use crate::embedding::EmbeddingProvider;
 use crate::memory_backend::MemoryBackend;
 use crate::runtime::AppState;
-use microclaw_storage::db::{call_blocking, Database, Memory};
+use microclaw_storage::db::{call_blocking, Database, KgTriple, Memory};
 use microclaw_storage::memory_quality;
 
 pub(crate) struct ReflectorApplyOutcome {
@@ -376,6 +376,55 @@ fn sanitize_memory_query(raw: &str) -> String {
     trimmed[start..].to_string()
 }
 
+/// Find which knowledge-graph entities a query mentions, to seed graph-augmented
+/// retrieval. Uses case-insensitive substring matching (so multi-word entities
+/// like "New York" are caught), prefers longer entities first (`entities` is
+/// pre-sorted longest-first by the storage layer), and ignores 1-2 char entities
+/// to avoid noise. Bounded to `max_seeds`.
+fn extract_kg_seeds(query: &str, entities: &[String], max_seeds: usize) -> Vec<String> {
+    let q = query.to_lowercase();
+    if q.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut seeds: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for ent in entities {
+        if seeds.len() >= max_seeds {
+            break;
+        }
+        let lc = ent.to_lowercase();
+        if lc.chars().count() < 3 {
+            continue;
+        }
+        if q.contains(&lc) && seen.insert(lc) {
+            seeds.push(ent.clone());
+        }
+    }
+    seeds
+}
+
+/// Render a connected-facts block from graph-expanded triples, skipping triples
+/// whose meaning is already covered by an injected memory line so the block adds
+/// genuinely new, multi-hop context rather than repeating L0-L2.
+fn render_graph_section(triples: &[KgTriple], already_injected: &str) -> String {
+    let injected_lc = already_injected.to_lowercase();
+    let mut lines = String::new();
+    for t in triples {
+        // Cheap redundancy guard: if both endpoints already appear together in an
+        // injected memory line, the relationship is probably already stated.
+        let subj_lc = t.subject.to_lowercase();
+        let obj_lc = t.object.to_lowercase();
+        if injected_lc.contains(&subj_lc) && injected_lc.contains(&obj_lc) {
+            continue;
+        }
+        lines.push_str(&format!(
+            "{} —[{}]→ {}\n",
+            t.subject, t.predicate, t.object
+        ));
+    }
+    lines
+}
+
 /// Build structured memory context using a 4-layer memory stack:
 ///
 /// - **L0 (Identity)**: PROFILE memories — always loaded first. These define who the user is.
@@ -386,6 +435,9 @@ fn sanitize_memory_query(raw: &str) -> String {
 /// - **L2 (Relevance)**: Query-relevant memories via semantic/keyword ranking.
 ///   Loaded based on what the user is currently asking about.
 ///   Budget: remaining tokens. Cost: variable.
+/// - **Connected**: Graph-augmented facts reached by expanding the temporal
+///   knowledge graph from entities the query mentions (1-2 hops). Surfaces
+///   multi-hop context the flat memory layers miss. Bounded and query-gated.
 /// - **L3 (Deep Search)**: Not injected here — available via `structured_memory_search` tool
 ///   for on-demand deep retrieval when the agent needs more context.
 #[expect(clippy::too_many_arguments)]
@@ -399,6 +451,9 @@ pub(crate) async fn build_db_memory_context(
     l0_identity_pct: usize,
     l1_essential_pct: usize,
     recency_half_life_days: f64,
+    graph_recall_enabled: bool,
+    graph_max_hops: usize,
+    graph_max_triples: usize,
 ) -> String {
     let query = &sanitize_memory_query(query);
     let memories = match memory_backend.get_memories_for_context(chat_id, 100).await {
@@ -575,6 +630,38 @@ pub(crate) async fn build_db_memory_context(
         let _ = retrieval_method;
         let _ = l1_count;
         let _ = l2_count;
+    }
+
+    // ── Connected: graph-augmented retrieval over the temporal knowledge graph ──
+    // Seed from entities the query mentions, expand a couple of hops over the KG,
+    // and surface connected facts the flat L0-L2 layers miss (multi-hop context).
+    // Local-only: no embeddings, no LLM, bounded by triple count and token budget.
+    if graph_recall_enabled && graph_max_triples > 0 && !query.trim().is_empty() {
+        let q = query.to_string();
+        let entities = call_blocking(db.clone(), move |d| {
+            d.kg_distinct_entities(Some(chat_id), 500)
+        })
+        .await
+        .unwrap_or_default();
+        let seeds = extract_kg_seeds(&q, &entities, 8);
+        if !seeds.is_empty() {
+            let hops = graph_max_hops.clamp(1, 3);
+            let max_triples = graph_max_triples;
+            let triples = call_blocking(db.clone(), move |d| {
+                d.kg_neighborhood(Some(chat_id), &seeds, hops, max_triples)
+            })
+            .await
+            .unwrap_or_default();
+            if !triples.is_empty() {
+                let section = render_graph_section(&triples, &out);
+                let est = (section.len() / 4) + 12;
+                if !section.trim().is_empty() && used_tokens + est <= budget {
+                    out.push_str("# Connected\n");
+                    out.push_str(&section);
+                    used_tokens += est;
+                }
+            }
+        }
     }
 
     out.push_str("</structured_memories>\n");
@@ -866,5 +953,61 @@ mod recency_tests {
         let stale = (now - chrono::Duration::days(365)).to_rfc3339();
         let m = mk("EVENT", &stale, 0.7);
         assert!((effective_memory_score(&m, now, 0.0) - 0.7).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod graph_recall_tests {
+    use super::{extract_kg_seeds, render_graph_section};
+    use microclaw_storage::db::KgTriple;
+
+    fn triple(subject: &str, predicate: &str, object: &str) -> KgTriple {
+        KgTriple {
+            id: 1,
+            subject: subject.into(),
+            predicate: predicate.into(),
+            object: object.into(),
+            chat_id: Some(1),
+            valid_from: "2026-01-01T00:00:00Z".into(),
+            valid_to: None,
+            confidence: 0.9,
+            source: "test".into(),
+            source_memory_id: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn seeds_match_multiword_entities_case_insensitively() {
+        let entities = vec![
+            "New York".to_string(),
+            "Acme".to_string(),
+            "Go".to_string(), // too short → ignored
+        ];
+        let seeds = extract_kg_seeds("Does acme still have an office in new york?", &entities, 8);
+        assert!(seeds.contains(&"New York".to_string()));
+        assert!(seeds.contains(&"Acme".to_string()));
+        assert!(!seeds.iter().any(|s| s == "Go"));
+    }
+
+    #[test]
+    fn empty_query_yields_no_seeds() {
+        let entities = vec!["Acme".to_string()];
+        assert!(extract_kg_seeds("   ", &entities, 8).is_empty());
+    }
+
+    #[test]
+    fn graph_section_skips_already_stated_relationships() {
+        let triples = vec![
+            triple("Acme", "located_in", "Berlin"),
+            triple("Bob", "manages", "Acme"),
+        ];
+        // The first relationship is already spelled out in an injected memory; the
+        // second (Bob→Acme) is new and should survive.
+        let injected = "[KNOWLEDGE] [chat] Acme is located_in Berlin\n";
+        let section = render_graph_section(&triples, injected);
+        assert!(!section.contains("Berlin"));
+        assert!(section.contains("Bob"));
+        assert!(section.contains("Acme"));
     }
 }

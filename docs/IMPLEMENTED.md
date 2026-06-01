@@ -68,6 +68,7 @@
 |---|---|
 | 记忆衰减/遗忘（plan E） | ✅ 已有：`memory_service.rs` confidence×recency-decay（PROFILE 免疫）、`scheduler.rs` 调用 `archive_stale_memories`/`archive_excess_memories`、config `recency_half_life_days` |
 | reflection（Generative-Agents 式） | ✅ 已有：reflector 循环 |
+| 图增强检索（HippoRAG/Mem0g 式） | ✅ 已有：`memory_service.rs` 从 query 实体在时序 KG 上做有界多跳扩展，注入 `# Connected` 关联事实（`db.rs` `kg_neighborhood`/`kg_distinct_entities`）；纯本地、无 embedding。config `memory_graph_recall_enabled`/`_max_hops`/`_max_triples` |
 
 ## 6. 可选未做（Phase 4+）
 

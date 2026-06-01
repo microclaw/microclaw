@@ -791,6 +791,9 @@ async fn process_with_agent_logic(
         state.config.memory_l0_identity_pct,
         state.config.memory_l1_essential_pct,
         state.config.memory_recency_half_life_days,
+        state.config.memory_graph_recall_enabled,
+        state.config.memory_graph_max_hops,
+        state.config.memory_graph_max_triples,
     )
     .await;
     let memory_context = format!("{}{}", file_memory, db_memory);
@@ -2961,8 +2964,10 @@ mod tests {
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
         let context =
-            build_db_memory_context(&memory_backend, &db, None, 100, "short", 20, 20, 30, 30.0)
-                .await;
+            build_db_memory_context(
+                &memory_backend, &db, None, 100, "short", 20, 20, 30, 30.0, true, 2, 10,
+            )
+            .await;
         assert!(context.contains("<structured_memories>"));
         // With a tiny budget (20 tokens), not all memories fit — some are available via deep search
         assert!(
@@ -2993,6 +2998,9 @@ mod tests {
             20,
             30,
             30.0,
+            true,
+            2,
+            10,
         )
         .await;
         assert!(context.contains("user likes rust"));
@@ -3021,6 +3029,9 @@ mod tests {
             20,
             30,
             30.0,
+            true,
+            2,
+            10,
         )
         .await;
         // Both PROFILE memories should be in L0 (Identity layer)
@@ -3113,6 +3124,9 @@ mod tests {
                 20,
                 30,
                 30.0,
+                true,
+                2,
+                10,
             )
             .await;
             assert!(

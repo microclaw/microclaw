@@ -35,6 +35,12 @@ max_history_messages: 50
 max_document_size_mb: 100
 # Estimated token budget for injecting structured memories into system prompt
 memory_token_budget: 1500
+# Graph-augmented recall: expand the temporal knowledge graph from entities the
+# query mentions and inject connected ("# Connected") facts the flat layers miss.
+# Local-only (no embeddings/LLM); uses the graph the reflector already builds.
+memory_graph_recall_enabled: true
+memory_graph_max_hops: 2      # clamped to 1-3
+memory_graph_max_triples: 10  # 0 disables
 # Optional embedding runtime config (requires binary built with --features sqlite-vec)
 # embedding_provider: "openai"   # openai | ollama
 # embedding_api_key: ""

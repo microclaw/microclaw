@@ -114,6 +114,15 @@ fn default_tool_result_artifact_ttl_hours() -> u64 {
 fn default_memory_recency_half_life_days() -> f64 {
     30.0
 }
+fn default_memory_graph_recall_enabled() -> bool {
+    true
+}
+fn default_memory_graph_max_hops() -> usize {
+    2
+}
+fn default_memory_graph_max_triples() -> usize {
+    10
+}
 fn default_tool_repeat_window() -> usize {
     10
 }
@@ -1014,6 +1023,22 @@ pub struct Config {
     /// memories never decay. Set to 0 to disable decay. Default: 30.
     #[serde(default = "default_memory_recency_half_life_days")]
     pub memory_recency_half_life_days: f64,
+    /// Graph-augmented memory recall: after the flat L0-L2 layers are built,
+    /// seed the temporal knowledge graph from entities the query mentions and
+    /// pull in connected facts a few hops out (a "# Connected" block). Surfaces
+    /// multi-hop context the flat layers miss, using the graph the reflector
+    /// already builds — local-only, no embeddings or extra LLM calls. Default: true.
+    #[serde(default = "default_memory_graph_recall_enabled")]
+    pub memory_graph_recall_enabled: bool,
+    /// Maximum hops to expand outward from query-seeded entities during
+    /// graph-augmented recall. Clamped to 1-3. Default: 2.
+    #[serde(default = "default_memory_graph_max_hops")]
+    pub memory_graph_max_hops: usize,
+    /// Maximum number of connected triples injected by graph-augmented recall
+    /// (also bounded by the overall memory token budget). Set to 0 to disable.
+    /// Default: 10.
+    #[serde(default = "default_memory_graph_max_triples")]
+    pub memory_graph_max_triples: usize,
     /// Sliding-window size (in past tool calls) used by the duplicate-call
     /// circuit breaker. When the same `(tool_name, args)` shows up
     /// `tool_repeat_limit` times within this many recent calls, the next
@@ -1683,6 +1708,9 @@ impl Config {
             tool_result_truncation_tail_chars: 500,
             tool_result_artifact_ttl_hours: 24,
             memory_recency_half_life_days: 30.0,
+            memory_graph_recall_enabled: true,
+            memory_graph_max_hops: 2,
+            memory_graph_max_triples: 10,
             tool_repeat_window: 10,
             tool_repeat_limit: 3,
             anthropic_prompt_cache_enabled: true,
