@@ -3627,6 +3627,24 @@ impl Database {
         Ok(ids)
     }
 
+    /// Chats whose most recent message is older than `cutoff` (i.e. idle since
+    /// then). Only chats that have ever had a message are returned.
+    pub fn list_idle_chats(&self, cutoff: &str, limit: usize) -> Result<Vec<i64>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT chat_id FROM messages
+             GROUP BY chat_id
+             HAVING MAX(timestamp) < ?1
+             LIMIT ?2",
+        )?;
+        let ids = stmt
+            .query_map(params![cutoff, limit.max(1) as i64], |row| {
+                row.get::<_, i64>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
     /// Keyword search in memories visible to chat_id (own + global).
     pub fn search_memories(
         &self,
@@ -4934,6 +4952,52 @@ impl Database {
         )
         .optional()
         .map_err(Into::into)
+    }
+
+    /// All child runs of a parent run, oldest first.
+    pub fn list_subagent_children(
+        &self,
+        parent_run_id: &str,
+    ) -> Result<Vec<SubagentRunRecord>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, parent_run_id, depth, token_budget, chat_id, caller_channel, task, context, status, created_at,
+                    started_at, finished_at, cancel_requested, error_text, result_text,
+                    input_tokens, output_tokens, total_tokens, provider, model, artifact_json,
+                    label, progress_text, last_progress_at
+             FROM subagent_runs
+             WHERE parent_run_id = ?1
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![parent_run_id], |row| {
+            Ok(SubagentRunRecord {
+                run_id: row.get(0)?,
+                parent_run_id: row.get(1)?,
+                depth: row.get(2)?,
+                token_budget: row.get(3)?,
+                chat_id: row.get(4)?,
+                caller_channel: row.get(5)?,
+                task: row.get(6)?,
+                context: row.get(7)?,
+                status: row.get(8)?,
+                created_at: row.get(9)?,
+                started_at: row.get(10)?,
+                finished_at: row.get(11)?,
+                cancel_requested: row.get::<_, i64>(12)? != 0,
+                error_text: row.get(13)?,
+                result_text: row.get(14)?,
+                input_tokens: row.get(15)?,
+                output_tokens: row.get(16)?,
+                total_tokens: row.get(17)?,
+                provider: row.get(18)?,
+                model: row.get(19)?,
+                artifact_json: row.get(20)?,
+                label: row.get(21)?,
+                progress_text: row.get(22)?,
+                last_progress_at: row.get(23)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Resolve a sub-agent reference that is either an exact run_id or a
@@ -7589,6 +7653,34 @@ mod tests {
     }
 
     #[test]
+    fn test_list_idle_chats() {
+        let (db, dir) = test_db();
+        // Chat 1: last message long ago (idle). Chat 2: recent (active).
+        db.store_message(&StoredMessage {
+            id: "old".into(),
+            chat_id: 1,
+            sender_name: "u".into(),
+            content: "hi".into(),
+            is_from_bot: false,
+            timestamp: "2020-01-01T00:00:00Z".into(),
+        })
+        .unwrap();
+        db.store_message(&StoredMessage {
+            id: "new".into(),
+            chat_id: 2,
+            sender_name: "u".into(),
+            content: "hi".into(),
+            is_from_bot: false,
+            timestamp: "2099-01-01T00:00:00Z".into(),
+        })
+        .unwrap();
+        let idle = db.list_idle_chats("2030-01-01T00:00:00Z", 50).unwrap();
+        assert!(idle.contains(&1));
+        assert!(!idle.contains(&2));
+        cleanup(&dir);
+    }
+
+    #[test]
     fn test_subagent_run_label_and_progress() {
         let (db, dir) = test_db();
         db.create_subagent_run(CreateSubagentRunParams {
@@ -7635,6 +7727,26 @@ mod tests {
         assert!(db.resolve_subagent_run_id(42, "nope").unwrap().is_none());
         // Wrong chat → no match.
         assert!(db.resolve_subagent_run_id(99, "competitor research").unwrap().is_none());
+
+        // Children listing for fan-in: a child of subrun-1.
+        db.create_subagent_run(CreateSubagentRunParams {
+            run_id: "subrun-1a",
+            parent_run_id: Some("subrun-1"),
+            depth: 2,
+            token_budget: 0,
+            chat_id: 42,
+            caller_channel: "telegram",
+            task: "child task",
+            context: "",
+            provider: "anthropic",
+            model: "claude-test",
+            label: Some("child"),
+        })
+        .unwrap();
+        let kids = db.list_subagent_children("subrun-1").unwrap();
+        assert_eq!(kids.len(), 1);
+        assert_eq!(kids[0].run_id, "subrun-1a");
+        assert!(db.list_subagent_children("subrun-1a").unwrap().is_empty());
 
         // First progress: no previous timestamp.
         let prev = db

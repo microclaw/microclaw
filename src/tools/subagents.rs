@@ -516,6 +516,89 @@ async fn run_sub_agent_task(
     Err("Sub-agent reached maximum iterations without completing the task.".into())
 }
 
+/// When the last child of a parent finishes, post one consolidated summary of
+/// the whole batch. Idempotent: the announce is keyed on `<parent>:fanin`, whose
+/// UNIQUE constraint means only one fan-in message is ever enqueued even if
+/// several children finish at once.
+async fn maybe_post_fan_in_summary(
+    config: &Config,
+    channel_registry: Arc<ChannelRegistry>,
+    db: Arc<Database>,
+    chat_id: i64,
+    parent_id: &str,
+) {
+    let parent_owned = parent_id.to_string();
+    let active = call_blocking(db.clone(), {
+        let p = parent_owned.clone();
+        move |db| db.count_active_subagent_children(&p)
+    })
+    .await
+    .unwrap_or(0);
+    if active > 0 {
+        return;
+    }
+    let children = match call_blocking(db.clone(), {
+        let p = parent_owned.clone();
+        move |db| db.list_subagent_children(&p)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("fan-in: failed to list children of {parent_id}: {e}");
+            return;
+        }
+    };
+    // Only summarize genuine batches (the single-child case is covered by its
+    // own completion message).
+    if children.len() < 2 {
+        return;
+    }
+
+    let n = children.len();
+    let mut lines = vec![format!("🧩 All {n} sub-tasks done:")];
+    let mut caller_channel = String::new();
+    for c in &children {
+        if caller_channel.is_empty() {
+            caller_channel = c.caller_channel.clone();
+        }
+        let emoji = match c.status.as_str() {
+            "completed" => "✅",
+            "cancelled" => "🛑",
+            "timed_out" => "⏱️",
+            _ => "❌",
+        };
+        let name = c
+            .label
+            .clone()
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| c.task.chars().take(40).collect::<String>());
+        let detail = c
+            .result_text
+            .clone()
+            .or_else(|| c.error_text.clone())
+            .map(|t| {
+                let snippet: String = t.trim().chars().take(120).collect();
+                format!(" — {snippet}")
+            })
+            .unwrap_or_default();
+        lines.push(format!("{emoji} {name}{detail}"));
+    }
+    let summary = lines.join("\n");
+
+    let announce_id = format!("{parent_owned}:fanin");
+    let enqueue = call_blocking(db.clone(), {
+        let channel = caller_channel.clone();
+        let summary = summary.clone();
+        move |db| db.enqueue_subagent_announce(&announce_id, chat_id, &channel, &summary)
+    })
+    .await;
+    // A UNIQUE violation here just means another sibling already enqueued it.
+    if enqueue.is_ok() {
+        let _ = flush_pending_announces_once(config, channel_registry, db, 10).await;
+    }
+}
+
 async fn build_announce_payload(
     db: Arc<Database>,
     chat_id: i64,
@@ -896,6 +979,7 @@ impl Tool for SessionsSpawnTool {
         let task_async = task.clone();
         let context_async = context.clone();
         let specialist_async = specialist.clone();
+        let parent_run_id_async = parent_run_id.clone();
         let auth_async = ToolAuthContext {
             caller_channel: auth.caller_channel.clone(),
             caller_chat_id: chat_id,
@@ -904,6 +988,7 @@ impl Tool for SessionsSpawnTool {
         };
         let channel_registry = self.channel_registry.clone();
         let subagent_channel_registry = self.channel_registry.clone();
+        let fan_in_channel_registry = self.channel_registry.clone();
         tokio::spawn(async move {
             let run_id_for_finish = run_id_async.clone();
             let _ = call_blocking(db.clone(), {
@@ -1052,11 +1137,28 @@ impl Tool for SessionsSpawnTool {
                             db.enqueue_subagent_announce(&rid, chat_id, &caller_channel, &payload)
                         })
                         .await;
-                        let _ = flush_pending_announces_once(&cfg, channel_registry, db, 10).await;
+                        let _ =
+                            flush_pending_announces_once(&cfg, channel_registry, db.clone(), 10)
+                                .await;
                     }
                     Err(e) => {
                         warn!("failed to build announce payload for run {run_id_async}: {e}");
                     }
+                }
+            }
+
+            // Fan-in: when this was the last active child of a parent run, post one
+            // consolidated summary of the whole batch (opt-in).
+            if cfg.subagents.fan_in_summary {
+                if let Some(parent_id) = parent_run_id_async.as_ref() {
+                    maybe_post_fan_in_summary(
+                        &cfg,
+                        fan_in_channel_registry,
+                        db,
+                        chat_id,
+                        parent_id,
+                    )
+                    .await;
                 }
             }
         });

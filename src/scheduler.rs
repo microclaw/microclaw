@@ -452,6 +452,126 @@ async fn run_task_standup(
     }
 }
 
+/// Proactive long-silence check-in: after a chat has been quiet for a while,
+/// let the agent reach out IF it has something genuinely useful to say.
+/// OFF by default — outward-facing and uses an LLM call per idle chat.
+pub fn spawn_idle_checkin(state: Arc<AppState>) {
+    if !state.config.idle_checkin.enabled {
+        return;
+    }
+    tokio::spawn(async move {
+        info!(
+            "Idle check-in started (idle_hours={}, min_interval_hours={})",
+            state.config.idle_checkin.idle_hours, state.config.idle_checkin.min_interval_hours
+        );
+        let mut last_checkin: HashMap<i64, Instant> = HashMap::new();
+        let mut ticker = tokio::time::interval(Duration::from_secs(1800));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            run_idle_checkin(&state, &mut last_checkin).await;
+        }
+    });
+}
+
+const IDLE_CHECKIN_PROMPT: &str = "[Proactive idle check-in] This chat has been quiet for a while. \
+Review what you know about this user and any pending follow-ups, due reminders, or promises you made.\n\
+- If — and ONLY if — you have something genuinely useful or kind to say right now (a due follow-up, a \
+relevant update, a gentle nudge on something they asked for), write ONE short, friendly message.\n\
+- Otherwise, reply with exactly: SKIP\n\
+Do not invent reasons to message; silence is the right default. Do not use the send_message tool — just \
+return the message text, or SKIP.";
+
+async fn run_idle_checkin(state: &Arc<AppState>, last_checkin: &mut HashMap<i64, Instant>) {
+    let idle_hours = state.config.idle_checkin.idle_hours.max(1) as i64;
+    let min_interval = Duration::from_secs(
+        state
+            .config
+            .idle_checkin
+            .min_interval_hours
+            .max(1)
+            .saturating_mul(3600),
+    );
+    let cutoff = (Utc::now() - chrono::Duration::hours(idle_hours)).to_rfc3339();
+    let chats = match call_blocking(state.db.clone(), move |db| db.list_idle_chats(&cutoff, 100))
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("idle check-in: failed to list idle chats: {e}");
+            return;
+        }
+    };
+
+    for chat_id in chats {
+        // Respect the per-chat min interval.
+        if let Some(t) = last_checkin.get(&chat_id) {
+            if t.elapsed() < min_interval {
+                continue;
+            }
+        }
+        // Skip chats with active background work — they get their own updates.
+        let active = call_blocking(state.db.clone(), move |db| {
+            db.count_active_subagent_runs_for_chat(chat_id)
+        })
+        .await
+        .unwrap_or(0);
+        if active > 0 {
+            continue;
+        }
+
+        let routing = match get_chat_routing(&state.channel_registry, state.db.clone(), chat_id)
+            .await
+            .ok()
+            .flatten()
+        {
+            Some(r) => r,
+            None => continue,
+        };
+
+        let response = match process_with_agent(
+            state,
+            AgentRequestContext {
+                caller_channel: &routing.channel_name,
+                chat_id,
+                chat_type: routing.conversation.as_agent_chat_type(),
+            },
+            Some(IDLE_CHECKIN_PROMPT),
+            None,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("idle check-in: agent run failed for chat {chat_id}: {e}");
+                last_checkin.insert(chat_id, Instant::now());
+                continue;
+            }
+        };
+
+        // Mark as checked-in regardless, so we don't retry every tick.
+        last_checkin.insert(chat_id, Instant::now());
+
+        let trimmed = response.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+            continue;
+        }
+
+        let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
+        if let Err(e) = deliver_and_store_bot_message(
+            &state.channel_registry,
+            state.db.clone(),
+            &bot_username,
+            chat_id,
+            trimmed,
+        )
+        .await
+        {
+            warn!("idle check-in: delivery failed for chat {chat_id}: {e}");
+        }
+    }
+}
+
 /// One-line-per-task standup digest, like a colleague's quick status. A task
 /// that has run well past the interval without recent progress is flagged as
 /// possibly stalled.

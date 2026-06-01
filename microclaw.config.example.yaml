@@ -260,6 +260,7 @@ web_session_idle_ttl_seconds: 300
 #   max_active_per_chat: 5         # cap on active runs per chat
 #   run_timeout_secs: 900          # per-run timeout
 #   announce_to_chat: true         # post a message when a run completes
+#   fan_in_summary: false          # when a batch of child tasks all finish, post one combined summary
 #   # How often a long-running sub-agent may post a "📊 progress" update (seconds).
 #   progress_min_interval_secs: 45
 #   # Proactive task standup: periodically post a one-line status for tasks that
@@ -267,3 +268,11 @@ web_session_idle_ttl_seconds: 300
 #   standup:
 #     enabled: false
 #     interval_secs: 1800          # min seconds between standups per chat
+
+# Proactive long-silence check-in: after a chat is quiet for a while, let the bot
+# reach out IF it has something genuinely useful to say. OFF by default (it sends
+# unprompted messages and uses an LLM call per idle chat).
+# idle_checkin:
+#   enabled: false
+#   idle_hours: 24                 # only consider a chat idle after this many hours of silence
+#   min_interval_hours: 24         # at most one check-in per chat per this many hours

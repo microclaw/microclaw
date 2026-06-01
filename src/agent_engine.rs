@@ -833,6 +833,14 @@ async fn process_with_agent_logic(
         system_prompt.push_str("\n</conversation_mood>\n");
     }
 
+    // Group etiquette: in a multi-party chat, behave like a considerate member —
+    // contribute when it adds value, stay quiet otherwise.
+    if context.chat_type == "group" {
+        system_prompt.push_str(
+            "\n# Group etiquette\n\nThis is a group chat with multiple people. Act like a considerate member, not a bot that replies to everything:\n- You were addressed (mentioned or replied to). Answer that, briefly.\n- Keep it tight — others are reading. One clear message beats a long monologue.\n- Don't insert yourself into side conversations between other people unless it's clearly useful.\n- If you have nothing that adds value, a short acknowledgement (or nothing) is fine.\n- Track who said what; address people by name when it helps.\n",
+        );
+    }
+
     debug!(
         chat_id,
         system_prompt_len = system_prompt.len(),

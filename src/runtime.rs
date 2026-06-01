@@ -519,6 +519,7 @@ pub async fn run(
     crate::scheduler::spawn_scheduler(state.clone());
     crate::scheduler::spawn_reflector(state.clone());
     crate::scheduler::spawn_task_standup(state.clone());
+    crate::scheduler::spawn_idle_checkin(state.clone());
     {
         let review_state = state.clone();
         spawn_guarded("skill_review_worker".to_string(), async move {

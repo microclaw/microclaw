@@ -37,7 +37,15 @@
 | “现在都在忙啥” | ✅ | `subagents_list` / `subagents_info` 带 label + 最新进度 |
 | 主动 standup（长任务定期同步） | ✅ | `scheduler::spawn_task_standup`；`db.list_active_subagent_runs`；默认关 `subagents.standup.enabled`，节流 `interval_secs`(1800) |
 | 卡住(stalled)检测 | ✅ | standup 中超 2× interval 且无近期进展的任务标 `⚠️ no recent progress` |
-| fan-in 聚合（同 parent 全完成出总结） | ⏳ | 可选，未做 |
+| fan-in 聚合（同 parent 全完成出总结） | ✅ | `maybe_post_fan_in_summary`（`subagents.rs`）；`db.list_subagent_children`；`parent:fanin` UNIQUE 去重；默认关 `subagents.fan_in_summary` |
+
+## 3b. 主动/对外功能（默认关闭）
+
+| 项 | 状态 | 实现 / 位置 |
+|---|---|---|
+| 群聊社交动态 | ✅ | 群聊时系统提示词注入 group etiquette（何时插话/沉默），`src/agent_engine.rs` 调用点（`chat_type == "group"`） |
+| fan-in 聚合 | ✅ | 见上，`subagents.fan_in_summary`（默认关） |
+| 长沉默关怀（idle check-in） | ✅ | `scheduler::spawn_idle_checkin`；`db.list_idle_chats`；override prompt 让 agent “有价值才发、否则回 SKIP”，SKIP 不投递；默认关 `idle_checkin.enabled`，`idle_hours`/`min_interval_hours` 节流 |
 
 ## 4. 出厂即用的内置 Skills（共 42 个）
 
