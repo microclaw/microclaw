@@ -158,9 +158,9 @@ MicroClaw 用的是 **Anthropic Agent Skills 标准**：一个 skill = 一个文
 | **Batch 3** | 编码：debugging / shell-scripting / api-design / testing / git | 低 | ✅ 完成 |
 | **Batch 4** | 检索 + 规划：research / wikipedia / define / brainstorming / decision-matrix / meeting-notes / goal-setting | 低 | ✅ 完成 |
 | **Batch 5** | 创意/写作：mermaid / color-tools / writing-editor / summarize / email-drafting / translate | 低 | ✅ 完成 |
-| Batch 6（可选） | P1/P2 重依赖：sql / qrcode / algorithmic-art / data-analysis | 中（依赖检测） | 待评估 |
+| **Batch 6** | P1/P2 重依赖：sql / qrcode / data-analysis / algorithmic-art | 中（依赖自检+兜底） | ✅ 完成 |
 
-> **已落地 26 个内置 skill**（含原有 12 个，共 38 个）。`test_ensure_builtin_skills_includes_*`
+> **已落地 30 个内置 skill**（含原有 12 个，共 42 个）。`test_ensure_builtin_skills_includes_*`
 > 断言全部新 skill 正确嵌入并安装，作为回归保护。所有新 skill 采用字符串 `compatibility`
 > 约定（与现有 weather/github 一致）→ 始终安装；带外部命令的（git/jq/curl）在缺失时由 skill
 > 正文内的兜底逻辑处理，不会因依赖检测被误跳过。

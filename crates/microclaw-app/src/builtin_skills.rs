@@ -299,6 +299,10 @@ mod tests {
             "summarize",
             "email-drafting",
             "translate",
+            "sql",
+            "qrcode",
+            "data-analysis",
+            "algorithmic-art",
         ] {
             let skill_file = skills_root.join(skill).join("SKILL.md");
             assert!(skill_file.exists(), "missing built-in skill: {skill}");
