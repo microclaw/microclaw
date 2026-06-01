@@ -4845,6 +4845,50 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// All currently-active sub-agent runs across chats (accepted/queued/running),
+    /// oldest first. Used by the proactive task-standup loop.
+    pub fn list_active_subagent_runs(&self) -> Result<Vec<SubagentRunRecord>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, parent_run_id, depth, token_budget, chat_id, caller_channel, task, context, status, created_at,
+                    started_at, finished_at, cancel_requested, error_text, result_text,
+                    input_tokens, output_tokens, total_tokens, provider, model, artifact_json,
+                    label, progress_text, last_progress_at
+             FROM subagent_runs
+             WHERE status IN ('accepted', 'queued', 'running')
+             ORDER BY chat_id ASC, created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SubagentRunRecord {
+                run_id: row.get(0)?,
+                parent_run_id: row.get(1)?,
+                depth: row.get(2)?,
+                token_budget: row.get(3)?,
+                chat_id: row.get(4)?,
+                caller_channel: row.get(5)?,
+                task: row.get(6)?,
+                context: row.get(7)?,
+                status: row.get(8)?,
+                created_at: row.get(9)?,
+                started_at: row.get(10)?,
+                finished_at: row.get(11)?,
+                cancel_requested: row.get::<_, i64>(12)? != 0,
+                error_text: row.get(13)?,
+                result_text: row.get(14)?,
+                input_tokens: row.get(15)?,
+                output_tokens: row.get(16)?,
+                total_tokens: row.get(17)?,
+                provider: row.get(18)?,
+                model: row.get(19)?,
+                artifact_json: row.get(20)?,
+                label: row.get(21)?,
+                progress_text: row.get(22)?,
+                last_progress_at: row.get(23)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn get_subagent_run(
         &self,
         run_id: &str,
@@ -7538,6 +7582,12 @@ mod tests {
         let listed = db.list_subagent_runs(42, 10).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].label.as_deref(), Some("competitor research"));
+
+        // Active-runs query (used by the standup loop) sees the fresh run.
+        let active = db.list_active_subagent_runs().unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].run_id, "subrun-1");
+        assert_eq!(active[0].chat_id, 42);
 
         // First progress: no previous timestamp.
         let prev = db

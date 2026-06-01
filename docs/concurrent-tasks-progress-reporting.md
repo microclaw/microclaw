@@ -228,11 +228,16 @@ subagents:
 - 测试：`test_subagent_run_label_and_progress` 覆盖进度记录 + 时间线事件 + 节流所需的"上次时间"返回。
 - **交付物**：场景 B 落地——任务运行中会主动同步进展（节流防刷屏）。
 
-### Phase 3 — 主动 standup + fan-in 汇总
-- Scheduler：`run_task_standup()`，motivation 门控（复用拟人化方案 A）。
-- 编排：一组同 parent 的子任务全部完成时，自动产出一条聚合结论（fan-in）。
-- 测试：多任务并行，门控下每 chat 不超过 1 条/interval 的 standup；全部完成给汇总。
-- **交付物**：场景 D 主动版 + 多任务收束汇报。
+### Phase 3 — 主动 standup ✅ 已完成（fan-in 汇总留待 Phase 4）
+- Scheduler：`spawn_task_standup` / `run_task_standup`（`src/scheduler.rs`）——每分钟检查活跃
+  子代理，对**已运行超过 interval** 的长任务，按 chat 合并成一条 `🛰️ Still on it — N tasks running` 站会。
+- DB：`list_active_subagent_runs()` 跨 chat 列活跃 run。
+- 强节流 + 默认关闭：`subagents.standup.enabled`（默认 `false`，因为是**主动发消息**）、
+  `interval_secs`（默认 1800s）；每 chat 每 interval 至多一条；短任务（早于 interval 完成）不触发，
+  由其完成消息覆盖。无 LLM 调用，零成本、确定性、防刷屏。
+- 测试：`format_standup`（label + 进度 + 时长）、`format_duration_secs`、`list_active_subagent_runs`。
+- **交付物**：场景 D 主动版——长任务运行期间定期收到合并进度站会。
+- 留待 Phase 4：fan-in 聚合（同 parent 全部完成出一条总结）、motivation 门控的"沉默关怀"。
 
 ### Phase 4 — 打磨
 - `progress_pct`/ETA 估算、卡住(`stalled`)检测与提醒、`humanize_with_llm` 可选人话化、

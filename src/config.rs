@@ -787,6 +787,8 @@ pub struct SubagentConfig {
     pub orchestrate_max_workers: usize,
     #[serde(default)]
     pub acp: SubagentAcpConfig,
+    #[serde(default)]
+    pub standup: SubagentStandupConfig,
 }
 
 impl Default for SubagentConfig {
@@ -804,6 +806,30 @@ impl Default for SubagentConfig {
             max_tokens_per_run: default_subagent_max_tokens_per_run(),
             orchestrate_max_workers: default_subagent_orchestrate_max_workers(),
             acp: SubagentAcpConfig::default(),
+            standup: SubagentStandupConfig::default(),
+        }
+    }
+}
+
+fn default_subagent_standup_interval_secs() -> u64 {
+    1800
+}
+
+/// Proactive task-standup: periodically post a one-line status for tasks that
+/// have been running a while. Off by default — it sends unprompted messages.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubagentStandupConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_subagent_standup_interval_secs")]
+    pub interval_secs: u64,
+}
+
+impl Default for SubagentStandupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: default_subagent_standup_interval_secs(),
         }
     }
 }
