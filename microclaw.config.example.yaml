@@ -277,3 +277,11 @@ web_session_idle_ttl_seconds: 300
 #   enabled: false
 #   idle_hours: 24                 # only consider a chat idle after this many hours of silence
 #   min_interval_hours: 24         # at most one check-in per chat per this many hours
+
+# "Inner thoughts" interjection: in an active group chat where the bot wasn't
+# addressed, occasionally chime in IF it has something genuinely worth saying.
+# OFF by default (it speaks unprompted in groups and uses an LLM call per check).
+# interjection:
+#   enabled: false
+#   min_interval_secs: 900         # at most one unprompted interjection per chat per this window
+#   lookback_mins: 10              # only consider chats with user messages this recent

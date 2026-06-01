@@ -313,6 +313,7 @@ Output format — a JSON object with three fields:
   - Set to a string when you have new durable information that materially improves the current USER.md, or when none exists yet and there is enough signal to draft one.
   - Set to null when the existing USER.md is still accurate; do not rewrite cosmetically.
   - Output ONLY the file content — no commentary, no code fences. Drop stale or contradicted facts. Never invent.
+  - Also keep a short "Working with them" note when you have evidence: what approaches land well with this person and what to avoid (e.g. "prefers a draft over questions", "wants the bottom line first then detail", "reacts badly to over-explaining", "appreciates a light tone"). Update it as you learn — this is how you get better at working with THIS person over time. Base it only on observed reactions, never assumptions.
 
 If nothing worth remembering: {"memories":[],"triples":[],"user_model":null}
 
@@ -574,6 +575,127 @@ async fn run_idle_checkin(state: &Arc<AppState>, last_checkin: &mut HashMap<i64,
         .await
         {
             warn!("idle check-in: delivery failed for chat {chat_id}: {e}");
+        }
+    }
+}
+
+/// "Inner thoughts" interjection: in an active group chat where the bot wasn't
+/// addressed, occasionally evaluate whether it has something genuinely worth
+/// saying and, if so, chime in once. OFF by default — outward-facing and uses
+/// an LLM call per evaluation.
+pub fn spawn_interjection(state: Arc<AppState>) {
+    if !state.config.interjection.enabled {
+        return;
+    }
+    tokio::spawn(async move {
+        info!(
+            "Interjection started (min_interval_secs={}, lookback_mins={})",
+            state.config.interjection.min_interval_secs, state.config.interjection.lookback_mins
+        );
+        let mut last_interjection: HashMap<i64, Instant> = HashMap::new();
+        let mut ticker = tokio::time::interval(Duration::from_secs(120));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            run_interjection(&state, &mut last_interjection).await;
+        }
+    });
+}
+
+const INTERJECTION_PROMPT: &str = "[Group interjection check] You were NOT addressed in this group, \
+but the recent conversation is visible to you.\n\
+- Only if you have something genuinely valuable, welcome, and on-topic to add (a useful fact, a \
+correction of a clear factual error, a helpful pointer), write ONE short message that fits in \
+naturally.\n\
+- Otherwise — which is most of the time — reply with exactly: SKIP\n\
+Do not butt in, do not police the conversation, do not restate what others said. When in doubt, \
+SKIP. Do not use the send_message tool — just return the message, or SKIP.";
+
+async fn run_interjection(state: &Arc<AppState>, last_interjection: &mut HashMap<i64, Instant>) {
+    let min_interval = Duration::from_secs(state.config.interjection.min_interval_secs.max(60));
+    let lookback = state.config.interjection.lookback_mins.max(1) as i64;
+    let since = (Utc::now() - chrono::Duration::minutes(lookback)).to_rfc3339();
+    let chats = match call_blocking(state.db.clone(), move |db| {
+        db.get_active_chat_ids_since(&since)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("interjection: failed to list active chats: {e}");
+            return;
+        }
+    };
+
+    for chat_id in chats {
+        if let Some(t) = last_interjection.get(&chat_id) {
+            if t.elapsed() < min_interval {
+                continue;
+            }
+        }
+
+        let routing = match get_chat_routing(&state.channel_registry, state.db.clone(), chat_id)
+            .await
+            .ok()
+            .flatten()
+        {
+            Some(r) => r,
+            None => continue,
+        };
+        // Interjection only makes sense in group conversations.
+        if !matches!(routing.conversation, ConversationKind::Group) {
+            continue;
+        }
+
+        // Only consider chats with messages the bot hasn't responded to yet.
+        let pending = call_blocking(state.db.clone(), move |db| {
+            db.get_messages_since_last_bot_response(chat_id, 50, 50)
+        })
+        .await
+        .unwrap_or_default();
+        if !pending.iter().any(|m| !m.is_from_bot) {
+            continue;
+        }
+
+        let response = match process_with_agent(
+            state,
+            AgentRequestContext {
+                caller_channel: &routing.channel_name,
+                chat_id,
+                chat_type: routing.conversation.as_agent_chat_type(),
+            },
+            Some(INTERJECTION_PROMPT),
+            None,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("interjection: agent run failed for chat {chat_id}: {e}");
+                last_interjection.insert(chat_id, Instant::now());
+                continue;
+            }
+        };
+
+        // Mark regardless so we don't re-evaluate every tick.
+        last_interjection.insert(chat_id, Instant::now());
+
+        let trimmed = response.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+            continue;
+        }
+
+        let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
+        if let Err(e) = deliver_and_store_bot_message(
+            &state.channel_registry,
+            state.db.clone(),
+            &bot_username,
+            chat_id,
+            trimmed,
+        )
+        .await
+        {
+            warn!("interjection: delivery failed for chat {chat_id}: {e}");
         }
     }
 }

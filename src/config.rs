@@ -873,6 +873,39 @@ impl Default for IdleCheckinConfig {
     }
 }
 
+fn default_interjection_min_interval_secs() -> u64 {
+    900
+}
+fn default_interjection_lookback_mins() -> u64 {
+    10
+}
+
+/// "Inner thoughts" interjection: in an active group chat where the bot was NOT
+/// addressed, occasionally evaluate whether it has a genuinely valuable thing to
+/// say and, if so, chime in once. OFF by default — it speaks unprompted in
+/// group conversations and uses an LLM call per evaluation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InterjectionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Minimum seconds between unprompted interjections per chat.
+    #[serde(default = "default_interjection_min_interval_secs")]
+    pub min_interval_secs: u64,
+    /// Only consider chats with non-bot messages in the last this-many minutes.
+    #[serde(default = "default_interjection_lookback_mins")]
+    pub lookback_mins: u64,
+}
+
+impl Default for InterjectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_interval_secs: default_interjection_min_interval_secs(),
+            lookback_mins: default_interjection_lookback_mins(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct A2APeerConfig {
     #[serde(default = "default_true")]
@@ -1036,6 +1069,8 @@ pub struct Config {
     pub subagents: SubagentConfig,
     #[serde(default)]
     pub idle_checkin: IdleCheckinConfig,
+    #[serde(default)]
+    pub interjection: InterjectionConfig,
     #[serde(default)]
     pub a2a: A2AConfig,
 
@@ -1679,6 +1714,7 @@ impl Config {
             show_thinking: false,
             subagents: SubagentConfig::default(),
             idle_checkin: IdleCheckinConfig::default(),
+            interjection: InterjectionConfig::default(),
             a2a: A2AConfig::default(),
             openai_compat_body_overrides: HashMap::new(),
             openai_compat_body_overrides_by_provider: HashMap::new(),
