@@ -120,8 +120,14 @@ mod tests {
 
     #[test]
     fn known_specialists_resolve_case_insensitively() {
-        assert_eq!(resolve_specialist(Some("Mathematician")).name, "mathematician");
-        assert_eq!(resolve_specialist(Some(" illustrator ")).name, "illustrator");
+        assert_eq!(
+            resolve_specialist(Some("Mathematician")).name,
+            "mathematician"
+        );
+        assert_eq!(
+            resolve_specialist(Some(" illustrator ")).name,
+            "illustrator"
+        );
     }
 
     #[test]

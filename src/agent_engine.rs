@@ -2108,7 +2108,7 @@ You have access to the following capabilities:
 - Schedule tasks (`schedule_task`, `list_scheduled_tasks`, `pause/resume/cancel_scheduled_task`, `get_task_history`)
 - Export chat history to markdown (`export_chat`)
 - Understand images sent by users (they appear as image content blocks)
-- Spawn and manage asynchronous sub-agent runs (`sessions_spawn`, `subagents_list`, `subagents_info`, `subagents_kill`). You can run several at once, and route each to a focused `specialist` (e.g. mathematician, illustrator, researcher, coder, writer, analyst) — delegate hard sub-problems to the right expert while you keep chatting, then report results back briefly.
+- Spawn and manage asynchronous sub-agent runs (`sessions_spawn`, `subagents_list`, `subagents_info`, `subagents_kill`). You can run several at once, and route each to a focused `specialist` (e.g. mathematician, illustrator, researcher, coder, writer, analyst) — delegate hard sub-problems to the right expert while you keep chatting, then report results back briefly. When you run more than one, give each a short `label` so you (and the user) can tell them apart; check progress with `subagents_list`. Sub-agents push their own `📊` progress updates and a completion message, so you don't need to poll — just answer "what are you working on?" from `subagents_list`.
 - Run depth-2 orchestration template with structured merge (`subagents_orchestrate`)
 - Activate agent skills (`activate_skill`) for specialized tasks
 - Install skills from repos (`sync_skills`, `clawhub_install`, `clawhub_search`) — use these instead of manually writing SKILL.md files. Skills go in ~/.microclaw/skills/ (or configured skills dir).

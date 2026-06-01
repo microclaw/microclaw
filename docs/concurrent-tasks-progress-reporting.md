@@ -210,22 +210,23 @@ subagents:
 
 > 原则：每一阶段都**独立可上线、可回滚**，先拿 UX 收益大、风险小的。
 
-### Phase 1 — 命名任务 + 站会一览（低风险，高 UX）
-- DB：`subagent_runs` 加 `label`（+ index）。
-- 工具：`sessions_spawn` 加 `label`；`subagents_list` 增强为人话 digest（或新 `tasks_status`）；
-  `resolve_run` 支持按 label 定位，贯通 info/kill/focus/send。
-- Prompt：引导主代理派活时起 label、查岗时调 `tasks_status`。
-- 测试：并发起 3 个带 label 的任务 → list 显示三行带名字；按 label kill 生效。
+### Phase 1 — 命名任务 + 站会一览（低风险，高 UX）✅ 已完成
+- DB：`subagent_runs` 加 `label`（schema v26 迁移，`db.rs`）。
+- 工具：`sessions_spawn` 加 `label` 参数；`subagents_list` / `subagents_info` 输出带 `label` +
+  最新进度，主代理据此回答"现在都在忙啥"。
+- Prompt：主代理提示词引导"多任务时给每个起 label，用 `subagents_list` 查岗"。
+- 测试：`test_subagent_run_label_and_progress` 断言 label 在 create/get/list 间往返。
 - **交付物**：用户能"同时开多个有名字的任务"并"一句话查全部状态"。
 
-### Phase 2 — 运行中途进度推送（核心）
-- DB：`subagent_runs` 加 `progress_text/pct/last_progress_at/last_announced_progress_at`；
-  `subagent_announces` 加 `kind`。
-- 工具：新增 `report_progress`（仅子代理）；子代理循环加结构化心跳。
-- Relay：`flush_pending_announces_once` 支持 `kind='progress'` + 节流 + 合并。
-- Prompt：子代理 system prompt 加"里程碑时简短 report_progress"。
-- 测试：长任务运行中 chat 收到 ≥1 条节流后的进度；间隔 < min_interval 的重复进度被合并。
-- **交付物**：场景 B 落地——任务运行中会主动同步进展。
+### Phase 2 — 运行中途进度推送（核心）✅ 已完成
+- DB：`subagent_runs` 加 `progress_text` / `last_progress_at`（schema v26）；复用 `subagent_events`
+  记录 `event_type='progress'` 时间线；新增 `record_subagent_progress()`。
+- 工具：新增 `report_progress`（仅子代理可用，`src/tools/report_progress.rs`）——记录进度 +
+  `deliver_and_store_bot_message` 推送 `📊 [label]: ...`。
+- 节流：`subagents.progress_min_interval_secs`（默认 45s）；距上次推送不足间隔则只记录不推送。
+- Prompt：子代理 system prompt 加"里程碑时调用 `report_progress` 简短同步"。
+- 测试：`test_subagent_run_label_and_progress` 覆盖进度记录 + 时间线事件 + 节流所需的"上次时间"返回。
+- **交付物**：场景 B 落地——任务运行中会主动同步进展（节流防刷屏）。
 
 ### Phase 3 — 主动 standup + fan-in 汇总
 - Scheduler：`run_task_standup()`，motivation 门控（复用拟人化方案 A）。

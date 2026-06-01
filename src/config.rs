@@ -262,6 +262,9 @@ fn default_subagent_run_timeout_secs() -> u64 {
 fn default_subagent_announce() -> bool {
     true
 }
+fn default_subagent_progress_min_interval_secs() -> u64 {
+    45
+}
 fn default_subagent_max_spawn_depth() -> usize {
     1
 }
@@ -768,6 +771,8 @@ pub struct SubagentConfig {
     pub run_timeout_secs: u64,
     #[serde(default = "default_subagent_announce")]
     pub announce_to_chat: bool,
+    #[serde(default = "default_subagent_progress_min_interval_secs")]
+    pub progress_min_interval_secs: u64,
     #[serde(default = "default_subagent_max_spawn_depth")]
     pub max_spawn_depth: usize,
     #[serde(default = "default_subagent_max_children_per_run")]
@@ -791,6 +796,7 @@ impl Default for SubagentConfig {
             max_active_per_chat: default_subagent_max_active_per_chat(),
             run_timeout_secs: default_subagent_run_timeout_secs(),
             announce_to_chat: default_subagent_announce(),
+            progress_min_interval_secs: default_subagent_progress_min_interval_secs(),
             max_spawn_depth: default_subagent_max_spawn_depth(),
             max_children_per_run: default_subagent_max_children_per_run(),
             thread_bound_routing_enabled: default_subagent_thread_bound_routing_enabled(),

@@ -234,7 +234,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 25;
+const SCHEMA_VERSION_CURRENT: i64 = 26;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -288,6 +288,9 @@ pub struct SubagentRunRecord {
     pub model: String,
     pub token_budget: i64,
     pub artifact_json: Option<String>,
+    pub label: Option<String>,
+    pub progress_text: Option<String>,
+    pub last_progress_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -314,6 +317,7 @@ pub struct CreateSubagentRunParams<'a> {
     pub context: &'a str,
     pub provider: &'a str,
     pub model: &'a str,
+    pub label: Option<&'a str>,
 }
 
 pub struct FinishSubagentRunParams<'a> {
@@ -1048,6 +1052,28 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 25)?;
         version = 25;
+    }
+    if version < 26 {
+        // Named, progress-reporting sub-agent runs: a human-friendly `label`
+        // for "what am I working on", plus the latest progress snapshot pushed
+        // by the `report_progress` tool during a long run.
+        if !table_has_column(conn, "subagent_runs", "label")? {
+            conn.execute("ALTER TABLE subagent_runs ADD COLUMN label TEXT", [])?;
+        }
+        if !table_has_column(conn, "subagent_runs", "progress_text")? {
+            conn.execute(
+                "ALTER TABLE subagent_runs ADD COLUMN progress_text TEXT",
+                [],
+            )?;
+        }
+        if !table_has_column(conn, "subagent_runs", "last_progress_at")? {
+            conn.execute(
+                "ALTER TABLE subagent_runs ADD COLUMN last_progress_at TEXT",
+                [],
+            )?;
+        }
+        set_schema_version(conn, 26)?;
+        version = 26;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -2344,7 +2370,15 @@ impl Database {
             "INSERT INTO tool_result_artifacts
                 (artifact_id, chat_id, tool_name, content, total_chars, created_at, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![artifact_id, chat_id, tool_name, content, total_chars, now, expires_at],
+            params![
+                artifact_id,
+                chat_id,
+                tool_name,
+                content,
+                total_chars,
+                now,
+                expires_at
+            ],
         )?;
         Ok(())
     }
@@ -2464,11 +2498,7 @@ impl Database {
 
     /// Overwrite the session label for a chat. No-op if the chat has no
     /// session row yet. Used by the title generator background task.
-    pub fn set_session_label(
-        &self,
-        chat_id: i64,
-        label: &str,
-    ) -> Result<(), MicroClawError> {
+    pub fn set_session_label(&self, chat_id: i64, label: &str) -> Result<(), MicroClawError> {
         let conn = self.lock_conn();
         conn.execute(
             "UPDATE sessions SET label = ?1 WHERE chat_id = ?2",
@@ -4648,8 +4678,8 @@ impl Database {
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO subagent_runs(
-                run_id, parent_run_id, depth, token_budget, chat_id, caller_channel, task, context, status, created_at, provider, model
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'accepted', ?9, ?10, ?11)",
+                run_id, parent_run_id, depth, token_budget, chat_id, caller_channel, task, context, status, created_at, provider, model, label
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'accepted', ?9, ?10, ?11, ?12)",
             params![
                 params.run_id,
                 params.parent_run_id,
@@ -4661,10 +4691,41 @@ impl Database {
                 params.context,
                 now,
                 params.provider,
-                params.model
+                params.model,
+                params.label
             ],
         )?;
         Ok(())
+    }
+
+    /// Record a progress snapshot for a running sub-agent: update the latest
+    /// progress text/time on the run and append a `progress` event to its
+    /// timeline. Returns the previous `last_progress_at` (for throttling).
+    pub fn record_subagent_progress(
+        &self,
+        run_id: &str,
+        progress_text: &str,
+    ) -> Result<Option<String>, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let prev: Option<String> = conn
+            .query_row(
+                "SELECT last_progress_at FROM subagent_runs WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        conn.execute(
+            "UPDATE subagent_runs SET progress_text = ?2, last_progress_at = ?3 WHERE run_id = ?1",
+            params![run_id, progress_text, now],
+        )?;
+        conn.execute(
+            "INSERT INTO subagent_events(run_id, event_type, detail, created_at)
+             VALUES (?1, 'progress', ?2, ?3)",
+            params![run_id, progress_text, now],
+        )?;
+        Ok(prev)
     }
 
     pub fn mark_subagent_queued(&self, run_id: &str) -> Result<(), MicroClawError> {
@@ -4746,7 +4807,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT run_id, parent_run_id, depth, token_budget, chat_id, caller_channel, task, context, status, created_at,
                     started_at, finished_at, cancel_requested, error_text, result_text,
-                    input_tokens, output_tokens, total_tokens, provider, model, artifact_json
+                    input_tokens, output_tokens, total_tokens, provider, model, artifact_json,
+                    label, progress_text, last_progress_at
              FROM subagent_runs
              WHERE chat_id = ?1
              ORDER BY created_at DESC
@@ -4775,6 +4837,9 @@ impl Database {
                 provider: row.get(18)?,
                 model: row.get(19)?,
                 artifact_json: row.get(20)?,
+                label: row.get(21)?,
+                progress_text: row.get(22)?,
+                last_progress_at: row.get(23)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -4789,7 +4854,8 @@ impl Database {
         conn.query_row(
             "SELECT run_id, parent_run_id, depth, token_budget, chat_id, caller_channel, task, context, status, created_at,
                     started_at, finished_at, cancel_requested, error_text, result_text,
-                    input_tokens, output_tokens, total_tokens, provider, model, artifact_json
+                    input_tokens, output_tokens, total_tokens, provider, model, artifact_json,
+                    label, progress_text, last_progress_at
              FROM subagent_runs
              WHERE run_id = ?1 AND chat_id = ?2",
             params![run_id, chat_id],
@@ -4816,6 +4882,9 @@ impl Database {
                     provider: row.get(18)?,
                     model: row.get(19)?,
                     artifact_json: row.get(20)?,
+                label: row.get(21)?,
+                progress_text: row.get(22)?,
+                last_progress_at: row.get(23)?,
                 })
             },
         )
@@ -5195,7 +5264,8 @@ impl Database {
         let mut stmt = conn.prepare(&format!(
             "SELECT run_id, parent_run_id, depth, token_budget, chat_id, caller_channel, task, context, status, created_at,
                     started_at, finished_at, cancel_requested, error_text, result_text,
-                    input_tokens, output_tokens, total_tokens, provider, model, artifact_json
+                    input_tokens, output_tokens, total_tokens, provider, model, artifact_json,
+                    label, progress_text, last_progress_at
              FROM subagent_runs
              WHERE 1=1 {active_filter}
              ORDER BY created_at DESC
@@ -5226,6 +5296,9 @@ impl Database {
                     provider: row.get(18)?,
                     model: row.get(19)?,
                     artifact_json: row.get(20)?,
+                    label: row.get(21)?,
+                    progress_text: row.get(22)?,
+                    last_progress_at: row.get(23)?,
                 })
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
@@ -5253,6 +5326,9 @@ impl Database {
                     provider: row.get(18)?,
                     model: row.get(19)?,
                     artifact_json: row.get(20)?,
+                    label: row.get(21)?,
+                    progress_text: row.get(22)?,
+                    last_progress_at: row.get(23)?,
                 })
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
@@ -5625,7 +5701,12 @@ mod tests {
         let messages = [
             ("chat-1", 101, "alice", "Rust async futures are awesome"),
             ("chat-2", 101, "bot", "I agree, tokio makes them easy"),
-            ("chat-3", 101, "alice", "Let's talk about JavaScript promises instead"),
+            (
+                "chat-3",
+                101,
+                "alice",
+                "Let's talk about JavaScript promises instead",
+            ),
             ("chat-4", 202, "bob", "Discussing Rust borrow checker"),
         ];
         for (i, (id, chat, sender, content)) in messages.iter().enumerate() {
@@ -5642,7 +5723,9 @@ mod tests {
 
         let rust_hits = db.search_messages_fts("rust", None, None, 10).unwrap();
         assert!(rust_hits.len() >= 2, "expected at least 2 rust matches");
-        assert!(rust_hits.iter().all(|m| m.content.to_lowercase().contains("rust")));
+        assert!(rust_hits
+            .iter()
+            .all(|m| m.content.to_lowercase().contains("rust")));
 
         let scoped = db.search_messages_fts("rust", Some(101), None, 10).unwrap();
         assert!(scoped.iter().all(|m| m.chat_id == 101));
@@ -5664,9 +5747,7 @@ mod tests {
             )
             .unwrap();
         }
-        let after_delete = db
-            .search_messages_fts("awesome", None, None, 10)
-            .unwrap();
+        let after_delete = db.search_messages_fts("awesome", None, None, 10).unwrap();
         assert!(after_delete.is_empty());
 
         cleanup(&dir);
@@ -7400,9 +7481,7 @@ mod tests {
 
         // Expired artifact returns None
         let future = (now + chrono::Duration::hours(2)).to_rfc3339();
-        let missing = db
-            .get_tool_artifact_slice("art_x", 0, 10, &future)
-            .unwrap();
+        let missing = db.get_tool_artifact_slice("art_x", 0, 10, &future).unwrap();
         assert!(missing.is_none());
 
         // Prune removes expired rows
@@ -7429,6 +7508,58 @@ mod tests {
         assert_eq!(nearest.len(), 1);
         assert_eq!(nearest[0].0, id1);
         assert!(nearest[0].1 >= 0.0);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_subagent_run_label_and_progress() {
+        let (db, dir) = test_db();
+        db.create_subagent_run(CreateSubagentRunParams {
+            run_id: "subrun-1",
+            parent_run_id: None,
+            depth: 1,
+            token_budget: 0,
+            chat_id: 42,
+            caller_channel: "telegram",
+            task: "research competitor pricing",
+            context: "",
+            provider: "anthropic",
+            model: "claude-test",
+            label: Some("competitor research"),
+        })
+        .unwrap();
+
+        // Label round-trips through both get and list.
+        let run = db.get_subagent_run("subrun-1", 42).unwrap().unwrap();
+        assert_eq!(run.label.as_deref(), Some("competitor research"));
+        assert!(run.progress_text.is_none());
+        assert!(run.last_progress_at.is_none());
+        let listed = db.list_subagent_runs(42, 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].label.as_deref(), Some("competitor research"));
+
+        // First progress: no previous timestamp.
+        let prev = db
+            .record_subagent_progress("subrun-1", "checked 3/5 sources")
+            .unwrap();
+        assert!(prev.is_none());
+        let run = db.get_subagent_run("subrun-1", 42).unwrap().unwrap();
+        assert_eq!(run.progress_text.as_deref(), Some("checked 3/5 sources"));
+        assert!(run.last_progress_at.is_some());
+
+        // Second progress: returns the prior timestamp (used for throttling) and
+        // appends a second event to the run timeline.
+        let prev2 = db
+            .record_subagent_progress("subrun-1", "checked 5/5 sources")
+            .unwrap();
+        assert!(prev2.is_some());
+        let events = db.list_subagent_events("subrun-1", 50).unwrap();
+        let progress_events = events
+            .iter()
+            .filter(|e| e.event_type == "progress")
+            .count();
+        assert_eq!(progress_events, 2);
 
         cleanup(&dir);
     }

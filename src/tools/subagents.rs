@@ -329,7 +329,7 @@ async fn run_sub_agent_task(
 
     let profile = crate::tools::specialists::resolve_specialist(Some(specialist.as_str()));
     let system_prompt = format!(
-        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {{type,path,description}}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.",
+        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nFor long tasks, call `report_progress` at meaningful milestones with a one-line status so the user gets colleague-style updates while you work.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {{type,path,description}}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.",
         persona = profile.persona
     );
 
@@ -662,6 +662,10 @@ impl Tool for SessionsSpawnTool {
                         "enum": crate::tools::specialists::specialist_names(),
                         "description": "Which specialist persona the sub-agent adopts. Defaults to generalist."
                     },
+                    "label": {
+                        "type": "string",
+                        "description": "Short human-friendly name for this task (e.g. 'competitor research'), shown when listing/reporting progress. Recommended when running several tasks at once."
+                    },
                     "runtime": {
                         "type": "string",
                         "enum": ["native", "acp"],
@@ -719,6 +723,13 @@ impl Tool for SessionsSpawnTool {
         )
         .name
         .to_string();
+        // Optional human-friendly label ("competitor research") for "what am I working on".
+        let label = input
+            .get("label")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| v.chars().take(80).collect::<String>());
         let parent_meta = subagent_runtime_meta_from_input(&input);
         let execution_runtime =
             match SubagentExecutionRuntime::from_input(&input, parent_meta.as_ref()) {
@@ -842,6 +853,7 @@ impl Tool for SessionsSpawnTool {
         let context_for_insert = context.clone();
         let caller_channel_for_insert = auth.caller_channel.clone();
         let parent_for_insert = parent_run_id.clone();
+        let label_for_insert = label.clone();
         if let Err(e) = call_blocking(self.db.clone(), move |db| {
             db.create_subagent_run(CreateSubagentRunParams {
                 run_id: &run_id_for_insert,
@@ -854,6 +866,7 @@ impl Tool for SessionsSpawnTool {
                 context: &context_for_insert,
                 provider: &provider,
                 model: &model,
+                label: label_for_insert.as_deref(),
             })
         })
         .await
@@ -1056,6 +1069,7 @@ impl Tool for SessionsSpawnTool {
                 "chat_id": chat_id,
                 "depth": child_depth,
                 "specialist": specialist,
+                "label": label,
                 "runtime": execution_runtime.as_str(),
                 "runtime_target": runtime_target,
                 "token_budget": child_token_budget,
@@ -1131,6 +1145,7 @@ impl Tool for SubagentsListTool {
             .map(|r| {
                 json!({
                     "run_id": r.run_id,
+                    "label": r.label,
                     "parent_run_id": r.parent_run_id,
                     "depth": r.depth,
                     "token_budget": r.token_budget,
@@ -1140,6 +1155,8 @@ impl Tool for SubagentsListTool {
                     "finished_at": r.finished_at,
                     "cancel_requested": r.cancel_requested,
                     "task": r.task,
+                    "progress": r.progress_text,
+                    "last_progress_at": r.last_progress_at,
                     "input_tokens": r.input_tokens,
                     "output_tokens": r.output_tokens,
                     "artifact_json": r.artifact_json,
@@ -1215,6 +1232,7 @@ impl Tool for SubagentsInfoTool {
         ToolResult::success(
             json!({
                 "run_id": run.run_id,
+                "label": run.label,
                 "parent_run_id": run.parent_run_id,
                 "depth": run.depth,
                 "chat_id": run.chat_id,
@@ -1226,6 +1244,8 @@ impl Tool for SubagentsInfoTool {
                 "started_at": run.started_at,
                 "finished_at": run.finished_at,
                 "cancel_requested": run.cancel_requested,
+                "progress": run.progress_text,
+                "last_progress_at": run.last_progress_at,
                 "error_text": run.error_text,
                 "result_text": run.result_text,
                 "input_tokens": run.input_tokens,

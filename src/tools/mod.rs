@@ -17,6 +17,7 @@ pub mod mcp;
 pub mod memory;
 pub mod osv_check;
 pub mod read_file;
+pub mod report_progress;
 pub mod schedule;
 pub mod send_message;
 pub mod session_search;
@@ -440,10 +441,15 @@ impl ToolRegistry {
             Box::new(fetch_artifact::FetchArtifactTool::new(db.clone())),
             Box::new(describe_image::DescribeImageTool::new(config)),
         ];
-        // Visual creation: available to specialists (e.g. illustrator) whenever a
+        // Visual creation + progress reporting: available to specialists whenever a
         // channel registry is present, independent of session-spawn permissions.
         if let Some(cr) = &channel_registry {
             tools.push(Box::new(generate_image::GenerateImageTool::new(
+                config,
+                cr.clone(),
+                db.clone(),
+            )));
+            tools.push(Box::new(report_progress::ReportProgressTool::new(
                 config,
                 cr.clone(),
                 db.clone(),
