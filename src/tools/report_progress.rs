@@ -102,6 +102,14 @@ impl Tool for ReportProgressTool {
             Err(e) => return ToolResult::error(format!("Failed recording progress: {e}")),
         };
 
+        // Progress is always recorded on the run timeline (so subagents_list /
+        // standup can show it); delivery to chat is what the toggle controls.
+        if !self.config.subagents.progress_reports {
+            return ToolResult::success(
+                json!({"status": "recorded", "delivered": false, "reason": "disabled"}).to_string(),
+            );
+        }
+
         let min_interval = self.config.subagents.progress_min_interval_secs as i64;
         let throttled = prev_progress_at
             .as_deref()

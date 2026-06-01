@@ -841,6 +841,19 @@ async fn process_with_agent_logic(
         );
     }
 
+    // Relationship familiarity: nudge tone by how much history we share with
+    // this person (welcoming for a brand-new chat, casual for a long-time one).
+    let message_count = call_blocking(state.db.clone(), move |db| {
+        db.count_messages_for_chat(chat_id)
+    })
+    .await
+    .unwrap_or(0);
+    if let Some(hint) = crate::relationship::familiarity_hint(message_count) {
+        system_prompt.push_str("\n# Relationship\n\n");
+        system_prompt.push_str(hint);
+        system_prompt.push('\n');
+    }
+
     debug!(
         chat_id,
         system_prompt_len = system_prompt.len(),

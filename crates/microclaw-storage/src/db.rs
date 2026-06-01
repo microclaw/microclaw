@@ -3616,6 +3616,18 @@ impl Database {
         Ok(memories)
     }
 
+    /// Total number of stored messages in a chat (both sides). Used as a cheap
+    /// proxy for how well the bot "knows" this person.
+    pub fn count_messages_for_chat(&self, chat_id: i64) -> Result<i64, MicroClawError> {
+        let conn = self.lock_conn();
+        conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE chat_id = ?1",
+            params![chat_id],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+    }
+
     pub fn get_active_chat_ids_since(&self, since: &str) -> Result<Vec<i64>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
@@ -4861,6 +4873,24 @@ impl Database {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Average wall-clock duration (seconds) of recently-completed sub-agent runs
+    /// in a chat, for rough ETA hints. `None` when there's no completed history.
+    pub fn avg_completed_subagent_duration_secs(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<i64>, MicroClawError> {
+        let conn = self.lock_conn();
+        let avg: Option<f64> = conn.query_row(
+            "SELECT AVG((julianday(finished_at) - julianday(started_at)) * 86400.0)
+             FROM subagent_runs
+             WHERE chat_id = ?1 AND status = 'completed'
+               AND started_at IS NOT NULL AND finished_at IS NOT NULL",
+            params![chat_id],
+            |row| row.get(0),
+        )?;
+        Ok(avg.map(|v| v.round() as i64).filter(|v| *v > 0))
     }
 
     /// All currently-active sub-agent runs across chats (accepted/queued/running),
@@ -7677,6 +7707,11 @@ mod tests {
         let idle = db.list_idle_chats("2030-01-01T00:00:00Z", 50).unwrap();
         assert!(idle.contains(&1));
         assert!(!idle.contains(&2));
+
+        // Familiarity proxy: message counts per chat.
+        assert_eq!(db.count_messages_for_chat(1).unwrap(), 1);
+        assert_eq!(db.count_messages_for_chat(2).unwrap(), 1);
+        assert_eq!(db.count_messages_for_chat(999).unwrap(), 0);
         cleanup(&dir);
     }
 

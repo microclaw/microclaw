@@ -23,6 +23,7 @@ pub mod memory_service;
 pub mod mood;
 pub mod plugins;
 pub mod prompt_cache;
+pub mod relationship;
 pub(crate) mod run_control;
 pub mod runtime;
 pub mod scheduler;

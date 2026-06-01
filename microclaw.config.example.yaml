@@ -261,6 +261,7 @@ web_session_idle_ttl_seconds: 300
 #   run_timeout_secs: 900          # per-run timeout
 #   announce_to_chat: true         # post a message when a run completes
 #   fan_in_summary: false          # when a batch of child tasks all finish, post one combined summary
+#   progress_reports: true         # whether sub-agents may post mid-run "📊 progress" updates to chat
 #   # How often a long-running sub-agent may post a "📊 progress" update (seconds).
 #   progress_min_interval_secs: 45
 #   # Proactive task standup: periodically post a one-line status for tasks that

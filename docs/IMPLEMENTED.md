@@ -90,3 +90,12 @@ subagents:
 - 新增/覆盖：`mood`（4）、`specialists`（3）、subagent label+progress+resolve（storage）、
   standup 格式化与 stalled（scheduler）、builtin skills 安装。
 - 已知失败：2 个 `hooks` 子进程测试在本沙箱环境失败，**在改动前的 baseline 同样失败**（环境性，与本分支无关）。
+
+## 跟进（后续 PR）
+
+| 项 | 状态 | 实现 / 位置 |
+|---|---|---|
+| 进度汇报可关 | ✅ | `subagents.progress_reports`（默认 true）。关闭后仍记录到时间线，仅不推送到聊天。`src/tools/report_progress.rs` |
+| 关系纵深（认识多久） | ✅ | `src/relationship.rs`：按消息量判定"很新/很熟"，注入 `# Relationship` 提示（中间不注入）。`db.count_messages_for_chat` |
+| 任务 ETA | ✅ | standup 用历史平均完成时长给"~还要 Xm"。`db.avg_completed_subagent_duration_secs` |
+| 专家间协作 / Inner Thoughts / 自发幽默 / 人格成长 | ⏳ | 仍属开放研究问题，见 `how-to-be-a-human.md` |

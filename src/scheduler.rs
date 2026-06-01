@@ -433,7 +433,13 @@ async fn run_task_standup(
             .first()
             .map(|r| r.caller_channel.clone())
             .unwrap_or_default();
-        let message = format_standup(&chat_runs, now, interval_secs);
+        let avg_duration_secs = call_blocking(state.db.clone(), move |db| {
+            db.avg_completed_subagent_duration_secs(chat_id)
+        })
+        .await
+        .ok()
+        .flatten();
+        let message = format_standup(&chat_runs, now, interval_secs, avg_duration_secs);
         let bot_username = state.config.bot_username_for_channel(&channel);
         match deliver_and_store_bot_message(
             &state.channel_registry,
@@ -579,6 +585,7 @@ fn format_standup(
     runs: &[microclaw_storage::db::SubagentRunRecord],
     now: chrono::DateTime<Utc>,
     interval_secs: u64,
+    avg_duration_secs: Option<i64>,
 ) -> String {
     let n = runs.len();
     let header = format!(
@@ -615,7 +622,15 @@ fn format_standup(
         let stale_progress = progress_age.map(|a| a >= interval).unwrap_or(true);
         let stalled = age_secs.map(|a| a >= 2 * interval).unwrap_or(false) && stale_progress;
         let flag = if stalled { " ⚠️ no recent progress" } else { "" };
-        lines.push(format!("• {name} ({age}){progress}{flag}"));
+        // Rough ETA from the chat's historical average run duration, shown only
+        // while the task is still under that average (and not flagged stalled).
+        let eta = match (avg_duration_secs, age_secs) {
+            (Some(avg), Some(age)) if !stalled && age < avg => {
+                format!(", ~{} left", format_duration_secs(avg - age))
+            }
+            _ => String::new(),
+        };
+        lines.push(format!("• {name} ({age}{eta}){progress}{flag}"));
     }
     lines.join("\n")
 }
@@ -1330,7 +1345,7 @@ mod tests {
             progress_text: Some("checked 3/5 vendors".into()),
             last_progress_at: None,
         };
-        let out = format_standup(std::slice::from_ref(&run), now, 1800);
+        let out = format_standup(std::slice::from_ref(&run), now, 1800, None);
         assert!(out.contains("1 task running"));
         assert!(out.contains("competitor research"));
         assert!(out.contains("checked 3/5 vendors"));
@@ -1370,8 +1385,44 @@ mod tests {
             progress_text: None,
             last_progress_at: None,
         };
-        let out = format_standup(std::slice::from_ref(&run), now, 1800);
+        let out = format_standup(std::slice::from_ref(&run), now, 1800, Some(600));
         assert!(out.contains("no recent progress"), "expected stalled flag: {out}");
+    }
+
+    #[test]
+    fn test_format_standup_shows_eta_when_under_average() {
+        use microclaw_storage::db::SubagentRunRecord;
+        let now = Utc::now();
+        // Running 2 min, average completed run is 10 min → ~8m left, no stall flag.
+        let run = SubagentRunRecord {
+            run_id: "subrun-eta".into(),
+            parent_run_id: None,
+            depth: 1,
+            chat_id: 7,
+            caller_channel: "telegram".into(),
+            task: "build report".into(),
+            context: String::new(),
+            status: "running".into(),
+            created_at: (now - chrono::Duration::seconds(120)).to_rfc3339(),
+            started_at: None,
+            finished_at: None,
+            cancel_requested: false,
+            error_text: None,
+            result_text: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            provider: "anthropic".into(),
+            model: "claude-test".into(),
+            token_budget: 0,
+            artifact_json: None,
+            label: Some("report".into()),
+            progress_text: None,
+            last_progress_at: None,
+        };
+        let out = format_standup(std::slice::from_ref(&run), now, 1800, Some(600));
+        assert!(out.contains("left"), "expected ETA: {out}");
+        assert!(!out.contains("no recent progress"));
     }
 
     #[test]

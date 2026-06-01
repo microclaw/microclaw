@@ -773,6 +773,8 @@ pub struct SubagentConfig {
     pub announce_to_chat: bool,
     #[serde(default)]
     pub fan_in_summary: bool,
+    #[serde(default = "default_true")]
+    pub progress_reports: bool,
     #[serde(default = "default_subagent_progress_min_interval_secs")]
     pub progress_min_interval_secs: u64,
     #[serde(default = "default_subagent_max_spawn_depth")]
@@ -801,6 +803,7 @@ impl Default for SubagentConfig {
             run_timeout_secs: default_subagent_run_timeout_secs(),
             announce_to_chat: default_subagent_announce(),
             fan_in_summary: false,
+            progress_reports: true,
             progress_min_interval_secs: default_subagent_progress_min_interval_secs(),
             max_spawn_depth: default_subagent_max_spawn_depth(),
             max_children_per_run: default_subagent_max_children_per_run(),
