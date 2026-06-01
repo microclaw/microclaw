@@ -1168,6 +1168,21 @@ impl Tool for SubagentsListTool {
     }
 }
 
+/// Resolve a run reference (exact run_id or human-friendly label) to a run_id
+/// within the given chat. Shared by subagents_info / subagents_kill.
+async fn resolve_subagent_ref(
+    db: &Arc<Database>,
+    chat_id: i64,
+    run_ref: &str,
+) -> Result<Option<String>, String> {
+    let run_ref_owned = run_ref.to_string();
+    call_blocking(db.clone(), move |db| {
+        db.resolve_subagent_run_id(chat_id, &run_ref_owned)
+    })
+    .await
+    .map_err(|e| format!("Failed resolving subagent reference: {e}"))
+}
+
 pub struct SubagentsInfoTool {
     db: Arc<Database>,
 }
@@ -1187,10 +1202,10 @@ impl Tool for SubagentsInfoTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "subagents_info".into(),
-            description: "Get detailed information for one subagent run.".into(),
+            description: "Get detailed information for one subagent run, by run id or task label.".into(),
             input_schema: schema_object(
                 json!({
-                    "run_id": {"type": "string"},
+                    "run_id": {"type": "string", "description": "Run id or the task label given at spawn."},
                     "chat_id": {"type": "integer"}
                 }),
                 &["run_id"],
@@ -1214,9 +1229,16 @@ impl Tool for SubagentsInfoTool {
         if let Err(e) = authorize_chat_access(&input, chat_id) {
             return ToolResult::error(e);
         }
-        let run_id = match input.get("run_id").and_then(|v| v.as_str()) {
+        let run_ref = match input.get("run_id").and_then(|v| v.as_str()) {
             Some(v) if !v.trim().is_empty() => v.trim().to_string(),
             _ => return ToolResult::error("Missing required parameter: run_id".into()),
+        };
+        let run_id = match resolve_subagent_ref(&self.db, chat_id, &run_ref).await {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                return ToolResult::error(format!("No subagent run matching '{run_ref}'"))
+            }
+            Err(e) => return ToolResult::error(e),
         };
 
         let run = match call_blocking(self.db.clone(), move |db| {
@@ -1284,10 +1306,10 @@ impl Tool for SubagentsKillTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "subagents_kill".into(),
-            description: "Request cancellation for one running subagent run, or all active runs in current chat with run_id=all.".into(),
+            description: "Request cancellation for one running subagent run (by run id or task label), or all active runs in current chat with run_id=all.".into(),
             input_schema: schema_object(
                 json!({
-                    "run_id": {"type": "string", "description": "Run id or 'all'"},
+                    "run_id": {"type": "string", "description": "Run id, task label, or 'all'"},
                     "chat_id": {"type": "integer"}
                 }),
                 &["run_id"],
@@ -1311,14 +1333,14 @@ impl Tool for SubagentsKillTool {
         if let Err(e) = authorize_chat_access(&input, chat_id) {
             return ToolResult::error(e);
         }
-        let run_id = match input.get("run_id").and_then(|v| v.as_str()) {
+        let run_ref = match input.get("run_id").and_then(|v| v.as_str()) {
             Some(v) if !v.trim().is_empty() => v.trim().to_string(),
             _ => return ToolResult::error("Missing required parameter: run_id".into()),
         };
 
         let runtime = subagent_runtime(&self.config);
 
-        if run_id.eq_ignore_ascii_case("all") {
+        if run_ref.eq_ignore_ascii_case("all") {
             let rows = match call_blocking(self.db.clone(), move |db| {
                 db.list_subagent_runs(chat_id, 200)
             })
@@ -1353,6 +1375,14 @@ impl Tool for SubagentsKillTool {
                 json!({"status": "ok", "cancelled": cancelled, "chat_id": chat_id}).to_string(),
             );
         }
+
+        let run_id = match resolve_subagent_ref(&self.db, chat_id, &run_ref).await {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                return ToolResult::error(format!("No subagent run matching '{run_ref}'"))
+            }
+            Err(e) => return ToolResult::error(e),
+        };
 
         let run_id_for_db = run_id.clone();
         let requested = match call_blocking(self.db.clone(), move |db| {

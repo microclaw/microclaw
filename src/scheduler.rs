@@ -432,7 +432,7 @@ async fn run_task_standup(
             .first()
             .map(|r| r.caller_channel.clone())
             .unwrap_or_default();
-        let message = format_standup(&chat_runs, now);
+        let message = format_standup(&chat_runs, now, interval_secs);
         let bot_username = state.config.bot_username_for_channel(&channel);
         match deliver_and_store_bot_message(
             &state.channel_registry,
@@ -451,16 +451,20 @@ async fn run_task_standup(
     }
 }
 
-/// One-line-per-task standup digest, like a colleague's quick status.
+/// One-line-per-task standup digest, like a colleague's quick status. A task
+/// that has run well past the interval without recent progress is flagged as
+/// possibly stalled.
 fn format_standup(
     runs: &[microclaw_storage::db::SubagentRunRecord],
     now: chrono::DateTime<Utc>,
+    interval_secs: u64,
 ) -> String {
     let n = runs.len();
     let header = format!(
         "🛰️ Still on it — {n} task{} running:",
         if n == 1 { "" } else { "s" }
     );
+    let interval = interval_secs as i64;
     let mut lines = vec![header];
     for r in runs {
         let name = r
@@ -471,18 +475,26 @@ fn format_standup(
                 let snippet: String = r.task.chars().take(40).collect();
                 snippet
             });
-        let age = chrono::DateTime::parse_from_rfc3339(&r.created_at)
+        let age_secs = chrono::DateTime::parse_from_rfc3339(&r.created_at)
             .ok()
-            .map(|c| (now - c.with_timezone(&Utc)).num_seconds().max(0))
-            .map(format_duration_secs)
-            .unwrap_or_default();
+            .map(|c| (now - c.with_timezone(&Utc)).num_seconds().max(0));
+        let age = age_secs.map(format_duration_secs).unwrap_or_default();
         let progress = r
             .progress_text
             .clone()
             .filter(|p| !p.trim().is_empty())
             .map(|p| format!(" — {p}"))
             .unwrap_or_default();
-        lines.push(format!("• {name} ({age}){progress}"));
+        // Stalled: running well past the interval with no recent progress.
+        let progress_age = r
+            .last_progress_at
+            .as_deref()
+            .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+            .map(|c| (now - c.with_timezone(&Utc)).num_seconds().max(0));
+        let stale_progress = progress_age.map(|a| a >= interval).unwrap_or(true);
+        let stalled = age_secs.map(|a| a >= 2 * interval).unwrap_or(false) && stale_progress;
+        let flag = if stalled { " ⚠️ no recent progress" } else { "" };
+        lines.push(format!("• {name} ({age}){progress}{flag}"));
     }
     lines.join("\n")
 }
@@ -1197,11 +1209,48 @@ mod tests {
             progress_text: Some("checked 3/5 vendors".into()),
             last_progress_at: None,
         };
-        let out = format_standup(std::slice::from_ref(&run), now);
+        let out = format_standup(std::slice::from_ref(&run), now, 1800);
         assert!(out.contains("1 task running"));
         assert!(out.contains("competitor research"));
         assert!(out.contains("checked 3/5 vendors"));
         assert!(out.contains("10m")); // 630s rounds to 10m
+        // Fresh progress + short interval-relative age → not flagged stalled.
+        assert!(!out.contains("no recent progress"));
+    }
+
+    #[test]
+    fn test_format_standup_flags_stalled_task() {
+        use microclaw_storage::db::SubagentRunRecord;
+        let now = Utc::now();
+        // Running 90 min, no progress ever, interval 30 min → stalled.
+        let run = SubagentRunRecord {
+            run_id: "subrun-2".into(),
+            parent_run_id: None,
+            depth: 1,
+            chat_id: 7,
+            caller_channel: "telegram".into(),
+            task: "long grind".into(),
+            context: String::new(),
+            status: "running".into(),
+            created_at: (now - chrono::Duration::seconds(5400)).to_rfc3339(),
+            started_at: None,
+            finished_at: None,
+            cancel_requested: false,
+            error_text: None,
+            result_text: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            provider: "anthropic".into(),
+            model: "claude-test".into(),
+            token_budget: 0,
+            artifact_json: None,
+            label: Some("long grind".into()),
+            progress_text: None,
+            last_progress_at: None,
+        };
+        let out = format_standup(std::slice::from_ref(&run), now, 1800);
+        assert!(out.contains("no recent progress"), "expected stalled flag: {out}");
     }
 
     #[test]

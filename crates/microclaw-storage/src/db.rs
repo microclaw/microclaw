@@ -4936,6 +4936,38 @@ impl Database {
         .map_err(Into::into)
     }
 
+    /// Resolve a sub-agent reference that is either an exact run_id or a
+    /// human-friendly label, scoped to a chat. Exact run_id wins; otherwise the
+    /// most recent run with that label is returned, preferring active ones.
+    pub fn resolve_subagent_run_id(
+        &self,
+        chat_id: i64,
+        run_id_or_label: &str,
+    ) -> Result<Option<String>, MicroClawError> {
+        let conn = self.lock_conn();
+        let exact: Option<String> = conn
+            .query_row(
+                "SELECT run_id FROM subagent_runs WHERE run_id = ?1 AND chat_id = ?2",
+                params![run_id_or_label, chat_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exact.is_some() {
+            return Ok(exact);
+        }
+        let by_label: Option<String> = conn
+            .query_row(
+                "SELECT run_id FROM subagent_runs
+                 WHERE chat_id = ?1 AND label = ?2
+                 ORDER BY (status IN ('accepted','queued','running')) DESC, created_at DESC
+                 LIMIT 1",
+                params![chat_id, run_id_or_label],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(by_label)
+    }
+
     pub fn is_subagent_cancel_requested(&self, run_id: &str) -> Result<bool, MicroClawError> {
         let conn = self.lock_conn();
         let requested = conn
@@ -7588,6 +7620,21 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].run_id, "subrun-1");
         assert_eq!(active[0].chat_id, 42);
+
+        // Resolve by exact run_id, by label, and a miss.
+        assert_eq!(
+            db.resolve_subagent_run_id(42, "subrun-1").unwrap().as_deref(),
+            Some("subrun-1")
+        );
+        assert_eq!(
+            db.resolve_subagent_run_id(42, "competitor research")
+                .unwrap()
+                .as_deref(),
+            Some("subrun-1")
+        );
+        assert!(db.resolve_subagent_run_id(42, "nope").unwrap().is_none());
+        // Wrong chat → no match.
+        assert!(db.resolve_subagent_run_id(99, "competitor research").unwrap().is_none());
 
         // First progress: no previous timestamp.
         let prev = db
