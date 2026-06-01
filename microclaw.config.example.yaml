@@ -252,3 +252,18 @@ web_session_idle_ttl_seconds: 300
 #   no_network: true
 #   require_runtime: true
 #   # mount_allowlist_path: "~/.microclaw/sandbox-mount-allowlist.txt"
+
+# Concurrent sub-agents (the "specialist team" that runs tasks in the background).
+# All fields are optional and shown with their defaults.
+# subagents:
+#   max_concurrent: 4              # global cap on simultaneously running sub-agents
+#   max_active_per_chat: 5         # cap on active runs per chat
+#   run_timeout_secs: 900          # per-run timeout
+#   announce_to_chat: true         # post a message when a run completes
+#   # How often a long-running sub-agent may post a "📊 progress" update (seconds).
+#   progress_min_interval_secs: 45
+#   # Proactive task standup: periodically post a one-line status for tasks that
+#   # have been running a while. OFF by default since it sends unprompted messages.
+#   standup:
+#     enabled: false
+#     interval_secs: 1800          # min seconds between standups per chat

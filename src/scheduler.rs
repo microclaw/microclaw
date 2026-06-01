@@ -293,6 +293,7 @@ Rules:
 - IGNORE: greetings, small talk, unanswered questions, transient requests
 - Each memory < 100 characters, specific and concrete
 - Category must be exactly one of: PROFILE (user attributes/preferences), KNOWLEDGE (facts/expertise), EVENT (significant things that happened)
+- ALSO capture how the user likes to COMMUNICATE as PROFILE memories when there's a clear, repeated signal: preferred language, short vs. detailed answers, formal vs. casual tone, emoji or no emoji, wants code/links vs. prose. E.g. "prefers concise, no-fluff answers", "writes in Chinese", "likes step-by-step detail". These help the bot match the user's style.
 - If a new memory updates or supersedes an existing one, add "supersedes_id": <id> to replace it
 
 Output format — a JSON object with three fields:
