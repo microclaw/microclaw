@@ -3,6 +3,7 @@ pub mod activate_skill;
 pub mod bash;
 pub mod browser;
 pub mod clarify;
+pub mod consult_specialist;
 pub mod describe_image;
 pub mod edit_file;
 pub mod export_chat;
@@ -440,6 +441,7 @@ impl ToolRegistry {
             ),
             Box::new(fetch_artifact::FetchArtifactTool::new(db.clone())),
             Box::new(describe_image::DescribeImageTool::new(config)),
+            Box::new(consult_specialist::ConsultSpecialistTool::new(config)),
         ];
         // Visual creation + progress reporting: available to specialists whenever a
         // channel registry is present, independent of session-spawn permissions.

@@ -329,7 +329,7 @@ async fn run_sub_agent_task(
 
     let profile = crate::tools::specialists::resolve_specialist(Some(specialist.as_str()));
     let system_prompt = format!(
-        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nFor long tasks, call `report_progress` at meaningful milestones with a one-line status so the user gets colleague-style updates while you work.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {{type,path,description}}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.",
+        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nFor long tasks, call `report_progress` at meaningful milestones with a one-line status so the user gets colleague-style updates while you work.\nIf a sub-problem falls outside your expertise, get a quick second opinion from the right specialist with `consult_specialist` (e.g. as a researcher, hand a draft to the writer; as a coder, ask the mathematician to check a formula) and weave their answer into your work — don't fake expertise you don't have. If a sub-problem is large enough to need its own run and you're allowed to spawn, delegate it with `sessions_spawn`; otherwise name the right specialist in next_actions.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {{type,path,description}}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.",
         persona = profile.persona
     );
 
