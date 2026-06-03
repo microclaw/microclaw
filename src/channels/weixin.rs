@@ -28,9 +28,14 @@ use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_channels::channel::ConversationKind;
 use microclaw_channels::channel_adapter::ChannelAdapter;
+use microclaw_core::text::split_text;
 use microclaw_storage::db::{call_blocking, StoredMessage};
 
 const CHANNEL_KEY: &str = "weixin";
+/// Max bytes per outbound Weixin text item. The ilink `sendmessage` API
+/// silently truncates anything longer, so long replies are split into
+/// multiple messages at newline boundaries (see `split_text`).
+const WEIXIN_TEXT_MAX_LEN: usize = 2048;
 const DEFAULT_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
 const DEFAULT_CDN_BASE_URL: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
 const DEFAULT_WEBHOOK_PATH: &str = "/weixin/messages";
@@ -1945,15 +1950,22 @@ impl ChannelAdapter for WeixinAdapter {
             )
         })?;
         let account = self.load_native_account()?;
-        send_text_message_native(
-            &self.http_client,
-            &account,
-            external_chat_id,
-            text,
-            &context_token,
-        )
-        .await
-        .map(|_| ())
+        // The ilink sendmessage API truncates over-long text items, so split
+        // long replies into multiple messages like the other channel adapters.
+        for chunk in split_text(text, WEIXIN_TEXT_MAX_LEN) {
+            if chunk.is_empty() {
+                continue;
+            }
+            send_text_message_native(
+                &self.http_client,
+                &account,
+                external_chat_id,
+                &chunk,
+                &context_token,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     async fn send_attachment(
