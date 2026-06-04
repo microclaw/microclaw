@@ -99,6 +99,48 @@ pub(crate) fn jaccard_similar(a: &str, b: &str, threshold: f64) -> bool {
     intersection as f64 / union as f64 >= threshold
 }
 
+/// A minimal view of a memory for sleep-time consolidation.
+#[derive(Debug, Clone)]
+pub(crate) struct ConsolidationItem {
+    pub id: i64,
+    pub content: String,
+    pub category: String,
+}
+
+/// Select near-duplicate memories to archive during a sleep-time consolidation pass.
+///
+/// `items` must be pre-sorted **best-first** (e.g. highest confidence / most recent
+/// first): the first member of each duplicate group is kept and later same-category
+/// near-duplicates are archived. PROFILE memories are always kept (they describe the
+/// user's identity). Returns the ids to archive, capped at `max`.
+pub(crate) fn select_duplicate_memories_to_archive(
+    items: &[ConsolidationItem],
+    threshold: f64,
+    max: usize,
+) -> Vec<i64> {
+    let threshold = threshold.clamp(0.5, 1.0);
+    let mut kept: Vec<&ConsolidationItem> = Vec::new();
+    let mut archive: Vec<i64> = Vec::new();
+    for it in items {
+        if it.category == "PROFILE" {
+            kept.push(it);
+            continue;
+        }
+        let is_dup = kept.iter().any(|k| {
+            k.category == it.category && jaccard_similar(&k.content, &it.content, threshold)
+        });
+        if is_dup {
+            archive.push(it.id);
+            if archive.len() >= max {
+                break;
+            }
+        } else {
+            kept.push(it);
+        }
+    }
+    archive
+}
+
 fn should_merge_duplicate(
     existing: &Memory,
     incoming_content: &str,
@@ -953,6 +995,71 @@ mod recency_tests {
         let stale = (now - chrono::Duration::days(365)).to_rfc3339();
         let m = mk("EVENT", &stale, 0.7);
         assert!((effective_memory_score(&m, now, 0.0) - 0.7).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod consolidation_tests {
+    use super::{select_duplicate_memories_to_archive, ConsolidationItem};
+
+    fn item(id: i64, content: &str, category: &str) -> ConsolidationItem {
+        ConsolidationItem {
+            id,
+            content: content.into(),
+            category: category.into(),
+        }
+    }
+
+    #[test]
+    fn archives_near_duplicate_keeping_first() {
+        let items = vec![
+            item(1, "user prefers concise replies and bullet points", "KNOWLEDGE"),
+            item(2, "user prefers concise replies and bullet points please", "KNOWLEDGE"),
+            item(3, "user lives in Berlin", "KNOWLEDGE"),
+        ];
+        let archived = select_duplicate_memories_to_archive(&items, 0.7, 20);
+        assert_eq!(archived, vec![2], "only the later near-duplicate is archived");
+    }
+
+    #[test]
+    fn never_archives_profile() {
+        let items = vec![
+            item(1, "name is Alex", "PROFILE"),
+            item(2, "name is Alex", "PROFILE"),
+        ];
+        let archived = select_duplicate_memories_to_archive(&items, 0.7, 20);
+        assert!(archived.is_empty(), "PROFILE memories are always kept");
+    }
+
+    #[test]
+    fn different_categories_are_not_duplicates() {
+        let items = vec![
+            item(1, "shipping the release today", "EVENT"),
+            item(2, "shipping the release today", "KNOWLEDGE"),
+        ];
+        let archived = select_duplicate_memories_to_archive(&items, 0.7, 20);
+        assert!(archived.is_empty());
+    }
+
+    #[test]
+    fn respects_max_cap() {
+        let items = vec![
+            item(1, "alpha beta gamma delta", "KNOWLEDGE"),
+            item(2, "alpha beta gamma delta", "KNOWLEDGE"),
+            item(3, "alpha beta gamma delta", "KNOWLEDGE"),
+        ];
+        let archived = select_duplicate_memories_to_archive(&items, 0.7, 1);
+        assert_eq!(archived.len(), 1, "cap limits archives per pass");
+    }
+
+    #[test]
+    fn distinct_memories_are_kept() {
+        let items = vec![
+            item(1, "user is a rust developer", "KNOWLEDGE"),
+            item(2, "user enjoys hiking on weekends", "KNOWLEDGE"),
+        ];
+        let archived = select_duplicate_memories_to_archive(&items, 0.82, 20);
+        assert!(archived.is_empty());
     }
 }
 

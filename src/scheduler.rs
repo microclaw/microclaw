@@ -579,6 +579,122 @@ async fn run_idle_checkin(state: &Arc<AppState>, last_checkin: &mut HashMap<i64,
     }
 }
 
+/// "Sleep-time" memory consolidation loop: when a chat has been idle for a while,
+/// run a deterministic (no-LLM) pass that archives near-duplicate memories so the
+/// store stops accumulating redundancy between reflector runs. OFF by default.
+pub fn spawn_memory_consolidation(state: Arc<AppState>) {
+    if !state.config.sleep_time.enabled {
+        return;
+    }
+    tokio::spawn(async move {
+        info!(
+            "Sleep-time consolidation started (idle_hours={}, min_interval_hours={}, threshold={})",
+            state.config.sleep_time.idle_hours,
+            state.config.sleep_time.min_interval_hours,
+            state.config.sleep_time.similarity_threshold
+        );
+        let mut last_run: HashMap<i64, Instant> = HashMap::new();
+        let mut ticker = tokio::time::interval(Duration::from_secs(1800));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            run_memory_consolidation(&state, &mut last_run).await;
+        }
+    });
+}
+
+async fn run_memory_consolidation(state: &Arc<AppState>, last_run: &mut HashMap<i64, Instant>) {
+    let cfg = &state.config.sleep_time;
+    let idle_hours = cfg.idle_hours.max(1) as i64;
+    let min_interval = Duration::from_secs(cfg.min_interval_hours.max(1).saturating_mul(3600));
+    let threshold = cfg.similarity_threshold;
+    let max_archived = cfg.max_archived_per_pass.max(1);
+    let cutoff = (Utc::now() - chrono::Duration::hours(idle_hours)).to_rfc3339();
+
+    let chats = match call_blocking(state.db.clone(), move |db| db.list_idle_chats(&cutoff, 100))
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("sleep-time consolidation: failed to list idle chats: {e}");
+            return;
+        }
+    };
+
+    for chat_id in chats {
+        // Respect the per-chat min interval.
+        if let Some(t) = last_run.get(&chat_id) {
+            if t.elapsed() < min_interval {
+                continue;
+            }
+        }
+
+        let memories = match call_blocking(state.db.clone(), move |db| {
+            db.get_all_memories_for_chat(Some(chat_id))
+        })
+        .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("sleep-time consolidation: failed to load memories for chat {chat_id}: {e}");
+                continue;
+            }
+        };
+
+        let now = Utc::now().to_rfc3339();
+        // Active, non-expired memories, sorted best-first (confidence desc, recency desc)
+        // so the strongest member of each duplicate group is the one kept.
+        let mut active: Vec<_> = memories
+            .into_iter()
+            .filter(|m| !m.is_archived)
+            .filter(|m| m.expires_at.as_deref().map(|e| e > now.as_str()).unwrap_or(true))
+            .collect();
+        active.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
+        });
+
+        let items: Vec<crate::memory_service::ConsolidationItem> = active
+            .iter()
+            .map(|m| crate::memory_service::ConsolidationItem {
+                id: m.id,
+                content: m.content.clone(),
+                category: m.category.clone(),
+            })
+            .collect();
+        let to_archive = crate::memory_service::select_duplicate_memories_to_archive(
+            &items,
+            threshold,
+            max_archived,
+        );
+
+        // Mark the chat as processed regardless, so we don't rescan every tick.
+        last_run.insert(chat_id, Instant::now());
+
+        if to_archive.is_empty() {
+            continue;
+        }
+
+        let mut archived = 0usize;
+        for id in &to_archive {
+            let id = *id;
+            match call_blocking(state.db.clone(), move |db| db.archive_memory(id)).await {
+                Ok(true) => archived += 1,
+                Ok(false) => {}
+                Err(e) => warn!("sleep-time consolidation: archive {id} failed: {e}"),
+            }
+        }
+        if archived > 0 {
+            info!(
+                "Sleep-time consolidation: archived {} duplicate memories in chat {}",
+                archived, chat_id
+            );
+        }
+    }
+}
+
 /// "Inner thoughts" interjection: in an active group chat where the bot wasn't
 /// addressed, occasionally evaluate whether it has something genuinely worth
 /// saying and, if so, chime in once. OFF by default — outward-facing and uses

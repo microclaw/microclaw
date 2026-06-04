@@ -50,6 +50,7 @@ fn minimal_config() -> Config {
         show_thinking: false,
         subagents: microclaw::config::SubagentConfig::default(),
         idle_checkin: microclaw::config::IdleCheckinConfig::default(),
+        sleep_time: microclaw::config::SleepTimeConfig::default(),
         interjection: microclaw::config::InterjectionConfig::default(),
         a2a: microclaw::config::A2AConfig::default(),
         openai_compat_body_overrides: std::collections::HashMap::new(),

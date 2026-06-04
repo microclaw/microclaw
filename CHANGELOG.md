@@ -18,6 +18,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   model name is swapped — and falls back to the main model when unset, so default
   behavior is unchanged. First steps toward the v0.3.0 "Self-Improving Runtime" plan
   (`docs/roadmap/v0.3.0-self-improving-runtime.md`).
+- Sleep-time memory consolidation (`sleep_time`, off by default) — when a chat has been
+  idle for a while, a background loop runs a deterministic (no-LLM) pass that archives
+  near-duplicate same-category memories, so the store stops accumulating redundancy
+  between reflector runs. PROFILE (identity) memories are never touched, archiving is
+  reversible, and the pass is throttled per chat (`min_interval_hours`) and capped
+  (`max_archived_per_pass`). First slice of the v0.3.0 sleep-time consolidation (Pillar 1c).
 - `microclaw eval` subcommand — a deterministic trajectory-evaluation gate for recorded
   agent sessions, with no LLM call. It replays a session fixture (a JSON array of
   messages, or an object with a `messages` array) and checks trajectory health:

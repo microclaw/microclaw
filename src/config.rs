@@ -890,6 +890,56 @@ impl Default for SubagentStandupConfig {
     }
 }
 
+fn default_sleep_time_idle_hours() -> u64 {
+    6
+}
+fn default_sleep_time_min_interval_hours() -> u64 {
+    24
+}
+fn default_sleep_time_similarity_threshold() -> f64 {
+    0.82
+}
+fn default_sleep_time_max_archived_per_pass() -> usize {
+    20
+}
+
+/// "Sleep-time" memory consolidation: when a chat has been idle for a while, run a
+/// background, deterministic (no-LLM) pass that archives near-duplicate memories so
+/// the store stops accumulating redundancy between reflector runs. PROFILE memories
+/// are never touched, archiving is reversible, and the pass is capped and throttled.
+/// OFF by default. First slice of the v0.3.0 "Self-Improving Runtime" sleep-time
+/// consolidation (Pillar 1c).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SleepTimeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Only consolidate a chat after this many hours with no messages.
+    #[serde(default = "default_sleep_time_idle_hours")]
+    pub idle_hours: u64,
+    /// At most one consolidation pass per chat per this many hours.
+    #[serde(default = "default_sleep_time_min_interval_hours")]
+    pub min_interval_hours: u64,
+    /// Jaccard similarity at/above which two same-category memories are treated as
+    /// duplicates (the lower-confidence one is archived). Clamped to [0.5, 1.0].
+    #[serde(default = "default_sleep_time_similarity_threshold")]
+    pub similarity_threshold: f64,
+    /// Safety cap on how many memories a single pass may archive per chat.
+    #[serde(default = "default_sleep_time_max_archived_per_pass")]
+    pub max_archived_per_pass: usize,
+}
+
+impl Default for SleepTimeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            idle_hours: default_sleep_time_idle_hours(),
+            min_interval_hours: default_sleep_time_min_interval_hours(),
+            similarity_threshold: default_sleep_time_similarity_threshold(),
+            max_archived_per_pass: default_sleep_time_max_archived_per_pass(),
+        }
+    }
+}
+
 fn default_idle_checkin_idle_hours() -> u64 {
     24
 }
@@ -1139,6 +1189,8 @@ pub struct Config {
     pub subagents: SubagentConfig,
     #[serde(default)]
     pub idle_checkin: IdleCheckinConfig,
+    #[serde(default)]
+    pub sleep_time: SleepTimeConfig,
     #[serde(default)]
     pub interjection: InterjectionConfig,
     #[serde(default)]
@@ -1788,6 +1840,7 @@ impl Config {
             show_thinking: false,
             subagents: SubagentConfig::default(),
             idle_checkin: IdleCheckinConfig::default(),
+            sleep_time: SleepTimeConfig::default(),
             interjection: InterjectionConfig::default(),
             a2a: A2AConfig::default(),
             openai_compat_body_overrides: HashMap::new(),
