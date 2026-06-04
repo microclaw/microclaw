@@ -37,6 +37,18 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   gate (Pillar 5). Enforced in CI via a "Trajectory eval gate" step that runs the
   passing fixtures in `docs/test/eval-fixtures/` (negative examples live in
   `docs/test/eval-fixtures/negative/`).
+- `microclaw skill audit` subcommand — a deterministic, read-only curation view over the
+  local skill corpus (no LLM, no DB, no mutation). `skill_review` distills a skill from a
+  single session and the reflector retires skills purely by inactivity age; neither gives a
+  cross-skill picture. The audit surfaces the signals a curator needs: **near-duplicate**
+  skills (token-Jaccard over name + description — merge candidates, and a retire signal when
+  an `agent-created` skill shadows a built-in), **stale** `agent-created` skills (old/absent
+  `updated_at`), **thin** `agent-created` skills (near-empty body), and **cap headroom**
+  against the `agent-created` ceiling. Built-in/human-curated skills are never flagged for
+  retirement (they stay immutable) but still participate in duplicate detection. Accepts an
+  optional directory argument (defaults to the configured skills dir), supports `--json`,
+  and `--strict` exits non-zero when anything actionable is found, so it can gate CI. First
+  slice of the v0.3.0 skill curator (Pillar 2).
 
 ## 0.2.0 - 2026-06-01
 

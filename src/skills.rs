@@ -678,7 +678,7 @@ fn normalize_single_line_frontmatter(content: &str) -> Option<String> {
 
 /// Parse a SKILL.md file, extracting frontmatter via YAML and body.
 /// Returns None if the file lacks valid frontmatter with a name field.
-fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMetadata, String)> {
+pub(crate) fn parse_skill_md(content: &str, dir_path: &std::path::Path) -> Option<(SkillMetadata, String)> {
     let trimmed = content.trim_start_matches('\u{feff}');
 
     // Try normalizing single-line frontmatter if standard format not found

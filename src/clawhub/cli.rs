@@ -164,6 +164,24 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             }
             Ok(())
         }
+        Some(SkillCommand::Audit {
+            path,
+            similarity,
+            stale_days,
+            min_body_chars,
+            json,
+            strict,
+        }) => {
+            let cfg = crate::skill_audit::AuditConfig {
+                similarity,
+                stale_days,
+                min_body_chars,
+                ..crate::skill_audit::AuditConfig::default()
+            };
+            let dir = path.unwrap_or_else(|| config.skills_data_dir());
+            let code = crate::skill_audit::run_audit(&dir, &cfg, json, strict);
+            std::process::exit(code);
+        }
         None => {
             println!("Usage: microclaw skill <command>");
             println!("\nCommands:");
@@ -172,6 +190,7 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             println!("  list              List installed skills");
             println!("  available [--all] List local skills (with diagnostics when --all)");
             println!("  inspect <slug>    Show skill details");
+            println!("  audit [--json] [--strict]  Audit local skills for curation actions");
             Ok(())
         }
     }
@@ -207,4 +226,25 @@ enum SkillCommand {
     },
     /// Show skill details
     Inspect { slug: String },
+    /// Audit the local skill corpus for curation actions (duplicates, stale,
+    /// thin, cap headroom). Read-only and deterministic.
+    Audit {
+        /// Skills directory to audit (defaults to the configured skills dir)
+        path: Option<String>,
+        /// Token-Jaccard threshold for near-duplicate detection (0.0-1.0)
+        #[arg(long, default_value_t = 0.5)]
+        similarity: f64,
+        /// Days since last update before an agent-created skill is stale
+        #[arg(long, default_value_t = 30)]
+        stale_days: i64,
+        /// Minimum body chars before an agent-created skill is "thin"
+        #[arg(long, default_value_t = 80)]
+        min_body_chars: usize,
+        /// Emit a JSON report instead of human-readable text
+        #[arg(long)]
+        json: bool,
+        /// Exit non-zero when the audit finds anything actionable
+        #[arg(long)]
+        strict: bool,
+    },
 }
