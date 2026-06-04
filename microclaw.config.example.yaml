@@ -29,6 +29,7 @@ max_tool_iterations: 100
 # the model name is swapped — and falls back to the main model when unset.
 # aux_models:
 #   compaction: claude-haiku-4-5   # cheaper model for context/history summarization
+#   reflector: claude-haiku-4-5    # cheaper model for the background memory reflector
 # Inject pending messages into the active agent loop between iterations (mid-turn injection)
 enable_mid_turn_injection: true
 # On non-web channels (Telegram, Discord, Slack, Feishu, Matrix, WeChat),
