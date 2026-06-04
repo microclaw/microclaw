@@ -1,0 +1,11 @@
+{
+  "messages": [
+    { "role": "user", "content": "Run the tests." },
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "tool_use", "id": "t1", "name": "bash", "input": { "command": "cargo test" } }
+      ]
+    }
+  ]
+}

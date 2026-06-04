@@ -18,6 +18,15 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   model name is swapped — and falls back to the main model when unset, so default
   behavior is unchanged. First steps toward the v0.3.0 "Self-Improving Runtime" plan
   (`docs/roadmap/v0.3.0-self-improving-runtime.md`).
+- `microclaw eval` subcommand — a deterministic trajectory-evaluation gate for recorded
+  agent sessions, with no LLM call. It replays a session fixture (a JSON array of
+  messages, or an object with a `messages` array) and checks trajectory health:
+  no dangling `tool_use`, no orphaned `tool_result`, the session ends on a real answer
+  (not a raw `tool_result`), tool-call count within `--max-tool-calls`, and tool errors
+  surfaced (failing only under `--strict-tool-errors`). Accepts a file or a directory of
+  fixtures, supports `--json`, and exits non-zero on failure so it can gate CI. Sample
+  fixtures and usage in `docs/test/eval-fixtures/`. First slice of the v0.3.0 evaluation
+  gate (Pillar 5).
 
 ## 0.2.0 - 2026-06-01
 

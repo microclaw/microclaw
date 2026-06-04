@@ -1,0 +1,19 @@
+{
+  "messages": [
+    { "role": "user", "content": "What's in config.rs near the top?" },
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "text", "text": "Let me read it." },
+        { "type": "tool_use", "id": "t1", "name": "read_file", "input": { "path": "src/config.rs" } }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "t1", "content": "pub struct Config { ... }" }
+      ]
+    },
+    { "role": "assistant", "content": "The top of config.rs defines the `Config` struct with the runtime fields." }
+  ]
+}
