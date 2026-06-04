@@ -1141,9 +1141,17 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
             "Extract memories from this conversation (chat_id={chat_id}):{existing_hint}{user_model_block}\n\nConversation:\n{conversation}"
         )),
     };
+    // The reflector is background, quality-tolerant work, so allow a (typically
+    // cheaper) auxiliary model to handle it on the same provider. When no aux
+    // model is configured, this passes `None` and behaves exactly as before.
     let response = match state
         .llm
-        .send_message(REFLECTOR_SYSTEM_PROMPT, vec![user_msg], None)
+        .send_message_with_model(
+            REFLECTOR_SYSTEM_PROMPT,
+            vec![user_msg],
+            None,
+            state.config.aux_models.reflector_model(),
+        )
         .await
     {
         Ok(r) => r,

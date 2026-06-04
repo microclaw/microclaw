@@ -9,12 +9,15 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 ### Added
 
 - Per-task auxiliary models: a new `aux_models` config section lets a (typically
-  cheaper) model handle ancillary work. The first wired slot, `aux_models.compaction`,
-  runs context/history summarization on the configured model instead of the main
-  conversation model. The auxiliary model reuses the main provider profile and
-  credentials — only the model name is swapped — and falls back to the main model when
-  unset, so default behavior is unchanged. First step toward the v0.3.0
-  "Self-Improving Runtime" plan (`docs/roadmap/v0.3.0-self-improving-runtime.md`).
+  cheaper) model handle ancillary work. Wired slots:
+  - `aux_models.compaction` — context/history summarization.
+  - `aux_models.reflector` — the background memory reflector (fact/triple extraction),
+    which runs periodically per active chat.
+
+  Each auxiliary model reuses the main provider profile and credentials — only the
+  model name is swapped — and falls back to the main model when unset, so default
+  behavior is unchanged. First steps toward the v0.3.0 "Self-Improving Runtime" plan
+  (`docs/roadmap/v0.3.0-self-improving-runtime.md`).
 
 ## 0.2.0 - 2026-06-01
 

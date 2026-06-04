@@ -784,6 +784,11 @@ pub struct AuxModels {
     /// main model when unset or empty.
     #[serde(default)]
     pub compaction: Option<String>,
+    /// Model used by the background memory reflector (fact/triple extraction). This
+    /// runs periodically per active chat, so a cheaper model here is pure savings.
+    /// Falls back to the main model when unset or empty.
+    #[serde(default)]
+    pub reflector: Option<String>,
 }
 
 impl AuxModels {
@@ -793,6 +798,15 @@ impl AuxModels {
         match self.compaction.as_deref() {
             Some(m) if !m.trim().is_empty() => m,
             _ => main,
+        }
+    }
+
+    /// Optional model override for the memory reflector. Returns `None` (use the
+    /// provider's default model) when unset or empty, preserving prior behavior.
+    pub fn reflector_model(&self) -> Option<&str> {
+        match self.reflector.as_deref() {
+            Some(m) if !m.trim().is_empty() => Some(m),
+            _ => None,
         }
     }
 }
@@ -2773,6 +2787,7 @@ mod tests {
     fn aux_models_compaction_override_is_used() {
         let aux = AuxModels {
             compaction: Some("cheap-model".to_string()),
+            ..Default::default()
         };
         assert_eq!(aux.compaction_model("main-model"), "cheap-model");
     }
@@ -2781,18 +2796,38 @@ mod tests {
     fn aux_models_blank_override_falls_back() {
         let aux = AuxModels {
             compaction: Some("   ".to_string()),
+            ..Default::default()
         };
         assert_eq!(aux.compaction_model("main-model"), "main-model");
     }
 
     #[test]
     fn aux_models_parse_from_yaml() {
-        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\naux_models:\n  compaction: claude-haiku-4-5\n";
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\naux_models:\n  compaction: claude-haiku-4-5\n  reflector: claude-haiku-4-5\n";
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             config.aux_models.compaction.as_deref(),
             Some("claude-haiku-4-5")
         );
+        assert_eq!(
+            config.aux_models.reflector_model(),
+            Some("claude-haiku-4-5")
+        );
+    }
+
+    #[test]
+    fn aux_models_reflector_default_is_none() {
+        let aux = AuxModels::default();
+        assert_eq!(aux.reflector_model(), None);
+    }
+
+    #[test]
+    fn aux_models_reflector_blank_is_none() {
+        let aux = AuxModels {
+            reflector: Some("  ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(aux.reflector_model(), None);
     }
 
     #[test]
