@@ -79,6 +79,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - name: Trajectory eval gate
+        run: cargo run --quiet -- eval docs/test/eval-fixtures
 
   rust-macos:
     name: Rust (macos-latest)

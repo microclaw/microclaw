@@ -26,7 +26,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   surfaced (failing only under `--strict-tool-errors`). Accepts a file or a directory of
   fixtures, supports `--json`, and exits non-zero on failure so it can gate CI. Sample
   fixtures and usage in `docs/test/eval-fixtures/`. First slice of the v0.3.0 evaluation
-  gate (Pillar 5).
+  gate (Pillar 5). Enforced in CI via a "Trajectory eval gate" step that runs the
+  passing fixtures in `docs/test/eval-fixtures/` (negative examples live in
+  `docs/test/eval-fixtures/negative/`).
 
 ## 0.2.0 - 2026-06-01
 
