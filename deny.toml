@@ -7,7 +7,18 @@ version = 2
 yanked = "deny"
 # Temporary exceptions for rustls-webpki advisories while the
 # upstream rustls/tokio-tungstenite/serenity dependency chain catches up.
-ignore = ["RUSTSEC-2026-0049", "RUSTSEC-2026-0098", "RUSTSEC-2026-0099"]
+#
+# RUSTSEC-2024-0388: `derivative` is unmaintained — pulled only transitively via
+#   matrix-sdk-indexeddb; no first-party use.
+# RUSTSEC-2026-0097: `rand` unsound with a custom logger using `rand::rng()` —
+#   transitive via the Matrix/OTLP stacks; not how we use rand.
+ignore = [
+  "RUSTSEC-2026-0049",
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  "RUSTSEC-2024-0388",
+  "RUSTSEC-2026-0097",
+]
 
 [bans]
 # The current graph includes several unavoidable duplicate transitive versions
