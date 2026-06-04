@@ -88,6 +88,12 @@ struct EvalCommand {
     /// Maximum allowed tool calls per session before flagging
     #[arg(long, default_value_t = 100)]
     max_tool_calls: usize,
+    /// Flag a stuck loop when the same tool + arguments is called this many times
+    #[arg(long, default_value_t = 3)]
+    max_repeats: usize,
+    /// Flag this many consecutive tool errors as a failure
+    #[arg(long, default_value_t = 3)]
+    max_error_streak: usize,
     /// Treat tool errors in the trajectory as a failure
     #[arg(long)]
     strict_tool_errors: bool,
@@ -633,12 +639,13 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Some(MainCommand::Eval(eval_args)) => {
-            let code = eval::run_eval(
-                &eval_args.path,
-                eval_args.max_tool_calls,
-                eval_args.strict_tool_errors,
-                eval_args.json,
-            )?;
+            let thresholds = eval::EvalThresholds {
+                max_tool_calls: eval_args.max_tool_calls,
+                strict_tool_errors: eval_args.strict_tool_errors,
+                max_repeats: eval_args.max_repeats,
+                max_error_streak: eval_args.max_error_streak,
+            };
+            let code = eval::run_eval(&eval_args.path, &thresholds, eval_args.json)?;
             std::process::exit(code);
         }
         Some(MainCommand::Reembed) => {

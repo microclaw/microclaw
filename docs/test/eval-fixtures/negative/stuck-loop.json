@@ -1,0 +1,12 @@
+{
+  "messages": [
+    { "role": "user", "content": "List the files." },
+    { "role": "assistant", "content": [ { "type": "tool_use", "id": "t1", "name": "bash", "input": { "command": "ls" } } ] },
+    { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "t1", "content": "a b c" } ] },
+    { "role": "assistant", "content": [ { "type": "tool_use", "id": "t2", "name": "bash", "input": { "command": "ls" } } ] },
+    { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "t2", "content": "a b c" } ] },
+    { "role": "assistant", "content": [ { "type": "tool_use", "id": "t3", "name": "bash", "input": { "command": "ls" } } ] },
+    { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "t3", "content": "a b c" } ] },
+    { "role": "assistant", "content": "Let me list the files again." }
+  ]
+}

@@ -29,8 +29,11 @@ microclaw eval docs/test/eval-fixtures/negative/dangling-tool-use.json
 - `no_orphan_tool_result` — every `tool_result` references a prior `tool_use`
 - `ends_with_answer` — the session ends on a real assistant answer, not a raw `tool_result`
 - `within_tool_budget` — tool-call count is within `--max-tool-calls`
+- `no_tool_call_loop` — the same tool + arguments isn't repeated `--max-repeats` times (stuck loop)
+- `no_error_streak` — no run of `--max-error-streak` consecutive tool errors
 - `tool_errors` — surfaces tool errors (fails only under `--strict-tool-errors`)
 
-`clean-session.json` passes all checks; `negative/dangling-tool-use.json` is the
-negative example — it ends with a `tool_use` that never received a `tool_result`,
-so it fails `no_dangling_tool_use`.
+`clean-session.json` passes all checks. Negative examples in `negative/`:
+`dangling-tool-use.json` ends with a `tool_use` that never received a
+`tool_result` (fails `no_dangling_tool_use`); `stuck-loop.json` repeats the same
+`bash ls` call three times (fails `no_tool_call_loop`).
