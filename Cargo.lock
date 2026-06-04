@@ -2907,6 +2907,7 @@ dependencies = [
  "microclaw-core",
  "rusqlite",
  "serde_json",
+ "sha2",
  "sqlite-vec",
  "tokio",
  "uuid",
