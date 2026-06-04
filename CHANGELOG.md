@@ -18,6 +18,15 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
     `media.vision.model` when set, and an explicit per-call `model` argument still wins.
 
   (`session_search` has no LLM step — it is pure full-text search — so it has no slot.)
+- Tamper-evident audit log — every new `audit_logs` entry is now sealed into a SHA-256
+  hash chain (`entry_hash` over the entry's fields plus the previous entry's `entry_hash`,
+  with a genesis link for the first). Modifying a field, deleting a row, or reordering rows
+  breaks the chain. A new `microclaw audit verify` command walks the chain and reports the
+  first broken link (exiting non-zero so it can gate monitoring/CI), and `microclaw audit
+  list [--kind] [--limit]` prints recent entries. Sealing happens under the DB connection
+  lock so concurrent writers can't race the chain; pre-migration rows stay unsealed and are
+  simply excluded from verification. First slice of the v0.4.0 security-governance track
+  (tamper-evident audit).
 
   Each auxiliary model reuses the main provider profile and credentials — only the
   model name is swapped — and falls back to the main model when unset, so default

@@ -73,6 +73,8 @@ enum MainCommand {
     Web(WebCommand),
     /// Evaluate recorded session trajectories (CI gate; no LLM call)
     Eval(EvalCommand),
+    /// Inspect and verify the tamper-evident audit log
+    Audit(AuditCommand),
     /// Re-embed active memories (requires `sqlite-vec` feature)
     Reembed,
     /// Upgrade MicroClaw to latest release
@@ -100,6 +102,27 @@ struct EvalCommand {
     /// Emit a JSON report instead of human-readable text
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Debug, Args)]
+struct AuditCommand {
+    #[command(subcommand)]
+    action: AuditAction,
+}
+
+#[derive(Debug, Subcommand)]
+enum AuditAction {
+    /// Verify the tamper-evident hash chain over the audit log
+    Verify,
+    /// List recent audit-log entries
+    List {
+        /// Filter by event kind (e.g. `auth`, `tool`, `hook`)
+        #[arg(long)]
+        kind: Option<String>,
+        /// Maximum number of entries to show
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -519,6 +542,56 @@ fn apply_config_override(path: Option<&PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Handle `microclaw audit <verify|list>`. Returns the process exit code:
+/// 0 when the chain is intact (or for `list`), 1 when tampering is detected.
+fn handle_audit_cli(cmd: AuditCommand) -> anyhow::Result<i32> {
+    let config = Config::load()?;
+    let db = db::Database::new(&config.runtime_data_dir())?;
+    match cmd.action {
+        AuditAction::Verify => {
+            let status = db.verify_audit_chain()?;
+            if status.intact {
+                println!(
+                    "Audit chain intact: {} sealed entr{} verified.",
+                    status.sealed_entries,
+                    if status.sealed_entries == 1 { "y" } else { "ies" }
+                );
+                Ok(0)
+            } else {
+                eprintln!(
+                    "Audit chain BROKEN at entry id {}: {}",
+                    status.broken_at.unwrap_or(-1),
+                    status.reason.as_deref().unwrap_or("unknown"),
+                );
+                eprintln!("({} entr{} verified before the break)",
+                    status.sealed_entries.saturating_sub(1),
+                    if status.sealed_entries.saturating_sub(1) == 1 { "y" } else { "ies" });
+                Ok(1)
+            }
+        }
+        AuditAction::List { kind, limit } => {
+            let rows = db.list_audit_logs(kind.as_deref(), limit)?;
+            if rows.is_empty() {
+                println!("No audit-log entries.");
+            } else {
+                for r in &rows {
+                    println!(
+                        "[{}] {} {} {} {} target={} {}",
+                        r.created_at,
+                        r.kind,
+                        r.actor,
+                        r.action,
+                        r.status,
+                        r.target.as_deref().unwrap_or("-"),
+                        r.detail.as_deref().unwrap_or(""),
+                    );
+                }
+            }
+            Ok(0)
+        }
+    }
+}
+
 async fn reembed_memories() -> anyhow::Result<()> {
     let config = Config::load()?;
 
@@ -646,6 +719,10 @@ async fn main() -> anyhow::Result<()> {
                 max_error_streak: eval_args.max_error_streak,
             };
             let code = eval::run_eval(&eval_args.path, &thresholds, eval_args.json)?;
+            std::process::exit(code);
+        }
+        Some(MainCommand::Audit(audit_args)) => {
+            let code = handle_audit_cli(audit_args)?;
             std::process::exit(code);
         }
         Some(MainCommand::Reembed) => {
