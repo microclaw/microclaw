@@ -13,6 +13,7 @@ pub mod config_persistence;
 pub mod context_references;
 pub mod doctor;
 pub mod embedding;
+pub mod eval;
 pub mod gateway;
 pub mod hooks;
 pub mod http_client;

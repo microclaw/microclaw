@@ -4,7 +4,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use microclaw::config::Config;
 use microclaw::error::MicroClawError;
 use microclaw::{
-    builtin_skills, db, doctor, gateway, hooks, logging, mcp, memory, runtime, setup, skills,
+    builtin_skills, db, doctor, eval, gateway, hooks, logging, mcp, memory, runtime, setup, skills,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -71,12 +71,29 @@ enum MainCommand {
     Weixin(WeixinCommand),
     /// Manage Web UI configurations
     Web(WebCommand),
+    /// Evaluate recorded session trajectories (CI gate; no LLM call)
+    Eval(EvalCommand),
     /// Re-embed active memories (requires `sqlite-vec` feature)
     Reembed,
     /// Upgrade MicroClaw to latest release
     Upgrade,
     /// Show version
     Version,
+}
+
+#[derive(Debug, Args)]
+struct EvalCommand {
+    /// Path to a session fixture (.json) or a directory of fixtures
+    path: String,
+    /// Maximum allowed tool calls per session before flagging
+    #[arg(long, default_value_t = 100)]
+    max_tool_calls: usize,
+    /// Treat tool errors in the trajectory as a failure
+    #[arg(long)]
+    strict_tool_errors: bool,
+    /// Emit a JSON report instead of human-readable text
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -614,6 +631,15 @@ async fn main() -> anyhow::Result<()> {
         Some(MainCommand::Weixin(weixin)) => {
             handle_weixin_cli(weixin.action).await?;
             return Ok(());
+        }
+        Some(MainCommand::Eval(eval_args)) => {
+            let code = eval::run_eval(
+                &eval_args.path,
+                eval_args.max_tool_calls,
+                eval_args.strict_tool_errors,
+                eval_args.json,
+            )?;
+            std::process::exit(code);
         }
         Some(MainCommand::Reembed) => {
             return reembed_memories().await;
