@@ -56,14 +56,17 @@ pub async fn generate_and_save_title(
     let user = format!(
         "Produce a title for the following conversation. Reply with the title only.\n\n{transcript}"
     );
+    // Title generation is one-shot summarization, so allow a (typically cheaper)
+    // auxiliary model. Passing `None` when unset preserves the prior behavior.
     let response = provider
-        .send_message(
+        .send_message_with_model(
             &system,
             vec![Message {
                 role: "user".to_string(),
                 content: MessageContent::Text(user),
             }],
             None,
+            config.aux_models.title_model(),
         )
         .await?;
     let title = first_text(&response.content)

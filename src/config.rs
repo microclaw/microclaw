@@ -789,6 +789,15 @@ pub struct AuxModels {
     /// Falls back to the main model when unset or empty.
     #[serde(default)]
     pub reflector: Option<String>,
+    /// Model used to generate short session titles. This is a one-shot
+    /// summarization, so a cheaper model is pure savings. Falls back to the
+    /// provider's default model when unset or empty.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Model used for image description (the `describe_image` tool). Overrides
+    /// `media.vision.model` when set; falls back to it when unset or empty.
+    #[serde(default)]
+    pub vision: Option<String>,
 }
 
 impl AuxModels {
@@ -805,6 +814,24 @@ impl AuxModels {
     /// provider's default model) when unset or empty, preserving prior behavior.
     pub fn reflector_model(&self) -> Option<&str> {
         match self.reflector.as_deref() {
+            Some(m) if !m.trim().is_empty() => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Optional model override for session-title generation. Returns `None` (use
+    /// the provider's default model) when unset or empty, preserving prior behavior.
+    pub fn title_model(&self) -> Option<&str> {
+        match self.title.as_deref() {
+            Some(m) if !m.trim().is_empty() => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Optional model override for image description. Returns `None` (use
+    /// `media.vision.model`) when unset or empty, preserving prior behavior.
+    pub fn vision_model(&self) -> Option<&str> {
+        match self.vision.as_deref() {
             Some(m) if !m.trim().is_empty() => Some(m),
             _ => None,
         }
@@ -2888,6 +2915,43 @@ mod tests {
         let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\n";
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(config.aux_models.compaction.is_none());
+    }
+
+    #[test]
+    fn aux_models_title_and_vision_default_none() {
+        let aux = AuxModels::default();
+        assert_eq!(aux.title_model(), None);
+        assert_eq!(aux.vision_model(), None);
+    }
+
+    #[test]
+    fn aux_models_title_and_vision_override_used() {
+        let aux = AuxModels {
+            title: Some("title-model".to_string()),
+            vision: Some("vision-model".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(aux.title_model(), Some("title-model"));
+        assert_eq!(aux.vision_model(), Some("vision-model"));
+    }
+
+    #[test]
+    fn aux_models_title_and_vision_blank_is_none() {
+        let aux = AuxModels {
+            title: Some("  ".to_string()),
+            vision: Some(String::new()),
+            ..Default::default()
+        };
+        assert_eq!(aux.title_model(), None);
+        assert_eq!(aux.vision_model(), None);
+    }
+
+    #[test]
+    fn aux_models_title_vision_parse_from_yaml() {
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\naux_models:\n  title: claude-haiku-4-5\n  vision: claude-haiku-4-5\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.aux_models.title_model(), Some("claude-haiku-4-5"));
+        assert_eq!(config.aux_models.vision_model(), Some("claude-haiku-4-5"));
     }
 
     #[test]

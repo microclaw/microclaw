@@ -13,6 +13,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   - `aux_models.compaction` — context/history summarization.
   - `aux_models.reflector` — the background memory reflector (fact/triple extraction),
     which runs periodically per active chat.
+  - `aux_models.title` — one-shot session-title generation.
+  - `aux_models.vision` — image description (the `describe_image` tool); overrides
+    `media.vision.model` when set, and an explicit per-call `model` argument still wins.
+
+  (`session_search` has no LLM step — it is pure full-text search — so it has no slot.)
 
   Each auxiliary model reuses the main provider profile and credentials — only the
   model name is swapped — and falls back to the main model when unset, so default

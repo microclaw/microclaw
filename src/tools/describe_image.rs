@@ -21,6 +21,8 @@ pub struct DescribeImageTool {
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
     timeout_secs: u64,
+    /// Optional `aux_models.vision` override, applied over `cfg.model` when set.
+    vision_aux: Option<String>,
 }
 
 impl DescribeImageTool {
@@ -38,6 +40,7 @@ impl DescribeImageTool {
             openai_api_key: config.openai_api_key.clone(),
             openai_base_url: config.openai_base_url.clone(),
             timeout_secs: config.tool_timeout_secs("describe_image", 60),
+            vision_aux: config.aux_models.vision_model().map(|s| s.to_string()),
         }
     }
 
@@ -107,10 +110,12 @@ impl Tool for DescribeImageTool {
             .unwrap_or("Describe this image in detail.")
             .trim()
             .to_string();
+        // Resolution: explicit tool input > aux_models.vision > media.vision.model.
         let model = input
             .get("model")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
+            .or_else(|| self.vision_aux.clone())
             .unwrap_or_else(|| self.cfg.model.clone());
 
         let client = match self.client() {
