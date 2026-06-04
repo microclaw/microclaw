@@ -42,6 +42,7 @@ fn minimal_config() -> Config {
         tool_timeout_overrides: std::collections::HashMap::new(),
         default_mcp_request_timeout_secs: 120,
         compaction_timeout_secs: 180,
+        aux_models: microclaw::config::AuxModels::default(),
         discord_bot_token: None,
         discord_allowed_channels: vec![],
         discord_no_mention: false,

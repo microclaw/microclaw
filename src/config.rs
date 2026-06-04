@@ -770,6 +770,33 @@ impl SubagentAcpConfig {
     }
 }
 
+/// Per-task auxiliary model overrides.
+///
+/// Each slot names a (typically cheaper) model used for a specific ancillary task
+/// instead of the main conversation model. Auxiliary models run on the *same*
+/// provider profile and credentials as the main model — only the model name is
+/// swapped — so the common case (e.g. a small/fast model for summarization) needs
+/// no extra provider configuration. An empty or unset slot falls back to the main
+/// model, so the default behavior is unchanged.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AuxModels {
+    /// Model used for context compaction / history summarization. Falls back to the
+    /// main model when unset or empty.
+    #[serde(default)]
+    pub compaction: Option<String>,
+}
+
+impl AuxModels {
+    /// Resolve the model to use for context compaction, falling back to `main` when
+    /// no auxiliary model is configured.
+    pub fn compaction_model<'a>(&'a self, main: &'a str) -> &'a str {
+        match self.compaction.as_deref() {
+            Some(m) if !m.trim().is_empty() => m,
+            _ => main,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubagentConfig {
     #[serde(default = "default_subagent_max_concurrent")]
@@ -981,6 +1008,10 @@ pub struct Config {
     pub max_tool_iterations: usize,
     #[serde(default = "default_compaction_timeout_secs")]
     pub compaction_timeout_secs: u64,
+    /// Optional per-task auxiliary model overrides (e.g. a cheaper model for
+    /// compaction). Empty by default, in which case the main model is used.
+    #[serde(default)]
+    pub aux_models: AuxModels,
     #[serde(default = "default_max_history_messages")]
     pub max_history_messages: usize,
     #[serde(default = "default_max_document_size_mb")]
@@ -1695,6 +1726,7 @@ impl Config {
             max_tokens: 8192,
             max_tool_iterations: 100,
             compaction_timeout_secs: 180,
+            aux_models: AuxModels::default(),
             max_history_messages: 50,
             max_document_size_mb: 100,
             memory_token_budget: 1500,
@@ -2729,6 +2761,45 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::env_lock()
+    }
+
+    #[test]
+    fn aux_models_default_falls_back_to_main_model() {
+        let aux = AuxModels::default();
+        assert_eq!(aux.compaction_model("main-model"), "main-model");
+    }
+
+    #[test]
+    fn aux_models_compaction_override_is_used() {
+        let aux = AuxModels {
+            compaction: Some("cheap-model".to_string()),
+        };
+        assert_eq!(aux.compaction_model("main-model"), "cheap-model");
+    }
+
+    #[test]
+    fn aux_models_blank_override_falls_back() {
+        let aux = AuxModels {
+            compaction: Some("   ".to_string()),
+        };
+        assert_eq!(aux.compaction_model("main-model"), "main-model");
+    }
+
+    #[test]
+    fn aux_models_parse_from_yaml() {
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\naux_models:\n  compaction: claude-haiku-4-5\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            config.aux_models.compaction.as_deref(),
+            Some("claude-haiku-4-5")
+        );
+    }
+
+    #[test]
+    fn aux_models_absent_yaml_defaults_to_none() {
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\n";
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.aux_models.compaction.is_none());
     }
 
     #[test]

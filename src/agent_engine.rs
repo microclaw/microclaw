@@ -2548,11 +2548,27 @@ async fn compact_messages(
     }];
     let (effective_profile, effective_model, _session_settings) =
         resolve_effective_provider_and_model(state, caller_channel, chat_id).await;
+    // Compaction is an ancillary task, so allow a (typically cheaper) auxiliary
+    // model to handle it. The aux model runs on the same provider profile as the
+    // main model; only the model name is swapped. Falls back to the main model.
+    let compaction_model = state
+        .config
+        .aux_models
+        .compaction_model(&effective_model)
+        .to_string();
+    if compaction_model != effective_model {
+        tracing::debug!(
+            chat_id,
+            main_model = %effective_model,
+            aux_model = %compaction_model,
+            "using auxiliary model for compaction"
+        );
+    }
     let scoped_provider = if effective_profile.alias != state.config.llm_provider {
         Some(crate::llm::create_provider(&build_provider_runtime_config(
             state,
             &effective_profile,
-            &effective_model,
+            &compaction_model,
         )))
     } else {
         None
@@ -2566,7 +2582,7 @@ async fn compact_messages(
                     "You are a helpful summarizer.",
                     summarize_messages,
                     None,
-                    Some(&effective_model),
+                    Some(&compaction_model),
                 )
                 .await
         } else {
@@ -2576,7 +2592,7 @@ async fn compact_messages(
                     "You are a helpful summarizer.",
                     summarize_messages,
                     None,
-                    Some(&effective_model),
+                    Some(&compaction_model),
                 )
                 .await
         }
@@ -2587,7 +2603,7 @@ async fn compact_messages(
             if let Some(usage) = &response.usage {
                 let channel = caller_channel.to_string();
                 let provider = state.config.llm_provider.clone();
-                let model = effective_model.clone();
+                let model = compaction_model.clone();
                 let input_tokens = i64::from(usage.input_tokens);
                 let output_tokens = i64::from(usage.output_tokens);
                 let _ = call_blocking(state.db.clone(), move |db| {

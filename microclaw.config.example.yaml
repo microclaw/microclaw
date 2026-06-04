@@ -23,6 +23,12 @@ model: ""
 max_tokens: 8192
 # Max tool loop iterations per message
 max_tool_iterations: 100
+# Optional per-task auxiliary models. Each slot names a (typically cheaper) model
+# used for a specific ancillary task instead of the main conversation model. The
+# auxiliary model runs on the SAME provider/credentials as the main model — only
+# the model name is swapped — and falls back to the main model when unset.
+# aux_models:
+#   compaction: claude-haiku-4-5   # cheaper model for context/history summarization
 # Inject pending messages into the active agent loop between iterations (mid-turn injection)
 enable_mid_turn_injection: true
 # On non-web channels (Telegram, Discord, Slack, Feishu, Matrix, WeChat),

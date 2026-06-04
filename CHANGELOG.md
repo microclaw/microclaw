@@ -4,6 +4,18 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Added
+
+- Per-task auxiliary models: a new `aux_models` config section lets a (typically
+  cheaper) model handle ancillary work. The first wired slot, `aux_models.compaction`,
+  runs context/history summarization on the configured model instead of the main
+  conversation model. The auxiliary model reuses the main provider profile and
+  credentials — only the model name is swapped — and falls back to the main model when
+  unset, so default behavior is unchanged. First step toward the v0.3.0
+  "Self-Improving Runtime" plan (`docs/roadmap/v0.3.0-self-improving-runtime.md`).
+
 ## 0.2.0 - 2026-06-01
 
 Milestone release consolidating everything since the 0.1.12 maturity-hardening
