@@ -4385,6 +4385,15 @@ impl SetupApp {
     }
 
     fn validate_local(&self) -> Result<(), MicroClawError> {
+        // A config with no enabled channel can't start, so refuse to save one —
+        // this is the source-side fix for "configured a channel but forgot to
+        // enable it". (The field defaults to `web`, so a normal setup passes.)
+        if self.enabled_channels().is_empty() {
+            return Err(MicroClawError::Config(
+                "Enable at least one channel: open the 'Enabled channels' field and select one (web, telegram, discord, ...).".into(),
+            ));
+        }
+
         for field in &self.fields {
             if self.is_field_required(field) && field.value.trim().is_empty() {
                 return Err(MicroClawError::Config(format!("{} is required", field.key)));
@@ -10907,6 +10916,19 @@ sandbox:
         assert_eq!(body.get("max_tokens"), None);
         assert_eq!(body["max_completion_tokens"], 1);
         assert!(!switch_to_max_completion_tokens(&mut body));
+    }
+
+    #[test]
+    fn validate_local_requires_an_enabled_channel() {
+        let mut app = SetupApp::new();
+        // Fresh app defaults to `web` enabled, so the channel gate passes.
+        assert!(!app.enabled_channels().is_empty());
+        // Clearing all channels must block save with a clear message.
+        if let Some(f) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
+            f.value = String::new();
+        }
+        let err = app.validate_local().unwrap_err().to_string();
+        assert!(err.contains("at least one channel"), "got: {err}");
     }
 
     #[test]

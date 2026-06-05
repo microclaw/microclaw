@@ -15,6 +15,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- Setup wizard now refuses to save a config with no channel enabled — the source-side fix for
+  "configured a channel but forgot `enabled: true`". Clearing all channels blocks save with a
+  clear instruction instead of producing a config that fails to start. (The field defaults to
+  `web`, so a normal setup is unaffected.) Part of the usability push.
 - `microclaw doctor --online` — verifies the LLM credentials by sending a minimal "hi" request
   to the configured provider (reusing the setup wizard's probe), so a bad API key or model is
   caught at preflight instead of surfacing as a confusing failure on the first chat. Rejected
