@@ -103,7 +103,12 @@ impl DoctorReport {
 #[command(
     name = "microclaw doctor",
     about = "Preflight diagnostics",
-    long_about = "Checks PATH, shell/runtime dependencies, browser automation prerequisites, MCP command dependencies, and sandbox readiness."
+    long_about = "Checks PATH, shell/runtime dependencies, browser automation prerequisites, MCP command dependencies, and sandbox readiness.",
+    after_help = "\x1b[1mExamples:\x1b[22m\n  \
+        microclaw doctor             Run the offline preflight checks\n  \
+        microclaw doctor --online    …and verify the API key/model with a live request\n  \
+        microclaw doctor sandbox     Check container runtime + image readiness\n  \
+        microclaw doctor --json      Machine-readable report"
 )]
 struct DoctorCli {
     #[command(subcommand)]

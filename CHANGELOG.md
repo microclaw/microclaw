@@ -15,6 +15,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- More guidance in the CLI: after `microclaw setup` succeeds it now prints the next steps
+  (`microclaw doctor` → `microclaw start`, with a note about `doctor --online`); and
+  `microclaw eval --help`, `microclaw audit --help`, and `microclaw doctor --help` each end
+  with an Examples section. (`doctor --help` now routes to the doctor parser so its options and
+  examples actually show.) Part of the usability push.
 - Setup wizard now labels every field `[required]` or `[optional]` (previously only required
   fields were marked, leaving "unmarked" ambiguous), so it's obvious at a glance what must be
   filled before saving. Part of the usability push.

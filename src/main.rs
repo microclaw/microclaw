@@ -65,7 +65,9 @@ enum MainCommand {
     /// Full-screen setup wizard (or `setup --enable-sandbox`)
     Setup(SetupCommand),
     /// Preflight diagnostics
+    #[command(disable_help_flag = true)]
     Doctor {
+        /// Use `microclaw doctor --help` for options and examples.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -101,6 +103,10 @@ enum MainCommand {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = "\x1b[1mExamples:\x1b[22m\n  \
+    microclaw eval session.json                 Check one recorded session\n  \
+    microclaw eval docs/test/eval-fixtures      Check every fixture in a directory\n  \
+    microclaw eval fixtures --strict-tool-errors --json")]
 struct EvalCommand {
     /// Path to a session fixture (.json) or a directory of fixtures
     path: String,
@@ -122,6 +128,10 @@ struct EvalCommand {
 }
 
 #[derive(Debug, Args)]
+#[command(after_help = "\x1b[1mExamples:\x1b[22m\n  \
+    microclaw audit verify                 Check the audit log hasn't been tampered with\n  \
+    microclaw audit list --kind auth       Show recent auth events\n  \
+    microclaw audit list --limit 100")]
 struct AuditCommand {
     #[command(subcommand)]
     action: AuditAction,
@@ -701,6 +711,11 @@ async fn main() -> anyhow::Result<()> {
                 let saved = setup::run_setup_wizard()?;
                 if saved {
                     println!("Setup saved to microclaw.config.yaml");
+                    println!();
+                    println!("Next steps:");
+                    println!("  1) microclaw doctor          # verify your setup");
+                    println!("     microclaw doctor --online # …and test the API key/model with a live request");
+                    println!("  2) microclaw start           # start the bot on the enabled channels");
                 } else {
                     println!("Setup canceled");
                 }
