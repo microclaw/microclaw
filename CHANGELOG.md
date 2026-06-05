@@ -15,6 +15,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- `microclaw doctor` now checks that the data and working directories can be created and
+  written to — the most common "won't start" cause (read-only path, wrong permissions, a
+  typo'd `data_dir`). Reports each as ✅ writable or ❌ with the failure reason and a fix hint.
+  Part of the usability push.
 - Setup wizard now refuses to save a config with no channel enabled — the source-side fix for
   "configured a channel but forgot `enabled: true`". Clearing all channels blocks save with a
   clear instruction instead of producing a config that fails to start. (The field defaults to

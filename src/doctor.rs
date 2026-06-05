@@ -416,6 +416,7 @@ fn build_report() -> DoctorReport {
 
     check_config(&mut report);
     check_channels(&mut report);
+    check_data_dirs(&mut report);
     check_acp_subagent_config(&mut report);
     check_web_fetch_validation(&mut report);
     check_context_layers(&mut report);
@@ -522,6 +523,49 @@ fn check_channels(report: &mut DoctorReport) {
             )),
         );
     }
+}
+
+/// Verify the data and working directories can be created and written to — the
+/// most common "it just won't start" cause (read-only path, wrong permissions,
+/// a typo'd `data_dir`). The DB, runtime state, and skills all live under these.
+fn check_data_dirs(report: &mut DoctorReport) {
+    let config = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+    for (id, label, raw) in [
+        ("storage.data_dir", "Data dir writable", config.runtime_data_dir()),
+        ("storage.working_dir", "Working dir writable", config.working_dir.clone()),
+    ] {
+        let path = PathBuf::from(shellexpand::tilde(&raw).as_ref());
+        match check_dir_writable(&path) {
+            Ok(()) => report.push(
+                id,
+                label,
+                CheckStatus::Pass,
+                format!("writable: {}", path.display()),
+                None,
+            ),
+            Err(err) => report.push(
+                id,
+                label,
+                CheckStatus::Fail,
+                err,
+                Some("Check the path's permissions and free space, or point `data_dir`/`working_dir` at a writable location.".to_string()),
+            ),
+        }
+    }
+}
+
+/// Create `dir` if needed and confirm a file can be written there, cleaning up
+/// the probe file. Returns a human-readable reason on failure.
+fn check_dir_writable(dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let probe = dir.join(format!(".microclaw-doctor-{}.tmp", std::process::id()));
+    std::fs::write(&probe, b"ok").map_err(|e| format!("cannot write to {}: {e}", dir.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
 }
 
 /// Verify the configured LLM credentials with a live "hi" request (only when
@@ -1767,6 +1811,25 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::env_lock()
+    }
+
+    #[test]
+    fn dir_writable_ok_and_failure() {
+        let base = std::env::temp_dir().join(format!(
+            "mc_doctor_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Fresh nested path is created and written to.
+        assert!(check_dir_writable(&base.join("sub")).is_ok());
+        // A path *under a regular file* can't be made into a directory.
+        let file = base.join("afile");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(check_dir_writable(&file.join("nope")).is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
