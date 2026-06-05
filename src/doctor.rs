@@ -112,6 +112,9 @@ struct DoctorCli {
     json: bool,
     #[arg(long, default_value_t = false)]
     apply_config_migrations: bool,
+    /// Send a live test request to the LLM provider to verify the API key/model.
+    #[arg(long, default_value_t = false)]
+    online: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -163,11 +166,16 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
-    let report = if sandbox_only {
+    let mut report = if sandbox_only {
         build_sandbox_report()
     } else {
         build_report()
     };
+    if !sandbox_only {
+        // Network probe lives outside `build_report` so the offline report stays
+        // pure (and hermetic for tests).
+        check_llm_credentials(&mut report, cli.online);
+    }
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -514,6 +522,108 @@ fn check_channels(report: &mut DoctorReport) {
             )),
         );
     }
+}
+
+/// Verify the configured LLM credentials with a live "hi" request (only when
+/// `online` is set, since `doctor` is otherwise hermetic). Reuses the same probe
+/// as the setup wizard. Runs on a dedicated thread because the probe uses
+/// blocking HTTP and `doctor` runs inside an async runtime.
+fn check_llm_credentials(report: &mut DoctorReport, online: bool) {
+    let config = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(_) => return, // load failure already reported by check_config
+    };
+    let provider = config.llm_provider.clone();
+
+    if crate::codex_auth::is_openai_codex_provider(&provider) {
+        report.push(
+            "llm.credentials",
+            "LLM credentials",
+            CheckStatus::Miss,
+            "openai-codex uses external auth (~/.codex); not probed".to_string(),
+            None,
+        );
+        return;
+    }
+
+    if !online {
+        report.push(
+            "llm.credentials",
+            "LLM credentials",
+            CheckStatus::Miss,
+            "not verified (offline)".to_string(),
+            Some("Run `microclaw doctor --online` to send a test request to the provider.".to_string()),
+        );
+        return;
+    }
+
+    let api_key = config.api_key.clone();
+    let base_url = config.llm_base_url.clone().unwrap_or_default();
+    let model = config.model.clone();
+    let user_agent = config.llm_user_agent.clone();
+
+    // Blocking probe on its own thread (doctor runs under Tokio).
+    let probe = std::thread::spawn(move || {
+        crate::setup::validate_llm_credentials(&provider, &api_key, &base_url, &user_agent, &model, None)
+    })
+    .join();
+
+    match probe {
+        Ok(Ok(msg)) => report.push(
+            "llm.credentials",
+            "LLM credentials",
+            CheckStatus::Pass,
+            msg,
+            None,
+        ),
+        Ok(Err(err)) => {
+            let detail = err.to_string();
+            if looks_like_auth_error(&detail) {
+                report.push(
+                    "llm.credentials",
+                    "LLM credentials",
+                    CheckStatus::Fail,
+                    detail,
+                    Some("Check your `api_key` and `model` — run `microclaw setup`.".to_string()),
+                );
+            } else {
+                report.push(
+                    "llm.credentials",
+                    "LLM credentials",
+                    CheckStatus::Warn,
+                    format!("could not verify: {detail}"),
+                    Some("Provider unreachable or a transient error; check `llm_base_url`/network and retry.".to_string()),
+                );
+            }
+        }
+        Err(_) => report.push(
+            "llm.credentials",
+            "LLM credentials",
+            CheckStatus::Warn,
+            "credential probe thread panicked".to_string(),
+            None,
+        ),
+    }
+}
+
+/// Heuristic: does this validation error look like rejected credentials (vs a
+/// network/transient failure)?
+fn looks_like_auth_error(detail: &str) -> bool {
+    let l = detail.to_lowercase();
+    [
+        "401",
+        "403",
+        "unauthorized",
+        "invalid x-api-key",
+        "invalid api key",
+        "incorrect api key",
+        "authentication",
+        "api key",
+        "api-key",
+        "permission denied",
+    ]
+    .iter()
+    .any(|needle| l.contains(needle))
 }
 
 fn check_web_fetch_validation(report: &mut DoctorReport) {
@@ -1657,6 +1767,17 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::env_lock()
+    }
+
+    #[test]
+    fn auth_error_classification() {
+        // Provider rejections → auth (Fail).
+        assert!(looks_like_auth_error("LLM validation failed: invalid x-api-key"));
+        assert!(looks_like_auth_error("HTTP 401 Unauthorized"));
+        assert!(looks_like_auth_error("Incorrect API key provided"));
+        // Network/transient → not auth (Warn).
+        assert!(!looks_like_auth_error("error sending request: dns error"));
+        assert!(!looks_like_auth_error("operation timed out"));
     }
 
     #[test]

@@ -5921,15 +5921,14 @@ fn perform_online_validation(
     model: &str,
     codex_account_id: Option<&str>,
 ) -> Result<Vec<String>, MicroClawError> {
-    const VALIDATION_MAX_OUTPUT_TOKENS: u32 = 64;
     let mut checks = Vec::new();
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent(llm_user_agent(configured_user_agent))
-        .build()?;
 
     // --- Telegram validation (optional) ---
     if telegram_enabled {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent(llm_user_agent(configured_user_agent))
+            .build()?;
         let tg_resp: serde_json::Value = client
             .get(format!("https://api.telegram.org/bot{tg_token}/getMe"))
             .send()?
@@ -5961,6 +5960,37 @@ fn perform_online_validation(
     }
 
     // --- LLM validation: send a minimal "hi" message ---
+    checks.push(validate_llm_credentials(
+        provider,
+        api_key,
+        base_url,
+        configured_user_agent,
+        model,
+        codex_account_id,
+    )?);
+
+    Ok(checks)
+}
+
+/// Send a minimal "hi" message to the configured LLM provider to verify the
+/// API key/model work. Returns a human-friendly "LLM OK (...)" string on
+/// success, or a `MicroClawError::Config` describing the failure. Shared by the
+/// setup wizard and `microclaw doctor`. Synchronous (blocking HTTP), so callers
+/// inside an async runtime must run it on a dedicated thread.
+pub(crate) fn validate_llm_credentials(
+    provider: &str,
+    api_key: &str,
+    base_url: &str,
+    configured_user_agent: &str,
+    model: &str,
+    codex_account_id: Option<&str>,
+) -> Result<String, MicroClawError> {
+    const VALIDATION_MAX_OUTPUT_TOKENS: u32 = 64;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(llm_user_agent(configured_user_agent))
+        .build()?;
+
     let preset = find_provider_preset(provider);
     let protocol = provider_protocol(provider);
     let model = if model.is_empty() {
@@ -6006,7 +6036,7 @@ fn perform_online_validation(
                 "LLM validation failed: {detail}"
             )));
         }
-        checks.push(format!("LLM OK (anthropic, model={model})"));
+        Ok(format!("LLM OK (anthropic, model={model})"))
     } else {
         let base = resolve_openai_compat_validation_base(provider, base_url, preset);
         let resp = if is_openai_codex_provider(provider) {
@@ -6058,20 +6088,17 @@ fn perform_online_validation(
         if !status.is_success() {
             let text = resp.text().unwrap_or_default();
             if is_validation_output_capped_error(&text) {
-                checks.push(format!(
+                return Ok(format!(
                     "LLM OK (openai-compatible, model={model}; probe output capped)"
                 ));
-                return Ok(checks);
             }
             let detail = extract_openai_error_detail(status, &text);
             return Err(MicroClawError::Config(format!(
                 "LLM validation failed: {detail}"
             )));
         }
-        checks.push(format!("LLM OK (openai-compatible, model={model})"));
+        Ok(format!("LLM OK (openai-compatible, model={model})"))
     }
-
-    Ok(checks)
 }
 
 fn push_telegram_disabled_status(checks: &mut Vec<String>, include_telegram_status: bool) {
