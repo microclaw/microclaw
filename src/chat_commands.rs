@@ -50,6 +50,42 @@ pub fn unknown_command_response() -> String {
     "Unknown command.".to_string()
 }
 
+/// Render the in-chat command reference. Pure (no `AppState`) so it can be
+/// unit-tested and reused. Backs `/help`.
+pub fn build_help_response() -> String {
+    [
+        "MicroClaw commands",
+        "",
+        "Session & context",
+        "  /status              Session info: provider, model, message & task counts",
+        "  /clear               Clear this chat's session + history (keep scheduled tasks)",
+        "  /reset               Clear this chat's session + history",
+        "  /reset memory        Clear this chat's long-term memory (AGENTS.md)",
+        "  /stop                Abort the run currently in progress",
+        "  /archive             Archive the current session to disk",
+        "",
+        "Model & provider",
+        "  /model [name|reset]  Show or set the model for this chat",
+        "  /models [provider]   List available models",
+        "  /provider [name]     Show or set the provider for this chat",
+        "  /providers           List configured providers",
+        "",
+        "Skills",
+        "  /skills              List available skills",
+        "  /reload-skills       Reload skills from disk",
+        "",
+        "Memory & usage",
+        "  /user [clear]        View or clear your USER.md profile",
+        "  /usage               Token usage report for this chat",
+        "  /rewind [id]         List or restore conversation checkpoints",
+        "",
+        "  /help                Show this message",
+        "",
+        "Tip: in groups, mention me first (e.g. @bot /status).",
+    ]
+    .join("\n")
+}
+
 /// Show or clear the per-chat USER.md user model. Backs the `/user` slash
 /// command. Lives outside `handle_chat_command` so it can be unit-tested
 /// without spinning up the full AppState match arm.
@@ -178,6 +214,10 @@ pub async fn handle_chat_command(
     sender_id: Option<&str>,
 ) -> Option<String> {
     let trimmed = normalized_slash_command(command_text)?.trim();
+
+    if trimmed == "/help" || trimmed == "/commands" || trimmed == "/?" {
+        return Some(build_help_response());
+    }
 
     if trimmed == "/reset memory" {
         let _ = call_blocking(state.db.clone(), move |db| db.clear_chat_memory(chat_id)).await;
@@ -1589,7 +1629,7 @@ channels:
 
 #[cfg(test)]
 mod slash_command_tests {
-    use super::is_slash_command;
+    use super::{build_help_response, is_slash_command};
 
     #[test]
     fn test_is_slash_command_with_leading_mentions() {
@@ -1598,5 +1638,19 @@ mod slash_command_tests {
         assert!(is_slash_command("<@U123> /status"));
         assert!(is_slash_command(" <@U123>   @bot   /status"));
         assert!(!is_slash_command("@bot hello"));
+    }
+
+    #[test]
+    fn help_lists_real_commands_and_is_recognized() {
+        assert!(is_slash_command("/help"));
+        let help = build_help_response();
+        // Every command surfaced in help must be a real dispatch entry.
+        for cmd in [
+            "/status", "/clear", "/reset", "/stop", "/archive", "/model", "/models",
+            "/provider", "/providers", "/skills", "/reload-skills", "/user", "/usage",
+            "/rewind", "/help",
+        ] {
+            assert!(help.contains(cmd), "help missing {cmd}");
+        }
     }
 }

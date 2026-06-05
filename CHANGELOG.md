@@ -8,6 +8,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- In-chat `/help` command (aliases `/commands`, `/?`) — lists every slash command with a
+  one-line description, grouped by area (session & context, model & provider, skills,
+  memory & usage). There was previously no way to discover the 15+ commands from inside a
+  chat. The CLI quick-start (`microclaw --help`) now points new users to it. First of a
+  usability/onboarding push.
 - Per-task auxiliary models: a new `aux_models` config section lets a (typically
   cheaper) model handle ancillary work. Wired slots:
   - `aux_models.compaction` — context/history summarization.

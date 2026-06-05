@@ -22,7 +22,9 @@ const LONG_ABOUT: &str = concat!(
     "\x1b[1mQuick Start:\x1b[22m\n",
     "  1) microclaw setup\n",
     "  2) microclaw doctor\n",
-    "  3) microclaw start",
+    "  3) microclaw start\n",
+    "\n",
+    "Once running, send \x1b[1m/help\x1b[22m in any chat to list the in-chat commands.",
 );
 
 #[derive(Debug, Parser)]
