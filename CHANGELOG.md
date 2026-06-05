@@ -15,6 +15,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- `microclaw doctor --online` — verifies the LLM credentials by sending a minimal "hi" request
+  to the configured provider (reusing the setup wizard's probe), so a bad API key or model is
+  caught at preflight instead of surfacing as a confusing failure on the first chat. Rejected
+  credentials are a ❌ FAIL with a fix hint; a network/transient failure is a ⚠️ WARN (so an
+  offline run isn't falsely red); `openai-codex` is skipped (external auth). Without `--online`,
+  `doctor` stays hermetic and notes that credentials weren't verified. Part of the usability push.
 - Clearer "no channel enabled" diagnostics — the common trap of filling in a channel's
   credentials but forgetting `enabled: true` now produces an actionable message instead of a
   generic one: the config error (and `microclaw start`) name the configured-but-disabled
