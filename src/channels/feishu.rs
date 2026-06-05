@@ -2114,7 +2114,10 @@ pub async fn start_feishu_bot(app_state: Arc<AppState>, runtime: FeishuRuntimeCo
     {
         Ok(t) => t,
         Err(e) => {
-            error!("Feishu: failed to get initial token: {e}");
+            error!(
+                "Feishu channel failed to start: could not obtain a tenant token: {e}. \
+                 This is usually a bad `feishu.app_id` / `feishu.app_secret` — run `microclaw setup`."
+            );
             return;
         }
     };
@@ -2126,7 +2129,10 @@ pub async fn start_feishu_bot(app_state: Arc<AppState>, runtime: FeishuRuntimeCo
             id
         }
         Err(e) => {
-            error!("Feishu: failed to resolve bot open_id: {e}");
+            error!(
+                "Feishu: failed to resolve bot open_id: {e}. \
+                 Check the app credentials and permissions (run `microclaw setup`)."
+            );
             return;
         }
     };

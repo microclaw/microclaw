@@ -6,6 +6,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Changed
+
+- Clearer channel auth-failure logs — when a channel can't start because its credentials are
+  rejected, Telegram/Discord/Slack/Feishu now log an actionable message ("authentication
+  failed … check the token / run `microclaw setup`") instead of a generic or silent error,
+  so a bad token isn't mistaken for the bot just going quiet. Part of the usability push.
+
 ### Added
 
 - Clearer "no channel enabled" diagnostics — the common trap of filling in a channel's

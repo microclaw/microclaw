@@ -876,7 +876,10 @@ pub async fn start_discord_bot(
             }
         }
         Err(e) => {
-            error!("Discord bot error: {e}");
+            error!(
+                "Discord bot failed to start: {e}. If this is an authentication error, \
+                 check `discord.bot_token` (from the Discord Developer Portal) — run `microclaw setup`."
+            );
         }
     }
 }

@@ -493,13 +493,15 @@ pub async fn start_telegram_bot(
         Ok(()) => {}
         Err(teloxide::RequestError::Api(teloxide::ApiError::InvalidToken)) => {
             warn!(
-                "Telegram channel '{}' disabled: invalid bot token. Update telegram_bot_token and restart.",
+                "Telegram channel '{}' disabled: authentication failed (invalid bot token). \
+                 Update the token (from @BotFather) and restart, or run `microclaw setup`.",
                 channel_name
             );
         }
         Err(err) => {
             warn!(
-                "Telegram channel '{}' stopped and was disabled due to startup error: {:?}",
+                "Telegram channel '{}' stopped due to a startup error: {:?}. \
+                 If this is an authentication error, check the bot token (run `microclaw setup`).",
                 channel_name, err
             );
         }

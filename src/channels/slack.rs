@@ -906,7 +906,10 @@ pub async fn start_slack_bot(app_state: Arc<AppState>, runtime: SlackRuntimeCont
             id
         }
         Err(e) => {
-            error!("Failed to resolve Slack bot user ID: {e}");
+            error!(
+                "Slack channel failed to start: {e}. If this is an authentication error, \
+                 check `slack.bot_token` and `slack.app_token` — run `microclaw setup`."
+            );
             return;
         }
     };
