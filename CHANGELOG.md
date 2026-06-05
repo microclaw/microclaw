@@ -8,6 +8,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- Friendlier config parse errors — when `microclaw.config.yaml` fails to parse, the message now
+  appends an actionable pointer (edit and re-run, or `microclaw setup`, plus a link to the
+  annotated example config), and for an unknown field/variant (a mistyped key like `discrod`)
+  it suggests the closest valid name ("did you mean `discord`?"). The original serde error
+  with its line/column is preserved. Part of the usability/onboarding push.
 - In-chat `/help` command (aliases `/commands`, `/?`) — lists every slash command with a
   one-line description, grouped by area (session & context, model & provider, skills,
   memory & usage). There was previously no way to discover the 15+ commands from inside a

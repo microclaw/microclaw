@@ -2075,7 +2075,7 @@ impl Config {
                 }
             }
             let mut config: Config = serde_yaml::from_str(&content)
-                .map_err(|e| MicroClawError::Config(format!("Failed to parse {path_str}: {e}")))?;
+                .map_err(|e| MicroClawError::Config(friendly_yaml_error(&path_str, &e)))?;
             config.post_deserialize()?;
             return Ok(config);
         }
@@ -2849,6 +2849,89 @@ fn merge_provider_profile(
     }
 }
 
+/// Turn a raw `serde_yaml` parse error into an actionable message. When the
+/// error is an unknown field or variant (the common YAML typo), suggest the
+/// closest valid name, and always point the user at `setup` / the example
+/// config. The original error (with its line/column) is preserved.
+fn friendly_yaml_error(path_str: &str, err: &serde_yaml::Error) -> String {
+    let raw = err.to_string();
+    let mut hint = String::new();
+    if let Some((kind, token)) = extract_unknown_token(&raw) {
+        match suggest_closest(token, &extract_backtick_options(&raw)) {
+            Some(best) => {
+                hint = format!("\n\n  Unknown {kind} `{token}` — did you mean `{best}`?");
+            }
+            None => hint = format!("\n\n  Unknown {kind} `{token}`."),
+        }
+    }
+    format!(
+        "Failed to parse {path_str}: {raw}{hint}\n\n  \
+         Edit the config and re-run, or run `microclaw setup`.\n  \
+         Reference: https://github.com/microclaw/microclaw/blob/main/microclaw.config.example.yaml"
+    )
+}
+
+/// Extract `(kind, token)` from a serde "unknown variant/field `X`" message.
+fn extract_unknown_token(raw: &str) -> Option<(&'static str, &str)> {
+    for (needle, kind) in [("unknown variant `", "variant"), ("unknown field `", "field")] {
+        if let Some(start) = raw.find(needle) {
+            let rest = &raw[start + needle.len()..];
+            if let Some(end) = rest.find('`') {
+                return Some((kind, &rest[..end]));
+            }
+        }
+    }
+    None
+}
+
+/// Collect the backtick-quoted options listed after "expected" in a serde error.
+fn extract_backtick_options(raw: &str) -> Vec<String> {
+    let Some(exp) = raw.find("expected") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut rest = &raw[exp..];
+    while let Some(open) = rest.find('`') {
+        rest = &rest[open + 1..];
+        if let Some(close) = rest.find('`') {
+            out.push(rest[..close].to_string());
+            rest = &rest[close + 1..];
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// Pick the closest option to `token` by edit distance, if one is "close
+/// enough" (distance at most a third of the token length, min 2).
+fn suggest_closest(token: &str, options: &[String]) -> Option<String> {
+    let threshold = (token.chars().count() / 3).max(2);
+    options
+        .iter()
+        .map(|o| (levenshtein(token, o), o))
+        .filter(|(d, _)| *d <= threshold)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, o)| o.clone())
+}
+
+/// Standard Levenshtein edit distance.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2861,6 +2944,39 @@ mod tests {
     fn aux_models_default_falls_back_to_main_model() {
         let aux = AuxModels::default();
         assert_eq!(aux.compaction_model("main-model"), "main-model");
+    }
+
+    #[test]
+    fn friendly_error_suggests_closest_field() {
+        // A real serde_yaml unknown-field error for a mistyped key.
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Mini {
+            #[allow(dead_code)]
+            discord: bool,
+        }
+        let err = serde_yaml::from_str::<Mini>("discrod: true\n").unwrap_err();
+        let msg = friendly_yaml_error("cfg.yaml", &err);
+        assert!(msg.contains("did you mean `discord`?"), "got: {msg}");
+        assert!(msg.contains("microclaw setup"));
+    }
+
+    #[test]
+    fn extract_and_suggest_helpers() {
+        let raw = "unknown variant `discrod`, expected one of `telegram`, `discord`, `slack`";
+        assert_eq!(extract_unknown_token(raw), Some(("variant", "discrod")));
+        let opts = extract_backtick_options(raw);
+        assert_eq!(opts, vec!["telegram", "discord", "slack"]);
+        assert_eq!(suggest_closest("discrod", &opts).as_deref(), Some("discord"));
+        // Nothing close → no suggestion.
+        assert_eq!(suggest_closest("zzzzzz", &opts), None);
+    }
+
+    #[test]
+    fn levenshtein_basics() {
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("discord", "discord"), 0);
+        assert_eq!(levenshtein("", "abc"), 3);
     }
 
     #[test]
