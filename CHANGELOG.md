@@ -8,6 +8,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- Clearer "no channel enabled" diagnostics — the common trap of filling in a channel's
+  credentials but forgetting `enabled: true` now produces an actionable message instead of a
+  generic one: the config error (and `microclaw start`) name the configured-but-disabled
+  channels and tell you to set `channels.<name>.enabled: true`. `microclaw doctor` now (a)
+  actually loads & validates the config (previously it only checked the file exists, so an
+  invalid config showed a misleading green), and (b) reports which channels are enabled plus
+  warns about any configured-but-disabled ones. Part of the usability/onboarding push.
 - Friendlier config parse errors — when `microclaw.config.yaml` fails to parse, the message now
   appends an actionable pointer (edit and re-run, or `microclaw setup`, plus a link to the
   annotated example config), and for an unknown field/variant (a mistyped key like `discrod`)

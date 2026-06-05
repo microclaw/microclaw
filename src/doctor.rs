@@ -407,6 +407,7 @@ fn build_report() -> DoctorReport {
     );
 
     check_config(&mut report);
+    check_channels(&mut report);
     check_acp_subagent_config(&mut report);
     check_web_fetch_validation(&mut report);
     check_context_layers(&mut report);
@@ -443,13 +444,22 @@ fn build_sandbox_report() -> DoctorReport {
 
 fn check_config(report: &mut DoctorReport) {
     match Config::resolve_config_path() {
-        Ok(Some(path)) => report.push(
-            "config.file",
-            "Config file",
-            CheckStatus::Pass,
-            format!("found {}", path.display()),
-            None,
-        ),
+        Ok(Some(path)) => match Config::load() {
+            Ok(_) => report.push(
+                "config.file",
+                "Config file",
+                CheckStatus::Pass,
+                format!("found and valid: {}", path.display()),
+                None,
+            ),
+            Err(err) => report.push(
+                "config.file",
+                "Config file",
+                CheckStatus::Fail,
+                err.to_string(),
+                Some("Fix the config per the message above, or run `microclaw setup`.".to_string()),
+            ),
+        },
         Ok(None) => report.push(
             "config.file",
             "Config file",
@@ -464,6 +474,45 @@ fn check_config(report: &mut DoctorReport) {
             err.to_string(),
             Some("Fix MICROCLAW_CONFIG or create a valid config file.".to_string()),
         ),
+    }
+}
+
+fn check_channels(report: &mut DoctorReport) {
+    // A failed load (e.g. no channel enabled at all) is already reported by
+    // `check_config`; here we add detail when the config does load.
+    let config = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+    let (enabled, configured_but_disabled) = config.channel_status();
+    if enabled.is_empty() {
+        report.push(
+            "channels.enabled",
+            "Channels",
+            CheckStatus::Fail,
+            "no channels are enabled".to_string(),
+            Some("Enable a channel with `channels.<name>.enabled: true`, or run `microclaw setup`.".to_string()),
+        );
+    } else {
+        report.push(
+            "channels.enabled",
+            "Channels",
+            CheckStatus::Pass,
+            format!("enabled: {}", enabled.join(", ")),
+            None,
+        );
+    }
+    if !configured_but_disabled.is_empty() {
+        report.push(
+            "channels.configured_disabled",
+            "Channels configured but disabled",
+            CheckStatus::Warn,
+            format!("{} configured but not enabled", configured_but_disabled.join(", ")),
+            Some(format!(
+                "Set `channels.{}.enabled: true` to activate (or remove the unused config).",
+                configured_but_disabled[0]
+            )),
+        );
     }
 }
 

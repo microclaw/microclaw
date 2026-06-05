@@ -2041,6 +2041,47 @@ impl Config {
         self.inferred_channel_enabled(&needle)
     }
 
+    /// Classify every known channel into `(enabled, configured_but_disabled)`.
+    /// A channel is "configured" when it has credentials/config present (a
+    /// `channels.<name>` block or a legacy top-level token); it is "enabled"
+    /// per [`channel_enabled`]. Used both for the no-channel config error and
+    /// for `microclaw doctor`, so the two stay consistent.
+    pub fn channel_status(&self) -> (Vec<&'static str>, Vec<&'static str>) {
+        let configured = [
+            (
+                "telegram",
+                !self.telegram_bot_token.trim().is_empty()
+                    || self.channels.contains_key("telegram"),
+            ),
+            (
+                "discord",
+                self.discord_bot_token
+                    .as_deref()
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false)
+                    || self.channels.contains_key("discord"),
+            ),
+            ("slack", self.channels.contains_key("slack")),
+            ("feishu", self.channels.contains_key("feishu")),
+            ("matrix", self.channels.contains_key("matrix")),
+            ("irc", self.channels.contains_key("irc")),
+            ("web", self.web_enabled || self.channels.contains_key("web")),
+        ];
+        let mut enabled = Vec::new();
+        let mut configured_but_disabled = Vec::new();
+        for (name, is_configured) in configured {
+            if !is_configured {
+                continue;
+            }
+            if self.channel_enabled(name) {
+                enabled.push(name);
+            } else {
+                configured_but_disabled.push(name);
+            }
+        }
+        (enabled, configured_but_disabled)
+    }
+
     /// Load config from YAML file.
     pub fn load() -> Result<Self, MicroClawError> {
         let yaml_path = Self::resolve_config_path()?;
@@ -2460,39 +2501,20 @@ Use operator password + API keys for Web auth."
         }
 
         // Validate required fields
-        let configured_telegram =
-            !self.telegram_bot_token.trim().is_empty() || self.channels.contains_key("telegram");
-        let configured_discord = self
-            .discord_bot_token
-            .as_deref()
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false)
-            || self.channels.contains_key("discord");
-        let configured_slack = self.channels.contains_key("slack");
-        let configured_feishu = self.channels.contains_key("feishu");
-        let configured_matrix = self.channels.contains_key("matrix");
-        let configured_irc = self.channels.contains_key("irc");
-        let configured_web = self.web_enabled || self.channels.contains_key("web");
-
-        let has_telegram = self.channel_enabled("telegram") && configured_telegram;
-        let has_discord = self.channel_enabled("discord") && configured_discord;
-        let has_slack = self.channel_enabled("slack") && configured_slack;
-        let has_feishu = self.channel_enabled("feishu") && configured_feishu;
-        let has_matrix = self.channel_enabled("matrix") && configured_matrix;
-        let has_irc = self.channel_enabled("irc") && configured_irc;
-        let has_web = self.channel_enabled("web") && configured_web;
-
-        if !(has_telegram
-            || has_discord
-            || has_slack
-            || has_feishu
-            || has_matrix
-            || has_irc
-            || has_web)
-        {
-            return Err(MicroClawError::Config(
-                "At least one channel must be enabled and configured (via channels.<name>.enabled or legacy channel settings)".into(),
-            ));
+        let (enabled_channels, configured_but_disabled) = self.channel_status();
+        if enabled_channels.is_empty() {
+            let hint = if configured_but_disabled.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " These channels are configured but not enabled: {}. \
+                     Set `channels.<name>.enabled: true` (or run `microclaw setup`).",
+                    configured_but_disabled.join(", ")
+                )
+            };
+            return Err(MicroClawError::Config(format!(
+                "At least one channel must be enabled and configured (via channels.<name>.enabled or legacy channel settings).{hint}"
+            )));
         }
         if self.api_key.is_empty() && !provider_allows_empty_api_key(&self.llm_provider) {
             return Err(MicroClawError::Config("api_key is required".into()));
@@ -2977,6 +2999,28 @@ mod tests {
         assert_eq!(levenshtein("kitten", "sitting"), 3);
         assert_eq!(levenshtein("discord", "discord"), 0);
         assert_eq!(levenshtein("", "abc"), 3);
+    }
+
+    #[test]
+    fn channel_status_splits_enabled_and_disabled() {
+        let cfg: Config = serde_yaml::from_str(
+            "api_key: k\nweb_enabled: false\nchannels:\n  telegram:\n    enabled: true\n  discord:\n    enabled: false\n",
+        )
+        .unwrap();
+        let (enabled, disabled) = cfg.channel_status();
+        assert_eq!(enabled, vec!["telegram"]);
+        assert_eq!(disabled, vec!["discord"]);
+    }
+
+    #[test]
+    fn no_enabled_channel_error_names_disabled_channel() {
+        let mut cfg: Config = serde_yaml::from_str(
+            "api_key: k\nweb_enabled: false\nchannels:\n  telegram:\n    enabled: false\n",
+        )
+        .unwrap();
+        let err = cfg.post_deserialize().unwrap_err().to_string();
+        assert!(err.contains("configured but not enabled"), "got: {err}");
+        assert!(err.contains("telegram"), "got: {err}");
     }
 
     #[test]
