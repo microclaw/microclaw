@@ -7432,10 +7432,12 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
 
         let selected = i == app.selected;
         let is_required = app.is_field_required(f);
+        // Mark every field so "unmarked" is never ambiguous: required fields
+        // must be filled before saving; optional ones can be left blank.
         let label = if is_required {
             format!("{}  [required]", f.label)
         } else {
-            f.label.to_string()
+            format!("{}  [optional]", f.label)
         };
         let value = if f.key == "LLM_PROVIDER" {
             provider_display(&f.value)

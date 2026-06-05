@@ -15,6 +15,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- Setup wizard now labels every field `[required]` or `[optional]` (previously only required
+  fields were marked, leaving "unmarked" ambiguous), so it's obvious at a glance what must be
+  filled before saving. Part of the usability push.
 - `microclaw --help` now ends with an **Examples** section (setup, doctor, `doctor --online`,
   start, `skill audit`, `audit verify`, `eval`) and a pointer to per-command `--help`, so the
   common workflows are discoverable without reading docs. Part of the usability push.
