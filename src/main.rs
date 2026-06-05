@@ -27,11 +27,26 @@ const LONG_ABOUT: &str = concat!(
     "Once running, send \x1b[1m/help\x1b[22m in any chat to list the in-chat commands.",
 );
 
+const EXAMPLES: &str = concat!(
+    "\x1b[1mExamples:\x1b[22m\n",
+    "  microclaw setup                 Create or edit microclaw.config.yaml\n",
+    "  microclaw doctor                Run preflight checks\n",
+    "  microclaw doctor --online       Also test your API key/model with a live request\n",
+    "  microclaw start                 Start the bot on the enabled channels\n",
+    "  microclaw skill audit           Audit local skills (duplicates, stale, thin)\n",
+    "  microclaw audit verify          Verify the tamper-evident audit log\n",
+    "  microclaw eval <file|dir>       Evaluate recorded session trajectories\n",
+    "\n",
+    "Run 'microclaw <command> --help' for command-specific options.",
+);
+
 #[derive(Debug, Parser)]
 #[command(
     name = "microclaw",
     version = VERSION,
-    about = LONG_ABOUT
+    about = LONG_ABOUT,
+    after_help = EXAMPLES,
+    after_long_help = EXAMPLES,
 )]
 struct Cli {
     /// Explicit config file path (absolute or relative)

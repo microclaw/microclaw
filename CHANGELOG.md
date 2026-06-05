@@ -15,6 +15,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- `microclaw --help` now ends with an **Examples** section (setup, doctor, `doctor --online`,
+  start, `skill audit`, `audit verify`, `eval`) and a pointer to per-command `--help`, so the
+  common workflows are discoverable without reading docs. Part of the usability push.
 - `microclaw doctor` now checks that the data and working directories can be created and
   written to — the most common "won't start" cause (read-only path, wrong permissions, a
   typo'd `data_dir`). Reports each as ✅ writable or ❌ with the failure reason and a fix hint.
