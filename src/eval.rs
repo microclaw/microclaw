@@ -532,4 +532,38 @@ mod tests {
         let msgs = load_messages(raw).unwrap();
         assert_eq!(msgs.len(), 1);
     }
+
+    /// Guards against example-rot. The negative example fixtures in
+    /// docs/test/eval-fixtures/negative/ exist to demonstrate failing
+    /// trajectories, but the CI gate scans the parent dir non-recursively and
+    /// never runs them — so without this test, an edit that made them pass
+    /// would go unnoticed. Keep them failing their advertised checks.
+    #[test]
+    fn negative_fixture_files_still_fail() {
+        let cases = [
+            ("dangling-tool-use.json", "no_dangling_tool_use"),
+            ("stuck-loop.json", "no_tool_call_loop"),
+        ];
+        for (file, expected_check) in cases {
+            let path = format!(
+                "{}/docs/test/eval-fixtures/negative/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                file
+            );
+            let raw =
+                std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
+            let messages =
+                load_messages(&raw).unwrap_or_else(|e| panic!("parsing {path}: {e}"));
+            let r = evaluate(file, &messages, &EvalThresholds::default());
+            assert!(
+                !r.passed,
+                "{file} unexpectedly passed; it must demonstrate a failing trajectory"
+            );
+            assert!(
+                r.checks.iter().any(|c| c.name == expected_check && !c.passed),
+                "{file} did not fail its expected check {expected_check}; checks: {:?}",
+                r.checks
+            );
+        }
+    }
 }
