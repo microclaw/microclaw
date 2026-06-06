@@ -175,6 +175,9 @@ impl Tool for ClawHubInstallTool {
             {
                 Ok(result) => {
                     let mut msg = result.message;
+                    for w in &result.warnings {
+                        msg.push_str(&format!("\n⚠ {}", w));
+                    }
                     if !result.success {
                         return ToolResult::error(msg);
                     }

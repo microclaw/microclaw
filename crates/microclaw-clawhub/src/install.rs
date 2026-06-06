@@ -18,21 +18,8 @@ pub struct InstallResult {
     pub success: bool,
     pub message: String,
     pub requires_restart: bool,
-}
-
-/// Gate check warning for user display
-pub struct GateWarning {
-    pub missing_bins: Vec<String>,
-    pub missing_envs: Vec<String>,
-    pub wrong_os: bool,
-}
-
-/// Security warning for user display
-pub struct SecurityWarning {
-    pub report_count: i32,
-    pub pending_scan: bool,
-    pub status: String,
-    pub url: String,
+    /// Non-fatal warnings surfaced to the user (unmet gates, security flags).
+    pub warnings: Vec<String>,
 }
 
 /// Main install function
@@ -59,6 +46,8 @@ pub async fn install_skill(
         target_version.to_string()
     };
 
+    let mut warnings: Vec<String> = Vec::new();
+
     // 3. Gate checks (unless skipped)
     if !options.skip_gates {
         let req = &meta
@@ -78,16 +67,37 @@ pub async fn install_skill(
             .as_ref()
             .map(|o| o.os.clone())
             .unwrap_or_default();
-        let _gate_result = check_requirements(req, &os_list);
-
-        // TODO: Return warning info if gates fail
+        let gate_result = check_requirements(req, &os_list);
+        if !gate_result.missing_bins.is_empty() {
+            warnings.push(format!(
+                "Missing required command(s): {}",
+                gate_result.missing_bins.join(", ")
+            ));
+        }
+        if !gate_result.missing_envs.is_empty() {
+            warnings.push(format!(
+                "Missing required environment variable(s): {}",
+                gate_result.missing_envs.join(", ")
+            ));
+        }
+        if gate_result.wrong_os {
+            warnings.push("Skill declares it does not support this platform".to_string());
+        }
     }
 
     // 4. Security check
     if !options.skip_security {
         if let Some(vt) = &meta.virustotal {
-            if vt.report_count >= 3 || vt.pending_scan {
-                // TODO: Return warning
+            if vt.report_count >= 3 {
+                warnings.push(format!(
+                    "VirusTotal flagged this skill: {} ({} report(s)) — review before trusting it",
+                    vt.status, vt.report_count
+                ));
+            } else if vt.pending_scan {
+                warnings.push(
+                    "VirusTotal scan is still pending — this skill has not been fully scanned"
+                        .to_string(),
+                );
             }
         }
     }
@@ -105,6 +115,7 @@ pub async fn install_skill(
                 slug
             ),
             requires_restart: false,
+            warnings,
         });
     }
     if skill_path.exists() && !options.force {
@@ -149,6 +160,7 @@ pub async fn install_skill(
         success: true,
         message: format!("Installed {} v{}", slug, actual_version),
         requires_restart: true,
+        warnings,
     })
 }
 

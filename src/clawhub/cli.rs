@@ -103,6 +103,9 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             match result {
                 Ok(result) => {
                     println!("{}", result.message);
+                    for w in &result.warnings {
+                        println!("  ⚠ {}", w);
+                    }
                     if result.requires_restart {
                         println!("Restart MicroClaw or run /reload-skills to activate.");
                     }
