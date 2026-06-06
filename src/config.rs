@@ -2113,6 +2113,9 @@ impl Config {
                             path_str
                         );
                     }
+                    for w in unknown_top_level_key_warnings(map) {
+                        warn!("{w} (in {path_str})");
+                    }
                 }
             }
             let mut config: Config = serde_yaml::from_str(&content)
@@ -2891,6 +2894,58 @@ fn friendly_yaml_error(path_str: &str, err: &serde_yaml::Error) -> String {
          Edit the config and re-run, or run `microclaw setup`.\n  \
          Reference: https://github.com/microclaw/microclaw/blob/main/microclaw.config.example.yaml"
     )
+}
+
+/// Build the set of accepted top-level config keys by serializing a baseline
+/// `Config` (so it stays in sync with the struct, including the flattened
+/// `clawhub_*` keys), plus the few fields excluded from serialization and the
+/// deprecated aliases handled elsewhere. Returns `None` if the baseline can't
+/// be derived, so callers skip the check rather than emit spurious warnings.
+fn known_top_level_config_keys() -> Option<std::collections::BTreeSet<String>> {
+    let base: Config = serde_yaml::from_str("{}").ok()?;
+    let serde_yaml::Value::Mapping(serialized) = serde_yaml::to_value(&base).ok()? else {
+        return None;
+    };
+    let mut known: std::collections::BTreeSet<String> = serialized
+        .keys()
+        .filter_map(|k| k.as_str().map(str::to_string))
+        .collect();
+    // Accepted on input but excluded from serialization (skip_serializing[_if])
+    // or kept only for backward-compatible deprecation warnings.
+    for k in ["timezone", "override_timezone", "web_auth_token"] {
+        known.insert(k.to_string());
+    }
+    // Sanity guard: a healthy Config has many keys; if we somehow derived only
+    // a handful, treat the set as unreliable and skip the check.
+    if known.len() < 5 {
+        return None;
+    }
+    Some(known)
+}
+
+/// Soft-validate top-level config keys: serde silently ignores unknown fields,
+/// so a typo like `discrod:` is otherwise invisible. Returns one human-readable
+/// warning per unrecognized key (with a did-you-mean suggestion when close).
+/// Does not fail the load.
+fn unknown_top_level_key_warnings(map: &serde_yaml::Mapping) -> Vec<String> {
+    let Some(known) = known_top_level_config_keys() else {
+        return Vec::new();
+    };
+    let candidates: Vec<String> = known.iter().cloned().collect();
+    let mut warnings = Vec::new();
+    for key in map.keys() {
+        let Some(name) = key.as_str() else { continue };
+        if known.contains(name) {
+            continue;
+        }
+        match suggest_closest(name, &candidates) {
+            Some(best) => warnings.push(format!(
+                "Unknown config key `{name}` (ignored) — did you mean `{best}`?"
+            )),
+            None => warnings.push(format!("Unknown config key `{name}` (ignored).")),
+        }
+    }
+    warnings
 }
 
 /// Extract `(kind, token)` from a serde "unknown variant/field `X`" message.
@@ -4329,5 +4384,51 @@ discord_allowed_channels: [111, 222]
             PathBuf::from(config.skills_dir.unwrap()),
             home.join("skills")
         );
+    }
+
+    fn mapping_of(yaml: &str) -> serde_yaml::Mapping {
+        serde_yaml::from_str::<serde_yaml::Value>(yaml)
+            .unwrap()
+            .as_mapping()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn unknown_top_level_key_is_flagged() {
+        let map = mapping_of("definitely_not_a_key: true\napi_key: k\n");
+        let warnings = unknown_top_level_key_warnings(&map);
+        assert!(
+            warnings.iter().any(|w| w.contains("definitely_not_a_key")),
+            "expected an unknown-key warning, got: {warnings:?}"
+        );
+        // A real key in the same document must not be flagged.
+        assert!(
+            !warnings.iter().any(|w| w.contains("`api_key`")),
+            "api_key should be recognized, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_key_gets_did_you_mean() {
+        // `api_ky` is one edit away from the real `api_key`.
+        let map = mapping_of("api_ky: k\n");
+        let warnings = unknown_top_level_key_warnings(&map);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("api_ky") && w.contains("did you mean `api_key`")),
+            "expected a did-you-mean suggestion, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn known_top_level_keys_produce_no_warnings() {
+        // A spread of real keys: plain fields, a nested struct, the flattened
+        // clawhub_* keys, and the skip-serialized timezone fields.
+        let yaml = "api_key: k\ntelegram_bot_token: t\nclawhub_registry: https://x\n\
+timezone: UTC\noverride_timezone: UTC\nsandbox:\n  enabled: false\n";
+        let warnings = unknown_top_level_key_warnings(&mapping_of(yaml));
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
     }
 }
