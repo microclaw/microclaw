@@ -887,7 +887,7 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "DeepSeek",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.deepseek.com/v1",
-        models: &["deepseek-chat", "deepseek-reasoner", "deepseek-v3"],
+        models: &["deepseek-chat", "deepseek-reasoner", "deepseek-v3", "deepseek-v4", "deepseek-v4-flash"],
     },
     ProviderPreset {
         id: "fireworks",

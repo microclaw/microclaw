@@ -1098,7 +1098,8 @@ impl OpenAiProvider {
         let is_openai_codex = is_openai_codex_provider(&config.llm_provider);
         let is_deepseek_provider = config.llm_provider.eq_ignore_ascii_case("deepseek");
         let is_google_provider = config.llm_provider.eq_ignore_ascii_case("google");
-        let enable_reasoning_content_bridge = is_deepseek_provider || is_google_provider;
+        let enable_reasoning_content_bridge =
+            is_google_provider || (config.show_thinking && is_deepseek_provider);
         let enable_thinking_param =
             (is_deepseek_provider || is_google_provider) && config.show_thinking;
         let configured_base = config.llm_base_url.as_deref().unwrap_or("");
@@ -1539,10 +1540,11 @@ impl LlmProvider for OpenAiProvider {
                 .await;
         }
 
+        let sanitized = sanitize_messages(messages);
         let oai_messages = if self.enable_reasoning_content_bridge {
-            translate_messages_to_oai_with_reasoning(system, &messages, true)
+            translate_messages_to_oai_with_reasoning(system, &sanitized, true)
         } else {
-            translate_messages_to_oai(system, &messages)
+            translate_messages_to_oai(system, &sanitized)
         };
 
         let mut body = json!({
@@ -1555,7 +1557,7 @@ impl LlmProvider for OpenAiProvider {
             self.prefer_max_completion_tokens,
         );
         let thinking_enabled =
-            self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
+            self.enable_thinking_param && !has_visible_reply_runtime_guard(&sanitized);
         maybe_enable_thinking_param(&mut body, &self.provider, thinking_enabled);
         apply_openai_compat_body_overrides(
             &mut body,
@@ -1687,10 +1689,11 @@ impl LlmProvider for OpenAiProvider {
             return Ok(response);
         }
 
+        let sanitized = sanitize_messages(messages);
         let oai_messages = if self.enable_reasoning_content_bridge {
-            translate_messages_to_oai_with_reasoning(system, &messages, true)
+            translate_messages_to_oai_with_reasoning(system, &sanitized, true)
         } else {
-            translate_messages_to_oai(system, &messages)
+            translate_messages_to_oai(system, &sanitized)
         };
 
         let mut body = json!({
@@ -1704,7 +1707,7 @@ impl LlmProvider for OpenAiProvider {
             self.prefer_max_completion_tokens,
         );
         let thinking_enabled =
-            self.enable_thinking_param && !has_visible_reply_runtime_guard(&messages);
+            self.enable_thinking_param && !has_visible_reply_runtime_guard(&sanitized);
         maybe_enable_thinking_param(&mut body, &self.provider, thinking_enabled);
         apply_openai_compat_body_overrides(
             &mut body,
@@ -1737,7 +1740,7 @@ impl LlmProvider for OpenAiProvider {
             provider = %self.provider,
             model = %model,
             url = %self.chat_url,
-            messages_count = messages.len(),
+            messages_count = sanitized.len(),
             "Sending LLM stream request"
         );
 
@@ -2026,6 +2029,32 @@ fn translate_messages_to_oai_with_reasoning(
 ) -> Vec<serde_json::Value> {
     let mut out: Vec<serde_json::Value> = Vec::new();
     let mut pending_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Track the index of the last assistant message that had tool_calls
+    // so we can strip orphaned calls when no tool results follow.
+    let mut last_tool_call_assistant_idx: Option<usize> = None;
+
+    // If `pending_tool_ids` is non-empty, the last assistant's tool_calls
+    // were never resolved by subsequent tool results. Strip the tool_calls
+    // from that assistant message to avoid API errors.
+    let strip_orphaned_tool_calls = |out: &mut Vec<serde_json::Value>,
+                                         pending: &mut std::collections::HashSet<String>,
+                                         last_idx: &mut Option<usize>| {
+        if !pending.is_empty() {
+            if let Some(idx) = last_idx.take() {
+                if let Some(entry) = out.get_mut(idx) {
+                    if let Some(obj) = entry.as_object_mut() {
+                        let text = obj
+                            .remove("reasoning_content")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_default();
+                        obj.remove("tool_calls");
+                        obj["content"] = json!(text);
+                    }
+                }
+            }
+            pending.clear();
+        }
+    };
 
     // System message
     if !system.is_empty() {
@@ -2035,7 +2064,7 @@ fn translate_messages_to_oai_with_reasoning(
     for msg in messages {
         match &msg.content {
             MessageContent::Text(text) => {
-                pending_tool_ids.clear();
+                strip_orphaned_tool_calls(&mut out, &mut pending_tool_ids, &mut last_tool_call_assistant_idx);
                 out.push(json!({"role": msg.role, "content": text}));
             }
             MessageContent::Blocks(blocks) => {
@@ -2088,6 +2117,10 @@ fn translate_messages_to_oai_with_reasoning(
                         })
                         .collect();
 
+                    // If the previous assistant's tool_calls were never resolved,
+                    // strip them before emitting a new assistant.
+                    strip_orphaned_tool_calls(&mut out, &mut pending_tool_ids, &mut last_tool_call_assistant_idx);
+
                     let mut m = json!({"role": "assistant"});
                     if include_reasoning_for_tool_calls && !tool_calls.is_empty() {
                         m["reasoning_content"] = json!(text);
@@ -2099,7 +2132,13 @@ fn translate_messages_to_oai_with_reasoning(
                         m["tool_calls"] = json!(tool_calls);
                     }
                     out.push(m);
+                    let has_any = !assistant_tool_ids.is_empty();
                     pending_tool_ids = assistant_tool_ids;
+                    last_tool_call_assistant_idx = if has_any {
+                        None
+                    } else {
+                        Some(out.len() - 1)
+                    };
                 } else {
                     // User role — tool_results, images, or text
                     let has_tool_results = blocks
@@ -2134,7 +2173,7 @@ fn translate_messages_to_oai_with_reasoning(
                             }
                         }
                         if !emitted_any_tool {
-                            pending_tool_ids.clear();
+                            strip_orphaned_tool_calls(&mut out, &mut pending_tool_ids, &mut last_tool_call_assistant_idx);
                         }
                         // Text blocks co-located with tool_results (e.g. iteration-budget
                         // warnings, mid-turn user message injections) have no place in the
@@ -2152,7 +2191,7 @@ fn translate_messages_to_oai_with_reasoning(
                             out.push(json!({"role": "user", "content": extra_text}));
                         }
                     } else {
-                        pending_tool_ids.clear();
+                        strip_orphaned_tool_calls(&mut out, &mut pending_tool_ids, &mut last_tool_call_assistant_idx);
                         // Images + text → multipart content array
                         let has_images = blocks
                             .iter()
@@ -2196,6 +2235,9 @@ fn translate_messages_to_oai_with_reasoning(
             }
         }
     }
+
+    // Final cleanup: strip unresolved tool_calls from trailing assistant
+    strip_orphaned_tool_calls(&mut out, &mut pending_tool_ids, &mut last_tool_call_assistant_idx);
 
     out
 }
