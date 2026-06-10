@@ -12,12 +12,15 @@ yanked = "deny"
 #   matrix-sdk-indexeddb; no first-party use.
 # RUSTSEC-2026-0097: `rand` unsound with a custom logger using `rand::rng()` —
 #   transitive via the Matrix/OTLP stacks; not how we use rand.
+# RUSTSEC-2026-0173: `proc-macro-error2` is unmaintained — compile-time-only
+#   proc macro pulled transitively via teloxide -> aquamarine; no runtime code.
 ignore = [
   "RUSTSEC-2026-0049",
   "RUSTSEC-2026-0098",
   "RUSTSEC-2026-0099",
   "RUSTSEC-2024-0388",
   "RUSTSEC-2026-0097",
+  "RUSTSEC-2026-0173",
 ]
 
 [bans]
