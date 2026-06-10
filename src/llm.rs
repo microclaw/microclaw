@@ -2051,7 +2051,7 @@ fn translate_messages_to_oai_with_reasoning(
                             .map(|arr| {
                                 arr.iter()
                                     .filter(|tc| {
-                                        tc["id"].as_str().map_or(true, |id| !pending.contains(id))
+                                        tc["id"].as_str().is_none_or(|id| !pending.contains(id))
                                     })
                                     .cloned()
                                     .collect()
@@ -2067,7 +2067,7 @@ fn translate_messages_to_oai_with_reasoning(
                                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                             {
                                 obj.insert("content".to_string(), json!(text));
-                            } else if obj.get("content").map_or(true, |c| c.is_null()) {
+                            } else if obj.get("content").is_none_or(|c| c.is_null()) {
                                 obj.insert("content".to_string(), json!(""));
                             }
                         } else {
