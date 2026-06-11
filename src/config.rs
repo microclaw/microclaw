@@ -177,6 +177,33 @@ fn default_working_dir() -> String {
 fn default_working_dir_isolation() -> WorkingDirIsolation {
     WorkingDirIsolation::Chat
 }
+fn default_rtk_binary_path() -> String {
+    "rtk".to_string()
+}
+
+/// Opt-in RTK (Rust Token Killer) integration for the bash tool.
+/// When enabled, commands are passed through `rtk rewrite` before execution;
+/// commands RTK recognizes run as `rtk <command>` and return compressed
+/// output, reducing token consumption. Commands without an RTK equivalent
+/// (or any rtk failure) run unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RtkConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to the rtk binary. Defaults to `rtk` resolved from PATH.
+    #[serde(default = "default_rtk_binary_path")]
+    pub binary_path: String,
+}
+
+impl Default for RtkConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            binary_path: default_rtk_binary_path(),
+        }
+    }
+}
+
 fn default_bash_dangerous_patterns() -> Vec<String> {
     vec![
         // Destructive recursive deletes against root or wildcards.
@@ -1275,6 +1302,9 @@ pub struct Config {
     /// string. Set to an empty list to disable command-content gating.
     #[serde(default = "default_bash_dangerous_patterns")]
     pub bash_dangerous_patterns: Vec<String>,
+    /// RTK (Rust Token Killer) bash-output compression. Off by default.
+    #[serde(default)]
+    pub rtk: RtkConfig,
     #[serde(default)]
     pub sandbox: SandboxConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1849,6 +1879,7 @@ impl Config {
             working_dir_isolation: WorkingDirIsolation::Chat,
             high_risk_tool_user_confirmation_required: true,
             bash_dangerous_patterns: default_bash_dangerous_patterns(),
+            rtk: RtkConfig::default(),
             sandbox: SandboxConfig::default(),
             openai_api_key: None,
             override_timezone: None,

@@ -73,6 +73,18 @@ working_dir_isolation: "chat"
 # IANA timezone for scheduling (e.g. "US/Eastern", "Europe/London")
 timezone: "UTC"
 
+# RTK (Rust Token Killer) integration — opt-in, off by default.
+# When enabled, bash tool commands are passed through `rtk rewrite` before
+# execution: commands RTK recognizes (git, cargo, npm, ls, grep, docker, ...)
+# run as `rtk <command>` and return compressed output (60-90% fewer tokens);
+# commands without an RTK equivalent run unchanged. Requires the rtk binary
+# (https://github.com/rtk-ai/rtk) on the host. If a sandboxed execution
+# environment lacks rtk, MicroClaw automatically falls back to the original
+# command.
+# rtk:
+#   enabled: true
+#   binary_path: "rtk"
+
 # OpenAI API key for voice transcription via Whisper (optional)
 # openai_api_key: ""
 

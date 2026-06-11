@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
 
-use crate::config::WorkingDirIsolation;
+use crate::config::{RtkConfig, WorkingDirIsolation};
 use microclaw_core::llm_types::ToolDefinition;
 use microclaw_core::text::floor_char_boundary;
 use microclaw_tools::sandbox::{SandboxExecOptions, SandboxMode, SandboxRouter};
@@ -19,6 +19,8 @@ pub struct BashTool {
     /// Compiled command-content patterns that always force operator approval,
     /// independent of `tool_risk` chat-level gating. Empty = no inspection.
     dangerous_patterns: Vec<(String, regex::Regex)>,
+    /// `Some` only when RTK rewriting is enabled in config.
+    rtk: Option<RtkConfig>,
 }
 
 impl BashTool {
@@ -36,6 +38,7 @@ impl BashTool {
             default_timeout_secs: 120,
             sandbox_router: None,
             dangerous_patterns: Vec::new(),
+            rtk: None,
         }
     }
 
@@ -46,6 +49,13 @@ impl BashTool {
 
     pub fn with_sandbox_router(mut self, router: Arc<SandboxRouter>) -> Self {
         self.sandbox_router = Some(router);
+        self
+    }
+
+    pub fn with_rtk(mut self, rtk: &RtkConfig) -> Self {
+        if rtk.enabled {
+            self.rtk = Some(rtk.clone());
+        }
         self
     }
 
@@ -164,6 +174,52 @@ fn command_accesses_dotenv(command: &str) -> bool {
     patterns.iter().any(|p| lower.contains(p))
 }
 
+/// Ceiling on the rewrite subprocess; rtk classifies in <10ms, so hitting
+/// this means a hung binary, not a slow rewrite.
+const RTK_REWRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Ask the rtk binary for a token-efficient rewrite of `command`.
+///
+/// `rtk rewrite` exit-code protocol (rtk's hooks/claude/rtk-rewrite.sh is the
+/// reference consumer): 0 = rewritten (stdout), 1 = no RTK equivalent,
+/// 2 = deny rule, 3 = ask rule. Only exit 0 is accepted here — deny/ask
+/// express RTK-side permission rules that MicroClaw's own approval gates
+/// (`dangerous_patterns`, `tool_risk`) are responsible for, so those run the
+/// original command. Missing binary, timeout, or any other failure also fall
+/// back to the original command: RTK must never break the bash tool.
+async fn rtk_rewrite(binary_path: &str, command: &str) -> Option<String> {
+    let output = tokio::time::timeout(
+        RTK_REWRITE_TIMEOUT,
+        tokio::process::Command::new(binary_path)
+            .arg("rewrite")
+            .arg(command)
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await;
+    let output = match output {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            tracing::warn!(
+                "rtk rewrite unavailable ({binary_path}): {e}; running original command"
+            );
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!("rtk rewrite timed out; running original command");
+            return None;
+        }
+    };
+    if output.status.code() != Some(0) {
+        return None;
+    }
+    let rewritten = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if rewritten.is_empty() || rewritten == command {
+        return None;
+    }
+    Some(rewritten)
+}
+
 fn command_not_found_hint(router: Option<&Arc<SandboxRouter>>) -> &'static str {
     match router {
         Some(router) if router.mode() == SandboxMode::All => {
@@ -261,7 +317,23 @@ impl Tool for BashTool {
             .with_error_type("env_access_blocked");
         }
 
-        info!("Executing bash in {}: {}", working_dir.display(), command);
+        // RTK rewrite runs after every gate above so the gates always judge
+        // the operator-visible command, never the rtk-prefixed variant.
+        let mut exec_command = command.to_string();
+        let mut rtk_rewritten = false;
+        if let Some(rtk) = &self.rtk {
+            if let Some(rewritten) = rtk_rewrite(&rtk.binary_path, command).await {
+                info!("rtk rewrite: {command} -> {rewritten}");
+                exec_command = rewritten;
+                rtk_rewritten = true;
+            }
+        }
+
+        info!(
+            "Executing bash in {}: {}",
+            working_dir.display(),
+            exec_command
+        );
 
         let session_key = super::auth_context_from_input(&input)
             .map(|auth| format!("{}-{}", auth.caller_channel, auth.caller_chat_id))
@@ -273,11 +345,24 @@ impl Tool for BashTool {
             envs: std::collections::HashMap::new(),
             env_files,
         };
-        let result = if let Some(router) = &self.sandbox_router {
-            router.exec(&session_key, command, &exec_opts).await
+        let mut result = if let Some(router) = &self.sandbox_router {
+            router.exec(&session_key, &exec_command, &exec_opts).await
         } else {
-            microclaw_tools::sandbox::exec_host_command(command, &exec_opts).await
+            microclaw_tools::sandbox::exec_host_command(&exec_command, &exec_opts).await
         };
+
+        // The rewrite decision is made on the host, but execution may land in
+        // a sandbox image that lacks the rtk binary (exit 127). Retry the
+        // original command so enabling RTK never makes a command fail that
+        // would have succeeded without it.
+        if rtk_rewritten && matches!(&result, Ok(output) if output.exit_code == 127) {
+            info!("rtk not available in execution environment; retrying original command");
+            result = if let Some(router) = &self.sandbox_router {
+                router.exec(&session_key, command, &exec_opts).await
+            } else {
+                microclaw_tools::sandbox::exec_host_command(command, &exec_opts).await
+            };
+        }
 
         match result {
             Ok(output) => {
@@ -643,6 +728,109 @@ mod tests {
         let output = "some output text";
         let redacted = redact_env_secrets(output, &[]);
         assert_eq!(redacted, output);
+    }
+
+    /// Writes a fake `rtk` binary that speaks the `rtk rewrite` exit-code
+    /// protocol: exit 0 + rewritten command for `echo original`, exit 3 (ask)
+    /// for `echo askme`, exit 0 + nonexistent binary for `echo fallback`,
+    /// exit 1 (no equivalent) for everything else.
+    #[cfg(unix)]
+    fn write_fake_rtk(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("rtk");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+[ "$1" = "rewrite" ] || exit 1
+case "$2" in
+  "echo original") echo "echo rewritten-by-rtk"; exit 0 ;;
+  "echo askme") echo "echo SHOULD-NOT-RUN"; exit 3 ;;
+  "echo fallback") echo "microclaw_test_no_such_binary_xyz"; exit 0 ;;
+  *) exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    fn rtk_test_tool() -> (BashTool, PathBuf) {
+        let root = std::env::temp_dir().join(format!("microclaw_rtk_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_rtk = write_fake_rtk(&root);
+        let tool = BashTool::new(".").with_rtk(&RtkConfig {
+            enabled: true,
+            binary_path: fake_rtk.to_string_lossy().into_owned(),
+        });
+        (tool, root)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_rtk_rewrite_applied_when_enabled() {
+        let (tool, root) = rtk_test_tool();
+        let result = tool.execute(json!({"command": "echo original"})).await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("rewritten-by-rtk"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_rtk_no_equivalent_runs_original() {
+        let (tool, root) = rtk_test_tool();
+        let result = tool.execute(json!({"command": "echo untouched"})).await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("untouched"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_rtk_ask_rule_runs_original() {
+        let (tool, root) = rtk_test_tool();
+        let result = tool.execute(json!({"command": "echo askme"})).await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("askme"));
+        assert!(!result.content.contains("SHOULD-NOT-RUN"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_rtk_falls_back_to_original_on_exit_127() {
+        let (tool, root) = rtk_test_tool();
+        let result = tool.execute(json!({"command": "echo fallback"})).await;
+        assert!(
+            !result.is_error,
+            "expected fallback retry, got: {}",
+            result.content
+        );
+        assert!(result.content.contains("fallback"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_rtk_missing_binary_runs_original() {
+        let tool = BashTool::new(".").with_rtk(&RtkConfig {
+            enabled: true,
+            binary_path: "/nonexistent/path/to/rtk".to_string(),
+        });
+        let result = tool.execute(json!({"command": "echo hello"})).await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_rtk_disabled_config_is_ignored() {
+        let tool = BashTool::new(".").with_rtk(&RtkConfig {
+            enabled: false,
+            binary_path: "/nonexistent/path/to/rtk".to_string(),
+        });
+        assert!(tool.rtk.is_none());
     }
 
     #[test]
