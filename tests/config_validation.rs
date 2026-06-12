@@ -30,6 +30,7 @@ fn minimal_config() -> Config {
         working_dir_isolation: WorkingDirIsolation::Chat,
         high_risk_tool_user_confirmation_required: true,
         bash_dangerous_patterns: vec![],
+        rtk: microclaw::config::RtkConfig::default(),
         sandbox: microclaw::config::SandboxConfig::default(),
         openai_api_key: None,
         override_timezone: None,
