@@ -869,6 +869,30 @@ fn assert_systemd_user_available() -> Result<()> {
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn warn_if_linger_disabled() {
+    // Without lingering, systemd stops user services once the last login
+    // session ends, so the gateway dies after SSH logout on headless servers.
+    let Ok(user) = std::env::var("USER") else {
+        return;
+    };
+    let Ok(output) = run_command("loginctl", &["show-user", &user, "--property=Linger"]) else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.lines().any(|line| line.trim() == "Linger=no") {
+        println!(
+            "Warning: lingering is disabled for user '{}', so the gateway service will stop after your last login session ends.",
+            user
+        );
+        println!("  To keep it running 24/7, enable lingering:");
+        println!("    sudo loginctl enable-linger {}", user);
+    }
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn linux_unit_path() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home)
@@ -982,6 +1006,7 @@ fn install_linux(ctx: &ServiceContext, opts: &InstallOptions) -> Result<()> {
         "Installed and started gateway service: {}",
         unit_path.display()
     );
+    warn_if_linger_disabled();
     Ok(())
 }
 
