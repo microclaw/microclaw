@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use serde::Deserialize;
 use teloxide::prelude::*;
-use teloxide::types::{ChatAction, InputFile, MessageId, ParseMode, ReplyParameters, ThreadId};
+use teloxide::types::{
+    BotCommand, ChatAction, InputFile, MessageId, ParseMode, ReplyParameters, ThreadId,
+};
 use tracing::{debug, error, info, warn};
 
 use crate::agent_engine::{
@@ -445,6 +447,34 @@ async fn maybe_plugin_slash_response(
     maybe_handle_plugin_command(config, text, chat_id, channel_name).await
 }
 
+/// Curated list of slash commands surfaced in the Telegram command menu (the
+/// "/" button next to the message input). Telegram requires command names to be
+/// 1-32 chars of lowercase letters, digits and underscores, and descriptions to
+/// be 3-256 chars, so this is a hand-picked subset of the full `/help` list
+/// (commands with hyphens or argument-only forms like `/reset memory` are
+/// omitted). Kept in sync with `chat_commands::build_help_response`.
+fn microclaw_command_menu() -> Vec<BotCommand> {
+    [
+        ("status", "Session info: provider, model, message & task counts"),
+        ("clear", "Clear this chat's session and history"),
+        ("reset", "Reset this chat's session and history"),
+        ("stop", "Abort the run currently in progress"),
+        ("archive", "Archive the current session to disk"),
+        ("model", "Show or set the model for this chat"),
+        ("models", "List available models"),
+        ("provider", "Show or set the provider for this chat"),
+        ("providers", "List configured providers"),
+        ("skills", "List available skills"),
+        ("user", "View or clear your USER.md profile"),
+        ("usage", "Token usage report for this chat"),
+        ("rewind", "List or restore conversation checkpoints"),
+        ("help", "Show the list of available commands"),
+    ]
+    .into_iter()
+    .map(|(command, description)| BotCommand::new(command, description))
+    .collect()
+}
+
 pub async fn start_telegram_bot(
     state: Arc<AppState>,
     bot: Bot,
@@ -470,6 +500,15 @@ pub async fn start_telegram_bot(
                 ctx.bot_username = actual;
             }
         }
+    }
+
+    // Register the bot command menu so common slash commands surface in the
+    // Telegram UI (the "/" menu button next to the input field).
+    if let Err(err) = bot.set_my_commands(microclaw_command_menu()).await {
+        warn!(
+            "Telegram channel '{}' failed to set command menu: {:?}",
+            ctx.channel_name, err
+        );
     }
 
     mark_channel_started(&ctx.channel_name);
@@ -2647,5 +2686,50 @@ commands:
         let out = maybe_plugin_slash_response(&cfg, "/tgplug", 1, "telegram").await;
         assert_eq!(out.as_deref(), Some("telegram-ok"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_command_menu_satisfies_telegram_constraints() {
+        let menu = microclaw_command_menu();
+        assert!(!menu.is_empty());
+        assert!(menu.len() <= 100, "Telegram allows at most 100 commands");
+
+        for cmd in &menu {
+            // Command names: 1-32 chars, lowercase letters/digits/underscores only.
+            let len = cmd.command.chars().count();
+            assert!(
+                (1..=32).contains(&len),
+                "command '{}' must be 1-32 chars",
+                cmd.command
+            );
+            assert!(
+                cmd.command
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "command '{}' has invalid characters",
+                cmd.command
+            );
+            // Descriptions: 3-256 chars.
+            let desc_len = cmd.description.chars().count();
+            assert!(
+                (3..=256).contains(&desc_len),
+                "description for '{}' must be 3-256 chars",
+                cmd.command
+            );
+        }
+    }
+
+    #[test]
+    fn test_command_menu_commands_are_documented() {
+        // Every menu entry should be a real slash command documented in /help,
+        // so the menu never advertises a command the handler won't recognize.
+        let help = crate::chat_commands::build_help_response();
+        for cmd in microclaw_command_menu() {
+            let slash = format!("/{}", cmd.command);
+            assert!(
+                help.contains(&slash),
+                "menu command '{slash}' is not documented in build_help_response"
+            );
+        }
     }
 }
