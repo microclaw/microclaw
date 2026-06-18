@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_CN.md)
 
-[![Website](https://img.shields.io/badge/Website-microclaw.ai-blue)](https://microclaw.ai)
+[![Website](https://img.shields.io/badge/Website-microclaw.org-blue)](https://microclaw.org)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/pvmezwkAk5)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2Fmicroclaw-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/microclaw/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -59,7 +59,7 @@ MicroClaw 是一个面向聊天渠道的智能体运行时。它提供统一的�
 安装：
 
 ```sh
-curl -fsSL https://microclaw.ai/install.sh | bash
+curl -fsSL https://microclaw.org/install.sh | bash
 ```
 
 运行诊断：
@@ -93,13 +93,13 @@ http://127.0.0.1:10961
 ### 一键安装（推荐）
 
 ```sh
-curl -fsSL https://microclaw.ai/install.sh | bash
+curl -fsSL https://microclaw.org/install.sh | bash
 ```
 
 ### Windows PowerShell 安装
 
 ```powershell
-iwr https://microclaw.ai/install.ps1 -UseBasicParsing | iex
+iwr https://microclaw.org/install.ps1 -UseBasicParsing | iex
 ```
 
 安装脚本仅执行一种方式：
@@ -166,13 +166,13 @@ microclaw doctor sandbox
 macOS/Linux：
 
 ```sh
-curl -fsSL https://microclaw.ai/uninstall.sh | bash
+curl -fsSL https://microclaw.org/uninstall.sh | bash
 ```
 
 Windows PowerShell：
 
 ```powershell
-iwr https://microclaw.ai/uninstall.ps1 -UseBasicParsing | iex
+iwr https://microclaw.org/uninstall.ps1 -UseBasicParsing | iex
 ```
 
 ### Homebrew (macOS)
@@ -281,7 +281,7 @@ sqlite3 <data_dir>/runtime/microclaw.db "SELECT id, chat_id, chat_channel, exter
 
 ## 博客文章
 
-关于项目架构与设计取舍的介绍文章：**[Building MicroClaw: An Agentic AI Assistant in Rust That Lives in Your Chats](https://microclaw.ai/blog/building-microclaw)**
+关于项目架构与设计取舍的介绍文章：**[Building MicroClaw: An Agentic AI Assistant in Rust That Lives in Your Chats](https://microclaw.org/blog/building-microclaw)**
 
 ## 功能特性
 

@@ -16,14 +16,12 @@ If a vulnerability requires coordinated disclosure, maintainers may patch `main`
 
 Do not open a public GitHub issue for suspected security vulnerabilities.
 
-Report privately by email to `security@microclaw.ai` with:
+Report privately by email to `xnuapp@gmail.com`, or open a GitHub Security Advisory draft, with:
 
 - affected version or commit SHA
 - impact summary
 - reproduction steps or proof of concept
 - any known mitigations
-
-If email is unavailable, open a GitHub Security Advisory draft instead.
 
 ## Response Targets
 
