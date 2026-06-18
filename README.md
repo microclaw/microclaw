@@ -3,7 +3,7 @@
 
 [English](README.md) | [中文](README_CN.md)
 
-[![Website](https://img.shields.io/badge/Website-microclaw.ai-blue)](https://microclaw.ai)
+[![Website](https://img.shields.io/badge/Website-microclaw.org-blue)](https://microclaw.org)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/pvmezwkAk5)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2Fmicroclaw-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/microclaw/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -60,7 +60,7 @@ It works with Anthropic and OpenAI-compatible providers, supports multi-step too
 Install:
 
 ```sh
-curl -fsSL https://microclaw.ai/install.sh | bash
+curl -fsSL https://microclaw.org/install.sh | bash
 ```
 
 Run diagnostics:
@@ -94,25 +94,25 @@ If you want a source build instead, jump to [Install](#install). If you want ope
 ### One-line installer (recommended)
 
 ```sh
-curl -fsSL https://microclaw.ai/install.sh | bash
+curl -fsSL https://microclaw.org/install.sh | bash
 ```
 
 For the full variant (includes Matrix channel support):
 
 ```sh
-curl -fsSL https://microclaw.ai/install.sh | bash -s -- --full
+curl -fsSL https://microclaw.org/install.sh | bash -s -- --full
 ```
 
 ### Windows PowerShell installer
 
 ```powershell
-iwr https://microclaw.ai/install.ps1 -UseBasicParsing | iex
+iwr https://microclaw.org/install.ps1 -UseBasicParsing | iex
 ```
 
 For the full variant (adds Matrix channel) on Windows:
 
 ```powershell
-& ([scriptblock]::Create((iwr https://microclaw.ai/install.ps1 -UseBasicParsing).Content)) -Full
+& ([scriptblock]::Create((iwr https://microclaw.org/install.ps1 -UseBasicParsing).Content)) -Full
 ```
 
 This installer only does one thing:
@@ -179,13 +179,13 @@ microclaw doctor sandbox
 macOS/Linux:
 
 ```sh
-curl -fsSL https://microclaw.ai/uninstall.sh | bash
+curl -fsSL https://microclaw.org/uninstall.sh | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-iwr https://microclaw.ai/uninstall.ps1 -UseBasicParsing | iex
+iwr https://microclaw.org/uninstall.ps1 -UseBasicParsing | iex
 ```
 
 ### Homebrew (macOS)
@@ -303,7 +303,7 @@ This keeps behavior consistent across channels and lets one runtime power intera
 
 ## Blog post
 
-For a deeper dive into the architecture and design decisions, read: **[Building MicroClaw: An Agentic AI Assistant in Rust That Lives in Your Chats](https://microclaw.ai/blog/building-microclaw)**
+For a deeper dive into the architecture and design decisions, read: **[Building MicroClaw: An Agentic AI Assistant in Rust That Lives in Your Chats](https://microclaw.org/blog/building-microclaw)**
 
 ## Features
 

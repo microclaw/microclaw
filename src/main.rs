@@ -15,7 +15,7 @@ const LONG_ABOUT: &str = concat!(
     "\x1b[1mMicroClaw v",
     env!("CARGO_PKG_VERSION"),
     "\x1b[22m\n",
-    "\x1b[1mWebsite:\x1b[22m https://microclaw.ai\n",
+    "\x1b[1mWebsite:\x1b[22m https://microclaw.org\n",
     "\x1b[1mGitHub:\x1b[22m https://github.com/microclaw/microclaw\n",
     "\x1b[1mDiscord:\x1b[22m https://discord.gg/pvmezwkAk5\n",
     "\n",
@@ -254,7 +254,7 @@ fn handle_upgrade_cli() -> anyhow::Result<()> {
 
     if !status.success() {
         anyhow::bail!(
-            "upgrade failed (exit code {:?}). You can retry with install script:\n  macOS/Linux: curl -fsSL https://microclaw.ai/install.sh | bash\n  Windows: iwr https://microclaw.ai/install.ps1 -UseBasicParsing | iex",
+            "upgrade failed (exit code {:?}). You can retry with install script:\n  macOS/Linux: curl -fsSL https://microclaw.org/install.sh | bash\n  Windows: iwr https://microclaw.org/install.ps1 -UseBasicParsing | iex",
             status.code()
         );
     }

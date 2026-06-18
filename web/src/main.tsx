@@ -211,7 +211,7 @@ type ProviderProfileDraft = {
   show_thinking: boolean
 }
 
-const DOCS_BASE = 'https://microclaw.ai/docs'
+const DOCS_BASE = 'https://microclaw.org/docs'
 
 function warningDocUrl(code?: string): string {
   switch (code) {
