@@ -6,6 +6,21 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Added
+
+- **Pluggable web-search backends.** `web_search` (and the new `deep_research` tool) can now run
+  against DuckDuckGo (default, no key), a self-hosted **SearXNG** instance, **Brave Search**, or
+  **Tavily** — selected via the new `web_search` config block (`backend`, `searxng_base_url`,
+  `brave_api_key`, `tavily_api_key`, `max_results`). Defaults preserve the historical DuckDuckGo
+  behavior exactly, and a backend selected without its credentials/endpoint transparently
+  degrades to DuckDuckGo instead of failing.
+- **`deep_research` tool** — a deterministic multi-source research pass: fans out several
+  sub-queries across the configured search backend, deduplicates sources, concurrently fetches the
+  top pages through the existing SSRF-guarded `web_fetch` path, and returns a citation-numbered
+  evidence digest with source-agreement signals (corroboration across sub-queries, coverage gaps).
+  Semantic cross-verification and synthesis are left to the agent reading the digest, so the tool
+  runs no LLM and is fully deterministic. Available to the main agent and to research sub-agents.
+
 ### Changed
 
 - Clearer channel auth-failure logs — when a channel can't start because its credentials are

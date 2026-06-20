@@ -3,9 +3,11 @@ use serde_json::json;
 
 use super::{schema_object, Tool, ToolResult};
 use microclaw_core::llm_types::ToolDefinition;
+use microclaw_tools::web_search::SearchProviderConfig;
 
 pub struct WebSearchTool {
     default_timeout_secs: u64,
+    provider: SearchProviderConfig,
 }
 
 const MIN_TIMEOUT_SECS: u64 = 1;
@@ -15,7 +17,13 @@ impl WebSearchTool {
     pub fn new(default_timeout_secs: u64) -> Self {
         Self {
             default_timeout_secs,
+            provider: SearchProviderConfig::default(),
         }
+    }
+
+    pub fn with_provider(mut self, provider: SearchProviderConfig) -> Self {
+        self.provider = provider;
+        self
     }
 }
 
@@ -28,8 +36,10 @@ impl Tool for WebSearchTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "web_search".into(),
-            description: "Search the web using DuckDuckGo. Returns titles, URLs, and snippets."
-                .into(),
+            description:
+                "Search the web (DuckDuckGo by default; SearXNG/Brave/Tavily when configured). \
+                 Returns titles, URLs, and snippets."
+                    .into(),
             input_schema: schema_object(
                 json!({
                     "query": {
@@ -53,12 +63,18 @@ impl Tool for WebSearchTool {
         };
         let timeout_secs = resolve_timeout_secs(&input, self.default_timeout_secs);
 
-        match microclaw_tools::web_search::search_ddg_with_timeout(&query, timeout_secs).await {
-            Ok(results) => {
-                if results.is_empty() {
+        match microclaw_tools::web_search::search_with_provider(
+            &query,
+            &self.provider,
+            timeout_secs,
+        )
+        .await
+        {
+            Ok(hits) => {
+                if hits.is_empty() {
                     ToolResult::success("No results found.".into())
                 } else {
-                    ToolResult::success(results)
+                    ToolResult::success(microclaw_tools::web_search::format_search_hits(&hits))
                 }
             }
             Err(e) => ToolResult::error(format!("Search failed: {e}")),

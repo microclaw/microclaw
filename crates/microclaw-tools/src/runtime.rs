@@ -131,7 +131,8 @@ pub enum ToolConcurrencyClass {
 pub fn tool_concurrency_class(name: &str) -> ToolConcurrencyClass {
     match name {
         // Read-only tools: safe to parallelize
-        "read_file" | "glob" | "grep" | "web_fetch" | "web_search" | "get_current_time"
+        "read_file" | "glob" | "grep" | "web_fetch" | "web_search" | "deep_research"
+        | "get_current_time"
         | "compare_time" | "calculate" | "read_memory" | "structured_memory_search"
         | "todo_read" | "export_chat" | "a2a_list_peers" | "list_scheduled_tasks"
         | "get_scheduled_task_history" | "list_scheduled_task_dlq" | "subagents_list"
