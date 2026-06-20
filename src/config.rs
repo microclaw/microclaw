@@ -421,6 +421,10 @@ pub struct MediaConfig {
     pub tts: TtsConfig,
     #[serde(default)]
     pub stt: SttConfig,
+    #[serde(default)]
+    pub book: BookConfig,
+    #[serde(default)]
+    pub podcast: PodcastConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -506,6 +510,68 @@ impl Default for SttConfig {
     }
 }
 
+/// Configuration for the native `render_pdf` ("generate a book") tool.
+///
+/// Disabled by default — operators opt in via `media.book.enabled`. PDF
+/// rendering is fully self-contained (pure-Rust `genpdf`), so no external
+/// binaries are required.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BookConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Page size for rendered documents. Currently "A4" or "Letter".
+    #[serde(default = "default_book_page_size")]
+    pub page_size: String,
+    /// Path to a single-face TrueType (`.ttf`) font used to render text.
+    /// When unset, a usable system font is auto-detected (e.g. Arial Unicode
+    /// on macOS, DejaVu/Liberation on Linux). For CJK output, point this at a
+    /// CJK-capable TrueType font.
+    #[serde(default)]
+    pub font_path: Option<String>,
+}
+
+impl Default for BookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            page_size: default_book_page_size(),
+            font_path: None,
+        }
+    }
+}
+
+/// Configuration for the native `generate_podcast` tool.
+///
+/// Disabled by default — operators opt in via `media.podcast.enabled`.
+/// Per-segment speech reuses the OpenAI-compatible `/audio/speech` endpoint
+/// (sharing `media.tts` model/credentials); the segments are stitched into a
+/// single file by shelling out to `ffmpeg`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PodcastConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to (or name of) the `ffmpeg` binary used to concatenate segments.
+    #[serde(default = "default_ffmpeg_path")]
+    pub ffmpeg_path: String,
+    /// Default voice when a segment does not specify one.
+    #[serde(default = "default_tts_voice")]
+    pub default_voice: String,
+    /// Silence inserted between segments, in milliseconds.
+    #[serde(default = "default_segment_pause_ms")]
+    pub segment_pause_ms: u32,
+}
+
+impl Default for PodcastConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ffmpeg_path: default_ffmpeg_path(),
+            default_voice: default_tts_voice(),
+            segment_pause_ms: default_segment_pause_ms(),
+        }
+    }
+}
+
 fn default_image_model() -> String {
     "gpt-image-1".into()
 }
@@ -529,6 +595,15 @@ fn default_tts_format() -> String {
 }
 fn default_stt_model() -> String {
     "whisper-1".into()
+}
+fn default_book_page_size() -> String {
+    "A4".into()
+}
+fn default_ffmpeg_path() -> String {
+    "ffmpeg".into()
+}
+fn default_segment_pause_ms() -> u32 {
+    500
 }
 
 impl MediaConfig {

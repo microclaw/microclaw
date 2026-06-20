@@ -10,6 +10,7 @@ pub mod export_chat;
 pub mod fetch_artifact;
 pub mod fuzzy_match;
 pub mod generate_image;
+pub mod generate_podcast;
 pub mod glob;
 pub mod grep;
 pub mod insights;
@@ -18,6 +19,7 @@ pub mod mcp;
 pub mod memory;
 pub mod osv_check;
 pub mod read_file;
+pub mod render_pdf;
 pub mod report_progress;
 pub mod schedule;
 pub mod send_message;
@@ -327,6 +329,16 @@ impl ToolRegistry {
             )),
             Box::new(describe_image::DescribeImageTool::new(config)),
             Box::new(text_to_speech::TextToSpeechTool::new(
+                config,
+                channel_registry.clone(),
+                db.clone(),
+            )),
+            Box::new(generate_podcast::GeneratePodcastTool::new(
+                config,
+                channel_registry.clone(),
+                db.clone(),
+            )),
+            Box::new(render_pdf::RenderPdfTool::new(
                 config,
                 channel_registry.clone(),
                 db.clone(),

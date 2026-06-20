@@ -323,3 +323,27 @@ web_session_idle_ttl_seconds: 300
 #   enabled: false
 #   min_interval_secs: 900         # at most one unprompted interjection per chat per this window
 #   lookback_mins: 10              # only consider chats with user messages this recent
+
+# Multimedia tools. All OFF by default; each needs OpenAI-compatible credentials
+# (media.api_key, MICROCLAW_OPENAI_API_KEY, OPENAI_API_KEY, or top-level
+# openai_api_key). Enable only the ones you want the bot to use.
+# media:
+#   image_gen:
+#     enabled: false               # generate_image tool
+#   tts:
+#     enabled: false               # text_to_speech tool (also required by podcast)
+#     default_voice: alloy
+#   # Generate a book → PDF (render_pdf tool). Pure-Rust, self-contained, no
+#   # external binaries. For CJK (Chinese/Japanese/Korean) output, point
+#   # font_path at a single-face TrueType (.ttf) CJK font.
+#   book:
+#     enabled: false
+#     page_size: A4                # A4 or Letter
+#     # font_path: /System/Library/Fonts/Supplemental/Arial Unicode.ttf
+#   # Generate a podcast episode (generate_podcast tool). Needs media.tts enabled
+#   # and an ffmpeg binary on PATH (or set ffmpeg_path).
+#   podcast:
+#     enabled: false
+#     ffmpeg_path: ffmpeg
+#     default_voice: alloy
+#     segment_pause_ms: 500        # silence inserted between segments
