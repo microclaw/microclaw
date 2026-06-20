@@ -24,14 +24,21 @@ use crate::config::{BookConfig, Config};
 /// cannot read `.ttc` collections or CFF/OpenType outlines.
 ///
 /// Compact Latin-only fonts (used when the document contains no CJK, keeping
-/// the embedded-font payload — and thus the PDF — small).
+/// the embedded-font payload — and thus the PDF — small). The default is
+/// English, so these are tried first.
 const LATIN_FONT_CANDIDATES: &[&str] = &[
+    // macOS — small single-face TrueType faces (~0.2–0.8 MB).
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Georgia.ttf",
+    "/System/Library/Fonts/Supplemental/Verdana.ttf",
+    "/Library/Fonts/Arial.ttf",
+    // Debian/Ubuntu.
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    // Fedora/RHEL.
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
     "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
-    "/Library/Fonts/Arial.ttf",
 ];
 
 /// Large CJK-capable fonts (used when the document contains CJK characters).
@@ -735,6 +742,36 @@ mod tests {
         assert!(bytes.starts_with(b"%PDF"), "output is not a PDF");
         assert!(bytes.len() > 1500, "PDF suspiciously small: {}", bytes.len());
         eprintln!("rendered {} bytes -> {}", bytes.len(), out.display());
+    }
+
+    // English-only content should pick a compact Latin font (small PDF), not
+    // fall back to a large CJK font. #[ignore] — needs a system font.
+    // Run with: cargo test --lib render_smoke_english -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn render_smoke_english() {
+        let cfg = BookConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let dir = std::env::temp_dir().join("microclaw_render_smoke_en");
+        let _ = std::fs::create_dir_all(&dir);
+        let sections = vec![Section {
+            heading: "Introduction".into(),
+            level: 1,
+            body: "A short English-only document. It should render with a compact \
+                   Latin font so the resulting PDF stays small.\n\n- one\n- two"
+                .into(),
+        }];
+        let out = render_document(
+            &cfg, &dir, "English Report", None, None, true, true, &sections,
+        )
+        .expect("render should succeed");
+        let len = std::fs::read(&out).unwrap().len();
+        eprintln!("english PDF: {} bytes -> {}", len, out.display());
+        // Compact Latin faces are well under 5 MB embedded; a CJK fallback
+        // would be ~20 MB+.
+        assert!(len < 5_000_000, "English PDF unexpectedly large: {len} bytes");
     }
 
     #[test]
