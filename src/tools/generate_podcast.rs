@@ -485,9 +485,11 @@ mod tests {
 
     #[test]
     fn defaults_voice_and_pause() {
-        let mut cfg = PodcastConfig::default();
-        cfg.default_voice = "nova".into();
-        cfg.segment_pause_ms = 750;
+        let cfg = PodcastConfig {
+            default_voice: "nova".into(),
+            segment_pause_ms: 750,
+            ..Default::default()
+        };
         let input = json!({"segments": [{"text": "hello"}]});
         let segs = parse_segments(&input, &cfg).unwrap();
         assert_eq!(segs.len(), 1);
