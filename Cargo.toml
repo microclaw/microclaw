@@ -94,7 +94,10 @@ qrcode = "0.14"
 yaml-edit = "0.2.0"
 genpdf = "0.2"
 pulldown-cmark = { version = "0.12", default-features = false }
-printpdf = "0.3"
+# default-features off: we only use printpdf::BuiltinFont (genpdf's backend),
+# not its `embedded_images` stack, which would pull unmaintained image decoders
+# (gif/jpeg-decoder/png/tiff/adler) into the binary.
+printpdf = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 tower = "0.5"
