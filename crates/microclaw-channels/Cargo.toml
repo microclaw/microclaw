@@ -7,6 +7,8 @@ license = "MIT"
 [dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
 microclaw-storage = { version = "0.1.0", path = "../microclaw-storage" }
 serde_json = "1"
+tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }

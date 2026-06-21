@@ -8,6 +8,15 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Output guardrail (credential leak protection).** A new `output_guardrail` config block
+  (`mode: off | redact | block`, default **off**) scans outbound bot messages for credential-like
+  strings (OpenAI/Anthropic keys, GitHub PATs, AWS keys, Slack/Google tokens, Bearer tokens, PEM
+  private-key blocks, `api_key=` assignments) before they are delivered. `redact` masks the secret
+  and still delivers; `block` withholds the message. Applied both to each channel's main reply and
+  to the shared tool/scheduler delivery path, so a secret echoed from tool output, memory, or the
+  model can't leak to a chat. Detection reuses `microclaw-core`'s `redact` module, split so the
+  outbound path strips **credentials only** (emails/phone numbers the bot legitimately sends are
+  left intact). Every trip is logged to the `output_guardrail` trace target.
 - **Pluggable web-search backends.** `web_search` (and the new `deep_research` tool) can now run
   against DuckDuckGo (default, no key), a self-hosted **SearXNG** instance, **Brave Search**, or
   **Tavily** — selected via the new `web_search` config block (`backend`, `searxng_base_url`,

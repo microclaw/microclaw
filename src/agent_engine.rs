@@ -211,7 +211,26 @@ pub async fn process_with_agent_with_events_guarded(
     };
     run_control::unregister_run(context.caller_channel, context.chat_id, run_id).await;
 
-    result
+    // Outbound guardrail on the final reply (covers every channel's main reply,
+    // which is delivered by the adapter rather than via the shared funnel).
+    result.map(|text| {
+        match microclaw_core::redact::apply_output_guardrail(
+            &text,
+            state.config.output_guardrail.mode,
+        ) {
+            Some(outcome) => {
+                tracing::warn!(
+                    target: "output_guardrail",
+                    chat_id = %context.chat_id,
+                    blocked = outcome.blocked,
+                    categories = ?outcome.categories,
+                    "final reply tripped the output guardrail"
+                );
+                outcome.text
+            }
+            None => text,
+        }
+    })
 }
 
 /// Check if pending messages were queued during the last turn and spawn a

@@ -87,6 +87,14 @@ timezone: "UTC"
 #   tavily_api_key: ""
 #   max_results: 8
 
+# Outbound guardrail — scans delivered bot messages for credential-like strings
+# (API keys, tokens, PEM private keys, Bearer/`api_key=` patterns) before they
+# leave the bot. Off by default. `redact` masks the secret and still delivers;
+# `block` withholds the whole message. Emails/phone numbers are NOT touched.
+#   mode: off | redact | block
+# output_guardrail:
+#   mode: redact
+
 # RTK (Rust Token Killer) integration — opt-in, off by default.
 # When enabled, bash tool commands are passed through `rtk rewrite` before
 # execution: commands RTK recognizes (git, cargo, npm, ls, grep, docker, ...)

@@ -176,6 +176,7 @@ pub async fn run(
 
     // Build channel registry from config
     let mut registry = ChannelRegistry::new();
+    registry.set_output_guardrail(config.output_guardrail.mode);
     let mut telegram_runtimes: Vec<(teloxide::Bot, TelegramRuntimeContext)> = Vec::new();
     let mut llm_model_overrides: HashMap<String, String> = HashMap::new();
     let discord_runtimes: Vec<(String, DiscordRuntimeContext)> = prepare_channel_runtimes(

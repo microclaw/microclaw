@@ -14,6 +14,7 @@ use microclaw_core::error::MicroClawError;
 pub use microclaw_tools::sandbox::{SandboxBackend, SandboxConfig, SandboxMode, SecurityProfile};
 pub use microclaw_tools::types::WorkingDirIsolation;
 use microclaw_tools::web_content_validation::WebContentValidationConfig;
+use microclaw_core::redact::OutputGuardrailConfig;
 use microclaw_tools::web_fetch::WebFetchUrlValidationConfig;
 use microclaw_tools::web_search::SearchProviderConfig;
 
@@ -1348,6 +1349,10 @@ pub struct Config {
     /// Defaults to DuckDuckGo, preserving historical behavior.
     #[serde(default)]
     pub web_search: SearchProviderConfig,
+    /// Outbound message guardrail (off | redact | block). Off by default;
+    /// scans delivered bot messages for credential-like strings.
+    #[serde(default)]
+    pub output_guardrail: OutputGuardrailConfig,
 
     // --- Embedding ---
     #[serde(default)]
@@ -1920,6 +1925,7 @@ impl Config {
             web_fetch_validation: WebContentValidationConfig::default(),
             web_fetch_url_validation: WebFetchUrlValidationConfig::default(),
             web_search: SearchProviderConfig::default(),
+            output_guardrail: OutputGuardrailConfig::default(),
             model_prices: vec![],
             embedding_provider: None,
             embedding_api_key: None,
