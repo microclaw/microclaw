@@ -14,7 +14,9 @@ use microclaw_core::error::MicroClawError;
 pub use microclaw_tools::sandbox::{SandboxBackend, SandboxConfig, SandboxMode, SecurityProfile};
 pub use microclaw_tools::types::WorkingDirIsolation;
 use microclaw_tools::web_content_validation::WebContentValidationConfig;
+use microclaw_core::redact::OutputGuardrailConfig;
 use microclaw_tools::web_fetch::WebFetchUrlValidationConfig;
+use microclaw_tools::web_search::SearchProviderConfig;
 
 fn default_telegram_bot_token() -> String {
     String::new()
@@ -1418,6 +1420,14 @@ pub struct Config {
     pub web_fetch_validation: WebContentValidationConfig,
     #[serde(default)]
     pub web_fetch_url_validation: WebFetchUrlValidationConfig,
+    /// Pluggable web-search backend (duckduckgo | searxng | brave | tavily).
+    /// Defaults to DuckDuckGo, preserving historical behavior.
+    #[serde(default)]
+    pub web_search: SearchProviderConfig,
+    /// Outbound message guardrail (off | redact | block). Off by default;
+    /// scans delivered bot messages for credential-like strings.
+    #[serde(default)]
+    pub output_guardrail: OutputGuardrailConfig,
 
     // --- Embedding ---
     #[serde(default)]
@@ -1989,6 +1999,8 @@ impl Config {
             web_session_idle_ttl_seconds: 300,
             web_fetch_validation: WebContentValidationConfig::default(),
             web_fetch_url_validation: WebFetchUrlValidationConfig::default(),
+            web_search: SearchProviderConfig::default(),
+            output_guardrail: OutputGuardrailConfig::default(),
             model_prices: vec![],
             embedding_provider: None,
             embedding_api_key: None,
@@ -2456,6 +2468,7 @@ Use operator password + API keys for Web auth."
         }
         self.web_fetch_validation.normalize();
         self.web_fetch_url_validation.normalize();
+        self.web_search.normalize();
         if self.max_document_size_mb == 0 {
             self.max_document_size_mb = default_max_document_size_mb();
         }

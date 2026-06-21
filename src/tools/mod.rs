@@ -4,6 +4,7 @@ pub mod bash;
 pub mod browser;
 pub mod clarify;
 pub mod consult_specialist;
+pub mod deep_research;
 pub mod describe_image;
 pub mod edit_file;
 pub mod export_chat;
@@ -46,6 +47,7 @@ use std::{path::PathBuf, time::Instant};
 /// getting the same result. NOT a security boundary — that's `tool_risk` /
 /// `tool_execution_policy` in the runtime crate.
 pub const IDEMPOTENT_TOOLS: &[&str] = &[
+    "deep_research",
     "describe_image",
     "export_chat",
     "fetch_artifact",
@@ -197,8 +199,15 @@ impl ToolRegistry {
                 config.web_fetch_validation,
                 config.web_fetch_url_validation.clone(),
             )),
-            Box::new(web_search::WebSearchTool::new(
-                config.tool_timeout_secs("web_search", 15),
+            Box::new(
+                web_search::WebSearchTool::new(config.tool_timeout_secs("web_search", 15))
+                    .with_provider(config.web_search.clone()),
+            ),
+            Box::new(deep_research::DeepResearchTool::new(
+                config.tool_timeout_secs("deep_research", 20),
+                config.web_search.clone(),
+                config.web_fetch_validation,
+                config.web_fetch_url_validation.clone(),
             )),
             Box::new(time_math::GetCurrentTimeTool::new(config.timezone.clone())),
             Box::new(time_math::CompareTimeTool::new(config.timezone.clone())),
@@ -431,8 +440,15 @@ impl ToolRegistry {
                 config.web_fetch_validation,
                 config.web_fetch_url_validation.clone(),
             )),
-            Box::new(web_search::WebSearchTool::new(
-                config.tool_timeout_secs("web_search", 15),
+            Box::new(
+                web_search::WebSearchTool::new(config.tool_timeout_secs("web_search", 15))
+                    .with_provider(config.web_search.clone()),
+            ),
+            Box::new(deep_research::DeepResearchTool::new(
+                config.tool_timeout_secs("deep_research", 20),
+                config.web_search.clone(),
+                config.web_fetch_validation,
+                config.web_fetch_url_validation.clone(),
             )),
             Box::new(time_math::GetCurrentTimeTool::new(config.timezone.clone())),
             Box::new(time_math::CompareTimeTool::new(config.timezone.clone())),

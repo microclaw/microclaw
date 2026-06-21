@@ -45,11 +45,24 @@ pub struct ChannelRegistry {
     type_to_channel: HashMap<String, String>,
     /// "slack_dm" -> Private, "group" -> Group, etc.
     type_to_conversation: HashMap<String, ConversationKind>,
+    /// Outbound message guardrail mode, applied in
+    /// `deliver_and_store_bot_message`. Set once at startup; defaults to `Off`.
+    output_guardrail: microclaw_core::redact::OutputGuardrailMode,
 }
 
 impl ChannelRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the outbound message guardrail mode (applied at delivery).
+    pub fn set_output_guardrail(&mut self, mode: microclaw_core::redact::OutputGuardrailMode) {
+        self.output_guardrail = mode;
+    }
+
+    /// The configured outbound guardrail mode.
+    pub fn output_guardrail(&self) -> microclaw_core::redact::OutputGuardrailMode {
+        self.output_guardrail
     }
 
     pub fn register(&mut self, adapter: Arc<dyn ChannelAdapter>) {

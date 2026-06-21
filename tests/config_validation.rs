@@ -69,6 +69,8 @@ fn minimal_config() -> Config {
             microclaw_tools::web_content_validation::WebContentValidationConfig::default(),
         web_fetch_url_validation: microclaw_tools::web_fetch::WebFetchUrlValidationConfig::default(
         ),
+        web_search: microclaw_tools::web_search::SearchProviderConfig::default(),
+        output_guardrail: microclaw_core::redact::OutputGuardrailConfig::default(),
         model_prices: vec![],
         embedding_provider: None,
         embedding_api_key: None,

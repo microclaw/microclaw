@@ -230,6 +230,19 @@ pub async fn deliver_and_store_bot_message(
         .map_err(|e| format!("Failed to read external chat id for chat {chat_id}: {e}"))?
         .unwrap_or_else(|| chat_id.to_string());
 
+    // Outbound guardrail: scan for credential-like strings before delivery.
+    let guarded = microclaw_core::redact::apply_output_guardrail(text, registry.output_guardrail());
+    if let Some(outcome) = &guarded {
+        tracing::warn!(
+            target: "output_guardrail",
+            chat_id,
+            blocked = outcome.blocked,
+            categories = ?outcome.categories,
+            "outbound message tripped the output guardrail"
+        );
+    }
+    let text: &str = guarded.as_ref().map(|o| o.text.as_str()).unwrap_or(text);
+
     if let Some(adapter) = registry.get(&routing.channel_name) {
         if !adapter.is_local_only() {
             adapter.send_text(&external_chat_id, text).await?;
