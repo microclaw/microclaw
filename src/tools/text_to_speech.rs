@@ -13,6 +13,11 @@ use microclaw_tools::runtime::auth_context_from_input;
 use super::{schema_object, Tool, ToolResult};
 use crate::config::{Config, MediaConfig, TtsConfig};
 
+/// Trim and reject blank optional strings (e.g. an explicitly-empty config key).
+fn nonempty(s: Option<&str>) -> Option<String> {
+    s.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 const ALLOWED_FORMATS: &[&str] = &["mp3", "opus", "aac", "flac", "wav", "pcm"];
 const ALLOWED_VOICES: &[&str] = &[
     "alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse",
@@ -49,16 +54,18 @@ impl TextToSpeechTool {
     }
 
     fn client(&self) -> Result<MediaClient, String> {
-        let key = self
-            .media
-            .resolve_api_key(self.openai_api_key.as_deref())
+        // TTS-specific override first, then the shared media credentials.
+        let key = nonempty(self.cfg.api_key.as_deref())
+            .or_else(|| self.media.resolve_api_key(self.openai_api_key.as_deref()))
             .ok_or_else(|| {
-                "text_to_speech requires an API key (media.api_key, \
-                 MICROCLAW_OPENAI_API_KEY, OPENAI_API_KEY, or top-level \
-                 openai_api_key)."
+                "text_to_speech requires an API key (media.tts.api_key, \
+                 media.api_key, MICROCLAW_OPENAI_API_KEY, OPENAI_API_KEY, or \
+                 top-level openai_api_key)."
                     .to_string()
             })?;
-        let base = self.media.resolve_base_url(self.openai_base_url.as_deref());
+        let base = nonempty(self.cfg.base_url.as_deref())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| self.media.resolve_base_url(self.openai_base_url.as_deref()));
         MediaClient::new(base, key, self.timeout_secs)
     }
 }

@@ -20,6 +20,11 @@ const ALLOWED_VOICES: &[&str] = &[
 
 const MAX_SEGMENTS: usize = 40;
 
+/// Trim and reject blank optional strings (e.g. an explicitly-empty config key).
+fn nonempty(s: Option<&str>) -> Option<String> {
+    s.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 /// Native "generate a podcast" tool.
 ///
 /// Takes an ordered list of script segments (each with its own voice),
@@ -58,16 +63,21 @@ impl GeneratePodcastTool {
     }
 
     fn client(&self) -> Result<MediaClient, String> {
-        let key = self
-            .media
-            .resolve_api_key(self.openai_api_key.as_deref())
+        // Resolution order: podcast-specific override, then the shared TTS
+        // override, then the shared media credentials / env / top-level.
+        let key = nonempty(self.cfg.api_key.as_deref())
+            .or_else(|| nonempty(self.tts.api_key.as_deref()))
+            .or_else(|| self.media.resolve_api_key(self.openai_api_key.as_deref()))
             .ok_or_else(|| {
-                "generate_podcast requires an API key (media.api_key, \
-                 MICROCLAW_OPENAI_API_KEY, OPENAI_API_KEY, or top-level \
-                 openai_api_key)."
+                "generate_podcast requires an API key (media.podcast.api_key, \
+                 media.tts.api_key, media.api_key, MICROCLAW_OPENAI_API_KEY, \
+                 OPENAI_API_KEY, or top-level openai_api_key)."
                     .to_string()
             })?;
-        let base = self.media.resolve_base_url(self.openai_base_url.as_deref());
+        let base = nonempty(self.cfg.base_url.as_deref())
+            .or_else(|| nonempty(self.tts.base_url.as_deref()))
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| self.media.resolve_base_url(self.openai_base_url.as_deref()));
         MediaClient::new(base, key, self.timeout_secs)
     }
 }
@@ -502,6 +512,14 @@ mod tests {
         let cfg = PodcastConfig::default();
         let input = json!({"segments": [{"text": "hi", "voice": "bogus"}]});
         assert!(parse_segments(&input, &cfg).is_err());
+    }
+
+    #[test]
+    fn nonempty_trims_and_rejects_blank() {
+        assert_eq!(nonempty(Some("  k  ")), Some("k".to_string()));
+        assert_eq!(nonempty(Some("   ")), None);
+        assert_eq!(nonempty(Some("")), None);
+        assert_eq!(nonempty(None), None);
     }
 
     #[test]

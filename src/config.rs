@@ -479,6 +479,14 @@ pub struct TtsConfig {
     pub default_voice: String,
     #[serde(default = "default_tts_format")]
     pub default_format: String,
+    /// Optional TTS-specific endpoint override, e.g. a dedicated speech host.
+    /// Falls back to `media.base_url`, then `openai_base_url`, then OpenAI.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Optional TTS-specific API key. Falls back to `media.api_key`, then
+    /// `MICROCLAW_OPENAI_API_KEY` / `OPENAI_API_KEY` / `openai_api_key`.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl Default for TtsConfig {
@@ -488,6 +496,8 @@ impl Default for TtsConfig {
             model: default_tts_model(),
             default_voice: default_tts_voice(),
             default_format: default_tts_format(),
+            base_url: None,
+            api_key: None,
         }
     }
 }
@@ -545,9 +555,10 @@ impl Default for BookConfig {
 /// Configuration for the native `generate_podcast` tool.
 ///
 /// Disabled by default — operators opt in via `media.podcast.enabled`.
-/// Per-segment speech reuses the OpenAI-compatible `/audio/speech` endpoint
-/// (sharing `media.tts` model/credentials); the segments are stitched into a
-/// single file by shelling out to `ffmpeg`.
+/// Per-segment speech uses the OpenAI-compatible `/audio/speech` endpoint with
+/// the `media.tts` model; credentials/endpoint default to `media.tts` then the
+/// shared `media` settings, but can be overridden here. Segments are stitched
+/// into a single file by shelling out to `ffmpeg`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PodcastConfig {
     #[serde(default)]
@@ -561,6 +572,14 @@ pub struct PodcastConfig {
     /// Silence inserted between segments, in milliseconds.
     #[serde(default = "default_segment_pause_ms")]
     pub segment_pause_ms: u32,
+    /// Optional podcast-specific endpoint override. Falls back to
+    /// `media.tts.base_url`, then `media.base_url`, then `openai_base_url`.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Optional podcast-specific API key. Falls back to `media.tts.api_key`,
+    /// then `media.api_key` / `MICROCLAW_OPENAI_API_KEY` / `OPENAI_API_KEY`.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl Default for PodcastConfig {
@@ -570,6 +589,8 @@ impl Default for PodcastConfig {
             ffmpeg_path: default_ffmpeg_path(),
             default_voice: default_tts_voice(),
             segment_pause_ms: default_segment_pause_ms(),
+            base_url: None,
+            api_key: None,
         }
     }
 }
