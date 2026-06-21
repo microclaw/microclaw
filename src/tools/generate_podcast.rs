@@ -527,4 +527,70 @@ mod tests {
         let p = Path::new("/tmp/a'b.mp3");
         assert_eq!(concat_entry(p), "file '/tmp/a'\\''b.mp3'\n");
     }
+
+    // Live end-to-end test against a real OpenAI-compatible TTS endpoint.
+    // #[ignore] — needs an API key + ffmpeg (costs ~a fraction of a cent).
+    // Run with: OPENAI_API_KEY=... cargo test --lib live_generate_episode -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_generate_episode() {
+        use std::sync::Arc;
+        // Standard credential env vars, same ones the tool itself resolves.
+        let key = std::env::var("OPENAI_API_KEY")
+            .or_else(|_| std::env::var("MICROCLAW_OPENAI_API_KEY"))
+            .expect("set OPENAI_API_KEY (or MICROCLAW_OPENAI_API_KEY) to run this live test");
+
+        let work = std::env::temp_dir().join(format!(
+            "microclaw_podcast_live_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&work).unwrap();
+
+        let mut cfg = crate::config::Config::test_defaults();
+        cfg.data_dir = work.to_string_lossy().into_owned();
+        cfg.media.api_key = Some(key);
+        cfg.media.tts.enabled = true;
+        cfg.media.tts.model = "tts-1".into();
+        cfg.media.podcast.enabled = true;
+        if std::path::Path::new("/opt/homebrew/bin/ffmpeg").exists() {
+            cfg.media.podcast.ffmpeg_path = "/opt/homebrew/bin/ffmpeg".into();
+        }
+
+        let db_dir = work.join("db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let db = Arc::new(Database::new(db_dir.to_str().unwrap()).unwrap());
+        let tool = GeneratePodcastTool::new(
+            &cfg,
+            Arc::new(ChannelRegistry::new()),
+            db,
+        );
+
+        let input = json!({
+            "title": "MicroClaw Live Test",
+            "segments": [
+                {"voice": "nova", "text": "Welcome to the MicroClaw test podcast."},
+                {"voice": "onyx", "text": "This episode verifies text to speech and audio stitching from end to end."}
+            ],
+            "deliver": false
+        });
+        let res = tool.execute(input).await;
+        assert!(!res.is_error, "tool errored: {}", res.content);
+
+        let path = res
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("path"))
+            .and_then(|v| v.as_str())
+            .expect("metadata.path missing");
+        let bytes = std::fs::read(path).unwrap();
+        assert!(bytes.len() > 5000, "episode too small: {} bytes", bytes.len());
+        let is_mp3 =
+            bytes.starts_with(b"ID3") || (bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0);
+        assert!(
+            is_mp3,
+            "output is not mp3 (first bytes {:02X} {:02X})",
+            bytes[0], bytes[1]
+        );
+        eprintln!("OK: {} bytes -> {}", bytes.len(), path);
+    }
 }
