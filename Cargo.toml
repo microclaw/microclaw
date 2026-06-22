@@ -92,12 +92,12 @@ rmcp = { version = "1.7", features = [
 shellexpand = "3.1.2"
 qrcode = "0.14"
 yaml-edit = "0.2.0"
-genpdf = "0.2"
 pulldown-cmark = { version = "0.12", default-features = false }
-# default-features off: we only use printpdf::BuiltinFont (genpdf's backend),
-# not its `embedded_images` stack, which would pull unmaintained image decoders
-# (gif/jpeg-decoder/png/tiff/adler) into the binary.
-printpdf = { version = "0.3", default-features = false }
+# Typst typesetting backend for render_pdf: handles layout, CJK, and font
+# subsetting (so CJK PDFs stay small instead of embedding a whole ~23MB font).
+typst = "0.15"
+typst-pdf = "0.15"
+typst-layout = "0.15"
 
 [dev-dependencies]
 tower = "0.5"

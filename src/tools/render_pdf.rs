@@ -3,11 +3,16 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use genpdf::elements::{Break, PageBreak, Paragraph};
-use genpdf::fonts::{FontCache, FontData, FontFamily};
-use genpdf::style::Style;
-use genpdf::{Alignment, Document, Margins, SimplePageDecorator, Size};
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+
+use typst::diag::{FileError, FileResult, SourceDiagnostic, Warned};
+use typst::foundations::{Bytes, Datetime, Duration};
+use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
+use typst::text::{Font, FontBook};
+use typst::utils::LazyHash;
+use typst::{Library, LibraryExt, World};
+use typst_layout::PagedDocument;
+use typst_pdf::PdfOptions;
 
 use microclaw_channels::channel::deliver_and_store_bot_message;
 use microclaw_channels::channel_adapter::ChannelRegistry;
@@ -19,15 +24,11 @@ use microclaw_tools::runtime::auth_context_from_input;
 use super::{schema_object, Tool, ToolResult};
 use crate::config::{BookConfig, Config};
 
-/// System fonts probed (in order) when `media.book.font_path` is unset. Only
-/// single-face TrueType (`.ttf`) files work — rusttype (genpdf's backend)
-/// cannot read `.ttc` collections or CFF/OpenType outlines.
-///
-/// Compact Latin-only fonts (used when the document contains no CJK, keeping
-/// the embedded-font payload — and thus the PDF — small). The default is
-/// English, so these are tried first.
+/// Fonts probed (in order) when `media.book.font_path` is unset. Typst subsets
+/// whatever font it uses, so output stays small either way; we still prefer a
+/// compact Latin face for Latin-only docs and a CJK-capable face for CJK docs.
 const LATIN_FONT_CANDIDATES: &[&str] = &[
-    // macOS — small single-face TrueType faces (~0.2–0.8 MB).
+    // macOS.
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Supplemental/Georgia.ttf",
     "/System/Library/Fonts/Supplemental/Verdana.ttf",
@@ -41,24 +42,21 @@ const LATIN_FONT_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
 ];
 
-/// Large CJK-capable fonts (used when the document contains CJK characters).
+/// CJK-capable fonts (used when the document contains CJK characters). Typst
+/// reads `.ttc` collections and OTF/CFF too, but single-face `.ttf` is simplest.
 const CJK_FONT_CANDIDATES: &[&str] = &[
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttf",
     "/usr/share/fonts/truetype/arphic/uming.ttf",
 ];
 
-const PAGE_MARGIN_MM: f64 = 20.0;
 const BASE_FONT_SIZE: u8 = 11;
 const MAX_SECTIONS: usize = 64;
-/// Safety factor so our pre-wrapped lines never reach genpdf's own (whitespace
-/// only) re-wrap path — important because CJK text has no break opportunities
-/// for genpdf to fall back on, so an over-long line would overflow the page.
-const WRAP_SAFETY: f64 = 0.97;
 
-/// Native "generate a book" tool: renders structured content to a self-contained
-/// PDF (cover, optional table of contents, headed sections with Markdown bodies,
-/// page numbers) using the pure-Rust `genpdf` backend — no external binaries.
+/// "Generate a book" tool: renders structured content to a self-contained PDF
+/// (cover, optional table of contents, headed sections with Markdown bodies,
+/// page numbers) via the pure-Rust Typst backend — no external binaries, and
+/// fonts are subsetted so CJK PDFs stay small.
 pub struct RenderPdfTool {
     data_dir: PathBuf,
     channels: Arc<ChannelRegistry>,
@@ -98,8 +96,8 @@ impl Tool for RenderPdfTool {
                 table of contents, and headed sections with page numbers. The PDF is \
                 saved under the bot's data directory and — when the active channel \
                 supports attachments — sent back inline. Self-contained (pure-Rust, no \
-                external tools). Disabled by default; requires operator opt-in via \
-                `media.book.enabled`."
+                external tools); supports CJK and inline bold/italic. Disabled by \
+                default; requires operator opt-in via `media.book.enabled`."
                 .into(),
             input_schema: schema_object(
                 json!({
@@ -157,7 +155,7 @@ impl Tool for RenderPdfTool {
             Err(e) => return ToolResult::error(e),
         };
 
-        // PDF rendering is CPU-bound and synchronous; keep it off the async
+        // Typesetting is CPU-bound and synchronous; keep it off the async
         // executor. Move owned inputs into a blocking task.
         let cfg = self.cfg.clone();
         let data_dir = self.data_dir.clone();
@@ -238,9 +236,10 @@ fn parse_sections(input: &Value) -> Result<Vec<Section>, String> {
     Ok(out)
 }
 
-/// Load the configured/auto-detected font as bytes. `needs_cjk` selects a
-/// CJK-capable font for Chinese/Japanese/Korean content; otherwise a compact
-/// Latin font is preferred (smaller embedded payload).
+// ---------------------------------------------------------------------------
+// Font selection
+// ---------------------------------------------------------------------------
+
 fn resolve_font_path(cfg: &BookConfig, needs_cjk: bool) -> Result<PathBuf, String> {
     if let Some(p) = cfg.font_path.as_deref().filter(|s| !s.trim().is_empty()) {
         let pb = PathBuf::from(p);
@@ -249,8 +248,6 @@ fn resolve_font_path(cfg: &BookConfig, needs_cjk: bool) -> Result<PathBuf, Strin
         }
         return Ok(pb);
     }
-    // Prefer the family matching the content; fall back to the other so we
-    // still render *something* (CJK font also covers Latin).
     let order: [&[&str]; 2] = if needs_cjk {
         [CJK_FONT_CANDIDATES, LATIN_FONT_CANDIDATES]
     } else {
@@ -269,50 +266,8 @@ fn resolve_font_path(cfg: &BookConfig, needs_cjk: bool) -> Result<PathBuf, Strin
         ""
     };
     Err(format!(
-        "no usable font found. Set media.book.font_path to a single-face TrueType (.ttf) font.{hint}"
+        "no usable font found. Set media.book.font_path to a TrueType/OpenType font.{hint}"
     ))
-}
-
-/// Build the font family for `regular_path`.
-///
-/// The regular face is always embedded once. For Latin documents we also try
-/// to embed the font's real Bold / Italic / BoldItalic sibling files so inline
-/// Markdown emphasis renders with matching glyphs; missing variants fall back
-/// to non-embedded PDF built-ins. For CJK documents the variant faces stay
-/// non-embedded built-ins (never selected — emphasis is rendered in the regular
-/// weight) so the big CJK face is embedded exactly once and the PDF stays small.
-fn font_family(
-    regular_path: &Path,
-    regular_bytes: &[u8],
-    embed_variants: bool,
-) -> Result<FontFamily<FontData>, String> {
-    use printpdf::BuiltinFont;
-    let regular =
-        FontData::new(regular_bytes.to_vec(), None).map_err(|e| format!("invalid font: {e}"))?;
-    let builtin = |b| FontData::new(regular_bytes.to_vec(), Some(b))
-        .map_err(|e| format!("invalid font: {e}"));
-
-    // Embed real bold/italic faces only when the doc uses emphasis (Latin);
-    // otherwise keep non-embedded built-ins so the PDF stays small.
-    let face = |kind: FaceKind, fallback: BuiltinFont| -> Result<FontData, String> {
-        if embed_variants {
-            if let Some(p) = variant_path(regular_path, kind) {
-                if let Ok(b) = std::fs::read(&p) {
-                    if let Ok(fd) = FontData::new(b, None) {
-                        return Ok(fd);
-                    }
-                }
-            }
-        }
-        builtin(fallback)
-    };
-
-    Ok(FontFamily {
-        regular,
-        bold: face(FaceKind::Bold, BuiltinFont::HelveticaBold)?,
-        italic: face(FaceKind::Italic, BuiltinFont::HelveticaOblique)?,
-        bold_italic: face(FaceKind::BoldItalic, BuiltinFont::HelveticaBoldOblique)?,
-    })
 }
 
 #[derive(Clone, Copy)]
@@ -322,32 +277,28 @@ enum FaceKind {
     BoldItalic,
 }
 
-/// Find the sibling variant file for a regular font, trying the common naming
-/// conventions (`Arial Bold.ttf`, `DejaVuSans-Bold.ttf`,
-/// `LiberationSans-Bold.ttf`, …). Returns the first existing candidate.
+/// Find the sibling variant file for a regular font, trying common naming
+/// conventions (`Arial Bold.ttf`, `DejaVuSans-Bold.ttf`, …).
 fn variant_path(regular: &Path, kind: FaceKind) -> Option<PathBuf> {
     let dir = regular.parent()?;
     let stem = regular.file_stem()?.to_str()?;
     let ext = regular.extension().and_then(|e| e.to_str()).unwrap_or("ttf");
-    // (space-separated suffix, hyphenated suffix, oblique hyphenated suffix)
     let (spaced, hyphen, oblique) = match kind {
         FaceKind::Bold => (" Bold", "-Bold", "-Bold"),
         FaceKind::Italic => (" Italic", "-Italic", "-Oblique"),
         FaceKind::BoldItalic => (" Bold Italic", "-BoldItalic", "-BoldOblique"),
     };
-    // Base stem with any "-Regular"/"Regular" marker removed.
     let base = stem
         .trim_end_matches("-Regular")
         .trim_end_matches("Regular")
         .trim_end_matches(['-', ' ']);
     let base = if base.is_empty() { stem } else { base };
-    let names = [
+    for n in [
         format!("{stem}{spaced}.{ext}"),
         format!("{base}{hyphen}.{ext}"),
         format!("{base}{oblique}.{ext}"),
         format!("{base}{spaced}.{ext}"),
-    ];
-    for n in names {
+    ] {
         let p = dir.join(n);
         if p.exists() {
             return Some(p);
@@ -356,17 +307,39 @@ fn variant_path(regular: &Path, kind: FaceKind) -> Option<PathBuf> {
     None
 }
 
-/// Does any string in the document contain a CJK character?
+/// Load the regular face (plus any Bold/Italic siblings) as Typst fonts and
+/// return them with the regular face's family name.
+fn load_fonts(cfg: &BookConfig, needs_cjk: bool) -> Result<(Vec<Font>, String), String> {
+    let regular_path = resolve_font_path(cfg, needs_cjk)?;
+    let regular_bytes = std::fs::read(&regular_path)
+        .map_err(|e| format!("failed to read font '{}': {e}", regular_path.display()))?;
+    let regular = Font::new(Bytes::new(regular_bytes), 0)
+        .ok_or_else(|| format!("could not parse font '{}'", regular_path.display()))?;
+    let family = regular.info().family.clone();
+
+    let mut fonts = vec![regular];
+    for kind in [FaceKind::Bold, FaceKind::Italic, FaceKind::BoldItalic] {
+        if let Some(p) = variant_path(&regular_path, kind) {
+            if let Ok(b) = std::fs::read(&p) {
+                if let Some(f) = Font::new(Bytes::new(b), 0) {
+                    fonts.push(f);
+                }
+            }
+        }
+    }
+    Ok((fonts, family))
+}
+
 fn contains_cjk(sections: &[Section], title: &str) -> bool {
     let is_cjk = |c: char| {
         matches!(c as u32,
-            0x3000..=0x303F   // CJK punctuation
-            | 0x3040..=0x30FF // Hiragana + Katakana
-            | 0x3400..=0x4DBF // CJK ext A
-            | 0x4E00..=0x9FFF // CJK unified
-            | 0xF900..=0xFAFF // compatibility ideographs
-            | 0xAC00..=0xD7AF // Hangul syllables
-            | 0xFF00..=0xFFEF // fullwidth forms
+            0x3000..=0x303F
+            | 0x3040..=0x30FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0xAC00..=0xD7AF
+            | 0xFF00..=0xFFEF
         )
     };
     title.chars().any(is_cjk)
@@ -375,27 +348,9 @@ fn contains_cjk(sections: &[Section], title: &str) -> bool {
             .any(|s| s.heading.chars().any(is_cjk) || s.body.chars().any(is_cjk))
 }
 
-/// Does any section body use bold/italic? Gates embedding the variant faces.
-fn uses_emphasis(sections: &[Section]) -> bool {
-    sections.iter().any(|s| {
-        markdown_blocks(&s.body).iter().any(|b| match b {
-            Block::Paragraph(spans) | Block::ListItem(spans) => {
-                spans.iter().any(|sp| sp.bold || sp.italic)
-            }
-            _ => false,
-        })
-    })
-}
-
-fn paper_size(page_size: &str) -> (Size, f64) {
-    // (size, usable text width in mm)
-    let (w, h) = match page_size.to_ascii_lowercase().as_str() {
-        "letter" => (215.9, 279.4),
-        _ => (210.0, 297.0), // A4
-    };
-    let text_width = (w - 2.0 * PAGE_MARGIN_MM) * WRAP_SAFETY;
-    (Size::new(w as f32, h as f32), text_width)
-}
+// ---------------------------------------------------------------------------
+// Rendering (Typst)
+// ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 fn render_document(
@@ -409,160 +364,222 @@ fn render_document(
     sections: &[Section],
 ) -> Result<PathBuf, String> {
     let needs_cjk = contains_cjk(sections, title);
-    let font_path = resolve_font_path(cfg, needs_cjk)?;
-    let bytes = std::fs::read(&font_path)
-        .map_err(|e| format!("failed to read font '{}': {e}", font_path.display()))?;
-    // Latin documents get real inline emphasis (matching bold/italic faces are
-    // embedded); CJK documents keep emphasis flattened to the regular weight.
-    // Only embed the variant faces when the document actually uses emphasis, so
-    // plain documents stay small.
-    let styled = !needs_cjk;
-    let embed_variants = styled && uses_emphasis(sections);
-    let family = font_family(&font_path, &bytes, embed_variants)?;
+    let (fonts, family) = load_fonts(cfg, needs_cjk)?;
+    let markup = build_markup(title, subtitle, author, want_cover, want_toc, sections, &family);
 
-    let mut doc = Document::new(family);
-    doc.set_title(title);
-    doc.set_font_size(BASE_FONT_SIZE);
-    let (size, text_width) = paper_size(&cfg.page_size);
-    doc.set_paper_size(size);
+    let world = TypstWorld::new(fonts, markup);
+    let Warned { output, .. } = typst::compile::<PagedDocument>(&world);
+    let document =
+        output.map_err(|d| format!("typst compile failed: {}", format_diagnostics(&d)))?;
+    let pdf = typst_pdf::pdf(&document, &PdfOptions::default())
+        .map_err(|d| format!("typst PDF export failed: {}", format_diagnostics(&d)))?;
 
-    let mut deco = SimplePageDecorator::new();
-    deco.set_margins(Margins::all(PAGE_MARGIN_MM as f32));
-    // Page number, top-right, suppressed on the cover.
-    deco.set_header(|page| {
-        let mut p = Paragraph::new(if page > 1 { page.to_string() } else { String::new() });
-        p.set_alignment(Alignment::Right);
-        p
-    });
-    doc.set_page_decorator(deco);
-
-    // Plan all content up front while we hold an immutable borrow of the font
-    // cache (used for measuring), then push — push needs &mut doc.
-    let lines: Vec<Line> = {
-        let fc = doc.font_cache();
-        plan_lines(
-            fc, text_width, styled, title, subtitle, author, want_cover, want_toc, sections,
-        )
-    };
-
-    for line in lines {
-        match line {
-            Line::Break(n) => doc.push(Break::new(n)),
-            Line::PageBreak => doc.push(PageBreak::new()),
-            Line::Text { text, size, align } => {
-                // Pre-wrapped single-style line (CJK-safe path + headings).
-                let style = Style::new().with_font_size(size);
-                let mut p = Paragraph::default();
-                p.push_styled(text, style);
-                p.set_alignment(align);
-                doc.push(p);
-            }
-            Line::StyledPara { spans, size } => {
-                // Latin path: let genpdf wrap natively (it breaks on spaces) so
-                // each span keeps its own bold/italic face.
-                let mut p = Paragraph::default();
-                for span in spans {
-                    let mut style = Style::new().with_font_size(size);
-                    if span.bold {
-                        style = style.bold();
-                    }
-                    if span.italic {
-                        style = style.italic();
-                    }
-                    p.push_styled(span.text, style);
-                }
-                doc.push(p);
-            }
-        }
-    }
-
-    let mut buf: Vec<u8> = Vec::new();
-    doc.render(&mut buf)
-        .map_err(|e| format!("PDF render failed: {e}"))?;
-    persist_output(data_dir, "docs", "pdf", &buf).map_err(|e| format!("failed to save PDF: {e}"))
+    persist_output(data_dir, "docs", "pdf", &pdf).map_err(|e| format!("failed to save PDF: {e}"))
 }
 
-/// An inline run of text sharing one style (bold/italic).
-struct Span {
-    text: String,
-    bold: bool,
-    italic: bool,
+fn format_diagnostics(diags: &[SourceDiagnostic]) -> String {
+    diags
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
-/// A planned output line / element (or spacing/page-break marker).
-enum Line {
-    /// Pre-wrapped single-style line — used for headings and the CJK path.
-    Text {
-        text: String,
-        size: u8,
-        align: Alignment,
-    },
-    /// Multi-span paragraph wrapped natively by genpdf — Latin emphasis path.
-    StyledPara {
-        spans: Vec<Span>,
-        size: u8,
-    },
-    Break(f64),
-    PageBreak,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn plan_lines(
-    fc: &FontCache,
-    text_width: f64,
-    styled: bool,
+/// Build the Typst markup for the whole document.
+fn build_markup(
     title: &str,
     subtitle: Option<&str>,
     author: Option<&str>,
     want_cover: bool,
     want_toc: bool,
     sections: &[Section],
-) -> Vec<Line> {
-    let mut out = Vec::new();
+    family: &str,
+) -> String {
+    let mut m = String::new();
+    m.push_str(&format!("#set document(title: {})\n", typst_string(title)));
+    m.push_str(&format!(
+        "#set text(font: {}, size: {}pt)\n",
+        typst_string(family),
+        BASE_FONT_SIZE
+    ));
+    m.push_str("#set par(justify: false, leading: 0.7em)\n");
+    m.push_str("#set heading(numbering: none)\n");
+    m.push_str("#show heading.where(level: 1): set text(size: 18pt)\n");
+    m.push_str("#show heading.where(level: 2): set text(size: 14pt)\n");
+    m.push_str("#show heading.where(level: 3): set text(size: 12pt)\n");
+    m.push_str("#set page(paper: \"a4\", margin: 2cm, numbering: none)\n\n");
 
     if want_cover {
-        out.push(Line::Break(6.0));
-        push_wrapped(&mut out, fc, text_width, title, 28, Alignment::Center);
+        m.push_str("#align(center)[\n  #v(5cm)\n");
+        m.push_str(&format!(
+            "  #text(size: 28pt, weight: \"bold\")[{}]\n",
+            escape_typst(title)
+        ));
         if let Some(sub) = subtitle {
-            out.push(Line::Break(1.0));
-            push_wrapped(&mut out, fc, text_width, sub, 16, Alignment::Center);
+            m.push_str(&format!(
+                "  #v(0.6cm)\n  #text(size: 16pt)[{}]\n",
+                escape_typst(sub)
+            ));
         }
         if let Some(a) = author {
-            out.push(Line::Break(2.0));
-            push_wrapped(&mut out, fc, text_width, a, 12, Alignment::Center);
+            m.push_str(&format!(
+                "  #v(1.2cm)\n  #text(size: 12pt)[{}]\n",
+                escape_typst(a)
+            ));
         }
-        out.push(Line::PageBreak);
+        m.push_str("]\n#pagebreak()\n\n");
     }
+
+    // Number pages from 1 starting after the cover.
+    m.push_str("#set page(numbering: \"1\")\n#counter(page).update(1)\n\n");
 
     if want_toc && sections.len() > 1 {
-        push_wrapped(&mut out, fc, text_width, "Contents", 18, Alignment::Left);
-        out.push(Line::Break(1.0));
-        for s in sections {
-            push_wrapped(&mut out, fc, text_width, &s.heading, BASE_FONT_SIZE, Alignment::Left);
-        }
-        out.push(Line::PageBreak);
+        m.push_str("#outline(title: [Contents], depth: 1)\n#pagebreak()\n\n");
     }
 
-    for (i, s) in sections.iter().enumerate() {
-        if i > 0 {
-            out.push(Line::Break(1.5));
-        }
-        let hsize = heading_size(s.level);
-        push_wrapped(&mut out, fc, text_width, &s.heading, hsize, Alignment::Left);
-        out.push(Line::Break(0.5));
+    for s in sections {
+        let level = s.level.clamp(1, 3) as usize;
+        m.push_str(&format!(
+            "{} {}\n\n",
+            "=".repeat(level),
+            escape_typst(&s.heading)
+        ));
         for block in markdown_blocks(&s.body) {
-            render_block(&mut out, fc, text_width, styled, block);
+            m.push_str(&emit_block(&block));
+        }
+        m.push('\n');
+    }
+    m
+}
+
+/// Render one Markdown block to Typst markup.
+fn emit_block(block: &Block) -> String {
+    match block {
+        Block::Heading(level, text) => {
+            format!("\n{} {}\n\n", "=".repeat(*level as usize), escape_typst(text))
+        }
+        Block::Paragraph(spans) => format!("{}\n\n", emit_spans(spans)),
+        // No blank line after a list item, so consecutive items form one list.
+        Block::ListItem(spans) => format!("- {}\n", emit_spans(spans)),
+        Block::Code(text) => format!("#raw(block: true, {})\n\n", typst_string(text)),
+    }
+}
+
+/// Render inline spans to Typst markup, applying bold/italic via `#strong` /
+/// `#emph` (function form, so escaping is unambiguous).
+fn emit_spans(spans: &[Span]) -> String {
+    let mut out = String::new();
+    for span in spans {
+        let esc = escape_typst(&span.text);
+        let rendered = match (span.bold, span.italic) {
+            (true, true) => format!("#strong[#emph[{esc}]]"),
+            (true, false) => format!("#strong[{esc}]"),
+            (false, true) => format!("#emph[{esc}]"),
+            (false, false) => esc,
+        };
+        out.push_str(&rendered);
+    }
+    out
+}
+
+/// Escape text for use in Typst markup context. Over-escapes a few characters
+/// that are only special at line start (`-`, `+`, `=`) — harmless, they render
+/// literally — to keep arbitrary user text from triggering markup.
+fn escape_typst(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '>' | '@' | '[' | ']' | '~' | '=' | '+'
+            | '-' | '/' | '"' => {
+                out.push('\\');
+                out.push(c);
+            }
+            // A bare newline would end the paragraph; keep runs on one line.
+            '\n' => out.push(' '),
+            _ => out.push(c),
         }
     }
     out
 }
 
-fn heading_size(level: u8) -> u8 {
-    match level {
-        1 => 18,
-        2 => 14,
-        _ => 12,
+/// Quote a Rust string as a Typst string literal (`"..."`).
+fn typst_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(c),
+        }
     }
+    out.push('"');
+    out
+}
+
+/// A minimal in-memory Typst [`World`] backed by a single source string and a
+/// fixed set of fonts. No filesystem or package access.
+struct TypstWorld {
+    library: LazyHash<Library>,
+    book: LazyHash<FontBook>,
+    fonts: Vec<Font>,
+    main: FileId,
+    source: Source,
+}
+
+impl TypstWorld {
+    fn new(fonts: Vec<Font>, markup: String) -> Self {
+        let book = FontBook::from_fonts(fonts.iter());
+        let vpath = VirtualPath::new("main.typ").expect("valid virtual path");
+        let main = FileId::new(RootedPath::new(VirtualRoot::Project, vpath));
+        let source = Source::new(main, markup);
+        Self {
+            library: LazyHash::new(Library::builder().build()),
+            book: LazyHash::new(book),
+            fonts,
+            main,
+            source,
+        }
+    }
+}
+
+impl World for TypstWorld {
+    fn library(&self) -> &LazyHash<Library> {
+        &self.library
+    }
+    fn book(&self) -> &LazyHash<FontBook> {
+        &self.book
+    }
+    fn main(&self) -> FileId {
+        self.main
+    }
+    fn source(&self, id: FileId) -> FileResult<Source> {
+        if id == self.main {
+            Ok(self.source.clone())
+        } else {
+            Err(FileError::NotFound(PathBuf::new()))
+        }
+    }
+    fn file(&self, _id: FileId) -> FileResult<Bytes> {
+        Err(FileError::NotFound(PathBuf::new()))
+    }
+    fn font(&self, index: usize) -> Option<Font> {
+        self.fonts.get(index).cloned()
+    }
+    fn today(&self, _offset: Option<Duration>) -> Option<Datetime> {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Markdown parsing (block + inline spans)
+// ---------------------------------------------------------------------------
+
+/// An inline run of text sharing one style (bold/italic).
+struct Span {
+    text: String,
+    bold: bool,
+    italic: bool,
 }
 
 /// A parsed Markdown block. Paragraph/list bodies keep their inline spans so
@@ -578,7 +595,6 @@ fn flatten_spans(spans: &[Span]) -> String {
     spans.iter().map(|s| s.text.as_str()).collect()
 }
 
-/// Drop leading/trailing whitespace-only spans and trim the edges.
 fn trim_spans(mut spans: Vec<Span>) -> Vec<Span> {
     while spans.first().is_some_and(|s| s.text.trim().is_empty()) {
         spans.remove(0);
@@ -595,8 +611,6 @@ fn trim_spans(mut spans: Vec<Span>) -> Vec<Span> {
     spans
 }
 
-/// Append text to the span list, merging with the last span when the style
-/// matches so adjacent same-style runs stay together.
 fn push_span(spans: &mut Vec<Span>, text: &str, bold: bool, italic: bool) {
     if text.is_empty() {
         return;
@@ -681,10 +695,10 @@ fn markdown_blocks(md: &str) -> Vec<Block> {
                 flush(&mut blocks, &mut spans, mode, heading_level);
                 mode = 0;
             }
-            // Inline code is rendered as regular text (no monospace face bundled).
+            // Inline code is rendered as regular text.
             Event::Text(t) | Event::Code(t) => push_span(&mut spans, &t, bold > 0, italic > 0),
             Event::SoftBreak => push_span(&mut spans, " ", bold > 0, italic > 0),
-            Event::HardBreak => push_span(&mut spans, "\n", bold > 0, italic > 0),
+            Event::HardBreak => push_span(&mut spans, " ", bold > 0, italic > 0),
             _ => {}
         }
     }
@@ -700,124 +714,9 @@ fn heading_md_level(level: HeadingLevel) -> u8 {
     }
 }
 
-/// Plan one Markdown block. When `styled`, paragraph/list bodies become native
-/// multi-span paragraphs (real bold/italic); otherwise (CJK) they are flattened
-/// and pre-wrapped in the regular weight.
-fn render_block(out: &mut Vec<Line>, fc: &FontCache, text_width: f64, styled: bool, block: Block) {
-    match block {
-        Block::Heading(level, text) => {
-            out.push(Line::Break(0.8));
-            push_wrapped(out, fc, text_width, &text, heading_size(level), Alignment::Left);
-            out.push(Line::Break(0.3));
-        }
-        Block::Paragraph(spans) => {
-            if styled {
-                out.push(Line::StyledPara { spans, size: BASE_FONT_SIZE });
-            } else {
-                push_wrapped(out, fc, text_width, &flatten_spans(&spans), BASE_FONT_SIZE, Alignment::Left);
-            }
-            out.push(Line::Break(0.6));
-        }
-        Block::ListItem(mut spans) => {
-            if styled {
-                spans.insert(0, Span { text: "• ".into(), bold: false, italic: false });
-                out.push(Line::StyledPara { spans, size: BASE_FONT_SIZE });
-            } else {
-                let text = format!("• {}", flatten_spans(&spans));
-                push_wrapped(out, fc, text_width, &text, BASE_FONT_SIZE, Alignment::Left);
-            }
-            out.push(Line::Break(0.2));
-        }
-        Block::Code(text) => {
-            for raw in text.lines() {
-                push_wrapped(out, fc, text_width, raw, BASE_FONT_SIZE, Alignment::Left);
-            }
-            out.push(Line::Break(0.6));
-        }
-    }
-}
-
-/// Wrap `text` to `text_width` (CJK-aware) and append the resulting lines.
-fn push_wrapped(
-    out: &mut Vec<Line>,
-    fc: &FontCache,
-    text_width: f64,
-    text: &str,
-    size: u8,
-    align: Alignment,
-) {
-    let style = Style::new().with_font_size(size);
-    for line in wrap_text(fc, &style, text_width, text) {
-        out.push(Line::Text {
-            text: line,
-            size,
-            align,
-        });
-    }
-}
-
-fn width_of(fc: &FontCache, style: &Style, s: &str) -> f64 {
-    f64::from(style.str_width(fc, s))
-}
-
-/// Greedy line-wrap that works for both space-separated (Latin) and
-/// space-free (CJK) text. Whole words are kept together when they fit; an
-/// over-long single token (e.g. a Chinese sentence) is broken character by
-/// character so it still fills lines instead of overflowing.
-fn wrap_text(fc: &FontCache, style: &Style, max_width: f64, text: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    for segment in text.split('\n') {
-        wrap_segment(fc, style, max_width, segment, &mut lines);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
-}
-
-fn wrap_segment(fc: &FontCache, style: &Style, max_width: f64, segment: &str, lines: &mut Vec<String>) {
-    let mut cur = String::new();
-    for word in segment.split_whitespace() {
-        let candidate = if cur.is_empty() {
-            word.to_string()
-        } else {
-            format!("{cur} {word}")
-        };
-        if width_of(fc, style, &candidate) <= max_width {
-            cur = candidate;
-            continue;
-        }
-        if !cur.is_empty() {
-            lines.push(std::mem::take(&mut cur));
-        }
-        if width_of(fc, style, word) <= max_width {
-            cur = word.to_string();
-        } else {
-            // Single token too wide for a line — break it by character.
-            cur = break_long(fc, style, max_width, word, lines);
-        }
-    }
-    if !cur.is_empty() {
-        lines.push(cur);
-    }
-}
-
-/// Break a single over-long token character by character. Pushes full lines
-/// into `lines` and returns the trailing remainder for the caller to continue.
-fn break_long(fc: &FontCache, style: &Style, max_width: f64, word: &str, lines: &mut Vec<String>) -> String {
-    let mut cur = String::new();
-    for ch in word.chars() {
-        let mut candidate = cur.clone();
-        candidate.push(ch);
-        if !cur.is_empty() && width_of(fc, style, &candidate) > max_width {
-            lines.push(std::mem::take(&mut cur));
-            cur.push(ch);
-        } else {
-            cur = candidate;
-        }
-    }
-    cur
-}
+// ---------------------------------------------------------------------------
+// Delivery
+// ---------------------------------------------------------------------------
 
 async fn deliver_attachment(
     channels: &ChannelRegistry,
@@ -884,6 +783,12 @@ mod tests {
         assert_eq!(s[0].heading, "Intro");
     }
 
+    #[test]
+    fn escape_typst_neutralizes_markup() {
+        assert_eq!(escape_typst("a*b_c#d"), "a\\*b\\_c\\#d");
+        assert_eq!(typst_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    }
+
     // Real render smoke test — needs a system font, so it's #[ignore] by
     // default. Run with: cargo test --lib render_smoke -- --ignored --nocapture
     #[test]
@@ -900,8 +805,8 @@ mod tests {
                 heading: "Introduction".into(),
                 level: 1,
                 body: "This is a **first** paragraph with enough words to require \
-                       wrapping across multiple lines so we exercise the greedy \
-                       Latin line-breaker thoroughly.\n\n- bullet one\n- bullet two"
+                       wrapping across multiple lines so we exercise the layout \
+                       engine thoroughly.\n\n- bullet one\n- bullet two"
                     .into(),
             },
             Section {
@@ -926,13 +831,16 @@ mod tests {
         .expect("render should succeed");
         let bytes = std::fs::read(&out).unwrap();
         assert!(bytes.starts_with(b"%PDF"), "output is not a PDF");
+        // Typst subsets the CJK font, so even a Chinese PDF should be small.
         assert!(bytes.len() > 1500, "PDF suspiciously small: {}", bytes.len());
+        assert!(
+            bytes.len() < 5_000_000,
+            "CJK PDF should be subset-small, got {} bytes",
+            bytes.len()
+        );
         eprintln!("rendered {} bytes -> {}", bytes.len(), out.display());
     }
 
-    // English-only content should pick a compact Latin font (small PDF), not
-    // fall back to a large CJK font. #[ignore] — needs a system font.
-    // Run with: cargo test --lib render_smoke_english -- --ignored --nocapture
     #[test]
     #[ignore]
     fn render_smoke_english() {
@@ -945,8 +853,7 @@ mod tests {
         let sections = vec![Section {
             heading: "Introduction".into(),
             level: 1,
-            body: "A short English-only document. It should render with a compact \
-                   Latin font so the resulting PDF stays small.\n\n- one\n- two"
+            body: "A short English-only document. It should render small.\n\n- one\n- two"
                 .into(),
         }];
         let out = render_document(
@@ -955,8 +862,6 @@ mod tests {
         .expect("render should succeed");
         let len = std::fs::read(&out).unwrap().len();
         eprintln!("english PDF: {} bytes -> {}", len, out.display());
-        // Compact Latin faces are well under 5 MB embedded; a CJK fallback
-        // would be ~20 MB+.
         assert!(len < 5_000_000, "English PDF unexpectedly large: {len} bytes");
     }
 
@@ -971,7 +876,6 @@ mod tests {
             .or_else(|_| std::env::var("MICROCLAW_OPENAI_API_KEY"))
             .expect("set OPENAI_API_KEY (or MICROCLAW_OPENAI_API_KEY) to run this live test");
 
-        // 1) Ask a real LLM to draft a tiny multi-chapter book as JSON.
         let prompt = "Write a very short book on \"the history of the quartz \
             watch\". Respond with ONLY a JSON object of the form {\"title\": \
             string, \"subtitle\": string, \"sections\": [{\"heading\": string, \
@@ -999,7 +903,6 @@ mod tests {
         let n = book["sections"].as_array().map(|a| a.len()).unwrap_or(0);
         assert!(n > 0, "LLM returned no sections");
 
-        // 2) Render with the real render_pdf tool (keyless, deliver:false).
         let work = std::env::temp_dir().join(format!("microclaw_book_live_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&work).unwrap();
         let mut cfg = crate::config::Config::test_defaults();
@@ -1032,8 +935,8 @@ mod tests {
         );
     }
 
-    // Renders a Latin doc with bold/italic and checks it stays a valid,
-    // reasonably-sized PDF (variant faces embedded). #[ignore] — needs a font.
+    // Renders a Latin doc with bold/italic and checks it stays a valid PDF.
+    // #[ignore] — needs a font.
     #[test]
     #[ignore]
     fn render_emphasis_smoke() {
@@ -1057,7 +960,6 @@ mod tests {
                 .expect("render should succeed");
         let bytes = std::fs::read(&out).unwrap();
         assert!(bytes.starts_with(b"%PDF"), "not a PDF");
-        // Regular + bold + italic + bold-italic Latin faces embedded — still small.
         assert!(
             (1500..8_000_000).contains(&bytes.len()),
             "unexpected size: {} bytes",
@@ -1081,7 +983,6 @@ mod tests {
     #[test]
     fn markdown_blocks_splits_paragraph_and_list() {
         let blocks = markdown_blocks("Hello world.\n\n- one\n- two");
-        // one paragraph + two list items
         assert_eq!(blocks.len(), 3);
         assert!(matches!(blocks[0], Block::Paragraph(_)));
         assert!(matches!(blocks[1], Block::ListItem(_)));

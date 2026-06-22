@@ -15,15 +15,12 @@ yanked = "deny"
 # RUSTSEC-2026-0173: `proc-macro-error2` is unmaintained — compile-time-only
 #   proc macro pulled transitively via teloxide -> aquamarine; no runtime code.
 #
-# The following are all *unmaintained* (not vulnerable) advisories pulled in
-# transitively by `genpdf` (native book -> PDF rendering). They are render-only
-# (no network / untrusted-input exposure) and tracked for removal in #441, which
-# proposes migrating off genpdf/printpdf 0.3 to a maintained PDF backend.
-# RUSTSEC-2021-0140: `rusttype` unmaintained — genpdf's text/metrics backend.
-# RUSTSEC-2020-0020: `stb_truetype` deprecated — pulled via rusttype 0.8.
-# RUSTSEC-2020-0056: `stdweb` unmaintained — transitive under the rusttype chain.
-# RUSTSEC-2021-0153: `encoding` unmaintained — pulled via lopdf (PDF writer).
-# RUSTSEC-2020-0144: `lzw` unmaintained — pulled via lopdf (PDF writer).
+# The following are *unmaintained* (not vulnerable) advisories pulled in
+# transitively by `typst` (the render_pdf book/PDF backend). They are
+# compile-time / render-only with no network or untrusted-input exposure.
+# RUSTSEC-2024-0320: `yaml-rust` unmaintained — transitive in the typst stack.
+# RUSTSEC-2024-0436: `paste` no longer maintained — compile-time proc macro.
+# RUSTSEC-2025-0141: `bincode` 1.x unmaintained — transitive in the typst stack.
 ignore = [
   "RUSTSEC-2026-0049",
   "RUSTSEC-2026-0098",
@@ -31,11 +28,9 @@ ignore = [
   "RUSTSEC-2024-0388",
   "RUSTSEC-2026-0097",
   "RUSTSEC-2026-0173",
-  "RUSTSEC-2021-0140",
-  "RUSTSEC-2020-0020",
-  "RUSTSEC-2020-0056",
-  "RUSTSEC-2021-0153",
-  "RUSTSEC-2020-0144",
+  "RUSTSEC-2024-0320",
+  "RUSTSEC-2024-0436",
+  "RUSTSEC-2025-0141",
 ]
 
 [bans]
@@ -49,6 +44,7 @@ skip-tree = []
 
 [licenses]
 allow = [
+  "0BSD",
   "MIT",
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
@@ -60,9 +56,5 @@ allow = [
   "MPL-2.0",
   "Unicode-3.0",
   "Zlib",
-  # Public-domain dedication (more permissive than MIT). Only appears on the
-  # `encoding-index-*` data tables pulled transitively via genpdf -> lopdf ->
-  # encoding. See #441 (migrate off genpdf).
-  "CC0-1.0",
 ]
 confidence-threshold = 0.8
