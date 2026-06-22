@@ -774,6 +774,78 @@ mod tests {
         assert!(len < 5_000_000, "English PDF unexpectedly large: {len} bytes");
     }
 
+    // Live end-to-end "write a book" test: a real LLM drafts the chapters, then
+    // the real render_pdf tool renders them. #[ignore] — needs an API key (LLM
+    // only; rendering itself is keyless) and a system font; costs ~a cent.
+    // Run with: OPENAI_API_KEY=... cargo test --lib live_render_book -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_render_book() {
+        let key = std::env::var("OPENAI_API_KEY")
+            .or_else(|_| std::env::var("MICROCLAW_OPENAI_API_KEY"))
+            .expect("set OPENAI_API_KEY (or MICROCLAW_OPENAI_API_KEY) to run this live test");
+
+        // 1) Ask a real LLM to draft a tiny multi-chapter book as JSON.
+        let prompt = "Write a very short book on \"the history of the quartz \
+            watch\". Respond with ONLY a JSON object of the form {\"title\": \
+            string, \"subtitle\": string, \"sections\": [{\"heading\": string, \
+            \"body_markdown\": string}]} with exactly 3 sections. Each \
+            body_markdown is ~120 words of real prose plus a short markdown \
+            bullet list.";
+        let req = json!({
+            "model": "gpt-4o-mini",
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": prompt}]
+        });
+        let resp = reqwest::Client::new()
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&key)
+            .json(&req)
+            .send()
+            .await
+            .expect("chat request failed");
+        assert!(resp.status().is_success(), "chat HTTP {}", resp.status());
+        let v: Value = resp.json().await.expect("bad chat json");
+        let content = v["choices"][0]["message"]["content"]
+            .as_str()
+            .expect("no message content");
+        let mut book: Value = serde_json::from_str(content).expect("LLM did not return JSON");
+        let n = book["sections"].as_array().map(|a| a.len()).unwrap_or(0);
+        assert!(n > 0, "LLM returned no sections");
+
+        // 2) Render with the real render_pdf tool (keyless, deliver:false).
+        let work = std::env::temp_dir().join(format!("microclaw_book_live_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&work).unwrap();
+        let mut cfg = crate::config::Config::test_defaults();
+        cfg.data_dir = work.to_string_lossy().into_owned();
+        cfg.media.book.enabled = true;
+        let db_dir = work.join("db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let db = Arc::new(Database::new(db_dir.to_str().unwrap()).unwrap());
+        let tool = RenderPdfTool::new(&cfg, Arc::new(ChannelRegistry::new()), db);
+
+        book["deliver"] = json!(false);
+        let res = tool.execute(book.clone()).await;
+        assert!(!res.is_error, "render_pdf errored: {}", res.content);
+
+        let path = res
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("path"))
+            .and_then(|x| x.as_str())
+            .expect("metadata.path missing");
+        let bytes = std::fs::read(path).unwrap();
+        assert!(bytes.starts_with(b"%PDF"), "output is not a PDF");
+        assert!(bytes.len() > 1500, "PDF suspiciously small: {} bytes", bytes.len());
+        eprintln!(
+            "OK: book \"{}\" ({} sections) -> {} ({} bytes)",
+            book["title"].as_str().unwrap_or("?"),
+            n,
+            path,
+            bytes.len()
+        );
+    }
+
     #[test]
     fn markdown_blocks_splits_paragraph_and_list() {
         let blocks = markdown_blocks("Hello world.\n\n- one\n- two");
