@@ -241,10 +241,13 @@ fn parse_sections(input: &Value) -> Result<Vec<Section>, String> {
 /// Load the configured/auto-detected font as bytes. `needs_cjk` selects a
 /// CJK-capable font for Chinese/Japanese/Korean content; otherwise a compact
 /// Latin font is preferred (smaller embedded payload).
-fn load_font_bytes(cfg: &BookConfig, needs_cjk: bool) -> Result<Vec<u8>, String> {
+fn resolve_font_path(cfg: &BookConfig, needs_cjk: bool) -> Result<PathBuf, String> {
     if let Some(p) = cfg.font_path.as_deref().filter(|s| !s.trim().is_empty()) {
-        return std::fs::read(p)
-            .map_err(|e| format!("failed to read media.book.font_path '{p}': {e}"));
+        let pb = PathBuf::from(p);
+        if !pb.exists() {
+            return Err(format!("media.book.font_path '{p}' does not exist"));
+        }
+        return Ok(pb);
     }
     // Prefer the family matching the content; fall back to the other so we
     // still render *something* (CJK font also covers Latin).
@@ -256,9 +259,7 @@ fn load_font_bytes(cfg: &BookConfig, needs_cjk: bool) -> Result<Vec<u8>, String>
     for group in order {
         for cand in group {
             if Path::new(cand).exists() {
-                if let Ok(b) = std::fs::read(cand) {
-                    return Ok(b);
-                }
+                return Ok(PathBuf::from(cand));
             }
         }
     }
@@ -272,22 +273,87 @@ fn load_font_bytes(cfg: &BookConfig, needs_cjk: bool) -> Result<Vec<u8>, String>
     ))
 }
 
-/// Build a font family that embeds the face exactly once. Only the `regular`
-/// face is embedded; the bold/italic faces are mapped to non-embedded PDF
-/// built-ins (and are never selected, since rendering uses size — not weight —
-/// to mark headings). This keeps a CJK PDF near the font's own size instead of
-/// embedding it four times.
-fn font_family(bytes: &[u8]) -> Result<FontFamily<FontData>, String> {
+/// Build the font family for `regular_path`.
+///
+/// The regular face is always embedded once. For Latin documents we also try
+/// to embed the font's real Bold / Italic / BoldItalic sibling files so inline
+/// Markdown emphasis renders with matching glyphs; missing variants fall back
+/// to non-embedded PDF built-ins. For CJK documents the variant faces stay
+/// non-embedded built-ins (never selected — emphasis is rendered in the regular
+/// weight) so the big CJK face is embedded exactly once and the PDF stays small.
+fn font_family(
+    regular_path: &Path,
+    regular_bytes: &[u8],
+    embed_variants: bool,
+) -> Result<FontFamily<FontData>, String> {
     use printpdf::BuiltinFont;
     let regular =
-        FontData::new(bytes.to_vec(), None).map_err(|e| format!("invalid font: {e}"))?;
-    let builtin = |b| FontData::new(bytes.to_vec(), Some(b)).map_err(|e| format!("invalid font: {e}"));
+        FontData::new(regular_bytes.to_vec(), None).map_err(|e| format!("invalid font: {e}"))?;
+    let builtin = |b| FontData::new(regular_bytes.to_vec(), Some(b))
+        .map_err(|e| format!("invalid font: {e}"));
+
+    // Embed real bold/italic faces only when the doc uses emphasis (Latin);
+    // otherwise keep non-embedded built-ins so the PDF stays small.
+    let face = |kind: FaceKind, fallback: BuiltinFont| -> Result<FontData, String> {
+        if embed_variants {
+            if let Some(p) = variant_path(regular_path, kind) {
+                if let Ok(b) = std::fs::read(&p) {
+                    if let Ok(fd) = FontData::new(b, None) {
+                        return Ok(fd);
+                    }
+                }
+            }
+        }
+        builtin(fallback)
+    };
+
     Ok(FontFamily {
         regular,
-        bold: builtin(BuiltinFont::HelveticaBold)?,
-        italic: builtin(BuiltinFont::HelveticaOblique)?,
-        bold_italic: builtin(BuiltinFont::HelveticaBoldOblique)?,
+        bold: face(FaceKind::Bold, BuiltinFont::HelveticaBold)?,
+        italic: face(FaceKind::Italic, BuiltinFont::HelveticaOblique)?,
+        bold_italic: face(FaceKind::BoldItalic, BuiltinFont::HelveticaBoldOblique)?,
     })
+}
+
+#[derive(Clone, Copy)]
+enum FaceKind {
+    Bold,
+    Italic,
+    BoldItalic,
+}
+
+/// Find the sibling variant file for a regular font, trying the common naming
+/// conventions (`Arial Bold.ttf`, `DejaVuSans-Bold.ttf`,
+/// `LiberationSans-Bold.ttf`, …). Returns the first existing candidate.
+fn variant_path(regular: &Path, kind: FaceKind) -> Option<PathBuf> {
+    let dir = regular.parent()?;
+    let stem = regular.file_stem()?.to_str()?;
+    let ext = regular.extension().and_then(|e| e.to_str()).unwrap_or("ttf");
+    // (space-separated suffix, hyphenated suffix, oblique hyphenated suffix)
+    let (spaced, hyphen, oblique) = match kind {
+        FaceKind::Bold => (" Bold", "-Bold", "-Bold"),
+        FaceKind::Italic => (" Italic", "-Italic", "-Oblique"),
+        FaceKind::BoldItalic => (" Bold Italic", "-BoldItalic", "-BoldOblique"),
+    };
+    // Base stem with any "-Regular"/"Regular" marker removed.
+    let base = stem
+        .trim_end_matches("-Regular")
+        .trim_end_matches("Regular")
+        .trim_end_matches(['-', ' ']);
+    let base = if base.is_empty() { stem } else { base };
+    let names = [
+        format!("{stem}{spaced}.{ext}"),
+        format!("{base}{hyphen}.{ext}"),
+        format!("{base}{oblique}.{ext}"),
+        format!("{base}{spaced}.{ext}"),
+    ];
+    for n in names {
+        let p = dir.join(n);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// Does any string in the document contain a CJK character?
@@ -307,6 +373,18 @@ fn contains_cjk(sections: &[Section], title: &str) -> bool {
         || sections
             .iter()
             .any(|s| s.heading.chars().any(is_cjk) || s.body.chars().any(is_cjk))
+}
+
+/// Does any section body use bold/italic? Gates embedding the variant faces.
+fn uses_emphasis(sections: &[Section]) -> bool {
+    sections.iter().any(|s| {
+        markdown_blocks(&s.body).iter().any(|b| match b {
+            Block::Paragraph(spans) | Block::ListItem(spans) => {
+                spans.iter().any(|sp| sp.bold || sp.italic)
+            }
+            _ => false,
+        })
+    })
 }
 
 fn paper_size(page_size: &str) -> (Size, f64) {
@@ -331,8 +409,16 @@ fn render_document(
     sections: &[Section],
 ) -> Result<PathBuf, String> {
     let needs_cjk = contains_cjk(sections, title);
-    let bytes = load_font_bytes(cfg, needs_cjk)?;
-    let family = font_family(&bytes)?;
+    let font_path = resolve_font_path(cfg, needs_cjk)?;
+    let bytes = std::fs::read(&font_path)
+        .map_err(|e| format!("failed to read font '{}': {e}", font_path.display()))?;
+    // Latin documents get real inline emphasis (matching bold/italic faces are
+    // embedded); CJK documents keep emphasis flattened to the regular weight.
+    // Only embed the variant faces when the document actually uses emphasis, so
+    // plain documents stay small.
+    let styled = !needs_cjk;
+    let embed_variants = styled && uses_emphasis(sections);
+    let family = font_family(&font_path, &bytes, embed_variants)?;
 
     let mut doc = Document::new(family);
     doc.set_title(title);
@@ -355,7 +441,7 @@ fn render_document(
     let lines: Vec<Line> = {
         let fc = doc.font_cache();
         plan_lines(
-            fc, text_width, title, subtitle, author, want_cover, want_toc, sections,
+            fc, text_width, styled, title, subtitle, author, want_cover, want_toc, sections,
         )
     };
 
@@ -364,12 +450,27 @@ fn render_document(
             Line::Break(n) => doc.push(Break::new(n)),
             Line::PageBreak => doc.push(PageBreak::new()),
             Line::Text { text, size, align } => {
-                // Only the regular (embedded) face is CJK-safe, so we never
-                // switch to a bold/italic face; headings stand out by size.
+                // Pre-wrapped single-style line (CJK-safe path + headings).
                 let style = Style::new().with_font_size(size);
                 let mut p = Paragraph::default();
                 p.push_styled(text, style);
                 p.set_alignment(align);
+                doc.push(p);
+            }
+            Line::StyledPara { spans, size } => {
+                // Latin path: let genpdf wrap natively (it breaks on spaces) so
+                // each span keeps its own bold/italic face.
+                let mut p = Paragraph::default();
+                for span in spans {
+                    let mut style = Style::new().with_font_size(size);
+                    if span.bold {
+                        style = style.bold();
+                    }
+                    if span.italic {
+                        style = style.italic();
+                    }
+                    p.push_styled(span.text, style);
+                }
                 doc.push(p);
             }
         }
@@ -381,12 +482,25 @@ fn render_document(
     persist_output(data_dir, "docs", "pdf", &buf).map_err(|e| format!("failed to save PDF: {e}"))
 }
 
-/// A planned, already-wrapped output line (or spacing/page-break marker).
+/// An inline run of text sharing one style (bold/italic).
+struct Span {
+    text: String,
+    bold: bool,
+    italic: bool,
+}
+
+/// A planned output line / element (or spacing/page-break marker).
 enum Line {
+    /// Pre-wrapped single-style line — used for headings and the CJK path.
     Text {
         text: String,
         size: u8,
         align: Alignment,
+    },
+    /// Multi-span paragraph wrapped natively by genpdf — Latin emphasis path.
+    StyledPara {
+        spans: Vec<Span>,
+        size: u8,
     },
     Break(f64),
     PageBreak,
@@ -396,6 +510,7 @@ enum Line {
 fn plan_lines(
     fc: &FontCache,
     text_width: f64,
+    styled: bool,
     title: &str,
     subtitle: Option<&str>,
     author: Option<&str>,
@@ -436,7 +551,7 @@ fn plan_lines(
         push_wrapped(&mut out, fc, text_width, &s.heading, hsize, Alignment::Left);
         out.push(Line::Break(0.5));
         for block in markdown_blocks(&s.body) {
-            render_block(&mut out, fc, text_width, &block);
+            render_block(&mut out, fc, text_width, styled, block);
         }
     }
     out
@@ -450,65 +565,130 @@ fn heading_size(level: u8) -> u8 {
     }
 }
 
-/// A parsed Markdown block (inline styling is flattened to plain text for v1).
+/// A parsed Markdown block. Paragraph/list bodies keep their inline spans so
+/// bold/italic can be rendered; headings and code blocks are single-style.
 enum Block {
     Heading(u8, String),
-    Paragraph(String),
-    ListItem(String),
+    Paragraph(Vec<Span>),
+    ListItem(Vec<Span>),
     Code(String),
+}
+
+fn flatten_spans(spans: &[Span]) -> String {
+    spans.iter().map(|s| s.text.as_str()).collect()
+}
+
+/// Drop leading/trailing whitespace-only spans and trim the edges.
+fn trim_spans(mut spans: Vec<Span>) -> Vec<Span> {
+    while spans.first().is_some_and(|s| s.text.trim().is_empty()) {
+        spans.remove(0);
+    }
+    while spans.last().is_some_and(|s| s.text.trim().is_empty()) {
+        spans.pop();
+    }
+    if let Some(first) = spans.first_mut() {
+        first.text = first.text.trim_start().to_string();
+    }
+    if let Some(last) = spans.last_mut() {
+        last.text = last.text.trim_end().to_string();
+    }
+    spans
+}
+
+/// Append text to the span list, merging with the last span when the style
+/// matches so adjacent same-style runs stay together.
+fn push_span(spans: &mut Vec<Span>, text: &str, bold: bool, italic: bool) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(last) = spans.last_mut() {
+        if last.bold == bold && last.italic == italic {
+            last.text.push_str(text);
+            return;
+        }
+    }
+    spans.push(Span {
+        text: text.to_string(),
+        bold,
+        italic,
+    });
 }
 
 fn markdown_blocks(md: &str) -> Vec<Block> {
     let mut blocks = Vec::new();
-    let mut buf = String::new();
-    // Active block kind: 0 none, 1 paragraph, 2 item, 3 code; heading carries level.
+    let mut spans: Vec<Span> = Vec::new();
+    // Active block kind: 0 none, 1 paragraph, 2 item, 3 code, 4 heading.
     let mut mode: u8 = 0;
     let mut heading_level: u8 = 1;
+    let mut bold = 0u32;
+    let mut italic = 0u32;
 
-    let flush = |blocks: &mut Vec<Block>, buf: &mut String, mode: u8, hl: u8| {
-        let text = buf.trim().to_string();
-        if !text.is_empty() {
-            match mode {
-                1 => blocks.push(Block::Paragraph(text)),
-                2 => blocks.push(Block::ListItem(text)),
-                3 => blocks.push(Block::Code(text)),
-                4 => blocks.push(Block::Heading(hl, text)),
-                _ => {}
+    let flush = |blocks: &mut Vec<Block>, spans: &mut Vec<Span>, mode: u8, hl: u8| {
+        let taken = std::mem::take(spans);
+        match mode {
+            1 => {
+                let s = trim_spans(taken);
+                if !s.is_empty() {
+                    blocks.push(Block::Paragraph(s));
+                }
             }
+            2 => {
+                let s = trim_spans(taken);
+                if !s.is_empty() {
+                    blocks.push(Block::ListItem(s));
+                }
+            }
+            3 => {
+                let t = flatten_spans(&taken).trim().to_string();
+                if !t.is_empty() {
+                    blocks.push(Block::Code(t));
+                }
+            }
+            4 => {
+                let t = flatten_spans(&taken).trim().to_string();
+                if !t.is_empty() {
+                    blocks.push(Block::Heading(hl, t));
+                }
+            }
+            _ => {}
         }
-        buf.clear();
     };
 
     for ev in Parser::new(md) {
         match ev {
             Event::Start(Tag::Paragraph) => {
-                flush(&mut blocks, &mut buf, mode, heading_level);
+                flush(&mut blocks, &mut spans, mode, heading_level);
                 mode = 1;
             }
             Event::Start(Tag::Item) => {
-                flush(&mut blocks, &mut buf, mode, heading_level);
+                flush(&mut blocks, &mut spans, mode, heading_level);
                 mode = 2;
             }
             Event::Start(Tag::CodeBlock(_)) => {
-                flush(&mut blocks, &mut buf, mode, heading_level);
+                flush(&mut blocks, &mut spans, mode, heading_level);
                 mode = 3;
             }
             Event::Start(Tag::Heading { level, .. }) => {
-                flush(&mut blocks, &mut buf, mode, heading_level);
+                flush(&mut blocks, &mut spans, mode, heading_level);
                 mode = 4;
                 heading_level = heading_md_level(level);
             }
+            Event::Start(Tag::Strong) => bold += 1,
+            Event::Start(Tag::Emphasis) => italic += 1,
+            Event::End(TagEnd::Strong) => bold = bold.saturating_sub(1),
+            Event::End(TagEnd::Emphasis) => italic = italic.saturating_sub(1),
             Event::End(TagEnd::Paragraph | TagEnd::Item | TagEnd::CodeBlock | TagEnd::Heading(_)) => {
-                flush(&mut blocks, &mut buf, mode, heading_level);
+                flush(&mut blocks, &mut spans, mode, heading_level);
                 mode = 0;
             }
-            Event::Text(t) | Event::Code(t) => buf.push_str(&t),
-            Event::SoftBreak => buf.push(' '),
-            Event::HardBreak => buf.push('\n'),
+            // Inline code is rendered as regular text (no monospace face bundled).
+            Event::Text(t) | Event::Code(t) => push_span(&mut spans, &t, bold > 0, italic > 0),
+            Event::SoftBreak => push_span(&mut spans, " ", bold > 0, italic > 0),
+            Event::HardBreak => push_span(&mut spans, "\n", bold > 0, italic > 0),
             _ => {}
         }
     }
-    flush(&mut blocks, &mut buf, mode, heading_level);
+    flush(&mut blocks, &mut spans, mode, heading_level);
     blocks
 }
 
@@ -520,26 +700,32 @@ fn heading_md_level(level: HeadingLevel) -> u8 {
     }
 }
 
-fn render_block(out: &mut Vec<Line>, fc: &FontCache, text_width: f64, block: &Block) {
+/// Plan one Markdown block. When `styled`, paragraph/list bodies become native
+/// multi-span paragraphs (real bold/italic); otherwise (CJK) they are flattened
+/// and pre-wrapped in the regular weight.
+fn render_block(out: &mut Vec<Line>, fc: &FontCache, text_width: f64, styled: bool, block: Block) {
     match block {
         Block::Heading(level, text) => {
             out.push(Line::Break(0.8));
-            push_wrapped(out, fc, text_width, text, heading_size(*level), Alignment::Left);
+            push_wrapped(out, fc, text_width, &text, heading_size(level), Alignment::Left);
             out.push(Line::Break(0.3));
         }
-        Block::Paragraph(text) => {
-            push_wrapped(out, fc, text_width, text, BASE_FONT_SIZE, Alignment::Left);
+        Block::Paragraph(spans) => {
+            if styled {
+                out.push(Line::StyledPara { spans, size: BASE_FONT_SIZE });
+            } else {
+                push_wrapped(out, fc, text_width, &flatten_spans(&spans), BASE_FONT_SIZE, Alignment::Left);
+            }
             out.push(Line::Break(0.6));
         }
-        Block::ListItem(text) => {
-            push_wrapped(
-                out,
-                fc,
-                text_width,
-                &format!("• {text}"),
-                BASE_FONT_SIZE,
-                Alignment::Left,
-            );
+        Block::ListItem(mut spans) => {
+            if styled {
+                spans.insert(0, Span { text: "• ".into(), bold: false, italic: false });
+                out.push(Line::StyledPara { spans, size: BASE_FONT_SIZE });
+            } else {
+                let text = format!("• {}", flatten_spans(&spans));
+                push_wrapped(out, fc, text_width, &text, BASE_FONT_SIZE, Alignment::Left);
+            }
             out.push(Line::Break(0.2));
         }
         Block::Code(text) => {
@@ -844,6 +1030,52 @@ mod tests {
             path,
             bytes.len()
         );
+    }
+
+    // Renders a Latin doc with bold/italic and checks it stays a valid,
+    // reasonably-sized PDF (variant faces embedded). #[ignore] — needs a font.
+    #[test]
+    #[ignore]
+    fn render_emphasis_smoke() {
+        let cfg = BookConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let dir = std::env::temp_dir().join("microclaw_render_emphasis");
+        let _ = std::fs::create_dir_all(&dir);
+        let sections = vec![Section {
+            heading: "Styles".into(),
+            level: 1,
+            body: "This paragraph has **bold words**, *italic words*, and \
+                   ***both at once***, plus inline `code`. It should wrap across \
+                   a couple of lines with the emphasis preserved.\n\n\
+                   - a **bold** bullet\n- an *italic* bullet"
+                .into(),
+        }];
+        let out =
+            render_document(&cfg, &dir, "Emphasis Test", None, None, true, true, &sections)
+                .expect("render should succeed");
+        let bytes = std::fs::read(&out).unwrap();
+        assert!(bytes.starts_with(b"%PDF"), "not a PDF");
+        // Regular + bold + italic + bold-italic Latin faces embedded — still small.
+        assert!(
+            (1500..8_000_000).contains(&bytes.len()),
+            "unexpected size: {} bytes",
+            bytes.len()
+        );
+        eprintln!("emphasis PDF: {} bytes -> {}", bytes.len(), out.display());
+    }
+
+    #[test]
+    fn markdown_emphasis_produces_styled_spans() {
+        let blocks = markdown_blocks("Plain **bold** and *italic* words.");
+        assert_eq!(blocks.len(), 1);
+        let Block::Paragraph(spans) = &blocks[0] else {
+            panic!("expected a paragraph");
+        };
+        assert!(spans.iter().any(|s| s.bold && !s.italic && s.text.contains("bold")));
+        assert!(spans.iter().any(|s| s.italic && !s.bold && s.text.contains("italic")));
+        assert!(spans.iter().any(|s| !s.bold && !s.italic && s.text.contains("Plain")));
     }
 
     #[test]
