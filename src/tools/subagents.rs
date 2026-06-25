@@ -114,8 +114,25 @@ fn compute_child_token_budget(
 }
 
 pub(crate) fn normalize_subagent_artifact_payload(raw_text: &str) -> (String, String) {
-    let text = raw_text.trim();
-    let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
+    // Strip any chain-of-thought the model emitted so it never leaks into the
+    // chat announcement, and so a JSON object that follows a <think> block can
+    // still be parsed (a leading reasoning block makes a whole-string parse fail).
+    let cleaned = crate::agent_engine::strip_thinking(raw_text);
+    let text = cleaned.trim();
+    // Prefer a clean whole-string parse; otherwise recover an embedded {...}
+    // object (model wrapped the JSON in prose) so we don't fall back to dumping
+    // raw reasoning as the answer.
+    let parsed = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .or_else(|| {
+            let start = text.find('{')?;
+            let end = text.rfind('}')?;
+            if end > start {
+                serde_json::from_str::<serde_json::Value>(&text[start..=end]).ok()
+            } else {
+                None
+            }
+        });
     let mut summary = String::new();
     let mut final_answer = String::new();
     let mut findings: Vec<String> = Vec::new();
@@ -329,7 +346,7 @@ async fn run_sub_agent_task(
 
     let profile = crate::tools::specialists::resolve_specialist(Some(specialist.as_str()));
     let system_prompt = format!(
-        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nFor long tasks, call `report_progress` at meaningful milestones with a one-line status so the user gets colleague-style updates while you work.\nIf a sub-problem falls outside your expertise, get a quick second opinion from the right specialist with `consult_specialist` (e.g. as a researcher, hand a draft to the writer; as a coder, ask the mathematician to check a formula) and weave their answer into your work — don't fake expertise you don't have. If a sub-problem is large enough to need its own run and you're allowed to spawn, delegate it with `sessions_spawn`; otherwise name the right specialist in next_actions.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {{type,path,description}}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.",
+        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nYou are a background worker: you have NO tools to message the chat, write memory, or schedule tasks (no `send_message`, `write_memory`, or `schedule` — do not look for them or stall when they are missing). `read_memory` and `structured_memory_search` are read-only lookups. Any durable facts you surface in `findings`/`final_answer` are persisted by the orchestrator automatically — just report them, don't try to save them yourself.\nFor long tasks, call `report_progress` at meaningful milestones with a one-line status so the user gets colleague-style updates while you work.\nIf a sub-problem falls outside your expertise, get a quick second opinion from the right specialist with `consult_specialist` (e.g. as a researcher, hand a draft to the writer; as a coder, ask the mathematician to check a formula) and weave their answer into your work — don't fake expertise you don't have. If a sub-problem is large enough to need its own run and you're allowed to spawn, delegate it with `sessions_spawn`; otherwise name the right specialist in next_actions.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {{type,path,description}}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.",
         persona = profile.persona
     );
 
@@ -2356,6 +2373,29 @@ mod tests {
             .await;
         assert!(result.is_error);
         assert!(result.content.contains("run_id"));
+    }
+
+    #[test]
+    fn test_normalize_strips_leaked_thinking() {
+        // A sub-agent that emits only chain-of-thought (no JSON) must not leak
+        // the <think> block into the announced answer.
+        let raw = "<think>The write_memory tool is not available - I see read_memory \
+                   but not write_memory. Let me inform the user.</think>";
+        let (answer, envelope) = normalize_subagent_artifact_payload(raw);
+        assert!(!answer.contains("<think>"));
+        assert!(!answer.contains("write_memory"));
+        assert!(!envelope.contains("<think>"));
+    }
+
+    #[test]
+    fn test_normalize_recovers_json_after_thinking() {
+        // Reasoning block followed by the contract JSON: the JSON must win, not
+        // the raw text fallback.
+        let raw = "<think>let me structure this</think>\n\
+                   {\"summary\":\"done\",\"findings\":[\"a\"],\"artifacts\":[],\
+                   \"next_actions\":[],\"final_answer\":\"All set.\"}";
+        let (answer, _envelope) = normalize_subagent_artifact_payload(raw);
+        assert_eq!(answer, "All set.");
     }
 
     #[test]
