@@ -79,6 +79,9 @@ pub fn build_help_response() -> String {
         "  /usage               Token usage report for this chat",
         "  /rewind [id]         List or restore conversation checkpoints",
         "",
+        "Diagnostics (admin only)",
+        "  /log [N]             Tail the last N log lines (default 100, max 300)",
+        "",
         "  /help                Show this message",
         "",
         "Tip: in groups, mention me first (e.g. @bot /status).",
@@ -206,6 +209,48 @@ fn persist_channel_llm_overrides(
         .map_err(|e| e.to_string())
 }
 
+/// Default / maximum number of log lines a single `/log` invocation tails.
+const LOG_TAIL_DEFAULT_LINES: usize = 100;
+const LOG_TAIL_MAX_LINES: usize = 300;
+
+/// Tail the bot's own log files into chat for troubleshooting (`/log [N]`,
+/// `/log read 100`, etc.). Admin-gated: logs can contain other chats' content
+/// and secrets, so access is restricted to configured `control_chat_ids`. File
+/// logging is only active under the gateway (`MICROCLAW_GATEWAY`); in console
+/// mode logs stream to stdout and there is no file to read.
+fn build_log_response(config: &Config, chat_id: i64, command: &str) -> String {
+    // Default-deny when no control chats are configured.
+    if config.control_chat_ids.is_empty() {
+        return "Log access is disabled. Set `control_chat_ids` in the config to your admin chat(s) first — logs can contain other chats' content and secrets, so this is admin-only.".to_string();
+    }
+    if !config.control_chat_ids.contains(&chat_id) {
+        return "Not authorized: `/log` is restricted to the configured control chat(s).".to_string();
+    }
+
+    // Accept an optional line count anywhere in the args; ignore keywords like
+    // "read"/"print" so `/log`, `/log 50`, and `/log read 50` all work.
+    let requested = command
+        .split_whitespace()
+        .skip(1)
+        .find_map(|tok| tok.parse::<usize>().ok());
+    let lines = requested
+        .unwrap_or(LOG_TAIL_DEFAULT_LINES)
+        .clamp(1, LOG_TAIL_MAX_LINES);
+
+    let log_dir = PathBuf::from(config.runtime_data_dir()).join("logs");
+    match crate::logging::read_last_lines_from_logs(&log_dir, lines) {
+        Ok(rows) if rows.is_empty() => format!(
+            "No log lines found in {}. File logging is only active when running under the gateway (MICROCLAW_GATEWAY); in console mode logs go to stdout.",
+            log_dir.display()
+        ),
+        Ok(rows) => {
+            let body = rows.join("\n");
+            format!("📜 Last {} log line(s):\n```\n{body}\n```", rows.len())
+        }
+        Err(e) => format!("Failed to read logs from {}: {e}", log_dir.display()),
+    }
+}
+
 pub async fn handle_chat_command(
     state: &AppState,
     chat_id: i64,
@@ -319,6 +364,14 @@ pub async fn handle_chat_command(
             )
             .await,
         );
+    }
+
+    if trimmed == "/log"
+        || trimmed == "/logs"
+        || trimmed.starts_with("/log ")
+        || trimmed.starts_with("/logs ")
+    {
+        return Some(build_log_response(&state.config, chat_id, trimmed));
     }
 
     if trimmed == "/start" {
@@ -1629,7 +1682,24 @@ channels:
 
 #[cfg(test)]
 mod slash_command_tests {
-    use super::{build_help_response, is_slash_command};
+    use super::{build_help_response, build_log_response, is_slash_command};
+    use crate::config::Config;
+
+    #[test]
+    fn test_log_command_denied_without_control_chats() {
+        let mut cfg = Config::test_defaults();
+        cfg.control_chat_ids = vec![];
+        let resp = build_log_response(&cfg, 1, "/log");
+        assert!(resp.contains("disabled"), "got: {resp}");
+    }
+
+    #[test]
+    fn test_log_command_denied_for_non_control_chat() {
+        let mut cfg = Config::test_defaults();
+        cfg.control_chat_ids = vec![999];
+        let resp = build_log_response(&cfg, 1, "/log 50");
+        assert!(resp.contains("Not authorized"), "got: {resp}");
+    }
 
     #[test]
     fn test_is_slash_command_with_leading_mentions() {
@@ -1648,7 +1718,7 @@ mod slash_command_tests {
         for cmd in [
             "/status", "/clear", "/reset", "/stop", "/archive", "/model", "/models",
             "/provider", "/providers", "/skills", "/reload-skills", "/user", "/usage",
-            "/rewind", "/help",
+            "/rewind", "/log", "/help",
         ] {
             assert!(help.contains(cmd), "help missing {cmd}");
         }

@@ -110,7 +110,11 @@ async fn deliver_scheduler_message_with_backoff(
 
 async fn run_due_tasks(state: &Arc<AppState>) {
     let now = Utc::now().to_rfc3339();
-    let tasks = match call_blocking(state.db.clone(), move |db| db.claim_due_tasks(&now, 200)).await
+    let now_for_claim = now.clone();
+    let tasks = match call_blocking(state.db.clone(), move |db| {
+        db.claim_due_tasks(&now_for_claim, 200)
+    })
+    .await
     {
         Ok(t) => t,
         Err(e) => {
@@ -119,10 +123,22 @@ async fn run_due_tasks(state: &Arc<AppState>) {
         }
     };
 
+    if tasks.is_empty() {
+        // Per-tick heartbeat at debug so an operator can confirm the poll loop
+        // is alive without flooding info logs every minute.
+        tracing::debug!("Scheduler: tick at {now}, no due tasks");
+        return;
+    }
+    info!("Scheduler: {} due task(s) claimed at {}", tasks.len(), now);
+
     for task in tasks {
         info!(
-            "Scheduler: executing task #{} for chat {}",
-            task.id, task.chat_id
+            "Scheduler: executing task #{} for chat {} (schedule {}='{}', was due at {})",
+            task.id,
+            task.chat_id,
+            task.schedule_type,
+            task.schedule_value,
+            task.next_run,
         );
 
         let started_at = Utc::now();
@@ -273,6 +289,17 @@ async fn run_due_tasks(state: &Arc<AppState>) {
         } else {
             None // one-shot
         };
+
+        match &next_run {
+            Some(nr) => info!(
+                "Scheduler: task #{} finished (success={}, {}ms); next run at {}",
+                task.id, success, duration_ms, nr
+            ),
+            None => info!(
+                "Scheduler: one-shot task #{} finished (success={}, {}ms); marked completed",
+                task.id, success, duration_ms
+            ),
+        }
 
         let started_for_update = started_at_str.clone();
         if let Err(e) = call_blocking(state.db.clone(), move |db| {
