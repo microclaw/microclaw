@@ -80,7 +80,7 @@ pub fn build_help_response() -> String {
         "  /rewind [id]         List or restore conversation checkpoints",
         "",
         "Diagnostics (admin only)",
-        "  /log [N]             Tail the last N log lines (default 100, max 300)",
+        "  /log [N] [keyword]   Tail last N log lines (default 100, max 300); filter by keyword",
         "",
         "  /help                Show this message",
         "",
@@ -212,10 +212,15 @@ fn persist_channel_llm_overrides(
 /// Default / maximum number of log lines a single `/log` invocation tails.
 const LOG_TAIL_DEFAULT_LINES: usize = 100;
 const LOG_TAIL_MAX_LINES: usize = 300;
+/// When a keyword filter is given, scan up to this many recent lines for matches
+/// before keeping the last N. Bounds the work while still reaching back far
+/// enough to catch a rare term (e.g. an error from an hour ago).
+const LOG_FILTER_SCAN_LINES: usize = 5000;
 
-/// Tail the bot's own log files into chat for troubleshooting (`/log [N]`,
-/// `/log read 100`, etc.). Admin-gated: logs can contain other chats' content
-/// and secrets, so access is restricted to configured `control_chat_ids`. File
+/// Tail the bot's own log files into chat for troubleshooting. Supports
+/// `/log [N]`, `/log read 100`, and a keyword filter: `/log error`,
+/// `/log 50 scheduler`. Admin-gated: logs can contain other chats' content and
+/// secrets, so access is restricted to configured `control_chat_ids`. File
 /// logging is only active under the gateway (`MICROCLAW_GATEWAY`); in console
 /// mode logs stream to stdout and there is no file to read.
 fn build_log_response(config: &Config, chat_id: i64, command: &str) -> String {
@@ -227,25 +232,60 @@ fn build_log_response(config: &Config, chat_id: i64, command: &str) -> String {
         return "Not authorized: `/log` is restricted to the configured control chat(s).".to_string();
     }
 
-    // Accept an optional line count anywhere in the args; ignore keywords like
-    // "read"/"print" so `/log`, `/log 50`, and `/log read 50` all work.
-    let requested = command
-        .split_whitespace()
-        .skip(1)
-        .find_map(|tok| tok.parse::<usize>().ok());
-    let lines = requested
+    // Parse the args after `/log`: a bare number sets the line count; the verbs
+    // "read"/"print" are ignored; anything else becomes a case-insensitive
+    // keyword filter (joined when multiple words are given).
+    let mut requested_lines: Option<usize> = None;
+    let mut filter_tokens: Vec<&str> = Vec::new();
+    for tok in command.split_whitespace().skip(1) {
+        if let Ok(n) = tok.parse::<usize>() {
+            requested_lines.get_or_insert(n);
+        } else if tok.eq_ignore_ascii_case("read") || tok.eq_ignore_ascii_case("print") {
+            continue;
+        } else {
+            filter_tokens.push(tok);
+        }
+    }
+    let lines = requested_lines
         .unwrap_or(LOG_TAIL_DEFAULT_LINES)
         .clamp(1, LOG_TAIL_MAX_LINES);
+    let filter = (!filter_tokens.is_empty()).then(|| filter_tokens.join(" ").to_lowercase());
 
     let log_dir = PathBuf::from(config.runtime_data_dir()).join("logs");
-    match crate::logging::read_last_lines_from_logs(&log_dir, lines) {
+    // With a filter, scan a wider window then keep the last N matches; otherwise
+    // just tail the last N lines directly.
+    let scan = if filter.is_some() {
+        LOG_FILTER_SCAN_LINES
+    } else {
+        lines
+    };
+    match crate::logging::read_last_lines_from_logs(&log_dir, scan) {
         Ok(rows) if rows.is_empty() => format!(
             "No log lines found in {}. File logging is only active when running under the gateway (MICROCLAW_GATEWAY); in console mode logs go to stdout.",
             log_dir.display()
         ),
         Ok(rows) => {
+            let (rows, suffix) = match &filter {
+                Some(kw) => {
+                    let mut matched: Vec<String> = rows
+                        .into_iter()
+                        .filter(|l| l.to_lowercase().contains(kw))
+                        .collect();
+                    if matched.len() > lines {
+                        matched = matched.split_off(matched.len() - lines);
+                    }
+                    (matched, format!(" matching \"{kw}\""))
+                }
+                None => (rows, String::new()),
+            };
+            if rows.is_empty() {
+                return format!("No log line{suffix} in the last {LOG_FILTER_SCAN_LINES} lines.");
+            }
             let body = rows.join("\n");
-            format!("📜 Last {} log line(s):\n```\n{body}\n```", rows.len())
+            format!(
+                "📜 Last {} log line(s){suffix}:\n```\n{body}\n```",
+                rows.len()
+            )
         }
         Err(e) => format!("Failed to read logs from {}: {e}", log_dir.display()),
     }
@@ -1699,6 +1739,37 @@ mod slash_command_tests {
         cfg.control_chat_ids = vec![999];
         let resp = build_log_response(&cfg, 1, "/log 50");
         assert!(resp.contains("Not authorized"), "got: {resp}");
+    }
+
+    #[test]
+    fn test_log_command_keyword_filter() {
+        let dir = std::env::temp_dir().join(format!(
+            "microclaw_log_cmd_test_{}/runtime",
+            uuid::Uuid::new_v4()
+        ));
+        let logs = dir.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(
+            logs.join("microclaw-2026-02-08-10.log"),
+            "INFO starting up\nERROR scheduler exploded\nINFO all good\n",
+        )
+        .unwrap();
+
+        let mut cfg = Config::test_defaults();
+        cfg.control_chat_ids = vec![7];
+        cfg.data_dir = dir.to_string_lossy().to_string();
+
+        // Keyword filter keeps only matching lines (case-insensitive).
+        let resp = build_log_response(&cfg, 7, "/log error");
+        assert!(resp.contains("scheduler exploded"), "got: {resp}");
+        assert!(!resp.contains("all good"), "got: {resp}");
+        assert!(resp.contains("matching \"error\""), "got: {resp}");
+
+        // No filter tails everything.
+        let all = build_log_response(&cfg, 7, "/log");
+        assert!(all.contains("all good") && all.contains("starting up"), "got: {all}");
+
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
     #[test]
