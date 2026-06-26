@@ -3,8 +3,18 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::Utc;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
 use tracing::{error, info, warn};
+
+/// Max number of distinct chats whose due tasks run concurrently per tick.
+/// Bounds load on the LLM provider and DB while still letting independent
+/// chats' tasks make progress in parallel.
+const MAX_CONCURRENT_SCHEDULED_TASKS: usize = 4;
+/// Wall-clock cap for a single scheduled task's agent run. A hung run is
+/// stopped, marked failed (and DLQ'd) rather than pinning a slot indefinitely.
+const SCHEDULED_TASK_TIMEOUT_SECS: u64 = 600;
 
 use crate::agent_engine::process_with_agent;
 use crate::agent_engine::AgentRequestContext;
@@ -131,185 +141,230 @@ async fn run_due_tasks(state: &Arc<AppState>) {
     }
     info!("Scheduler: {} due task(s) claimed at {}", tasks.len(), now);
 
+    // Run distinct chats concurrently (bounded), but tasks WITHIN one chat
+    // sequentially — two tasks for the same chat would otherwise race on that
+    // chat's session/history. A single slow or hung task no longer blocks
+    // unrelated chats' tasks for the rest of the tick.
+    let mut by_chat: HashMap<i64, Vec<microclaw_storage::db::ScheduledTask>> = HashMap::new();
     for task in tasks {
-        info!(
-            "Scheduler: executing task #{} for chat {} (schedule {}='{}', was due at {})",
-            task.id,
-            task.chat_id,
-            task.schedule_type,
-            task.schedule_value,
-            task.next_run,
-        );
-
-        let started_at = Utc::now();
-        let started_at_str = started_at.to_rfc3339();
-        let routing = get_chat_routing(&state.channel_registry, state.db.clone(), task.chat_id)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| {
-                warn!(
-                    "Scheduler: no chat routing found for chat {}, defaulting to telegram/private",
-                    task.chat_id
-                );
-                ChatRouting {
-                    channel_name: "telegram".to_string(),
-                    conversation: ConversationKind::Private,
-                }
-            });
-
-        // Run agent loop with the task prompt
-        let (success, result_summary) = match process_with_agent(
-            state,
-            AgentRequestContext {
-                caller_channel: &routing.channel_name,
-                chat_id: task.chat_id,
-                chat_type: routing.conversation.as_agent_chat_type(),
-            },
-            Some(&task.prompt),
-            None,
-        )
-        .await
-        {
-            Ok(response) => {
-                if !response.is_empty() {
-                    let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
-                    if let Err(delivery_err) = deliver_scheduler_message_with_backoff(
-                        state,
-                        &bot_username,
-                        task.chat_id,
-                        &response,
-                    )
-                    .await
-                    {
-                        error!(
-                            "Scheduler: task #{} generated a reply but delivery failed: {}",
-                            task.id, delivery_err
-                        );
-                        (false, Some(format!("Delivery error: {delivery_err}")))
-                    } else {
-                        let summary = if response.len() > 200 {
-                            format!("{}...", &response[..floor_char_boundary(&response, 200)])
-                        } else {
-                            response
-                        };
-                        (true, Some(summary))
-                    }
-                } else {
-                    (true, None)
-                }
+        by_chat.entry(task.chat_id).or_default().push(task);
+    }
+    let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_SCHEDULED_TASKS));
+    let mut set = JoinSet::new();
+    for (_chat_id, chat_tasks) in by_chat {
+        let state = state.clone();
+        let sem = sem.clone();
+        set.spawn(async move {
+            // One permit per chat group; bounds total concurrency across chats.
+            let _permit = sem.acquire_owned().await;
+            for task in chat_tasks {
+                run_one_due_task(state.clone(), task).await;
             }
-            Err(e) => {
-                error!("Scheduler: task #{} failed: {e}", task.id);
-                let err_text = format!("Scheduled task #{} failed: {e}", task.id);
+        });
+    }
+    while set.join_next().await.is_some() {}
+}
+
+/// Execute a single claimed scheduled task end-to-end: run the agent (bounded by
+/// a wall-clock timeout so a hung run can't pin a slot forever), deliver the
+/// reply, log the run, enqueue a DLQ entry on failure, and reschedule (or mark
+/// terminal). Failures and timeouts are surfaced — never silently swallowed.
+async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::ScheduledTask) {
+    info!(
+        "Scheduler: executing task #{} for chat {} (schedule {}='{}', was due at {})",
+        task.id, task.chat_id, task.schedule_type, task.schedule_value, task.next_run,
+    );
+
+    let started_at = Utc::now();
+    let started_at_str = started_at.to_rfc3339();
+    let routing = get_chat_routing(&state.channel_registry, state.db.clone(), task.chat_id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| {
+            warn!(
+                "Scheduler: no chat routing found for chat {}, defaulting to telegram/private",
+                task.chat_id
+            );
+            ChatRouting {
+                channel_name: "telegram".to_string(),
+                conversation: ConversationKind::Private,
+            }
+        });
+
+    // Run agent loop with the task prompt, bounded by a wall-clock timeout.
+    let agent_future = process_with_agent(
+        &state,
+        AgentRequestContext {
+            caller_channel: &routing.channel_name,
+            chat_id: task.chat_id,
+            chat_type: routing.conversation.as_agent_chat_type(),
+        },
+        Some(&task.prompt),
+        None,
+    );
+    let timeout = Duration::from_secs(SCHEDULED_TASK_TIMEOUT_SECS);
+    let (success, result_summary) = match tokio::time::timeout(timeout, agent_future).await {
+        Err(_elapsed) => {
+            error!(
+                "Scheduler: task #{} timed out after {}s",
+                task.id, SCHEDULED_TASK_TIMEOUT_SECS
+            );
+            let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
+            let err_text = format!(
+                "Scheduled task #{} timed out after {}s and was stopped.",
+                task.id, SCHEDULED_TASK_TIMEOUT_SECS
+            );
+            let _ = deliver_scheduler_message_with_backoff(
+                &state,
+                &bot_username,
+                task.chat_id,
+                &err_text,
+            )
+            .await;
+            (
+                false,
+                Some(format!("Timed out after {}s", SCHEDULED_TASK_TIMEOUT_SECS)),
+            )
+        }
+        Ok(Ok(response)) => {
+            if !response.is_empty() {
                 let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
-                let summary = match deliver_scheduler_message_with_backoff(
-                    state,
+                if let Err(delivery_err) = deliver_scheduler_message_with_backoff(
+                    &state,
                     &bot_username,
                     task.chat_id,
-                    &err_text,
+                    &response,
                 )
                 .await
                 {
-                    Ok(()) => format!("Error: {e}"),
-                    Err(delivery_err) => {
-                        warn!(
-                            "Scheduler: failed to notify chat {} about task #{} failure: {}",
-                            task.chat_id, task.id, delivery_err
-                        );
-                        format!("Error: {e}; delivery error: {delivery_err}")
-                    }
-                };
-                (false, Some(summary))
+                    error!(
+                        "Scheduler: task #{} generated a reply but delivery failed: {}",
+                        task.id, delivery_err
+                    );
+                    (false, Some(format!("Delivery error: {delivery_err}")))
+                } else {
+                    let summary = if response.len() > 200 {
+                        format!("{}...", &response[..floor_char_boundary(&response, 200)])
+                    } else {
+                        response
+                    };
+                    (true, Some(summary))
+                }
+            } else {
+                (true, None)
             }
-        };
+        }
+        Ok(Err(e)) => {
+            error!("Scheduler: task #{} failed: {e}", task.id);
+            let err_text = format!("Scheduled task #{} failed: {e}", task.id);
+            let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
+            let summary = match deliver_scheduler_message_with_backoff(
+                &state,
+                &bot_username,
+                task.chat_id,
+                &err_text,
+            )
+            .await
+            {
+                Ok(()) => format!("Error: {e}"),
+                Err(delivery_err) => {
+                    warn!(
+                        "Scheduler: failed to notify chat {} about task #{} failure: {}",
+                        task.chat_id, task.id, delivery_err
+                    );
+                    format!("Error: {e}; delivery error: {delivery_err}")
+                }
+            };
+            (false, Some(summary))
+        }
+    };
 
-        let finished_at = Utc::now();
-        let finished_at_str = finished_at.to_rfc3339();
-        let duration_ms = (finished_at - started_at).num_milliseconds();
+    let finished_at = Utc::now();
+    let finished_at_str = finished_at.to_rfc3339();
+    let duration_ms = (finished_at - started_at).num_milliseconds();
 
-        // Log the task run
-        let log_summary = result_summary.clone();
-        let started_for_log = started_at_str.clone();
-        let finished_for_log = finished_at_str.clone();
+    // Log the task run
+    let log_summary = result_summary.clone();
+    let started_for_log = started_at_str.clone();
+    let finished_for_log = finished_at_str.clone();
+    if let Err(e) = call_blocking(state.db.clone(), move |db| {
+        db.log_task_run(
+            task.id,
+            task.chat_id,
+            &started_for_log,
+            &finished_for_log,
+            duration_ms,
+            success,
+            log_summary.as_deref(),
+        )?;
+        Ok(())
+    })
+    .await
+    {
+        error!("Scheduler: failed to log task run for #{}: {e}", task.id);
+    }
+
+    if !success {
+        let started_for_dlq = started_at_str.clone();
+        let finished_for_dlq = finished_at_str.clone();
+        let dlq_summary = result_summary.clone();
         if let Err(e) = call_blocking(state.db.clone(), move |db| {
-            db.log_task_run(
+            db.insert_scheduled_task_dlq(
                 task.id,
                 task.chat_id,
-                &started_for_log,
-                &finished_for_log,
+                &started_for_dlq,
+                &finished_for_dlq,
                 duration_ms,
-                success,
-                log_summary.as_deref(),
+                dlq_summary.as_deref(),
             )?;
             Ok(())
         })
         .await
         {
-            error!("Scheduler: failed to log task run for #{}: {e}", task.id);
+            error!("Scheduler: failed to enqueue DLQ for task #{}: {e}", task.id);
         }
+    }
 
-        if !success {
-            let started_for_dlq = started_at_str.clone();
-            let finished_for_dlq = finished_at_str.clone();
-            let dlq_summary = result_summary.clone();
-            if let Err(e) = call_blocking(state.db.clone(), move |db| {
-                db.insert_scheduled_task_dlq(
-                    task.id,
-                    task.chat_id,
-                    &started_for_dlq,
-                    &finished_for_dlq,
-                    duration_ms,
-                    dlq_summary.as_deref(),
-                )?;
-                Ok(())
-            })
-            .await
-            {
-                error!(
-                    "Scheduler: failed to enqueue DLQ for task #{}: {e}",
-                    task.id
-                );
+    // Compute next run (prefer task-specific timezone; fallback to app timezone).
+    let tz = resolve_task_timezone(&task.timezone, &state.config.timezone);
+    let next_run = if task.schedule_type == "cron" {
+        match cron::Schedule::from_str(&task.schedule_value) {
+            Ok(schedule) => schedule
+                .upcoming(tz)
+                .next()
+                .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339()),
+            Err(e) => {
+                error!("Scheduler: invalid cron for task #{}: {e}", task.id);
+                None
             }
         }
+    } else {
+        None // one-shot
+    };
 
-        // Compute next run (prefer task-specific timezone; fallback to app timezone).
-        let tz = resolve_task_timezone(&task.timezone, &state.config.timezone);
-        let next_run = if task.schedule_type == "cron" {
-            match cron::Schedule::from_str(&task.schedule_value) {
-                Ok(schedule) => schedule
-                    .upcoming(tz)
-                    .next()
-                    .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339()),
-                Err(e) => {
-                    error!("Scheduler: invalid cron for task #{}: {e}", task.id);
-                    None
-                }
-            }
-        } else {
-            None // one-shot
-        };
+    match &next_run {
+        Some(nr) => info!(
+            "Scheduler: task #{} finished (success={}, {}ms); next run at {}",
+            task.id, success, duration_ms, nr
+        ),
+        None => info!(
+            "Scheduler: one-shot task #{} finished (success={}, {}ms); marked {}",
+            task.id,
+            success,
+            duration_ms,
+            if success { "completed" } else { "failed" }
+        ),
+    }
 
-        match &next_run {
-            Some(nr) => info!(
-                "Scheduler: task #{} finished (success={}, {}ms); next run at {}",
-                task.id, success, duration_ms, nr
-            ),
-            None => info!(
-                "Scheduler: one-shot task #{} finished (success={}, {}ms); marked completed",
-                task.id, success, duration_ms
-            ),
-        }
-
-        let started_for_update = started_at_str.clone();
-        if let Err(e) = call_blocking(state.db.clone(), move |db| {
-            db.update_task_after_run(task.id, &started_for_update, next_run.as_deref())?;
-            Ok(())
-        })
-        .await
-        {
-            error!("Scheduler: failed to update task #{}: {e}", task.id);
-        }
+    let started_for_update = started_at_str.clone();
+    if let Err(e) = call_blocking(state.db.clone(), move |db| {
+        db.update_task_after_run(task.id, &started_for_update, next_run.as_deref(), success)?;
+        Ok(())
+    })
+    .await
+    {
+        error!("Scheduler: failed to update task #{}: {e}", task.id);
     }
 }
 

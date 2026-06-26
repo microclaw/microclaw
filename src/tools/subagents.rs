@@ -113,6 +113,39 @@ fn compute_child_token_budget(
     Ok(desired.clamp(2_000, configured_max))
 }
 
+/// Whether the sub-agent's terminal text actually carries the structured
+/// output contract — a JSON object with a non-empty `summary` or `final_answer`
+/// — as opposed to raw prose or leaked reasoning. Drives the one-shot repair
+/// re-ask in the sub-agent loop before falling back to best-effort
+/// normalization.
+pub(crate) fn subagent_output_is_structured(raw_text: &str) -> bool {
+    let cleaned = crate::agent_engine::strip_thinking(raw_text);
+    let text = cleaned.trim();
+    let parsed = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .or_else(|| {
+            let start = text.find('{')?;
+            let end = text.rfind('}')?;
+            if end > start {
+                serde_json::from_str::<serde_json::Value>(&text[start..=end]).ok()
+            } else {
+                None
+            }
+        });
+    parsed
+        .as_ref()
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            ["final_answer", "summary"].iter().any(|k| {
+                obj.get(*k)
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 pub(crate) fn normalize_subagent_artifact_payload(raw_text: &str) -> (String, String) {
     // Strip any chain-of-thought the model emitted so it never leaks into the
     // chat announcement, and so a JSON object that follows a <think> block can
@@ -362,6 +395,10 @@ async fn run_sub_agent_task(
     }];
     let mut input_tokens_sum = 0_i64;
     let mut output_tokens_sum = 0_i64;
+    // Bounded (one-shot) repair: if the model ends without the required JSON
+    // contract, we re-ask exactly once before falling back to best-effort
+    // normalization. Prevents an unbounded re-ask loop.
+    let mut repair_attempted = false;
 
     for _ in 0..MAX_SUB_AGENT_ITERATIONS {
         if is_cancelled(db.clone(), &run_id, &local_cancel).await? {
@@ -416,6 +453,31 @@ async fn run_sub_agent_task(
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            // One-shot repair re-ask: the contract requires a JSON object, but
+            // models sometimes stop on prose or leaked reasoning. Ask once for
+            // clean JSON before falling back to best-effort normalization. Only
+            // for a natural `end_turn`; a `max_tokens` stop is truncation, where
+            // re-asking would just burn more budget without fixing the shape.
+            if stop_reason == "end_turn"
+                && !repair_attempted
+                && !text.trim().is_empty()
+                && !subagent_output_is_structured(&text)
+            {
+                repair_attempted = true;
+                log_subagent_event(db.clone(), &run_id, "output_repair", None).await;
+                messages.push(Message {
+                    role: "assistant".into(),
+                    content: MessageContent::Text(text),
+                });
+                messages.push(Message {
+                    role: "user".into(),
+                    content: MessageContent::Text(
+                        "Your previous reply was not the required output. Respond with ONLY a single JSON object matching the contract: {\"summary\":string,\"findings\":string[],\"artifacts\":[],\"next_actions\":string[],\"final_answer\":string}. No prose, no markdown fences, no <think> tags."
+                            .into(),
+                    ),
+                });
+                continue;
+            }
             let source = if text.is_empty() {
                 "(sub-agent produced no output)".to_string()
             } else {
@@ -2385,6 +2447,23 @@ mod tests {
         assert!(!answer.contains("<think>"));
         assert!(!answer.contains("write_memory"));
         assert!(!envelope.contains("<think>"));
+    }
+
+    #[test]
+    fn test_subagent_output_is_structured() {
+        // Prose / leaked reasoning is NOT structured (would trigger a repair).
+        assert!(!subagent_output_is_structured(
+            "<think>no write_memory tool</think> I can't save this."
+        ));
+        assert!(!subagent_output_is_structured("Done, everything looks good."));
+        // A contract object (even after a thinking block) IS structured.
+        assert!(subagent_output_is_structured(
+            "<think>ok</think>{\"summary\":\"s\",\"final_answer\":\"done\"}"
+        ));
+        // An object with only empty contract fields is not structured.
+        assert!(!subagent_output_is_structured(
+            "{\"summary\":\"\",\"final_answer\":\"\"}"
+        ));
     }
 
     #[test]

@@ -2048,10 +2048,13 @@ impl Database {
         task_id: i64,
         last_run: &str,
         next_run: Option<&str>,
+        success: bool,
     ) -> Result<(), MicroClawError> {
         let conn = self.lock_conn();
         match next_run {
             Some(next) => {
+                // Recurring task: reschedule and stay active regardless of this
+                // run's outcome (a transient failure retries on the next tick).
                 conn.execute(
                     "UPDATE scheduled_tasks
                      SET last_run = ?1, next_run = ?2, status = 'active'
@@ -2060,10 +2063,13 @@ impl Database {
                 )?;
             }
             None => {
-                // One-shot task, mark completed
+                // One-shot task: reflect the actual outcome. A failed one-shot
+                // becomes 'failed' (and is recorded in the DLQ) rather than
+                // masquerading as 'completed'.
+                let status = if success { "completed" } else { "failed" };
                 conn.execute(
-                    "UPDATE scheduled_tasks SET last_run = ?1, status = 'completed' WHERE id = ?2",
-                    params![last_run, task_id],
+                    "UPDATE scheduled_tasks SET last_run = ?1, status = ?2 WHERE id = ?3",
+                    params![last_run, status, task_id],
                 )?;
             }
         }
@@ -6598,7 +6604,7 @@ mod tests {
             .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
             .unwrap();
 
-        db.update_task_after_run(id, "2024-01-01T00:01:00Z", Some("2024-01-01T00:02:00Z"))
+        db.update_task_after_run(id, "2024-01-01T00:01:00Z", Some("2024-01-01T00:02:00Z"), true)
             .unwrap();
 
         let tasks = db.get_tasks_for_chat(100).unwrap();
@@ -6641,13 +6647,35 @@ mod tests {
             )
             .unwrap();
 
-        // One-shot: no next_run, should mark as completed
-        db.update_task_after_run(id, "2024-01-01T00:00:00Z", None)
+        // One-shot success: no next_run, should mark as completed
+        db.update_task_after_run(id, "2024-01-01T00:00:00Z", None, true)
             .unwrap();
 
         // Should not appear in active/paused list
         let tasks = db.get_tasks_for_chat(100).unwrap();
         assert!(tasks.is_empty());
+        assert_eq!(db.get_task_by_id(id).unwrap().unwrap().status, "completed");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_update_task_after_run_one_shot_failure_marked_failed() {
+        let (db, dir) = test_db();
+        let id = db
+            .create_scheduled_task(
+                100,
+                "test",
+                "once",
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+            )
+            .unwrap();
+
+        // A failed one-shot must be recorded as 'failed', not 'completed'.
+        db.update_task_after_run(id, "2024-01-01T00:00:00Z", None, false)
+            .unwrap();
+
+        assert_eq!(db.get_task_by_id(id).unwrap().unwrap().status, "failed");
         cleanup(&dir);
     }
 

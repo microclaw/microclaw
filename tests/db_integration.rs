@@ -167,7 +167,7 @@ fn test_scheduled_task_lifecycle() {
     assert_eq!(tasks_100.len(), 1); // cancelled ones filtered out
 
     // After run - cron task gets new next_run
-    db.update_task_after_run(id1, "2024-01-01T00:05:00Z", Some("2024-01-01T00:10:00Z"))
+    db.update_task_after_run(id1, "2024-01-01T00:05:00Z", Some("2024-01-01T00:10:00Z"), true)
         .unwrap();
     let task = db.get_task_by_id(id1).unwrap().unwrap();
     assert_eq!(task.last_run.as_deref(), Some("2024-01-01T00:05:00Z"));
@@ -184,7 +184,7 @@ fn test_scheduled_task_lifecycle() {
             "2024-01-01T00:00:00Z",
         )
         .unwrap();
-    db.update_task_after_run(id4, "2024-01-01T00:00:00Z", None)
+    db.update_task_after_run(id4, "2024-01-01T00:00:00Z", None, true)
         .unwrap();
     let task = db.get_task_by_id(id4).unwrap().unwrap();
     assert_eq!(task.status, "completed");
