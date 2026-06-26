@@ -25,6 +25,55 @@ use microclaw_core::llm_types::{
     ResponseContentBlock, ToolDefinition, Usage,
 };
 
+/// HTTP statuses worth retrying: rate limit (429), Anthropic "overloaded"
+/// (529), and transient server errors (500/502/503/504). Everything else
+/// (400/401/403/404/422 …) is terminal — retrying just fails again and hides
+/// the real problem.
+pub(crate) fn is_retryable_status(status: u16) -> bool {
+    matches!(status, 429 | 529 | 500 | 502 | 503 | 504)
+}
+
+/// Transport-level failures (connection refused, reset, timeout) are transient
+/// and safe to retry on a fresh request — the server never saw a complete
+/// request, so there is no risk of duplicating a side effect.
+pub(crate) fn is_retryable_transport_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_request()
+}
+
+/// Parse a `Retry-After` header in delta-seconds form (the HTTP-date form is
+/// ignored — providers use seconds in practice).
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(std::time::Duration::from_secs)
+}
+
+/// Backoff for retry `attempt` (1-based): exponential (2^attempt seconds) capped
+/// at 32s, with "equal jitter" (half fixed, half random) so a burst of callers
+/// — e.g. many cron tasks firing at once — don't retry in lockstep and stampede
+/// the provider. Never returns less than a server-provided `Retry-After`.
+fn retry_backoff(attempt: u32, retry_after: Option<std::time::Duration>) -> std::time::Duration {
+    let exp = 2u64.saturating_pow(attempt).min(32);
+    let half = (exp / 2).max(1);
+    // Cheap jitter source; randomness quality is irrelevant, we only need to
+    // desynchronize concurrent retriers.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()))
+        .unwrap_or(0);
+    let jittered = half + (nanos % (half + 1));
+    let base = std::time::Duration::from_secs(jittered);
+    match retry_after {
+        Some(ra) => base.max(ra),
+        None => base,
+    }
+}
+
 /// Remove invalid `ToolResult` blocks that cannot be matched to the most recent
 /// assistant `ToolUse` turn. This can happen after session compaction or
 /// malformed history reconstruction.
@@ -975,7 +1024,7 @@ impl LlmProvider for AnthropicProvider {
         let body = self.build_request_body(&request)?;
 
         loop {
-            let response = self
+            let send_result = self
                 .http
                 .post(&self.base_url)
                 .header("x-api-key", &self.api_key)
@@ -983,7 +1032,20 @@ impl LlmProvider for AnthropicProvider {
                 .header("content-type", "application/json")
                 .json(&body)
                 .send()
-                .await?;
+                .await;
+            let response = match send_result {
+                Ok(r) => r,
+                Err(e) if is_retryable_transport_error(&e) && retries < max_retries => {
+                    retries += 1;
+                    let delay = retry_backoff(retries, None);
+                    warn!(
+                        "LLM transport error ({e}), retrying in {delay:?} (attempt {retries}/{max_retries})"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
 
             let status = response.status();
 
@@ -995,12 +1057,12 @@ impl LlmProvider for AnthropicProvider {
                 return Ok(parsed);
             }
 
-            if status.as_u16() == 429 && retries < max_retries {
+            if is_retryable_status(status.as_u16()) && retries < max_retries {
                 retries += 1;
-                let delay = std::time::Duration::from_secs(2u64.pow(retries));
+                let retry_after = parse_retry_after(response.headers());
+                let delay = retry_backoff(retries, retry_after);
                 warn!(
-                    "Rate limited, retrying in {:?} (attempt {retries}/{max_retries})",
-                    delay
+                    "Transient LLM error (HTTP {status}), retrying in {delay:?} (attempt {retries}/{max_retries})"
                 );
                 tokio::time::sleep(delay).await;
                 continue;
@@ -1597,7 +1659,19 @@ impl LlmProvider for OpenAiProvider {
             if !self.api_key.trim().is_empty() {
                 req = req.header("Authorization", format!("Bearer {}", self.api_key));
             }
-            let response = req.send().await?;
+            let response = match req.send().await {
+                Ok(r) => r,
+                Err(e) if is_retryable_transport_error(&e) && retries < max_retries => {
+                    retries += 1;
+                    let delay = retry_backoff(retries, None);
+                    warn!(
+                        "LLM transport error ({e}), retrying in {delay:?} (attempt {retries}/{max_retries})"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
 
             let status = response.status();
 
@@ -1614,12 +1688,12 @@ impl LlmProvider for OpenAiProvider {
                 ));
             }
 
-            if status.as_u16() == 429 && retries < max_retries {
+            if is_retryable_status(status.as_u16()) && retries < max_retries {
                 retries += 1;
-                let delay = std::time::Duration::from_secs(2u64.pow(retries));
+                let retry_after = parse_retry_after(response.headers());
+                let delay = retry_backoff(retries, retry_after);
                 warn!(
-                    "Rate limited, retrying in {:?} (attempt {retries}/{max_retries})",
-                    delay
+                    "Transient LLM error (HTTP {status}), retrying in {delay:?} (attempt {retries}/{max_retries})"
                 );
                 tokio::time::sleep(delay).await;
                 continue;
@@ -1945,7 +2019,19 @@ impl OpenAiProvider {
                     req = req.header("ChatGPT-Account-ID", account_id);
                 }
             }
-            let response = req.send().await?;
+            let response = match req.send().await {
+                Ok(r) => r,
+                Err(e) if is_retryable_transport_error(&e) && retries < max_retries => {
+                    retries += 1;
+                    let delay = retry_backoff(retries, None);
+                    warn!(
+                        "LLM transport error ({e}), retrying in {delay:?} (attempt {retries}/{max_retries})"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             let status = response.status();
 
             if status.is_success() {
@@ -1954,12 +2040,12 @@ impl OpenAiProvider {
                 return Ok(translate_oai_responses_response(parsed));
             }
 
-            if status.as_u16() == 429 && retries < max_retries {
+            if is_retryable_status(status.as_u16()) && retries < max_retries {
                 retries += 1;
-                let delay = std::time::Duration::from_secs(2u64.pow(retries));
+                let retry_after = parse_retry_after(response.headers());
+                let delay = retry_backoff(retries, retry_after);
                 warn!(
-                    "Rate limited, retrying in {:?} (attempt {retries}/{max_retries})",
-                    delay
+                    "Transient LLM error (HTTP {status}), retrying in {delay:?} (attempt {retries}/{max_retries})"
                 );
                 tokio::time::sleep(delay).await;
                 continue;
@@ -2665,6 +2751,38 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::env_lock()
+    }
+
+    #[test]
+    fn test_is_retryable_status_classification() {
+        // Transient: rate limit, overloaded, 5xx.
+        for s in [429, 529, 500, 502, 503, 504] {
+            assert!(is_retryable_status(s), "{s} should be retryable");
+        }
+        // Terminal: client errors and success must not retry.
+        for s in [200, 400, 401, 403, 404, 422] {
+            assert!(!is_retryable_status(s), "{s} should be terminal");
+        }
+    }
+
+    #[test]
+    fn test_retry_backoff_grows_and_is_bounded() {
+        // Equal-jitter range is [2^a/2, 2^a], capped at 32s.
+        let d1 = retry_backoff(1, None).as_secs();
+        assert!((1..=2).contains(&d1), "attempt 1 backoff {d1}s out of range");
+        let d3 = retry_backoff(3, None).as_secs();
+        assert!((4..=8).contains(&d3), "attempt 3 backoff {d3}s out of range");
+        // Cap holds for large attempts.
+        let dbig = retry_backoff(20, None).as_secs();
+        assert!((16..=32).contains(&dbig), "large backoff {dbig}s exceeds cap");
+    }
+
+    #[test]
+    fn test_retry_backoff_honors_retry_after_floor() {
+        // A server-provided Retry-After is a floor the computed backoff cannot
+        // undercut.
+        let d = retry_backoff(1, Some(Duration::from_secs(45)));
+        assert_eq!(d.as_secs(), 45);
     }
 
     // -----------------------------------------------------------------------
