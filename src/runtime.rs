@@ -518,6 +518,7 @@ pub async fn run(
     }
 
     crate::scheduler::spawn_scheduler(state.clone());
+    crate::scheduler::spawn_dlq_replay(state.clone());
     crate::scheduler::spawn_reflector(state.clone());
     crate::scheduler::spawn_task_standup(state.clone());
     crate::scheduler::spawn_idle_checkin(state.clone());

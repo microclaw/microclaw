@@ -113,6 +113,35 @@ fn compute_child_token_budget(
     Ok(desired.clamp(2_000, configured_max))
 }
 
+/// Name of the synthetic tool a sub-agent calls to return its final structured
+/// result. Using a tool input schema is the provider-native way to constrain the
+/// shape of the output (validated function/tool arguments on both Anthropic and
+/// OpenAI), which is far more reliable than parsing free-text JSON.
+const SUBMIT_RESULT_TOOL: &str = "submit_result";
+
+/// The contract schema, expressed as a tool so the model emits it as validated
+/// tool input rather than free text.
+fn submit_result_tool_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: SUBMIT_RESULT_TOOL.to_string(),
+        description:
+            "Submit your final structured result and end the run. Call this exactly once when the \
+             task is complete, instead of writing the result as plain text."
+                .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string", "description": "One-line summary of what you did."},
+                "findings": {"type": "array", "items": {"type": "string"}, "description": "Key findings or results."},
+                "artifacts": {"type": "array", "items": {"type": "object"}, "description": "Files/artifacts produced, each {type, path, description}."},
+                "next_actions": {"type": "array", "items": {"type": "string"}, "description": "Suggested follow-up actions."},
+                "final_answer": {"type": "string", "description": "The full answer delivered to the user."}
+            },
+            "required": ["summary", "final_answer"]
+        }),
+    }
+}
+
 /// Whether the sub-agent's terminal text actually carries the structured
 /// output contract — a JSON object with a non-empty `summary` or `final_answer`
 /// — as opposed to raw prose or leaked reasoning. Drives the one-shot repair
@@ -375,11 +404,15 @@ async fn run_sub_agent_task(
         Some(channel_registry),
         allow_session_tools,
     );
-    let tool_defs = tools.definitions().to_vec();
+    // The sub-agent's normal tools plus a synthetic `submit_result` tool used to
+    // return the final structured result as validated tool input (native
+    // constrained decoding) rather than hand-written JSON text.
+    let mut tool_defs = tools.definitions().to_vec();
+    tool_defs.push(submit_result_tool_definition());
 
     let profile = crate::tools::specialists::resolve_specialist(Some(specialist.as_str()));
     let system_prompt = format!(
-        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nYou are a background worker: you have NO tools to message the chat, write memory, or schedule tasks (no `send_message`, `write_memory`, or `schedule` — do not look for them or stall when they are missing). `read_memory` and `structured_memory_search` are read-only lookups. Any durable facts you surface in `findings`/`final_answer` are persisted by the orchestrator automatically — just report them, don't try to save them yourself.\nFor long tasks, call `report_progress` at meaningful milestones with a one-line status so the user gets colleague-style updates while you work.\nIf a sub-problem falls outside your expertise, get a quick second opinion from the right specialist with `consult_specialist` (e.g. as a researcher, hand a draft to the writer; as a coder, ask the mathematician to check a formula) and weave their answer into your work — don't fake expertise you don't have. If a sub-problem is large enough to need its own run and you're allowed to spawn, delegate it with `sessions_spawn`; otherwise name the right specialist in next_actions.\nOutput contract (required): return a JSON object with keys:\n- summary: string\n- findings: string[]\n- artifacts: {{type,path,description}}[]\n- next_actions: string[]\n- final_answer: string\nReturn only JSON in the final turn.",
+        "{persona}\n\nComplete the task thoroughly with tool use when needed.\nYou are a background worker: you have NO tools to message the chat, write memory, or schedule tasks (no `send_message`, `write_memory`, or `schedule` — do not look for them or stall when they are missing). `read_memory` and `structured_memory_search` are read-only lookups. Any durable facts you surface in `findings`/`final_answer` are persisted by the orchestrator automatically — just report them, don't try to save them yourself.\nFor long tasks, call `report_progress` at meaningful milestones with a one-line status so the user gets colleague-style updates while you work.\nIf a sub-problem falls outside your expertise, get a quick second opinion from the right specialist with `consult_specialist` (e.g. as a researcher, hand a draft to the writer; as a coder, ask the mathematician to check a formula) and weave their answer into your work — don't fake expertise you don't have. If a sub-problem is large enough to need its own run and you're allowed to spawn, delegate it with `sessions_spawn`; otherwise name the right specialist in next_actions.\nOutput contract (required): when the task is complete, call the `submit_result` tool exactly once with your structured result (summary, findings, artifacts, next_actions, final_answer). Prefer `submit_result` over writing the result as text. If you do answer in text instead, it MUST be a single JSON object with those same keys and nothing else.",
         persona = profile.persona
     );
 
@@ -493,6 +526,27 @@ async fn run_sub_agent_task(
         }
 
         if stop_reason == "tool_use" {
+            // If the model called `submit_result`, its (schema-validated) input
+            // IS the final structured result — short-circuit and return it.
+            if let Some(submit_input) = response.content.iter().find_map(|b| match b {
+                ResponseContentBlock::ToolUse { name, input, .. }
+                    if name == SUBMIT_RESULT_TOOL =>
+                {
+                    Some(input.clone())
+                }
+                _ => None,
+            }) {
+                log_subagent_event(db.clone(), &run_id, "submit_result", None).await;
+                let (final_text, artifact_json) =
+                    normalize_subagent_artifact_payload(&submit_input.to_string());
+                return Ok((
+                    final_text,
+                    artifact_json,
+                    input_tokens_sum,
+                    output_tokens_sum,
+                ));
+            }
+
             let assistant_content: Vec<ContentBlock> = response
                 .content
                 .iter()
@@ -2447,6 +2501,22 @@ mod tests {
         assert!(!answer.contains("<think>"));
         assert!(!answer.contains("write_memory"));
         assert!(!envelope.contains("<think>"));
+    }
+
+    #[test]
+    fn test_submit_result_tool_definition_shape() {
+        let def = submit_result_tool_definition();
+        assert_eq!(def.name, SUBMIT_RESULT_TOOL);
+        let props = def.input_schema.get("properties").unwrap();
+        for key in ["summary", "findings", "artifacts", "next_actions", "final_answer"] {
+            assert!(props.get(key).is_some(), "missing schema property {key}");
+        }
+        let required = def.input_schema.get("required").unwrap().as_array().unwrap();
+        assert!(required.iter().any(|v| v == "final_answer"));
+        // A submit_result payload normalizes into the announced answer.
+        let payload = json!({"summary": "s", "final_answer": "the answer"}).to_string();
+        let (answer, _envelope) = normalize_subagent_artifact_payload(&payload);
+        assert_eq!(answer, "the answer");
     }
 
     #[test]
