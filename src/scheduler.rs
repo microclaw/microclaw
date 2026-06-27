@@ -368,6 +368,152 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
     }
 }
 
+/// What to do with a dead-lettered task during the auto-replay sweep.
+#[derive(Debug, PartialEq, Eq)]
+enum DlqReplayAction {
+    /// Re-activate the task for one more attempt.
+    Requeue,
+    /// Out of attempts — leave it in the DLQ for manual inspection.
+    GiveUp,
+    /// Not eligible (e.g. a cron task that reschedules itself, or a task that
+    /// was cancelled/completed since it failed).
+    Skip,
+}
+
+/// Pure replay decision so the policy is unit-testable without a DB.
+///
+/// Auto-replay only rescues tasks currently in `failed` state — i.e. one-shot
+/// tasks that hit a transient failure. Recurring (cron) tasks reschedule
+/// themselves on the next tick, so requeueing them would just run them
+/// off-schedule. `failure_count` is the cumulative number of DLQ entries for
+/// the task; once it reaches `max_attempts` we stop and leave it for a human.
+fn dlq_replay_action(task_status: &str, failure_count: u32, max_attempts: u32) -> DlqReplayAction {
+    if task_status != "failed" {
+        return DlqReplayAction::Skip;
+    }
+    if failure_count >= max_attempts {
+        return DlqReplayAction::GiveUp;
+    }
+    DlqReplayAction::Requeue
+}
+
+/// Periodically retry scheduled tasks that landed in the dead-letter queue.
+/// A one-shot task that failed transiently is re-activated for another attempt,
+/// bounded by `dlq_max_replay_attempts`; after that it's left in the DLQ for
+/// manual inspection. OFF only if `dlq_replay_enabled` is false.
+pub fn spawn_dlq_replay(state: Arc<AppState>) {
+    if !state.config.dlq_replay_enabled {
+        info!("DLQ auto-replay disabled by config");
+        return;
+    }
+    let interval_secs = state.config.dlq_replay_interval_secs.max(30);
+    tokio::spawn(async move {
+        info!("DLQ auto-replay started (interval: {}s)", interval_secs);
+        let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            run_dlq_replay(&state).await;
+        }
+    });
+}
+
+async fn run_dlq_replay(state: &Arc<AppState>) {
+    let max_attempts = state.config.dlq_max_replay_attempts.max(1);
+    let entries = match call_blocking(state.db.clone(), |db| {
+        db.list_scheduled_task_dlq(None, None, false, 100)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("DLQ auto-replay: failed to list dead-lettered tasks: {e}");
+            return;
+        }
+    };
+    if entries.is_empty() {
+        return;
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut requeued = 0usize;
+    for entry in entries {
+        let task_id = entry.task_id;
+        let dlq_id = entry.id;
+
+        let task = call_blocking(state.db.clone(), move |db| db.get_task_by_id(task_id))
+            .await
+            .ok()
+            .flatten();
+        let Some(task) = task else {
+            // Parent task is gone; close out the DLQ entry so we don't rescan it.
+            let _ = call_blocking(state.db.clone(), move |db| {
+                db.mark_scheduled_task_dlq_replayed(dlq_id, Some("task no longer exists"))
+            })
+            .await;
+            continue;
+        };
+
+        // Cumulative failure count for this task == number of DLQ rows.
+        let failure_count = call_blocking(state.db.clone(), move |db| {
+            db.list_scheduled_task_dlq(None, Some(task_id), true, 1000)
+        })
+        .await
+        .map(|v| v.len() as u32)
+        .unwrap_or(0);
+
+        match dlq_replay_action(&task.status, failure_count, max_attempts) {
+            DlqReplayAction::Skip => {
+                let _ = call_blocking(state.db.clone(), move |db| {
+                    db.mark_scheduled_task_dlq_replayed(
+                        dlq_id,
+                        Some("task not in failed state; no replay needed"),
+                    )
+                })
+                .await;
+            }
+            DlqReplayAction::GiveUp => {
+                warn!(
+                    "DLQ auto-replay: task #{} exhausted {} attempt(s); leaving in DLQ for manual inspection",
+                    task_id, max_attempts
+                );
+                let _ = call_blocking(state.db.clone(), move |db| {
+                    db.mark_scheduled_task_dlq_replayed(
+                        dlq_id,
+                        Some("max replay attempts reached; left for manual inspection"),
+                    )
+                })
+                .await;
+            }
+            DlqReplayAction::Requeue => {
+                let now_for_requeue = now.clone();
+                let ok = call_blocking(state.db.clone(), move |db| {
+                    db.requeue_scheduled_task(task_id, &now_for_requeue)
+                })
+                .await
+                .unwrap_or(false);
+                if ok {
+                    let note = format!("auto-replay attempt {failure_count}/{max_attempts}");
+                    let _ = call_blocking(state.db.clone(), move |db| {
+                        db.mark_scheduled_task_dlq_replayed(dlq_id, Some(&note))
+                    })
+                    .await;
+                    info!(
+                        "DLQ auto-replay: requeued task #{} (attempt {}/{})",
+                        task_id, failure_count, max_attempts
+                    );
+                    requeued += 1;
+                } else {
+                    warn!("DLQ auto-replay: failed to requeue task #{}", task_id);
+                }
+            }
+        }
+    }
+    if requeued > 0 {
+        info!("DLQ auto-replay: requeued {requeued} task(s) for retry");
+    }
+}
+
 const REFLECTOR_SYSTEM_PROMPT: &str = r#"You are a memory extraction specialist. Extract durable, factual information from conversations.
 
 Rules:
@@ -1640,6 +1786,20 @@ mod tests {
         assert_eq!(format_duration_secs(5), "5s");
         assert_eq!(format_duration_secs(125), "2m");
         assert_eq!(format_duration_secs(3 * 3600 + 25 * 60), "3h25m");
+    }
+
+    #[test]
+    fn test_dlq_replay_action_policy() {
+        // A failed one-shot under the attempt cap is requeued.
+        assert_eq!(dlq_replay_action("failed", 1, 3), DlqReplayAction::Requeue);
+        assert_eq!(dlq_replay_action("failed", 2, 3), DlqReplayAction::Requeue);
+        // At/over the cap we give up and leave it for manual inspection.
+        assert_eq!(dlq_replay_action("failed", 3, 3), DlqReplayAction::GiveUp);
+        assert_eq!(dlq_replay_action("failed", 9, 3), DlqReplayAction::GiveUp);
+        // Non-failed tasks (active cron, cancelled, completed) are skipped.
+        assert_eq!(dlq_replay_action("active", 1, 3), DlqReplayAction::Skip);
+        assert_eq!(dlq_replay_action("cancelled", 1, 3), DlqReplayAction::Skip);
+        assert_eq!(dlq_replay_action("completed", 1, 3), DlqReplayAction::Skip);
     }
 
     #[test]

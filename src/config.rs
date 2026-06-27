@@ -337,6 +337,15 @@ fn default_reflector_enabled() -> bool {
 fn default_reflector_interval_mins() -> u64 {
     15
 }
+fn default_dlq_replay_enabled() -> bool {
+    true
+}
+fn default_dlq_replay_interval_secs() -> u64 {
+    300
+}
+fn default_dlq_max_replay_attempts() -> u32 {
+    3
+}
 fn default_soul_path() -> Option<String> {
     None
 }
@@ -1228,6 +1237,12 @@ pub struct Config {
     /// compaction). Empty by default, in which case the main model is used.
     #[serde(default)]
     pub aux_models: AuxModels,
+    /// Optional fallback model used when the primary model's provider keeps
+    /// failing (after retries) or its circuit breaker is open. None disables
+    /// fallback (and the breaker wrapper) entirely — behaviour is then
+    /// identical to the primary provider alone.
+    #[serde(default)]
+    pub fallback_model: Option<String>,
     #[serde(default = "default_max_history_messages")]
     pub max_history_messages: usize,
     #[serde(default = "default_max_document_size_mb")]
@@ -1473,6 +1488,19 @@ pub struct Config {
     pub reflector_enabled: bool,
     #[serde(default = "default_reflector_interval_mins")]
     pub reflector_interval_mins: u64,
+    // --- Scheduled-task DLQ auto-replay ---
+    /// Automatically retry scheduled tasks that landed in the dead-letter
+    /// queue (e.g. a one-shot task that hit a transient failure), up to
+    /// `dlq_max_replay_attempts` times. Default: true.
+    #[serde(default = "default_dlq_replay_enabled")]
+    pub dlq_replay_enabled: bool,
+    /// How often the DLQ auto-replay sweep runs, in seconds. Default: 300.
+    #[serde(default = "default_dlq_replay_interval_secs")]
+    pub dlq_replay_interval_secs: u64,
+    /// Maximum automatic replay attempts per task before it is left in the
+    /// DLQ for manual inspection. Default: 3.
+    #[serde(default = "default_dlq_max_replay_attempts")]
+    pub dlq_max_replay_attempts: u32,
     /// Minimum tool_use blocks in a turn before the end-of-turn skill
     /// review fires. Autonomous skill creation is on by default; set to
     /// 0 to disable entirely. Default: 5.
@@ -1956,6 +1984,7 @@ impl Config {
             max_tool_iterations: 100,
             compaction_timeout_secs: 180,
             aux_models: AuxModels::default(),
+            fallback_model: None,
             max_history_messages: 50,
             max_document_size_mb: 100,
             memory_token_budget: 1500,
@@ -2030,6 +2059,9 @@ impl Config {
             embedding_dim: None,
             reflector_enabled: true,
             reflector_interval_mins: 15,
+            dlq_replay_enabled: true,
+            dlq_replay_interval_secs: 300,
+            dlq_max_replay_attempts: 3,
             skill_review_min_tool_calls: 5,
             soul_path: None,
             souls_dir: None,
