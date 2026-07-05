@@ -88,6 +88,7 @@ pub async fn serve(
     });
 
     crate::scheduler::spawn_scheduler(app_state.clone());
+    crate::scheduler::spawn_dlq_replay(app_state.clone());
     crate::scheduler::spawn_reflector(app_state.clone());
     {
         let review_state = app_state.clone();

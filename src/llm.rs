@@ -8,7 +8,10 @@ use tracing::{debug, error, warn};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use crate::codex_auth::{
     codex_config_default_openai_base_url, is_openai_codex_provider, is_qwen_portal_provider,
@@ -297,9 +300,240 @@ pub trait LlmProvider: Send + Sync {
 }
 
 pub fn create_provider(config: &Config) -> Box<dyn LlmProvider> {
-    match config.llm_provider.trim().to_lowercase().as_str() {
+    let inner: Box<dyn LlmProvider> = match config.llm_provider.trim().to_lowercase().as_str() {
         "anthropic" => Box::new(AnthropicProvider::new(config)),
         _ => Box::new(OpenAiProvider::new(config)),
+    };
+    // Wrap with the resilience layer only when a distinct fallback model is
+    // configured. Without one, behaviour is identical to the bare provider.
+    match config.fallback_model.as_deref().map(str::trim) {
+        Some(fb) if !fb.is_empty() && fb != config.model.trim() => {
+            Box::new(ResilientProvider::new(inner, fb.to_string()))
+        }
+        _ => inner,
+    }
+}
+
+/// Number of consecutive primary-model failures before the breaker opens.
+const BREAKER_FAILURE_THRESHOLD: u32 = 4;
+/// How long the breaker stays open (routing straight to the fallback) before it
+/// lets a primary probe through again.
+const BREAKER_COOLDOWN_SECS: u64 = 30;
+
+/// A simple consecutive-failure circuit breaker for the primary model. When the
+/// primary fails `threshold` times in a row the breaker opens for `cooldown`,
+/// during which calls skip the primary and go straight to the fallback; after
+/// the cooldown a single primary probe is allowed through (closing the breaker
+/// on success, reopening on failure).
+struct CircuitBreaker {
+    failures: AtomicU32,
+    open_until: Mutex<Option<Instant>>,
+    threshold: u32,
+    cooldown: Duration,
+}
+
+impl CircuitBreaker {
+    fn new(threshold: u32, cooldown: Duration) -> Self {
+        Self {
+            failures: AtomicU32::new(0),
+            open_until: Mutex::new(None),
+            threshold,
+            cooldown,
+        }
+    }
+
+    fn is_open(&self, now: Instant) -> bool {
+        match *self.open_until.lock().unwrap_or_else(|p| p.into_inner()) {
+            Some(until) => now < until,
+            None => false,
+        }
+    }
+
+    fn record_success(&self) {
+        self.failures.store(0, Ordering::Relaxed);
+        if let Ok(mut guard) = self.open_until.lock() {
+            *guard = None;
+        }
+    }
+
+    fn record_failure(&self, now: Instant) {
+        let n = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if n >= self.threshold {
+            if let Ok(mut guard) = self.open_until.lock() {
+                *guard = Some(now + self.cooldown);
+            }
+        }
+    }
+}
+
+/// Decorator that adds a circuit breaker + model fallback around any
+/// `LlmProvider`. Non-streaming calls fall back to the configured model after a
+/// primary failure (or immediately while the breaker is open); streaming calls
+/// route to the fallback while the breaker is open but do not retry mid-stream
+/// (which would risk duplicating already-emitted output).
+pub struct ResilientProvider {
+    inner: Box<dyn LlmProvider>,
+    fallback_model: String,
+    breaker: CircuitBreaker,
+}
+
+impl ResilientProvider {
+    fn new(inner: Box<dyn LlmProvider>, fallback_model: String) -> Self {
+        Self {
+            inner,
+            fallback_model,
+            breaker: CircuitBreaker::new(
+                BREAKER_FAILURE_THRESHOLD,
+                Duration::from_secs(BREAKER_COOLDOWN_SECS),
+            ),
+        }
+    }
+
+    async fn call(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        let now = Instant::now();
+        // Breaker open and the caller didn't pin a model → fail fast to fallback.
+        if model_override.is_none() && self.breaker.is_open(now) {
+            warn!(
+                "LLM circuit breaker open; routing to fallback model {}",
+                self.fallback_model
+            );
+            return self
+                .inner
+                .send_message_with_model(system, messages, tools, Some(&self.fallback_model))
+                .await;
+        }
+        match self
+            .inner
+            .send_message_with_model(system, messages.clone(), tools.clone(), model_override)
+            .await
+        {
+            Ok(r) => {
+                self.breaker.record_success();
+                Ok(r)
+            }
+            Err(e) => {
+                self.breaker.record_failure(now);
+                // Try the fallback once, unless the caller already asked for it.
+                if model_override != Some(self.fallback_model.as_str()) {
+                    warn!(
+                        "primary LLM call failed ({e}); retrying with fallback model {}",
+                        self.fallback_model
+                    );
+                    match self
+                        .inner
+                        .send_message_with_model(
+                            system,
+                            messages,
+                            tools,
+                            Some(&self.fallback_model),
+                        )
+                        .await
+                    {
+                        Ok(r) => Ok(r),
+                        Err(e2) => {
+                            warn!("fallback model also failed: {e2}");
+                            Err(e)
+                        }
+                    }
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    async fn call_stream(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        text_tx: Option<&UnboundedSender<String>>,
+        model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        let now = Instant::now();
+        if model_override.is_none() && self.breaker.is_open(now) {
+            warn!(
+                "LLM circuit breaker open; streaming via fallback model {}",
+                self.fallback_model
+            );
+            return self
+                .inner
+                .send_message_stream_with_model(
+                    system,
+                    messages,
+                    tools,
+                    text_tx,
+                    Some(&self.fallback_model),
+                )
+                .await;
+        }
+        match self
+            .inner
+            .send_message_stream_with_model(system, messages, tools, text_tx, model_override)
+            .await
+        {
+            Ok(r) => {
+                self.breaker.record_success();
+                Ok(r)
+            }
+            Err(e) => {
+                // No mid-stream fallback: deltas may already have been emitted,
+                // so re-streaming would duplicate output. The next call will
+                // route to the fallback once the breaker opens.
+                self.breaker.record_failure(now);
+                Err(e)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for ResilientProvider {
+    async fn send_message(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        self.call(system, messages, tools, None).await
+    }
+
+    async fn send_message_with_model(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        self.call(system, messages, tools, model_override).await
+    }
+
+    async fn send_message_stream(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        text_tx: Option<&UnboundedSender<String>>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        self.call_stream(system, messages, tools, text_tx, None).await
+    }
+
+    async fn send_message_stream_with_model(
+        &self,
+        system: &str,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        text_tx: Option<&UnboundedSender<String>>,
+        model_override: Option<&str>,
+    ) -> Result<MessagesResponse, MicroClawError> {
+        self.call_stream(system, messages, tools, text_tx, model_override)
+            .await
     }
 }
 
@@ -2775,6 +3009,25 @@ mod tests {
         // Cap holds for large attempts.
         let dbig = retry_backoff(20, None).as_secs();
         assert!((16..=32).contains(&dbig), "large backoff {dbig}s exceeds cap");
+    }
+
+    #[test]
+    fn test_circuit_breaker_opens_and_recovers() {
+        let cb = CircuitBreaker::new(2, Duration::from_secs(60));
+        let t0 = Instant::now();
+        assert!(!cb.is_open(t0));
+        cb.record_failure(t0);
+        assert!(!cb.is_open(t0), "one failure below threshold must not open");
+        cb.record_failure(t0);
+        assert!(cb.is_open(t0), "threshold failures must open the breaker");
+        assert!(cb.is_open(t0 + Duration::from_secs(59)), "open during cooldown");
+        assert!(
+            !cb.is_open(t0 + Duration::from_secs(61)),
+            "closed (half-open probe) after cooldown"
+        );
+        // A success fully resets the breaker.
+        cb.record_success();
+        assert!(!cb.is_open(t0));
     }
 
     #[test]
