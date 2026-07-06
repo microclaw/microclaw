@@ -1101,6 +1101,47 @@ impl Default for SleepTimeConfig {
     }
 }
 
+fn default_token_budget_exempt_control_chats() -> bool {
+    true
+}
+
+/// Per-chat token spend cap. Counters Hermes-style "week-3 bill" drift:
+/// once a chat's rolling-24h total (input+output, all request kinds) hits
+/// `daily_per_chat`, new turns are refused with a notice until usage rolls
+/// out of the window. 0 (default) = unlimited; control chats exempt by
+/// default so operators can always reach the bot.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TokenBudgetConfig {
+    /// Total tokens (input+output) allowed per chat per rolling 24h. 0 = off.
+    #[serde(default)]
+    pub daily_per_chat: i64,
+    #[serde(default = "default_token_budget_exempt_control_chats")]
+    pub exempt_control_chats: bool,
+}
+
+impl Default for TokenBudgetConfig {
+    fn default() -> Self {
+        Self {
+            daily_per_chat: 0,
+            exempt_control_chats: default_token_budget_exempt_control_chats(),
+        }
+    }
+}
+
+impl TokenBudgetConfig {
+    /// True when a chat that has already spent `used` tokens in the window
+    /// must be refused a new turn.
+    pub fn blocks(&self, is_control_chat: bool, used: i64) -> bool {
+        if self.daily_per_chat <= 0 {
+            return false;
+        }
+        if self.exempt_control_chats && is_control_chat {
+            return false;
+        }
+        used >= self.daily_per_chat
+    }
+}
+
 fn default_heartbeat_interval_mins() -> u64 {
     30
 }
@@ -1392,6 +1433,8 @@ pub struct Config {
     pub idle_checkin: IdleCheckinConfig,
     #[serde(default)]
     pub heartbeat: HeartbeatConfig,
+    #[serde(default)]
+    pub token_budget: TokenBudgetConfig,
     #[serde(default)]
     pub sleep_time: SleepTimeConfig,
     #[serde(default)]
@@ -2074,6 +2117,7 @@ impl Config {
             subagents: SubagentConfig::default(),
             idle_checkin: IdleCheckinConfig::default(),
             heartbeat: HeartbeatConfig::default(),
+            token_budget: TokenBudgetConfig::default(),
             sleep_time: SleepTimeConfig::default(),
             interjection: InterjectionConfig::default(),
             a2a: A2AConfig::default(),
@@ -3229,6 +3273,32 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::env_lock()
+    }
+
+    #[test]
+    fn token_budget_disabled_never_blocks() {
+        let cfg = TokenBudgetConfig::default();
+        assert!(!cfg.blocks(false, i64::MAX));
+        assert!(!cfg.blocks(true, i64::MAX));
+    }
+
+    #[test]
+    fn token_budget_blocks_at_cap_but_exempts_control_chats() {
+        let cfg = TokenBudgetConfig {
+            daily_per_chat: 1000,
+            exempt_control_chats: true,
+        };
+        assert!(!cfg.blocks(false, 999));
+        assert!(cfg.blocks(false, 1000));
+        assert!(cfg.blocks(false, 5000));
+        // Control chat exempt by default
+        assert!(!cfg.blocks(true, 5000));
+        // ...unless exemption is turned off
+        let strict = TokenBudgetConfig {
+            daily_per_chat: 1000,
+            exempt_control_chats: false,
+        };
+        assert!(strict.blocks(true, 1000));
     }
 
     #[test]
