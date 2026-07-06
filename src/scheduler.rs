@@ -807,6 +807,140 @@ async fn run_idle_checkin(state: &Arc<AppState>, last_checkin: &mut HashMap<i64,
     }
 }
 
+/// OpenClaw-style proactive heartbeat: every `interval_mins`, read each chat's
+/// `runtime/groups/<chat_id>/HEARTBEAT.md` checklist and run an agent turn over
+/// it. The agent may use tools to check on items and messages the chat only
+/// when something genuinely needs attention (otherwise it replies SKIP and the
+/// sweep stays silent). OFF by default; chats without a HEARTBEAT.md are never
+/// touched, so enabling the loop alone changes nothing until a user (or the
+/// agent, via write_file) creates a checklist.
+pub fn spawn_heartbeat(state: Arc<AppState>) {
+    if !state.config.heartbeat.enabled {
+        return;
+    }
+    tokio::spawn(async move {
+        let interval_mins = state.config.heartbeat.interval_mins.max(1);
+        info!("Heartbeat started (interval_mins={interval_mins})");
+        let mut ticker = tokio::time::interval(Duration::from_secs(interval_mins * 60));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // First tick fires immediately; skip it so a restart doesn't
+        // instantly re-run every checklist.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            run_heartbeat(&state).await;
+        }
+    });
+}
+
+const HEARTBEAT_PROMPT_PREFIX: &str = "[Heartbeat] Periodic proactive check for this chat. Below is \
+the chat's HEARTBEAT.md checklist, maintained by the user (and you, via file tools).\n\
+- Work through the items. Use tools where needed to check on things (schedules, files, web, memory).\n\
+- If — and ONLY if — something needs the user's attention right now, write ONE short message about it.\n\
+- If nothing needs attention, reply with exactly: SKIP\n\
+Silence is the right default; do not narrate checks that came back clean. Do not use the send_message \
+tool — just return the message text, or SKIP.\n\n--- HEARTBEAT.md ---\n";
+
+/// Collect `(chat_id, checklist)` pairs from `<groups_dir>/<chat_id>/HEARTBEAT.md`.
+/// Non-numeric directory names and empty/unreadable files are skipped.
+fn heartbeat_checklists(groups_dir: &std::path::Path, max_chars: usize) -> Vec<(i64, String)> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(groups_dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let Some(chat_id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        let Ok(content) = std::fs::read_to_string(entry.path().join("HEARTBEAT.md")) else {
+            continue;
+        };
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let capped = if trimmed.len() > max_chars {
+            let end = floor_char_boundary(trimmed, max_chars);
+            format!("{}\n[... truncated at {max_chars} chars]", &trimmed[..end])
+        } else {
+            trimmed.to_string()
+        };
+        out.push((chat_id, capped));
+    }
+    out.sort_by_key(|(id, _)| *id);
+    out
+}
+
+async fn run_heartbeat(state: &Arc<AppState>) {
+    let groups_dir = crate::agent_engine::effective_runtime_data_dir(&state.config).join("groups");
+    let checklists = heartbeat_checklists(&groups_dir, state.config.heartbeat.max_chars);
+    if checklists.is_empty() {
+        return;
+    }
+    for (chat_id, checklist) in checklists {
+        // Chats with active background work already get their own updates.
+        let active = call_blocking(state.db.clone(), move |db| {
+            db.count_active_subagent_runs_for_chat(chat_id)
+        })
+        .await
+        .unwrap_or(0);
+        if active > 0 {
+            continue;
+        }
+
+        let routing = match get_chat_routing(&state.channel_registry, state.db.clone(), chat_id)
+            .await
+            .ok()
+            .flatten()
+        {
+            Some(r) => r,
+            None => continue,
+        };
+
+        let prompt = format!("{HEARTBEAT_PROMPT_PREFIX}{checklist}");
+        let response = match process_with_agent(
+            state,
+            AgentRequestContext {
+                caller_channel: &routing.channel_name,
+                chat_id,
+                chat_type: routing.conversation.as_agent_chat_type(),
+            },
+            Some(&prompt),
+            None,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("heartbeat: agent run failed for chat {chat_id}: {e}");
+                continue;
+            }
+        };
+
+        let trimmed = response.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+            continue;
+        }
+
+        let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
+        if let Err(e) = deliver_and_store_bot_message(
+            &state.channel_registry,
+            state.db.clone(),
+            &bot_username,
+            chat_id,
+            trimmed,
+        )
+        .await
+        {
+            warn!("heartbeat: delivery failed for chat {chat_id}: {e}");
+        }
+    }
+}
+
 /// "Sleep-time" memory consolidation loop: when a chat has been idle for a while,
 /// run a deterministic (no-LLM) pass that archives near-duplicate memories so the
 /// store stops accumulating redundancy between reflector runs. OFF by default.
@@ -1780,6 +1914,65 @@ fn persist_curated_user_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_heartbeat_checklists_scans_numeric_group_dirs() {
+        let root = std::env::temp_dir().join(format!(
+            "microclaw-heartbeat-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let groups = root.join("groups");
+        // chat 42: has a checklist
+        std::fs::create_dir_all(groups.join("42")).unwrap();
+        std::fs::write(groups.join("42/HEARTBEAT.md"), "- check the deploy\n").unwrap();
+        // chat 7: empty checklist -> skipped
+        std::fs::create_dir_all(groups.join("7")).unwrap();
+        std::fs::write(groups.join("7/HEARTBEAT.md"), "   \n").unwrap();
+        // chat 9: no HEARTBEAT.md -> skipped
+        std::fs::create_dir_all(groups.join("9")).unwrap();
+        // non-numeric dir -> skipped even with a checklist
+        std::fs::create_dir_all(groups.join("not-a-chat")).unwrap();
+        std::fs::write(groups.join("not-a-chat/HEARTBEAT.md"), "- x\n").unwrap();
+
+        let got = heartbeat_checklists(&groups, 8000);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, 42);
+        assert_eq!(got[0].1, "- check the deploy");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn test_heartbeat_checklists_caps_content() {
+        let root = std::env::temp_dir().join(format!(
+            "microclaw-heartbeat-cap-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let groups = root.join("groups");
+        std::fs::create_dir_all(groups.join("1")).unwrap();
+        std::fs::write(groups.join("1/HEARTBEAT.md"), "x".repeat(100)).unwrap();
+
+        let got = heartbeat_checklists(&groups, 10);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].1.starts_with("xxxxxxxxxx"));
+        assert!(got[0].1.contains("truncated"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn test_heartbeat_checklists_missing_dir_is_empty() {
+        let got = heartbeat_checklists(std::path::Path::new("/nonexistent/heartbeat-test"), 100);
+        assert!(got.is_empty());
+    }
 
     #[test]
     fn test_format_duration_secs() {

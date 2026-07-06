@@ -339,6 +339,16 @@ web_session_idle_ttl_seconds: 300
 #   idle_hours: 24                 # only consider a chat idle after this many hours of silence
 #   min_interval_hours: 24         # at most one check-in per chat per this many hours
 
+# Proactive heartbeat (OpenClaw-style): every interval, read each chat's
+# runtime/groups/<chat_id>/HEARTBEAT.md checklist and run an agent turn over it;
+# the bot messages the chat only when something on the list needs attention.
+# OFF by default — chats without a HEARTBEAT.md file are never touched, so
+# enabling the loop changes nothing until a checklist exists.
+# heartbeat:
+#   enabled: false
+#   interval_mins: 30              # minutes between heartbeat sweeps
+#   max_chars: 8000                # max HEARTBEAT.md chars injected into the prompt
+
 # "Sleep-time" memory consolidation: when a chat is idle, run a deterministic
 # (no-LLM) background pass that archives near-duplicate memories so the store stops
 # accumulating redundancy between reflector runs. PROFILE memories are never touched,

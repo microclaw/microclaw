@@ -1952,7 +1952,7 @@ fn effective_data_root_dir(config: &crate::config::Config) -> std::path::PathBuf
     }
 }
 
-fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::PathBuf {
+pub(crate) fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::PathBuf {
     let data_dir = std::path::PathBuf::from(&config.data_dir);
     let is_runtime_dir = data_dir
         .file_name()

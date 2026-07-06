@@ -522,6 +522,7 @@ pub async fn run(
     crate::scheduler::spawn_reflector(state.clone());
     crate::scheduler::spawn_task_standup(state.clone());
     crate::scheduler::spawn_idle_checkin(state.clone());
+    crate::scheduler::spawn_heartbeat(state.clone());
     crate::scheduler::spawn_memory_consolidation(state.clone());
     crate::scheduler::spawn_interjection(state.clone());
     {

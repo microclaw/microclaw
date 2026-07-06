@@ -1101,6 +1101,40 @@ impl Default for SleepTimeConfig {
     }
 }
 
+fn default_heartbeat_interval_mins() -> u64 {
+    30
+}
+fn default_heartbeat_max_chars() -> usize {
+    8000
+}
+
+/// OpenClaw-style proactive heartbeat. When enabled, every `interval_mins`
+/// the bot reads each chat's `runtime/groups/<chat_id>/HEARTBEAT.md` checklist
+/// and runs an agent turn over it; the agent messages the chat only when
+/// something on the list genuinely needs attention, otherwise stays silent.
+/// OFF by default — and chats without a HEARTBEAT.md file are never touched.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HeartbeatConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Minutes between heartbeat sweeps. Default: 30.
+    #[serde(default = "default_heartbeat_interval_mins")]
+    pub interval_mins: u64,
+    /// Max characters of HEARTBEAT.md injected into the prompt. Default: 8000.
+    #[serde(default = "default_heartbeat_max_chars")]
+    pub max_chars: usize,
+}
+
+impl Default for HeartbeatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_mins: default_heartbeat_interval_mins(),
+            max_chars: default_heartbeat_max_chars(),
+        }
+    }
+}
+
 fn default_idle_checkin_idle_hours() -> u64 {
     24
 }
@@ -1356,6 +1390,8 @@ pub struct Config {
     pub subagents: SubagentConfig,
     #[serde(default)]
     pub idle_checkin: IdleCheckinConfig,
+    #[serde(default)]
+    pub heartbeat: HeartbeatConfig,
     #[serde(default)]
     pub sleep_time: SleepTimeConfig,
     #[serde(default)]
@@ -2037,6 +2073,7 @@ impl Config {
             show_thinking: false,
             subagents: SubagentConfig::default(),
             idle_checkin: IdleCheckinConfig::default(),
+            heartbeat: HeartbeatConfig::default(),
             sleep_time: SleepTimeConfig::default(),
             interjection: InterjectionConfig::default(),
             a2a: A2AConfig::default(),
