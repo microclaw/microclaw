@@ -421,6 +421,7 @@ MicroClaw 支持 [Anthropic Agent Skills](https://github.com/anthropics/skills) 
 - `/reset` -- 清除当前聊天上下文（会话 + 聊天历史）并清空定时任务状态
 - `/skills` -- 列出所有可用技能
 - `/reload-skills` -- 从磁盘重新加载技能
+- `/learn` -- 把当前会话蒸馏为可复用技能（仅限控制聊天）
 - `/archive` -- 将当前内存会话归档为 markdown
 - `/usage` -- 查看 token 用量统计（当前聊天 + 全局汇总）
 - `/status` -- 查看 provider/model 和当前聊天会话/任务状态

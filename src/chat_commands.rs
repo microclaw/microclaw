@@ -73,6 +73,7 @@ pub fn build_help_response() -> String {
         "Skills",
         "  /skills              List available skills",
         "  /reload-skills       Reload skills from disk",
+        "  /learn               Distill this session into a reusable skill (control chats)",
         "",
         "Memory & usage",
         "  /user [clear]        View or clear your USER.md profile",
@@ -87,6 +88,42 @@ pub fn build_help_response() -> String {
         "Tip: in groups, mention me first (e.g. @bot /status).",
     ]
     .join("\n")
+}
+
+/// `/learn` — user-triggered skill distillation (the Hermes `/learn`
+/// pattern). Runs the skill-review pipeline over this chat's current
+/// session with the automatic gates (threshold, success heuristic)
+/// bypassed — the user explicitly asked. Content security scans and the
+/// agent-created cap still apply. Restricted to control chats: distilled
+/// skills alter future agent behavior in every chat.
+async fn handle_learn_command(state: &AppState, chat_id: i64) -> String {
+    if !state.config.control_chat_ids.contains(&chat_id) {
+        return "Permission denied: /learn is restricted to control chats.".to_string();
+    }
+    let outcome = crate::skill_review::run_skill_review_core(state, chat_id, true).await;
+    format_learn_reply(&outcome)
+}
+
+fn format_learn_reply(outcome: &crate::skill_review::LearnOutcome) -> String {
+    use crate::skill_review::LearnOutcome;
+    match outcome {
+        LearnOutcome::Applied(applied) => {
+            let verb = match applied.action_kind {
+                "create" => "Created",
+                "edit" => "Updated",
+                "patch" => "Patched",
+                other => other,
+            };
+            format!(
+                "{verb} skill '{}' (v{}) from this session. It will be considered in future \
+                 conversations; use /skills to inspect it or skill_manage to edit/delete it.",
+                applied.name, applied.version
+            )
+        }
+        LearnOutcome::Nothing(reason) => format!("No skill saved: {reason}"),
+        LearnOutcome::Skipped(reason) => format!("Nothing to learn: {reason}"),
+        LearnOutcome::Error(e) => format!("Learn failed: {e}"),
+    }
 }
 
 /// Show or clear the per-chat USER.md user model. Backs the `/user` slash
@@ -368,6 +405,10 @@ pub async fn handle_chat_command(
     if trimmed == "/reload-skills" {
         let count = state.skills.reload().len();
         return Some(format!("Reloaded {count} skills from disk."));
+    }
+
+    if trimmed == "/learn" {
+        return Some(handle_learn_command(state, chat_id).await);
     }
 
     if trimmed == "/archive" {
@@ -1722,7 +1763,7 @@ channels:
 
 #[cfg(test)]
 mod slash_command_tests {
-    use super::{build_help_response, build_log_response, is_slash_command};
+    use super::{build_help_response, build_log_response, format_learn_reply, is_slash_command};
     use crate::config::Config;
 
     #[test]
@@ -1788,10 +1829,30 @@ mod slash_command_tests {
         // Every command surfaced in help must be a real dispatch entry.
         for cmd in [
             "/status", "/clear", "/reset", "/stop", "/archive", "/model", "/models",
-            "/provider", "/providers", "/skills", "/reload-skills", "/user", "/usage",
-            "/rewind", "/log", "/help",
+            "/provider", "/providers", "/skills", "/reload-skills", "/learn", "/user",
+            "/usage", "/rewind", "/log", "/help",
         ] {
             assert!(help.contains(cmd), "help missing {cmd}");
         }
+    }
+
+    #[test]
+    fn learn_reply_formats_all_outcomes() {
+        use crate::skill_review::{AppliedAction, LearnOutcome};
+        let applied = format_learn_reply(&LearnOutcome::Applied(AppliedAction {
+            name: "deploy-checklist".into(),
+            action_kind: "create",
+            version: 1,
+        }));
+        assert!(applied.contains("Created skill 'deploy-checklist' (v1)"));
+        assert!(
+            format_learn_reply(&LearnOutcome::Nothing("nothing reusable".into()))
+                .contains("No skill saved")
+        );
+        assert!(
+            format_learn_reply(&LearnOutcome::Skipped("no session".into()))
+                .contains("Nothing to learn")
+        );
+        assert!(format_learn_reply(&LearnOutcome::Error("boom".into())).contains("Learn failed"));
     }
 }
