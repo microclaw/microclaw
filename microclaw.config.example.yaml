@@ -95,6 +95,18 @@ timezone: "UTC"
 # output_guardrail:
 #   mode: redact
 
+# Pre-tool-call policy — a hard gate evaluated before every tool call.
+# Off by default (no behavior change). `warn` executes the call but seals a
+# violation entry into the tamper-evident audit log; `block` short-circuits
+# the call with an error tool_result and audits it. `allow_tools` wins over
+# `deny_tools`/`max_risk`. `max_risk` denies tools above the given built-in
+# risk tier (low < medium < high); an invalid value fails closed.
+# tool_policy:
+#   mode: block
+#   deny_tools: [bash]
+#   max_risk: medium
+#   allow_tools: []
+
 # RTK (Rust Token Killer) integration — opt-in, off by default.
 # When enabled, bash tool commands are passed through `rtk rewrite` before
 # execution: commands RTK recognizes (git, cargo, npm, ls, grep, docker, ...)

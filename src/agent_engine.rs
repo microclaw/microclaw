@@ -1538,6 +1538,67 @@ async fn process_with_agent_logic(
             let repeat_window = state.config.tool_repeat_window;
             let repeat_limit = state.config.tool_repeat_limit.max(1);
             for call in raw_pending_calls {
+                // Pre-tool-call policy gate (tool_policy config). Runs before
+                // the circuit breaker: a denied tool never counts as an
+                // attempt. Warn mode audits but executes; block mode
+                // short-circuits with an error tool_result. Every violation is
+                // sealed into the tamper-evident audit chain.
+                match crate::tool_guardrails::evaluate_tool_policy(
+                    &state.config.tool_policy,
+                    &call.name,
+                ) {
+                    crate::tool_guardrails::PolicyDecision::Allow => {}
+                    crate::tool_guardrails::PolicyDecision::Warn(reason) => {
+                        warn!(chat_id, tool = %call.name, %reason, "Tool policy violation (warn mode)");
+                        let db = state.db.clone();
+                        let tool = call.name.clone();
+                        let actor = format!("chat:{chat_id}");
+                        let _ = call_blocking(db, move |db| {
+                            db.log_audit_event(
+                                "tool_policy",
+                                &actor,
+                                "warn",
+                                Some(&tool),
+                                "allowed",
+                                Some(&reason),
+                            )
+                        })
+                        .await;
+                    }
+                    crate::tool_guardrails::PolicyDecision::Block(reason) => {
+                        warn!(chat_id, tool = %call.name, %reason, "Tool policy violation (blocked)");
+                        {
+                            let db = state.db.clone();
+                            let tool = call.name.clone();
+                            let actor = format!("chat:{chat_id}");
+                            let detail = reason.clone();
+                            let _ = call_blocking(db, move |db| {
+                                db.log_audit_event(
+                                    "tool_policy",
+                                    &actor,
+                                    "block",
+                                    Some(&tool),
+                                    "blocked",
+                                    Some(&detail),
+                                )
+                            })
+                            .await;
+                        }
+                        let msg = format!(
+                            "Tool call blocked by policy: {reason}. Do not retry this tool; \
+                             use a permitted tool or explain the limitation to the user."
+                        );
+                        short_circuit_results.push((
+                            call.id.clone(),
+                            ContentBlock::ToolResult {
+                                tool_use_id: call.id.clone(),
+                                content: msg,
+                                is_error: Some(true),
+                            },
+                        ));
+                        continue;
+                    }
+                }
                 if repeat_window == 0 || call.name == "fetch_artifact" {
                     pending_calls.push(call);
                     continue;

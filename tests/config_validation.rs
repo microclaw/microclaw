@@ -72,6 +72,7 @@ fn minimal_config() -> Config {
         ),
         web_search: microclaw_tools::web_search::SearchProviderConfig::default(),
         output_guardrail: microclaw_core::redact::OutputGuardrailConfig::default(),
+        tool_policy: microclaw::tool_guardrails::ToolPolicyConfig::default(),
         model_prices: vec![],
         embedding_provider: None,
         embedding_api_key: None,

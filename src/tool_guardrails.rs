@@ -18,9 +18,114 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::tools::IDEMPOTENT_TOOLS;
+use microclaw_tools::runtime::{tool_risk, ToolRisk};
+
+/// Pre-tool-call policy mode. `Off` preserves historical behavior (no policy
+/// evaluation at all); `Warn` logs violations to the audit trail but lets the
+/// call run; `Block` short-circuits the call with an error tool_result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolPolicyMode {
+    #[default]
+    Off,
+    Warn,
+    Block,
+}
+
+/// Config-driven pre-tool-call policy (`tool_policy` in config.yaml).
+///
+/// Complements the warn-only loop guardrails below: where `GuardrailController`
+/// nudges the model out of unproductive loops, this policy is a hard gate the
+/// operator sets ahead of time. Default mode is `off` — existing deployments
+/// see no behavior change.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ToolPolicyConfig {
+    #[serde(default)]
+    pub mode: ToolPolicyMode,
+    /// Tool names that are always denied (subject to `mode`).
+    #[serde(default)]
+    pub deny_tools: Vec<String>,
+    /// Highest permitted risk tier: "low" | "medium" | "high". Tools whose
+    /// built-in risk exceeds this are denied. Unset = all tiers permitted.
+    #[serde(default)]
+    pub max_risk: Option<String>,
+    /// Tool names exempt from `deny_tools` / `max_risk` (allow wins).
+    #[serde(default)]
+    pub allow_tools: Vec<String>,
+}
+
+/// Outcome of evaluating one pending tool call against the policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyDecision {
+    Allow,
+    /// Violation under `warn` mode: execute, but audit-log the reason.
+    Warn(String),
+    /// Violation under `block` mode: short-circuit with this reason.
+    Block(String),
+}
+
+fn risk_rank(risk: ToolRisk) -> u8 {
+    match risk {
+        ToolRisk::Low => 0,
+        ToolRisk::Medium => 1,
+        ToolRisk::High => 2,
+    }
+}
+
+fn parse_risk(s: &str) -> Option<ToolRisk> {
+    match s.to_ascii_lowercase().as_str() {
+        "low" => Some(ToolRisk::Low),
+        "medium" => Some(ToolRisk::Medium),
+        "high" => Some(ToolRisk::High),
+        _ => None,
+    }
+}
+
+/// Evaluate `tool_name` against the configured policy. Pure — callers handle
+/// audit logging and short-circuiting.
+pub fn evaluate_tool_policy(cfg: &ToolPolicyConfig, tool_name: &str) -> PolicyDecision {
+    if cfg.mode == ToolPolicyMode::Off {
+        return PolicyDecision::Allow;
+    }
+    if cfg.allow_tools.iter().any(|t| t == tool_name) {
+        return PolicyDecision::Allow;
+    }
+    let violation = if cfg.deny_tools.iter().any(|t| t == tool_name) {
+        Some(format!("tool `{tool_name}` is in tool_policy.deny_tools"))
+    } else if let Some(max) = cfg.max_risk.as_deref() {
+        match parse_risk(max) {
+            Some(max_risk) => {
+                let risk = tool_risk(tool_name);
+                if risk_rank(risk) > risk_rank(max_risk) {
+                    Some(format!(
+                        "tool `{tool_name}` risk `{}` exceeds tool_policy.max_risk `{}`",
+                        risk.as_str(),
+                        max_risk.as_str()
+                    ))
+                } else {
+                    None
+                }
+            }
+            None => Some(format!(
+                "tool_policy.max_risk `{max}` is not one of low|medium|high; denying `{tool_name}` (fail closed)"
+            )),
+        }
+    } else {
+        None
+    };
+    match violation {
+        None => PolicyDecision::Allow,
+        Some(reason) => match cfg.mode {
+            ToolPolicyMode::Block => PolicyDecision::Block(reason),
+            ToolPolicyMode::Warn => PolicyDecision::Warn(reason),
+            ToolPolicyMode::Off => PolicyDecision::Allow,
+        },
+    }
+}
 
 /// Default thresholds (keeping warnings light — these are nudges, not gates).
 const NO_PROGRESS_WARN_AFTER: usize = 2;
@@ -118,6 +223,79 @@ fn hash_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cfg(mode: ToolPolicyMode) -> ToolPolicyConfig {
+        ToolPolicyConfig {
+            mode,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn policy_off_allows_everything() {
+        let mut c = cfg(ToolPolicyMode::Off);
+        c.deny_tools = vec!["bash".into()];
+        c.max_risk = Some("low".into());
+        assert_eq!(evaluate_tool_policy(&c, "bash"), PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn policy_blocks_denied_tool() {
+        let mut c = cfg(ToolPolicyMode::Block);
+        c.deny_tools = vec!["bash".into()];
+        assert!(matches!(
+            evaluate_tool_policy(&c, "bash"),
+            PolicyDecision::Block(_)
+        ));
+        assert_eq!(evaluate_tool_policy(&c, "read_file"), PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn policy_warn_mode_warns_not_blocks() {
+        let mut c = cfg(ToolPolicyMode::Warn);
+        c.deny_tools = vec!["bash".into()];
+        assert!(matches!(
+            evaluate_tool_policy(&c, "bash"),
+            PolicyDecision::Warn(_)
+        ));
+    }
+
+    #[test]
+    fn policy_max_risk_blocks_higher_tiers() {
+        let mut c = cfg(ToolPolicyMode::Block);
+        c.max_risk = Some("medium".into());
+        // bash is High risk -> blocked
+        assert!(matches!(
+            evaluate_tool_policy(&c, "bash"),
+            PolicyDecision::Block(_)
+        ));
+        // write_file is Medium -> allowed at max_risk=medium
+        assert_eq!(
+            evaluate_tool_policy(&c, "write_file"),
+            PolicyDecision::Allow
+        );
+        // read_file is Low -> allowed
+        assert_eq!(evaluate_tool_policy(&c, "read_file"), PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn policy_allow_list_overrides_deny() {
+        let mut c = cfg(ToolPolicyMode::Block);
+        c.deny_tools = vec!["bash".into()];
+        c.max_risk = Some("low".into());
+        c.allow_tools = vec!["bash".into()];
+        assert_eq!(evaluate_tool_policy(&c, "bash"), PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn policy_invalid_max_risk_fails_closed() {
+        let mut c = cfg(ToolPolicyMode::Block);
+        c.max_risk = Some("extreme".into());
+        assert!(matches!(
+            evaluate_tool_policy(&c, "read_file"),
+            PolicyDecision::Block(_)
+        ));
+    }
 
     #[test]
     fn idempotent_no_progress_warns_on_third_identical() {

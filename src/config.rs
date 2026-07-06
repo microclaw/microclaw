@@ -1464,6 +1464,10 @@ pub struct Config {
     /// scans delivered bot messages for credential-like strings.
     #[serde(default)]
     pub output_guardrail: OutputGuardrailConfig,
+    /// Pre-tool-call policy (mode off | warn | block, deny_tools, max_risk,
+    /// allow_tools). Off by default; violations are sealed into the audit log.
+    #[serde(default)]
+    pub tool_policy: crate::tool_guardrails::ToolPolicyConfig,
 
     // --- Embedding ---
     #[serde(default)]
@@ -2051,6 +2055,7 @@ impl Config {
             web_fetch_url_validation: WebFetchUrlValidationConfig::default(),
             web_search: SearchProviderConfig::default(),
             output_guardrail: OutputGuardrailConfig::default(),
+            tool_policy: crate::tool_guardrails::ToolPolicyConfig::default(),
             model_prices: vec![],
             embedding_provider: None,
             embedding_api_key: None,
