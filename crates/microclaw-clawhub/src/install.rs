@@ -142,16 +142,18 @@ pub async fn install_skill(
     // 7. Verify hash (if provided)
     let hash = format!("sha256:{:x}", Sha256::digest(&bytes));
 
-    // 8. Extract
-    if skill_path.exists() && options.force {
-        std::fs::remove_dir_all(&skill_path)?;
-    }
-    std::fs::create_dir_all(&skill_path)?;
+    // 8. Extract into a STAGING dir first. Nothing touches the live skill
+    // directory until the archive has passed bounds and content checks —
+    // a rejected install must never damage a pre-existing (possibly
+    // hand-written) skill at the same path.
+    let staging = skills_dir.join(format!(".{slug}.clawhub-staging"));
+    let _ = std::fs::remove_dir_all(&staging);
 
     let cursor = std::io::Cursor::new(bytes);
     let mut archive = ZipArchive::new(cursor)
         .map_err(|e| MicroClawError::Config(format!("Failed to read ZIP: {}", e)))?;
-    if let Err(reason) = check_archive_bounds(&mut archive) {
+    if let Err(reason) = extract_bounded(&mut archive, &staging) {
+        let _ = std::fs::remove_dir_all(&staging);
         return Ok(InstallResult {
             success: false,
             message: format!("Refusing to install '{slug}': {reason}"),
@@ -159,23 +161,20 @@ pub async fn install_skill(
             warnings,
         });
     }
-    archive
-        .extract(&skill_path)
-        .map_err(|e| MicroClawError::Config(format!("Failed to extract ZIP: {}", e)))?;
 
-    // Local prompt-injection scan of the extracted text files. This runs
+    // Local prompt-injection scan of the staged text files. This runs
     // regardless of the registry's own scanning (VirusTotal etc.) — the
     // registry can be bypassed; this boundary is ours. `--skip-security`
     // downgrades a hit to a warning for operators who have reviewed the
     // skill by hand.
-    let findings = scan_extracted_skill(&skill_path);
+    let findings = scan_extracted_skill(&staging);
     if !findings.is_empty() {
         if options.skip_security {
             for f in &findings {
                 warnings.push(format!("Security scan (bypassed with skip_security): {f}"));
             }
         } else {
-            let _ = std::fs::remove_dir_all(&skill_path);
+            let _ = std::fs::remove_dir_all(&staging);
             return Ok(InstallResult {
                 success: false,
                 message: format!(
@@ -188,6 +187,12 @@ pub async fn install_skill(
             });
         }
     }
+
+    // All checks passed — swap the staged tree into place.
+    if skill_path.exists() {
+        std::fs::remove_dir_all(&skill_path)?;
+    }
+    std::fs::rename(&staging, &skill_path)?;
 
     // 9. Update lockfile
     let mut lock = read_lockfile(lockfile_path)?;
@@ -222,29 +227,57 @@ pub fn check_update_available(
     current_version != latest_version
 }
 
-/// Enforce entry-count and uncompressed-size bounds on the archive before
-/// extraction. Fail closed: anything over a limit rejects the whole install.
-fn check_archive_bounds<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(), String> {
+/// Extract the archive into `dest`, enforcing entry-count and size bounds on
+/// the ACTUAL decompressed bytes — zip metadata can lie about uncompressed
+/// sizes, so `entry.size()` alone is not a defense. Per-file and total caps
+/// are enforced while copying (`Read::take`), so a zip bomb stops at the cap
+/// instead of filling the disk. Entry names are sanitized via
+/// `enclosed_name()` (zip-slip guard). Fail closed: any violation aborts.
+fn extract_bounded<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    dest: &Path,
+) -> Result<(), String> {
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(format!(
             "archive has {} entries (max {MAX_ARCHIVE_ENTRIES})",
             archive.len()
         ));
     }
+    std::fs::create_dir_all(dest).map_err(|e| format!("failed to create staging dir: {e}"))?;
     let mut total: u64 = 0;
     for i in 0..archive.len() {
-        let entry = archive
+        let mut entry = archive
             .by_index(i)
             .map_err(|e| format!("unreadable archive entry {i}: {e}"))?;
-        let size = entry.size();
-        if size > MAX_FILE_BYTES {
+        let Some(rel) = entry.enclosed_name() else {
             return Err(format!(
-                "entry '{}' is {size} bytes uncompressed (max {MAX_FILE_BYTES}); oversized \
-                 files are a known scanner-bypass pattern",
+                "entry '{}' has an unsafe path (traversal)",
+                entry.name()
+            ));
+        };
+        let out_path = dest.join(rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out_path)
+                .map_err(|e| format!("failed to create dir: {e}"))?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("failed to create dir: {e}"))?;
+        }
+        let mut out = std::fs::File::create(&out_path)
+            .map_err(|e| format!("failed to create file: {e}"))?;
+        // Copy at most one byte past the cap so we can tell "at cap" from
+        // "over cap" without trusting the entry's declared size.
+        let written = std::io::copy(&mut (&mut entry).take(MAX_FILE_BYTES + 1), &mut out)
+            .map_err(|e| format!("failed to extract '{}': {e}", entry.name()))?;
+        if written > MAX_FILE_BYTES {
+            return Err(format!(
+                "entry '{}' exceeds {MAX_FILE_BYTES} bytes uncompressed; oversized files \
+                 are a known scanner-bypass pattern",
                 entry.name()
             ));
         }
-        total = total.saturating_add(size);
+        total = total.saturating_add(written);
         if total > MAX_TOTAL_BYTES {
             return Err(format!(
                 "archive expands to more than {MAX_TOTAL_BYTES} bytes uncompressed"
@@ -315,7 +348,7 @@ mod tests {
         assert!(!check_update_available(&lock, "1.0.0", "1.0.0"));
     }
 
-    use super::{check_archive_bounds, scan_extracted_skill, MAX_FILE_BYTES};
+    use super::{extract_bounded, scan_extracted_skill, MAX_FILE_BYTES};
     use std::io::Write;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
@@ -337,31 +370,46 @@ mod tests {
         super::ZipArchive::new(std::io::Cursor::new(zip_bytes(entries))).unwrap()
     }
 
+    fn temp_dest(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("microclaw_clawhub_{tag}_{}", uuid::Uuid::new_v4()))
+    }
+
     #[test]
-    fn archive_bounds_accept_normal_skill() {
+    fn extract_bounded_accepts_normal_skill() {
+        let dest = temp_dest("ok");
         let mut a = archive_of(&[
             ("SKILL.md", b"---\nname: x\n---\nDo the thing." as &[u8]),
-            ("helper.sh", b"echo hi"),
+            ("nested/helper.sh", b"echo hi"),
         ]);
-        assert!(check_archive_bounds(&mut a).is_ok());
+        assert!(extract_bounded(&mut a, &dest).is_ok());
+        assert!(dest.join("SKILL.md").is_file());
+        assert!(dest.join("nested/helper.sh").is_file());
+        std::fs::remove_dir_all(&dest).ok();
     }
 
     #[test]
-    fn archive_bounds_reject_oversized_entry() {
+    fn extract_bounded_rejects_oversized_entry_by_actual_bytes() {
         // A padded README past the per-file cap — the ClawHavoc bypass shape.
+        // The cap is enforced on decompressed bytes, not the metadata size.
         let big = vec![b'a'; (MAX_FILE_BYTES + 1) as usize];
+        let dest = temp_dest("big");
         let mut a = archive_of(&[("README.md", big.as_slice())]);
-        let err = check_archive_bounds(&mut a).unwrap_err();
+        let err = extract_bounded(&mut a, &dest).unwrap_err();
         assert!(err.contains("scanner-bypass"), "got: {err}");
+        std::fs::remove_dir_all(&dest).ok();
     }
 
     #[test]
-    fn archive_bounds_reject_too_many_entries() {
+    fn extract_bounded_rejects_too_many_entries() {
         let names: Vec<String> = (0..300).map(|i| format!("f{i}.txt")).collect();
         let entries: Vec<(&str, &[u8])> =
             names.iter().map(|n| (n.as_str(), b"x" as &[u8])).collect();
+        let dest = temp_dest("many");
         let mut a = archive_of(&entries);
-        assert!(check_archive_bounds(&mut a).unwrap_err().contains("entries"));
+        assert!(extract_bounded(&mut a, &dest)
+            .unwrap_err()
+            .contains("entries"));
+        std::fs::remove_dir_all(&dest).ok();
     }
 
     #[test]

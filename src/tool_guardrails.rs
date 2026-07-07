@@ -49,10 +49,11 @@ pub struct ToolPolicyConfig {
     /// Tool names that are always denied (subject to `mode`).
     #[serde(default)]
     pub deny_tools: Vec<String>,
-    /// Highest permitted risk tier: "low" | "medium" | "high". Tools whose
-    /// built-in risk exceeds this are denied. Unset = all tiers permitted.
+    /// Highest permitted risk tier: low | medium | high. Tools whose built-in
+    /// risk exceeds this are denied. Unset = all tiers permitted. Typos are
+    /// rejected at config load (typed enum).
     #[serde(default)]
-    pub max_risk: Option<String>,
+    pub max_risk: Option<ToolRisk>,
     /// Tool names exempt from `deny_tools` / `max_risk` (allow wins).
     #[serde(default)]
     pub allow_tools: Vec<String>,
@@ -68,23 +69,6 @@ pub enum PolicyDecision {
     Block(String),
 }
 
-fn risk_rank(risk: ToolRisk) -> u8 {
-    match risk {
-        ToolRisk::Low => 0,
-        ToolRisk::Medium => 1,
-        ToolRisk::High => 2,
-    }
-}
-
-fn parse_risk(s: &str) -> Option<ToolRisk> {
-    match s.to_ascii_lowercase().as_str() {
-        "low" => Some(ToolRisk::Low),
-        "medium" => Some(ToolRisk::Medium),
-        "high" => Some(ToolRisk::High),
-        _ => None,
-    }
-}
-
 /// Evaluate `tool_name` against the configured policy. Pure — callers handle
 /// audit logging and short-circuiting.
 pub fn evaluate_tool_policy(cfg: &ToolPolicyConfig, tool_name: &str) -> PolicyDecision {
@@ -96,34 +80,28 @@ pub fn evaluate_tool_policy(cfg: &ToolPolicyConfig, tool_name: &str) -> PolicyDe
     }
     let violation = if cfg.deny_tools.iter().any(|t| t == tool_name) {
         Some(format!("tool `{tool_name}` is in tool_policy.deny_tools"))
-    } else if let Some(max) = cfg.max_risk.as_deref() {
-        match parse_risk(max) {
-            Some(max_risk) => {
-                let risk = tool_risk(tool_name);
-                if risk_rank(risk) > risk_rank(max_risk) {
-                    Some(format!(
-                        "tool `{tool_name}` risk `{}` exceeds tool_policy.max_risk `{}`",
-                        risk.as_str(),
-                        max_risk.as_str()
-                    ))
-                } else {
-                    None
-                }
-            }
-            None => Some(format!(
-                "tool_policy.max_risk `{max}` is not one of low|medium|high; denying `{tool_name}` (fail closed)"
-            )),
-        }
     } else {
-        None
+        match cfg.max_risk {
+            Some(max_risk) if tool_risk(tool_name) > max_risk => {
+                let risk = tool_risk(tool_name);
+                Some(format!(
+                    "tool `{tool_name}` risk `{}` exceeds tool_policy.max_risk `{}`",
+                    risk.as_str(),
+                    max_risk.as_str()
+                ))
+            }
+            _ => None,
+        }
     };
     match violation {
         None => PolicyDecision::Allow,
-        Some(reason) => match cfg.mode {
-            ToolPolicyMode::Block => PolicyDecision::Block(reason),
-            ToolPolicyMode::Warn => PolicyDecision::Warn(reason),
-            ToolPolicyMode::Off => PolicyDecision::Allow,
-        },
+        Some(reason) => {
+            if cfg.mode == ToolPolicyMode::Block {
+                PolicyDecision::Block(reason)
+            } else {
+                PolicyDecision::Warn(reason)
+            }
+        }
     }
 }
 
@@ -235,7 +213,7 @@ mod tests {
     fn policy_off_allows_everything() {
         let mut c = cfg(ToolPolicyMode::Off);
         c.deny_tools = vec!["bash".into()];
-        c.max_risk = Some("low".into());
+        c.max_risk = Some(ToolRisk::Low);
         assert_eq!(evaluate_tool_policy(&c, "bash"), PolicyDecision::Allow);
     }
 
@@ -263,7 +241,7 @@ mod tests {
     #[test]
     fn policy_max_risk_blocks_higher_tiers() {
         let mut c = cfg(ToolPolicyMode::Block);
-        c.max_risk = Some("medium".into());
+        c.max_risk = Some(ToolRisk::Medium);
         // bash is High risk -> blocked
         assert!(matches!(
             evaluate_tool_policy(&c, "bash"),
@@ -279,22 +257,31 @@ mod tests {
     }
 
     #[test]
+    fn policy_max_risk_covers_mcp_tools() {
+        // MCP tools rate Medium by default, so max_risk=low restricts them.
+        let mut c = cfg(ToolPolicyMode::Block);
+        c.max_risk = Some(ToolRisk::Low);
+        assert!(matches!(
+            evaluate_tool_policy(&c, "mcp_fs_delete_file"),
+            PolicyDecision::Block(_)
+        ));
+    }
+
+    #[test]
     fn policy_allow_list_overrides_deny() {
         let mut c = cfg(ToolPolicyMode::Block);
         c.deny_tools = vec!["bash".into()];
-        c.max_risk = Some("low".into());
+        c.max_risk = Some(ToolRisk::Low);
         c.allow_tools = vec!["bash".into()];
         assert_eq!(evaluate_tool_policy(&c, "bash"), PolicyDecision::Allow);
     }
 
     #[test]
-    fn policy_invalid_max_risk_fails_closed() {
-        let mut c = cfg(ToolPolicyMode::Block);
-        c.max_risk = Some("extreme".into());
-        assert!(matches!(
-            evaluate_tool_policy(&c, "read_file"),
-            PolicyDecision::Block(_)
-        ));
+    fn policy_invalid_max_risk_rejected_at_parse() {
+        // Typos now fail at config load instead of runtime fail-closed.
+        assert!(serde_yaml::from_str::<ToolPolicyConfig>("mode: block\nmax_risk: extreme").is_err());
+        let ok: ToolPolicyConfig = serde_yaml::from_str("mode: block\nmax_risk: medium").unwrap();
+        assert_eq!(ok.max_risk, Some(ToolRisk::Medium));
     }
 
     #[test]

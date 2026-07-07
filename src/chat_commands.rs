@@ -91,20 +91,23 @@ pub fn build_help_response() -> String {
 }
 
 /// `/learn` — user-triggered skill distillation (the Hermes `/learn`
-/// pattern). Runs the skill-review pipeline over this chat's current
-/// session with the automatic gates (threshold, success heuristic)
-/// bypassed — the user explicitly asked. Content security scans and the
-/// agent-created cap still apply. Restricted to control chats: distilled
-/// skills alter future agent behavior in every chat.
+/// pattern). Enqueues a forced skill-review job: the worker bypasses the
+/// automatic threshold/success gates (the user explicitly asked) but keeps
+/// all content-security scans and the agent-created cap, then posts the
+/// outcome back to the chat. Queued rather than inline because slash
+/// commands must stay fast — an inline LLM round-trip would stall
+/// single-threaded channel loops (e.g. the Weixin poller) and webhook
+/// handlers. Restricted to control chats: distilled skills alter future
+/// agent behavior in every chat.
 async fn handle_learn_command(state: &AppState, chat_id: i64) -> String {
-    if !state.config.control_chat_ids.contains(&chat_id) {
+    if !state.config.is_control_chat(chat_id) {
         return "Permission denied: /learn is restricted to control chats.".to_string();
     }
-    let outcome = crate::skill_review::run_skill_review_core(state, chat_id, true).await;
-    format_learn_reply(&outcome)
+    state.skill_review_queue.enqueue_learn(chat_id);
+    "Distilling this session into a skill — I'll post the result here shortly.".to_string()
 }
 
-fn format_learn_reply(outcome: &crate::skill_review::LearnOutcome) -> String {
+pub(crate) fn format_learn_reply(outcome: &crate::skill_review::LearnOutcome) -> String {
     use crate::skill_review::LearnOutcome;
     match outcome {
         LearnOutcome::Applied(applied) => {
@@ -265,7 +268,7 @@ fn build_log_response(config: &Config, chat_id: i64, command: &str) -> String {
     if config.control_chat_ids.is_empty() {
         return "Log access is disabled. Set `control_chat_ids` in the config to your admin chat(s) first — logs can contain other chats' content and secrets, so this is admin-only.".to_string();
     }
-    if !config.control_chat_ids.contains(&chat_id) {
+    if !config.is_control_chat(chat_id) {
         return "Not authorized: `/log` is restricted to the configured control chat(s).".to_string();
     }
 

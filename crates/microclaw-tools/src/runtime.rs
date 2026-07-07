@@ -60,7 +60,12 @@ impl ToolResult {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Declaration order is the risk ordering (Low < Medium < High) — the derived
+/// `Ord` is relied on by the tool-policy `max_risk` comparison.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum ToolRisk {
     Low,
     Medium,
@@ -110,6 +115,11 @@ pub fn tool_risk(name: &str) -> ToolRisk {
         | "replay_scheduled_task_dlq"
         | "structured_memory_delete"
         | "structured_memory_update" => ToolRisk::Medium,
+        // MCP tools are external code with unknown side effects; rating them
+        // Low would let them sail under a `max_risk` policy that blocks
+        // built-in write tools. Medium matches their SideEffect concurrency
+        // default.
+        name if name.starts_with("mcp_") => ToolRisk::Medium,
         _ => ToolRisk::Low,
     }
 }

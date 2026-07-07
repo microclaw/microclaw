@@ -1683,6 +1683,14 @@ pub struct Config {
 }
 
 impl Config {
+    /// Whether `chat_id` is a control chat. An empty `control_chat_ids` list
+    /// means NO chat has control privileges (default deny) — every privileged
+    /// surface (skill management, /learn, /log, ...) must route through this
+    /// so that rule stays in one place.
+    pub fn is_control_chat(&self, chat_id: i64) -> bool {
+        self.control_chat_ids.contains(&chat_id)
+    }
+
     fn ensure_mapping_mut(value: &mut serde_yaml::Value) -> &mut serde_yaml::Mapping {
         if !matches!(value, serde_yaml::Value::Mapping(_)) {
             *value = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());

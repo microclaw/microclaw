@@ -31,15 +31,20 @@ registry-side scanning can be bypassed (22 MB README padding past scanner size
 caps, post-scan payload mutation). Previously `install_skill` relied entirely
 on registry-provided VirusTotal flags. Now:
 
-- **Pre-extraction archive bounds** (fail closed): max 256 entries, 8 MB per
-  file uncompressed, 32 MB total. An oversize-padded file rejects the whole
-  install instead of being skipped by a scanner.
-- **Post-extraction local injection scan**: every text file (`md/txt/yaml/yml/
-  json/toml`) in the extracted skill is run through the shared
+- **Bounded extraction into a staging dir** (fail closed): max 256 entries,
+  8 MB per file, 32 MB total — enforced on the ACTUAL decompressed byte count
+  while copying (`Read::take`), not on the zip metadata's declared sizes,
+  which a crafted archive can understate. Entry paths are sanitized via
+  `enclosed_name()` (zip-slip guard). An oversize-padded file rejects the
+  whole install instead of being skipped by a scanner.
+- **Post-extraction local injection scan** (on the staging dir): every text
+  file (`md/txt/yaml/yml/json/toml`) is run through the shared
   `microclaw_core::injection_scan::scan_for_injection` (invisible-unicode,
-  instruction-override, HTML/script, exfil command+URL patterns). A hit deletes
-  the extracted directory and fails the install; `skip_security` downgrades it
-  to a warning for operators who reviewed the skill by hand.
+  instruction-override, HTML/script, exfil command+URL patterns). Only after
+  both checks pass is the staged tree swapped into the live skills dir — a
+  rejected install can no longer damage a pre-existing hand-written skill at
+  the same path. `skip_security` downgrades scan hits to warnings for
+  operators who reviewed the skill by hand.
 - `scan_for_injection` moved from `microclaw-storage` to `microclaw-core` so
   memory writes, agent-created skills (`skill_manage`), and ClawHub installs
   share one scanner; the storage path re-exports it (no caller changes).

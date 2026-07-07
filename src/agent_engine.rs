@@ -565,6 +565,11 @@ struct AgentMetrics {
     input_text: String,
 }
 
+/// Prefix of the canned reply returned when the token budget refuses a turn.
+/// Proactive loops (heartbeat / idle check-in / interjection / scheduler)
+/// match on this to stay silent instead of delivering the refusal to chat.
+pub const TOKEN_BUDGET_REFUSAL_PREFIX: &str = "Daily token budget reached";
+
 pub(crate) async fn process_with_agent_impl(
     state: &AppState,
     context: AgentRequestContext<'_>,
@@ -682,10 +687,11 @@ async fn process_with_agent_logic(
     // Per-chat token budget: refuse to start a turn once the chat's rolling
     // 24h usage exceeds the configured cap. Checked once per turn — a turn
     // already in flight may overshoot, which keeps the check cheap. Control
-    // chats can be exempted so operators can always reach the bot.
+    // chats can be exempted so operators can always reach the bot; exempt
+    // chats skip the usage aggregate entirely (they're typically the busiest).
     let budget = state.config.token_budget.daily_per_chat;
-    if budget > 0 {
-        let is_control_chat = state.config.control_chat_ids.contains(&chat_id);
+    let is_control_chat = state.config.is_control_chat(chat_id);
+    if budget > 0 && !(state.config.token_budget.exempt_control_chats && is_control_chat) {
         let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
         let used = call_blocking(state.db.clone(), move |db| {
             db.get_llm_usage_summary_since(Some(chat_id), Some(&since))
@@ -695,7 +701,7 @@ async fn process_with_agent_logic(
         if state.config.token_budget.blocks(is_control_chat, used) {
             warn!(chat_id, used, budget, "Token budget exhausted; refusing turn");
             return Ok(format!(
-                "Daily token budget reached for this chat ({used} of {budget} tokens in the \
+                "{TOKEN_BUDGET_REFUSAL_PREFIX} for this chat ({used} of {budget} tokens in the \
                  last 24h). I'll be available again once usage rolls out of the window. \
                  An operator can raise `token_budget.daily_per_chat` in the config."
             ));
@@ -1561,67 +1567,6 @@ async fn process_with_agent_logic(
             let repeat_window = state.config.tool_repeat_window;
             let repeat_limit = state.config.tool_repeat_limit.max(1);
             for call in raw_pending_calls {
-                // Pre-tool-call policy gate (tool_policy config). Runs before
-                // the circuit breaker: a denied tool never counts as an
-                // attempt. Warn mode audits but executes; block mode
-                // short-circuits with an error tool_result. Every violation is
-                // sealed into the tamper-evident audit chain.
-                match crate::tool_guardrails::evaluate_tool_policy(
-                    &state.config.tool_policy,
-                    &call.name,
-                ) {
-                    crate::tool_guardrails::PolicyDecision::Allow => {}
-                    crate::tool_guardrails::PolicyDecision::Warn(reason) => {
-                        warn!(chat_id, tool = %call.name, %reason, "Tool policy violation (warn mode)");
-                        let db = state.db.clone();
-                        let tool = call.name.clone();
-                        let actor = format!("chat:{chat_id}");
-                        let _ = call_blocking(db, move |db| {
-                            db.log_audit_event(
-                                "tool_policy",
-                                &actor,
-                                "warn",
-                                Some(&tool),
-                                "allowed",
-                                Some(&reason),
-                            )
-                        })
-                        .await;
-                    }
-                    crate::tool_guardrails::PolicyDecision::Block(reason) => {
-                        warn!(chat_id, tool = %call.name, %reason, "Tool policy violation (blocked)");
-                        {
-                            let db = state.db.clone();
-                            let tool = call.name.clone();
-                            let actor = format!("chat:{chat_id}");
-                            let detail = reason.clone();
-                            let _ = call_blocking(db, move |db| {
-                                db.log_audit_event(
-                                    "tool_policy",
-                                    &actor,
-                                    "block",
-                                    Some(&tool),
-                                    "blocked",
-                                    Some(&detail),
-                                )
-                            })
-                            .await;
-                        }
-                        let msg = format!(
-                            "Tool call blocked by policy: {reason}. Do not retry this tool; \
-                             use a permitted tool or explain the limitation to the user."
-                        );
-                        short_circuit_results.push((
-                            call.id.clone(),
-                            ContentBlock::ToolResult {
-                                tool_use_id: call.id.clone(),
-                                content: msg,
-                                is_error: Some(true),
-                            },
-                        ));
-                        continue;
-                    }
-                }
                 if repeat_window == 0 || call.name == "fetch_artifact" {
                     pending_calls.push(call);
                     continue;

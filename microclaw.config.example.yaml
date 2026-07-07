@@ -350,8 +350,12 @@ web_session_idle_ttl_seconds: 300
 #   max_chars: 8000                # max HEARTBEAT.md chars injected into the prompt
 
 # Per-chat token budget: once a chat's rolling-24h token total (input+output,
-# all request kinds) reaches daily_per_chat, new turns are refused with a
-# notice until usage rolls out of the window. 0 = unlimited (default).
+# across agent turns, sub-agent runs, compaction — everything logged for the
+# chat) reaches daily_per_chat, new agent turns are refused until usage rolls
+# out of the window. Proactive turns (heartbeat, idle check-in, scheduled
+# tasks) are refused silently, so a capped chat stops consuming instead of
+# being spammed. Enforced at turn start: a turn or background sub-agent
+# already in flight finishes and may overshoot. 0 = unlimited (default).
 # Control chats are exempt by default so operators can always reach the bot.
 # token_budget:
 #   daily_per_chat: 0
