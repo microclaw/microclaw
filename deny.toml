@@ -21,6 +21,9 @@ yanked = "deny"
 # RUSTSEC-2024-0320: `yaml-rust` unmaintained — transitive in the typst stack.
 # RUSTSEC-2024-0436: `paste` no longer maintained — compile-time proc macro.
 # RUSTSEC-2025-0141: `bincode` 1.x unmaintained — transitive in the typst stack.
+# RUSTSEC-2026-0192: `ttf-parser` unmaintained — font parsing throughout the
+#   typst render stack (fontdb/rustybuzz/usvg); upstream suggests migrating to
+#   `skrifa`, which typst has not done yet. No safe upgrade available.
 #
 # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: `quick-xml` 0.38/0.39 DoS advisories
 #   (quadratic dup-attribute check; unbounded NsReader allocation). Both copies
@@ -41,6 +44,7 @@ ignore = [
   "RUSTSEC-2025-0141",
   "RUSTSEC-2026-0194",
   "RUSTSEC-2026-0195",
+  "RUSTSEC-2026-0192",
 ]
 
 [bans]
