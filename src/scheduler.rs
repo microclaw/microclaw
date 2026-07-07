@@ -2014,7 +2014,7 @@ mod tests {
         std::fs::create_dir_all(groups.join("1")).unwrap();
         std::fs::write(groups.join("1/HEARTBEAT.md"), "x".repeat(100)).unwrap();
 
-        let got = heartbeat_checklists(&[groups.clone()], 10);
+        let got = heartbeat_checklists(std::slice::from_ref(&groups), 10);
         assert_eq!(got.len(), 1);
         assert!(got[0].1.starts_with("xxxxxxxxxx"));
         assert!(got[0].1.contains("truncated"));

@@ -59,7 +59,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-audit --locked
       - run: cargo install cargo-deny --locked
-      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099
+      # RUSTSEC-2026-0194/0195: quick-xml DoS advisories, transitive via the
+      # typst 0.15 render stack (citationberg/hayagriva, plist/syntect);
+      # fixed only in quick-xml >=0.41 which the parents haven't adopted.
+      # See the matching entries (with rationale) in deny.toml.
+      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
       - run: cargo deny check advisories bans licenses
 
   rust-ubuntu:
