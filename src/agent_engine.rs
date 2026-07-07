@@ -565,6 +565,11 @@ struct AgentMetrics {
     input_text: String,
 }
 
+/// Prefix of the canned reply returned when the token budget refuses a turn.
+/// Proactive loops (heartbeat / idle check-in / interjection / scheduler)
+/// match on this to stay silent instead of delivering the refusal to chat.
+pub const TOKEN_BUDGET_REFUSAL_PREFIX: &str = "Daily token budget reached";
+
 pub(crate) async fn process_with_agent_impl(
     state: &AppState,
     context: AgentRequestContext<'_>,
@@ -677,6 +682,30 @@ async fn process_with_agent_logic(
             "Agent request completed via fast path"
         );
         return Ok(reply);
+    }
+
+    // Per-chat token budget: refuse to start a turn once the chat's rolling
+    // 24h usage exceeds the configured cap. Checked once per turn — a turn
+    // already in flight may overshoot, which keeps the check cheap. Control
+    // chats can be exempted so operators can always reach the bot; exempt
+    // chats skip the usage aggregate entirely (they're typically the busiest).
+    let budget = state.config.token_budget.daily_per_chat;
+    let is_control_chat = state.config.is_control_chat(chat_id);
+    if budget > 0 && !(state.config.token_budget.exempt_control_chats && is_control_chat) {
+        let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let used = call_blocking(state.db.clone(), move |db| {
+            db.get_llm_usage_summary_since(Some(chat_id), Some(&since))
+        })
+        .await?
+        .total_tokens;
+        if state.config.token_budget.blocks(is_control_chat, used) {
+            warn!(chat_id, used, budget, "Token budget exhausted; refusing turn");
+            return Ok(format!(
+                "{TOKEN_BUDGET_REFUSAL_PREFIX} for this chat ({used} of {budget} tokens in the \
+                 last 24h). I'll be available again once usage rolls out of the window. \
+                 An operator can raise `token_budget.daily_per_chat` in the config."
+            ));
+        }
     }
 
     // Load messages first so we can use the latest user message as the relevance query
@@ -1891,7 +1920,7 @@ fn effective_data_root_dir(config: &crate::config::Config) -> std::path::PathBuf
     }
 }
 
-fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::PathBuf {
+pub(crate) fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::PathBuf {
     let data_dir = std::path::PathBuf::from(&config.data_dir);
     let is_runtime_dir = data_dir
         .file_name()

@@ -361,9 +361,17 @@ Output EXACTLY one JSON object, no surrounding prose, matching one of:
 /// The wrapper struct exists so [`crate::runtime::AppState`] can hand
 /// out cheap clones (`enqueue` only needs the sender). The worker
 /// retains the receiver via [`SkillReviewWorker::start`].
+/// One unit of review work. `forced` is the /learn path: gates are
+/// bypassed and the outcome is delivered back to the chat.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SkillReviewJob {
+    pub chat_id: i64,
+    pub forced: bool,
+}
+
 #[derive(Clone)]
 pub struct SkillReviewQueue {
-    tx: mpsc::UnboundedSender<i64>,
+    tx: mpsc::UnboundedSender<SkillReviewJob>,
 }
 
 impl SkillReviewQueue {
@@ -371,14 +379,28 @@ impl SkillReviewQueue {
     /// the worker has been shut down — review is best-effort and never
     /// blocks the caller.
     pub fn enqueue(&self, chat_id: i64) {
-        let _ = self.tx.send(chat_id);
+        let _ = self.tx.send(SkillReviewJob {
+            chat_id,
+            forced: false,
+        });
+    }
+
+    /// Enqueue a user-triggered /learn distillation. The worker runs it with
+    /// the automatic gates bypassed and posts the outcome to the chat, so
+    /// slash-command handlers stay fast (no inline LLM round-trip — that
+    /// would stall single-threaded channel loops and webhook handlers).
+    pub fn enqueue_learn(&self, chat_id: i64) {
+        let _ = self.tx.send(SkillReviewJob {
+            chat_id,
+            forced: true,
+        });
     }
 }
 
 /// Owning side of the skill-review queue. Created together with the
 /// `SkillReviewQueue` handle and consumed by [`spawn_skill_review_worker`].
 pub struct SkillReviewWorker {
-    rx: mpsc::UnboundedReceiver<i64>,
+    rx: mpsc::UnboundedReceiver<SkillReviewJob>,
 }
 
 /// Build the `(handle, worker)` pair that goes into [`AppState`] and the
@@ -389,19 +411,56 @@ pub fn build_skill_review_channel() -> (SkillReviewQueue, SkillReviewWorker) {
 }
 
 /// Run the worker loop on the current task. Drains all immediately-
-/// available chat_ids into a dedup set before processing, so a flurry of
+/// available jobs into a dedup set before processing, so a flurry of
 /// enqueues for the same chat collapses to one review.
 pub async fn spawn_skill_review_worker(state: Arc<AppState>, mut worker: SkillReviewWorker) {
     use std::collections::HashSet;
     while let Some(first) = worker.rx.recv().await {
-        let mut pending: HashSet<i64> = HashSet::new();
+        let mut pending: HashSet<SkillReviewJob> = HashSet::new();
         pending.insert(first);
         while let Ok(more) = worker.rx.try_recv() {
             pending.insert(more);
         }
-        for chat_id in pending {
-            run_skill_review(state.clone(), chat_id).await;
+        for job in pending {
+            if job.forced {
+                run_learn_job(&state, job.chat_id).await;
+            } else {
+                run_skill_review(state.clone(), job.chat_id).await;
+            }
         }
+    }
+}
+
+/// Execute a /learn job and deliver the outcome back to the chat.
+async fn run_learn_job(state: &Arc<AppState>, chat_id: i64) {
+    let outcome = run_skill_review_core(state, chat_id, true).await;
+    let reply = crate::chat_commands::format_learn_reply(&outcome);
+    let routing = match microclaw_channels::channel::get_chat_routing(
+        &state.channel_registry,
+        state.db.clone(),
+        chat_id,
+    )
+    .await
+    .ok()
+    .flatten()
+    {
+        Some(r) => r,
+        None => {
+            warn!("learn: no routing for chat {chat_id}; outcome: {reply}");
+            return;
+        }
+    };
+    let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
+    if let Err(e) = microclaw_channels::channel::deliver_and_store_bot_message(
+        &state.channel_registry,
+        state.db.clone(),
+        &bot_username,
+        chat_id,
+        &reply,
+    )
+    .await
+    {
+        warn!("learn: delivery failed for chat {chat_id}: {e}");
     }
 }
 
@@ -417,28 +476,70 @@ pub async fn spawn_skill_review_worker(state: Arc<AppState>, mut worker: SkillRe
 ///   5. Build trajectory + ask LLM for a verdict.
 ///   6. On `{"create": true, ...}`, validate + write SKILL.md.
 pub async fn run_skill_review(state: Arc<AppState>, chat_id: i64) {
+    // Errors are logged at the failure site inside the core, so both the
+    // autonomous path and /learn leave an operator-visible trace.
+    let _ = run_skill_review_core(&state, chat_id, false).await;
+}
+
+/// Outcome of one review pass, rich enough for a user-facing reply
+/// (the `/learn` command) while the autonomous path just logs it.
+#[derive(Debug)]
+pub enum LearnOutcome {
+    /// A skill was created/edited/patched.
+    Applied(AppliedAction),
+    /// Review ran but decided nothing was worth saving (or the action was
+    /// rejected by validation); the string says why.
+    Nothing(String),
+    /// A pre-LLM gate stopped the pass (feature off, too few tool calls,
+    /// unsuccessful-looking turn, empty session, skill cap).
+    Skipped(String),
+    Error(String),
+}
+
+/// Full review pipeline for one chat. `forced` is the `/learn` path: it
+/// bypasses the feature gate, the tool-call threshold, and the success
+/// heuristic — the user explicitly asked for distillation — but keeps the
+/// agent-created cap and every content-security check.
+pub async fn run_skill_review_core(
+    state: &AppState,
+    chat_id: i64,
+    forced: bool,
+) -> LearnOutcome {
+    // `skill_review_min_tool_calls: 0` is the documented master switch for
+    // agent skill creation — /learn honors it too rather than becoming a
+    // bypass of an operator decision.
     let min_tool_calls = state.config.skill_review_min_tool_calls;
     if min_tool_calls == 0 {
-        return;
+        return LearnOutcome::Skipped(
+            "skill review is disabled (skill_review_min_tool_calls: 0)".into(),
+        );
     }
 
-    let session_messages = match load_session_messages(&state, chat_id).await {
+    let session_messages = match load_session_messages(state, chat_id).await {
         Some(msgs) if !msgs.is_empty() => msgs,
-        _ => return,
+        _ => {
+            return LearnOutcome::Skipped(
+                "no session to learn from — have a conversation first".into(),
+            )
+        }
     };
 
     let tool_use_count = count_tool_uses(&session_messages);
-    if tool_use_count < min_tool_calls {
-        return;
+    if !forced && tool_use_count < min_tool_calls {
+        return LearnOutcome::Skipped(format!(
+            "only {tool_use_count} tool calls (threshold {min_tool_calls})"
+        ));
     }
 
-    let signal = assess_success(&session_messages);
-    if signal == SuccessSignal::Unlikely {
-        info!(
-            chat_id,
-            tool_use_count, "Skill review: skipping — task did not look successful"
-        );
-        return;
+    if !forced {
+        let signal = assess_success(&session_messages);
+        if signal == SuccessSignal::Unlikely {
+            info!(
+                chat_id,
+                tool_use_count, "Skill review: skipping — task did not look successful"
+            );
+            return LearnOutcome::Skipped("task did not look successful".into());
+        }
     }
 
     let existing_skills = state.skills.discover_skills();
@@ -452,12 +553,14 @@ pub async fn run_skill_review(state: Arc<AppState>, chat_id: i64) {
             agent_created_count,
             "Skill review: skipping — agent-created skill cap reached"
         );
-        return;
+        return LearnOutcome::Skipped(format!(
+            "agent-created skill cap reached ({agent_created_count}/{MAX_AGENT_CREATED_SKILLS}) — delete one first"
+        ));
     }
 
     let trajectory = build_tool_trajectory(&session_messages);
     if trajectory.trim().is_empty() {
-        return;
+        return LearnOutcome::Skipped("session has no tool activity to distill".into());
     }
 
     // Provide name + description + source so the LLM can decide whether
@@ -488,8 +591,9 @@ pub async fn run_skill_review(state: Arc<AppState>, chat_id: i64) {
     {
         Ok(r) => r,
         Err(e) => {
+            // Same wording as before the refactor — log greps/alerts match on it.
             error!("Skill review: LLM call failed for chat {chat_id}: {e}");
-            return;
+            return LearnOutcome::Error(format!("LLM call failed: {e}"));
         }
     };
 
@@ -509,21 +613,31 @@ pub async fn run_skill_review(state: Arc<AppState>, chat_id: i64) {
     let trimmed = text.trim();
     let review: serde_json::Value = match parse_review_json(trimmed) {
         Some(v) => v,
-        None => return,
+        None => {
+            return LearnOutcome::Nothing("review verdict was not parseable JSON".into());
+        }
     };
 
     let action = parse_review_action(&review);
     let skills_root = std::path::PathBuf::from(state.config.skills_data_dir());
     match apply_review_action(&skills_root, &existing_skills, action) {
-        Ok(Some(applied)) => info!(
-            chat_id,
-            skill = %applied.name,
-            action = applied.action_kind,
-            version = applied.version,
-            "Skill review: applied action"
+        Ok(Some(applied)) => {
+            info!(
+                chat_id,
+                skill = %applied.name,
+                action = applied.action_kind,
+                version = applied.version,
+                "Skill review: applied action"
+            );
+            LearnOutcome::Applied(applied)
+        }
+        Ok(None) => LearnOutcome::Nothing(
+            "no reusable pattern found in this session worth saving as a skill".into(),
         ),
-        Ok(None) => {}
-        Err(e) => warn!(chat_id, "Skill review: action rejected: {e}"),
+        Err(e) => {
+            warn!(chat_id, "Skill review: action rejected: {e}");
+            LearnOutcome::Nothing(format!("proposed skill was rejected: {e}"))
+        }
     }
 }
 
@@ -813,7 +927,7 @@ fn parse_review_json(trimmed: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&trimmed[start..end]).ok()
 }
 
-async fn load_session_messages(state: &Arc<AppState>, chat_id: i64) -> Option<Vec<Message>> {
+async fn load_session_messages(state: &AppState, chat_id: i64) -> Option<Vec<Message>> {
     let loaded = call_blocking(state.db.clone(), move |db| db.load_session(chat_id))
         .await
         .ok()??;
@@ -1574,8 +1688,26 @@ mod tests {
             }
             received.extend(pending);
         }
-        received.sort();
-        assert_eq!(received, vec![1, 2]);
+        let mut chat_ids: Vec<i64> = received.iter().map(|j| j.chat_id).collect();
+        chat_ids.sort();
+        assert_eq!(chat_ids, vec![1, 2]);
+        assert!(received.iter().all(|j| !j.forced));
+    }
+
+    #[tokio::test]
+    async fn skill_review_queue_learn_jobs_are_distinct_from_autonomous() {
+        let (queue, mut worker) = build_skill_review_channel();
+        queue.enqueue(1);
+        queue.enqueue_learn(1);
+        drop(queue);
+        let mut got = Vec::new();
+        while let Some(job) = worker.rx.recv().await {
+            got.push(job);
+        }
+        // Same chat, but a forced /learn job does not dedup against the
+        // autonomous review job.
+        let set: std::collections::HashSet<_> = got.into_iter().collect();
+        assert_eq!(set.len(), 2);
     }
 
     #[test]

@@ -531,6 +531,7 @@ See full manifest schema and examples: `docs/plugins/overview.md`.
 - `/reset memory` -- clear current chat memory (chat AGENTS.md + structured memories), keep conversation and tasks
 - `/skills` -- list all available skills
 - `/reload-skills` -- reload skills from disk
+- `/learn` -- distill the current session into a reusable skill (control chats only)
 - `/archive` -- archive current in-memory session as markdown
 - `/usage` -- show token usage summary (current chat + global totals)
 - `/status` -- show provider/model plus current chat session/task status

@@ -465,6 +465,7 @@ fn microclaw_command_menu() -> Vec<BotCommand> {
         ("provider", "Show or set the provider for this chat"),
         ("providers", "List configured providers"),
         ("skills", "List available skills"),
+        ("learn", "Distill this session into a reusable skill"),
         ("user", "View or clear your USER.md profile"),
         ("usage", "Token usage report for this chat"),
         ("rewind", "List or restore conversation checkpoints"),

@@ -73,6 +73,7 @@ pub fn build_help_response() -> String {
         "Skills",
         "  /skills              List available skills",
         "  /reload-skills       Reload skills from disk",
+        "  /learn               Distill this session into a reusable skill (control chats)",
         "",
         "Memory & usage",
         "  /user [clear]        View or clear your USER.md profile",
@@ -87,6 +88,45 @@ pub fn build_help_response() -> String {
         "Tip: in groups, mention me first (e.g. @bot /status).",
     ]
     .join("\n")
+}
+
+/// `/learn` — user-triggered skill distillation (the Hermes `/learn`
+/// pattern). Enqueues a forced skill-review job: the worker bypasses the
+/// automatic threshold/success gates (the user explicitly asked) but keeps
+/// all content-security scans and the agent-created cap, then posts the
+/// outcome back to the chat. Queued rather than inline because slash
+/// commands must stay fast — an inline LLM round-trip would stall
+/// single-threaded channel loops (e.g. the Weixin poller) and webhook
+/// handlers. Restricted to control chats: distilled skills alter future
+/// agent behavior in every chat.
+async fn handle_learn_command(state: &AppState, chat_id: i64) -> String {
+    if !state.config.is_control_chat(chat_id) {
+        return "Permission denied: /learn is restricted to control chats.".to_string();
+    }
+    state.skill_review_queue.enqueue_learn(chat_id);
+    "Distilling this session into a skill — I'll post the result here shortly.".to_string()
+}
+
+pub(crate) fn format_learn_reply(outcome: &crate::skill_review::LearnOutcome) -> String {
+    use crate::skill_review::LearnOutcome;
+    match outcome {
+        LearnOutcome::Applied(applied) => {
+            let verb = match applied.action_kind {
+                "create" => "Created",
+                "edit" => "Updated",
+                "patch" => "Patched",
+                other => other,
+            };
+            format!(
+                "{verb} skill '{}' (v{}) from this session. It will be considered in future \
+                 conversations; use /skills to inspect it or skill_manage to edit/delete it.",
+                applied.name, applied.version
+            )
+        }
+        LearnOutcome::Nothing(reason) => format!("No skill saved: {reason}"),
+        LearnOutcome::Skipped(reason) => format!("Nothing to learn: {reason}"),
+        LearnOutcome::Error(e) => format!("Learn failed: {e}"),
+    }
 }
 
 /// Show or clear the per-chat USER.md user model. Backs the `/user` slash
@@ -228,7 +268,7 @@ fn build_log_response(config: &Config, chat_id: i64, command: &str) -> String {
     if config.control_chat_ids.is_empty() {
         return "Log access is disabled. Set `control_chat_ids` in the config to your admin chat(s) first — logs can contain other chats' content and secrets, so this is admin-only.".to_string();
     }
-    if !config.control_chat_ids.contains(&chat_id) {
+    if !config.is_control_chat(chat_id) {
         return "Not authorized: `/log` is restricted to the configured control chat(s).".to_string();
     }
 
@@ -368,6 +408,10 @@ pub async fn handle_chat_command(
     if trimmed == "/reload-skills" {
         let count = state.skills.reload().len();
         return Some(format!("Reloaded {count} skills from disk."));
+    }
+
+    if trimmed == "/learn" {
+        return Some(handle_learn_command(state, chat_id).await);
     }
 
     if trimmed == "/archive" {
@@ -1722,7 +1766,7 @@ channels:
 
 #[cfg(test)]
 mod slash_command_tests {
-    use super::{build_help_response, build_log_response, is_slash_command};
+    use super::{build_help_response, build_log_response, format_learn_reply, is_slash_command};
     use crate::config::Config;
 
     #[test]
@@ -1788,10 +1832,30 @@ mod slash_command_tests {
         // Every command surfaced in help must be a real dispatch entry.
         for cmd in [
             "/status", "/clear", "/reset", "/stop", "/archive", "/model", "/models",
-            "/provider", "/providers", "/skills", "/reload-skills", "/user", "/usage",
-            "/rewind", "/log", "/help",
+            "/provider", "/providers", "/skills", "/reload-skills", "/learn", "/user",
+            "/usage", "/rewind", "/log", "/help",
         ] {
             assert!(help.contains(cmd), "help missing {cmd}");
         }
+    }
+
+    #[test]
+    fn learn_reply_formats_all_outcomes() {
+        use crate::skill_review::{AppliedAction, LearnOutcome};
+        let applied = format_learn_reply(&LearnOutcome::Applied(AppliedAction {
+            name: "deploy-checklist".into(),
+            action_kind: "create",
+            version: 1,
+        }));
+        assert!(applied.contains("Created skill 'deploy-checklist' (v1)"));
+        assert!(
+            format_learn_reply(&LearnOutcome::Nothing("nothing reusable".into()))
+                .contains("No skill saved")
+        );
+        assert!(
+            format_learn_reply(&LearnOutcome::Skipped("no session".into()))
+                .contains("Nothing to learn")
+        );
+        assert!(format_learn_reply(&LearnOutcome::Error("boom".into())).contains("Learn failed"));
     }
 }

@@ -82,6 +82,9 @@ pub struct ToolRegistry {
     sandbox_mode: SandboxMode,
     sandbox_runtime_available: bool,
     cached_static_definitions: OnceLock<Vec<ToolDefinition>>,
+    /// For sealing tool-policy decisions into the audit chain. `None` only in
+    /// unit tests; both real constructors set it.
+    audit_db: Option<Arc<Database>>,
 }
 
 impl ToolRegistry {
@@ -134,6 +137,7 @@ impl ToolRegistry {
         db: Arc<Database>,
         memory_backend: Arc<MemoryBackend>,
     ) -> Self {
+        let audit_db = Some(db.clone());
         let working_dir = PathBuf::from(&config.working_dir);
         if let Err(e) = std::fs::create_dir_all(&working_dir) {
             tracing::warn!(
@@ -373,6 +377,7 @@ impl ToolRegistry {
             sandbox_mode: sandbox_router.mode(),
             sandbox_runtime_available: sandbox_router.runtime_available(),
             cached_static_definitions: OnceLock::new(),
+            audit_db,
         }
     }
 
@@ -384,6 +389,7 @@ impl ToolRegistry {
         channel_registry: Option<Arc<ChannelRegistry>>,
         allow_session_tools: bool,
     ) -> Self {
+        let audit_db = Some(db.clone());
         let working_dir = PathBuf::from(&config.working_dir);
         if let Err(e) = std::fs::create_dir_all(&working_dir) {
             tracing::warn!(
@@ -514,6 +520,7 @@ impl ToolRegistry {
             sandbox_mode: sandbox_router.mode(),
             sandbox_runtime_available: sandbox_router.runtime_available(),
             cached_static_definitions: OnceLock::new(),
+            audit_db,
         }
     }
 
@@ -580,6 +587,60 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
+        // Operator-set tool policy. Enforced here — the single choke point —
+        // so main-loop calls, sub-agent loops, and any future caller are all
+        // covered; a denied tool cannot be reached by delegation. Decisions
+        // are sealed into the audit chain fire-and-forget (the DB write
+        // itself preserves chain order).
+        match crate::tool_guardrails::evaluate_tool_policy(&self.config.tool_policy, name) {
+            crate::tool_guardrails::PolicyDecision::Allow => {}
+            decision => {
+                let (action, status, block_reason) = match decision {
+                    crate::tool_guardrails::PolicyDecision::Warn(reason) => {
+                        ("warn", "allowed", Err(reason))
+                    }
+                    crate::tool_guardrails::PolicyDecision::Block(reason) => {
+                        ("block", "blocked", Ok(reason))
+                    }
+                    crate::tool_guardrails::PolicyDecision::Allow => unreachable!(),
+                };
+                let reason = match &block_reason {
+                    Ok(r) | Err(r) => r.clone(),
+                };
+                tracing::warn!(
+                    tool = name,
+                    chat_id = auth.caller_chat_id,
+                    action,
+                    %reason,
+                    "Tool policy violation"
+                );
+                if let Some(db) = self.audit_db.clone() {
+                    let tool = name.to_string();
+                    let actor = format!("chat:{}", auth.caller_chat_id);
+                    let detail = reason.clone();
+                    tokio::spawn(async move {
+                        let _ = microclaw_storage::db::call_blocking(db, move |db| {
+                            db.log_audit_event(
+                                "tool_policy",
+                                &actor,
+                                action,
+                                Some(&tool),
+                                status,
+                                Some(&detail),
+                            )
+                        })
+                        .await;
+                    });
+                }
+                if block_reason.is_ok() {
+                    return ToolResult::error(format!(
+                        "Tool call blocked by policy: {reason}. Do not retry this tool; \
+                         use a permitted tool or explain the limitation to the user."
+                    ))
+                    .with_error_type("tool_policy_blocked");
+                }
+            }
+        }
         if let Err(msg) =
             validate_execution_policy(name, self.sandbox_mode, self.sandbox_runtime_available)
         {
@@ -778,12 +839,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_tool_policy_blocks_at_choke_point() {
+        // Policy enforcement lives in execute_with_auth so EVERY caller —
+        // main loop, sub-agent loops — is covered. Denied tools return a
+        // typed error before any execution-policy/approval logic runs.
+        let mut config = crate::config::Config::test_defaults();
+        config.tool_policy.mode = crate::tool_guardrails::ToolPolicyMode::Block;
+        config.tool_policy.deny_tools = vec!["bash".to_string()];
+        let registry = ToolRegistry {
+            config,
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            audit_db: None,
+            tools: vec![Box::new(DummyTool {
+                tool_name: "bash".into(),
+            })],
+        };
+        let auth = ToolAuthContext {
+            caller_channel: "telegram".into(),
+            caller_chat_id: 1,
+            control_chat_ids: vec![],
+            env_files: vec![],
+        };
+        let result = registry.execute_with_auth("bash", json!({}), &auth).await;
+        assert!(result.is_error);
+        assert_eq!(result.error_type.as_deref(), Some("tool_policy_blocked"));
+
+        // Warn mode executes the tool (DummyTool returns success).
+        let mut warn_config = crate::config::Config::test_defaults();
+        warn_config.tool_policy.mode = crate::tool_guardrails::ToolPolicyMode::Warn;
+        warn_config.tool_policy.deny_tools = vec!["bash".to_string()];
+        warn_config.high_risk_tool_user_confirmation_required = false;
+        let registry = ToolRegistry {
+            config: warn_config,
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            audit_db: None,
+            tools: vec![Box::new(DummyTool {
+                tool_name: "bash".into(),
+            })],
+        };
+        let result = registry.execute_with_auth("bash", json!({}), &auth).await;
+        assert!(!result.is_error, "warn mode must still execute: {}", result.content);
+    }
+
+    #[tokio::test]
     async fn test_high_risk_tool_requires_explicit_approval_on_web() {
         let registry = ToolRegistry {
             config: crate::config::Config::test_defaults(),
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -821,6 +930,7 @@ mod tests {
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -856,6 +966,7 @@ mod tests {
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -882,6 +993,7 @@ mod tests {
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -905,6 +1017,7 @@ mod tests {
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "write_file".into(),
             })],
@@ -959,6 +1072,7 @@ tools:
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
         };
         let auth = ToolAuthContext {
             caller_channel: "web".into(),
@@ -986,6 +1100,7 @@ tools:
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "write_memory".into(),
             })],
@@ -1016,6 +1131,7 @@ tools:
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "write_memory".into(),
             })],
@@ -1046,6 +1162,7 @@ tools:
             sandbox_mode: SandboxMode::Off,
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
+            audit_db: None,
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "send_message".into(),
             })],

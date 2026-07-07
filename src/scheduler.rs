@@ -228,7 +228,15 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
             )
         }
         Ok(Ok(response)) => {
-            if !response.is_empty() {
+            if response.starts_with(crate::agent_engine::TOKEN_BUDGET_REFUSAL_PREFIX) {
+                // Budget-refused turn: don't deliver the canned notice to the
+                // chat; record it in the run history instead.
+                warn!(
+                    "Scheduler: task #{} skipped — chat {} token budget exhausted",
+                    task.id, task.chat_id
+                );
+                (true, Some("skipped: token budget exhausted".to_string()))
+            } else if !response.is_empty() {
                 let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
                 if let Err(delivery_err) = deliver_scheduler_message_with_backoff(
                     &state,
@@ -709,13 +717,77 @@ pub fn spawn_idle_checkin(state: Arc<AppState>) {
     });
 }
 
-const IDLE_CHECKIN_PROMPT: &str = "[Proactive idle check-in] This chat has been quiet for a while. \
-Review what you know about this user and any pending follow-ups, due reminders, or promises you made.\n\
-- If — and ONLY if — you have something genuinely useful or kind to say right now (a due follow-up, a \
-relevant update, a gentle nudge on something they asked for), write ONE short, friendly message.\n\
-- Otherwise, reply with exactly: SKIP\n\
+/// SKIP contract appended to every proactive prompt. One copy — the sentinel
+/// wording and the parser in [`proactive_deliverable`] must stay in sync.
+const PROACTIVE_SKIP_CONTRACT: &str = "\n- Otherwise, reply with exactly: SKIP\n\
 Do not invent reasons to message; silence is the right default. Do not use the send_message tool — just \
 return the message text, or SKIP.";
+
+const IDLE_CHECKIN_PROMPT_BODY: &str = "[Proactive idle check-in] This chat has been quiet for a while. \
+Review what you know about this user and any pending follow-ups, due reminders, or promises you made.\n\
+- If — and ONLY if — you have something genuinely useful or kind to say right now (a due follow-up, a \
+relevant update, a gentle nudge on something they asked for), write ONE short, friendly message.";
+
+/// Decide whether a proactive agent reply should be delivered. `None` means
+/// stay silent: empty replies, the SKIP sentinel (tolerating trailing
+/// punctuation like "SKIP."), and system refusals (token budget) that would
+/// otherwise be re-delivered on every sweep.
+fn proactive_deliverable(response: &str) -> Option<&str> {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .eq_ignore_ascii_case("skip")
+    {
+        return None;
+    }
+    if trimmed.starts_with(crate::agent_engine::TOKEN_BUDGET_REFUSAL_PREFIX) {
+        return None;
+    }
+    Some(trimmed)
+}
+
+/// Shared tail of every proactive loop: run one agent turn over `prompt` and
+/// deliver the reply unless [`proactive_deliverable`] says to stay silent.
+/// Returns `Err` when the agent run itself failed so callers can do their own
+/// bookkeeping; delivery failures are logged here.
+async fn proactive_turn_and_deliver(
+    state: &Arc<AppState>,
+    routing: &ChatRouting,
+    chat_id: i64,
+    prompt: &str,
+    label: &str,
+) -> anyhow::Result<()> {
+    let response = process_with_agent(
+        state,
+        AgentRequestContext {
+            caller_channel: &routing.channel_name,
+            chat_id,
+            chat_type: routing.conversation.as_agent_chat_type(),
+        },
+        Some(prompt),
+        None,
+    )
+    .await?;
+
+    if let Some(reply) = proactive_deliverable(&response) {
+        let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
+        if let Err(e) = deliver_and_store_bot_message(
+            &state.channel_registry,
+            state.db.clone(),
+            &bot_username,
+            chat_id,
+            reply,
+        )
+        .await
+        {
+            warn!("{label}: delivery failed for chat {chat_id}: {e}");
+        }
+    }
+    Ok(())
+}
 
 async fn run_idle_checkin(state: &Arc<AppState>, last_checkin: &mut HashMap<i64, Instant>) {
     let idle_hours = state.config.idle_checkin.idle_hours.max(1) as i64;
@@ -764,45 +836,154 @@ async fn run_idle_checkin(state: &Arc<AppState>, last_checkin: &mut HashMap<i64,
             None => continue,
         };
 
-        let response = match process_with_agent(
-            state,
-            AgentRequestContext {
-                caller_channel: &routing.channel_name,
-                chat_id,
-                chat_type: routing.conversation.as_agent_chat_type(),
-            },
-            Some(IDLE_CHECKIN_PROMPT),
-            None,
-        )
-        .await
+        let prompt = format!("{IDLE_CHECKIN_PROMPT_BODY}{PROACTIVE_SKIP_CONTRACT}");
+        if let Err(e) =
+            proactive_turn_and_deliver(state, &routing, chat_id, &prompt, "idle check-in").await
         {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("idle check-in: agent run failed for chat {chat_id}: {e}");
-                last_checkin.insert(chat_id, Instant::now());
+            warn!("idle check-in: agent run failed for chat {chat_id}: {e}");
+        }
+        // Mark as checked-in regardless of outcome, so we don't retry every tick.
+        last_checkin.insert(chat_id, Instant::now());
+    }
+}
+
+/// OpenClaw-style proactive heartbeat: every `interval_mins`, read each
+/// chat's HEARTBEAT.md checklist and run an agent turn over it. The agent may
+/// use tools to check on items and messages the chat only when something
+/// genuinely needs attention (otherwise it replies SKIP and the sweep stays
+/// silent). OFF by default; chats without a HEARTBEAT.md are never touched,
+/// so enabling the loop alone changes nothing until a checklist exists.
+///
+/// Checklists are looked up in both per-chat layouts:
+/// `<data_dir>/groups/<channel>/<chat_id>/HEARTBEAT.md` (next to the chat's
+/// AGENTS.md — the canonical spot) and the flat
+/// `<data_dir>/runtime/groups/<chat_id>/HEARTBEAT.md` (SOUL-override layout).
+pub fn spawn_heartbeat(state: Arc<AppState>) {
+    if !state.config.heartbeat.enabled {
+        return;
+    }
+    tokio::spawn(async move {
+        let interval_mins = state.config.heartbeat.interval_mins.max(1);
+        info!("Heartbeat started (interval_mins={interval_mins})");
+        let mut ticker = tokio::time::interval(Duration::from_secs(interval_mins * 60));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // The first interval tick completes immediately; consume it so a
+        // restart doesn't instantly re-run every checklist.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            run_heartbeat(&state).await;
+        }
+    });
+}
+
+const HEARTBEAT_PROMPT_BODY: &str = "[Heartbeat] Periodic proactive check for this chat. Below is \
+the chat's HEARTBEAT.md checklist, maintained by the user (and you, via file tools).\n\
+- Work through the items. Use tools where needed to check on things (schedules, files, web, memory).\n\
+- If — and ONLY if — something needs the user's attention right now, write ONE short message about it. \
+Do not narrate checks that came back clean.";
+
+/// Collect `(chat_id, checklist)` pairs from every configured heartbeat root.
+/// Each root is scanned one level deep: a numeric child dir is a chat dir
+/// (flat layout); a non-numeric child is a channel dir whose numeric children
+/// are chat dirs. First root wins on duplicate chat ids.
+fn heartbeat_checklists(roots: &[std::path::PathBuf], max_chars: usize) -> Vec<(i64, String)> {
+    let mut out: Vec<(i64, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let visit_chat_dir = |dir: &std::path::Path, chat_id: i64, out: &mut Vec<(i64, String)>, seen: &mut std::collections::HashSet<i64>| {
+        if seen.contains(&chat_id) {
+            return;
+        }
+        let Ok(content) = std::fs::read_to_string(dir.join("HEARTBEAT.md")) else {
+            return;
+        };
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let capped = if trimmed.len() > max_chars {
+            let end = floor_char_boundary(trimmed, max_chars);
+            format!("{}\n[... truncated at {max_chars} chars]", &trimmed[..end])
+        } else {
+            trimmed.to_string()
+        };
+        seen.insert(chat_id);
+        out.push((chat_id, capped));
+    };
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
                 continue;
             }
-        };
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if let Ok(chat_id) = name.parse::<i64>() {
+                visit_chat_dir(&entry.path(), chat_id, &mut out, &mut seen);
+            } else {
+                // Channel dir: scan its numeric children.
+                let Ok(children) = std::fs::read_dir(entry.path()) else {
+                    continue;
+                };
+                for child in children.flatten() {
+                    let Some(chat_id) = child
+                        .file_name()
+                        .to_str()
+                        .and_then(|s| s.parse::<i64>().ok())
+                    else {
+                        continue;
+                    };
+                    visit_chat_dir(&child.path(), chat_id, &mut out, &mut seen);
+                }
+            }
+        }
+    }
+    out.sort_by_key(|(id, _)| *id);
+    out
+}
 
-        // Mark as checked-in regardless, so we don't retry every tick.
-        last_checkin.insert(chat_id, Instant::now());
+/// The two roots heartbeat checklists may live under, in priority order.
+fn heartbeat_roots(config: &crate::config::Config) -> Vec<std::path::PathBuf> {
+    vec![
+        // Canonical channel-aware layout, where per-chat AGENTS.md lives.
+        std::path::PathBuf::from(&config.data_dir).join("groups"),
+        // Flat legacy layout used by per-chat SOUL.md overrides.
+        crate::agent_engine::effective_runtime_data_dir(config).join("groups"),
+    ]
+}
 
-        let trimmed = response.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+async fn run_heartbeat(state: &Arc<AppState>) {
+    let roots = heartbeat_roots(&state.config);
+    let checklists = heartbeat_checklists(&roots, state.config.heartbeat.max_chars);
+    for (chat_id, checklist) in checklists {
+        // Chats with active background work already get their own updates.
+        let active = call_blocking(state.db.clone(), move |db| {
+            db.count_active_subagent_runs_for_chat(chat_id)
+        })
+        .await
+        .unwrap_or(0);
+        if active > 0 {
             continue;
         }
 
-        let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
-        if let Err(e) = deliver_and_store_bot_message(
-            &state.channel_registry,
-            state.db.clone(),
-            &bot_username,
-            chat_id,
-            trimmed,
-        )
-        .await
+        let routing = match get_chat_routing(&state.channel_registry, state.db.clone(), chat_id)
+            .await
+            .ok()
+            .flatten()
         {
-            warn!("idle check-in: delivery failed for chat {chat_id}: {e}");
+            Some(r) => r,
+            None => continue,
+        };
+
+        let prompt = format!(
+            "{HEARTBEAT_PROMPT_BODY}{PROACTIVE_SKIP_CONTRACT}\n\n--- HEARTBEAT.md ---\n{checklist}"
+        );
+        if let Err(e) =
+            proactive_turn_and_deliver(state, &routing, chat_id, &prompt, "heartbeat").await
+        {
+            warn!("heartbeat: agent run failed for chat {chat_id}: {e}");
         }
     }
 }
@@ -1024,10 +1205,9 @@ async fn run_interjection(state: &Arc<AppState>, last_interjection: &mut HashMap
         // Mark regardless so we don't re-evaluate every tick.
         last_interjection.insert(chat_id, Instant::now());
 
-        let trimmed = response.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+        let Some(reply) = proactive_deliverable(&response) else {
             continue;
-        }
+        };
 
         let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
         if let Err(e) = deliver_and_store_bot_message(
@@ -1035,7 +1215,7 @@ async fn run_interjection(state: &Arc<AppState>, last_interjection: &mut HashMap
             state.db.clone(),
             &bot_username,
             chat_id,
-            trimmed,
+            reply,
         )
         .await
         {
@@ -1781,11 +1961,95 @@ fn persist_curated_user_model(
 mod tests {
     use super::*;
 
+    /// Unique per-test temp dir; callers clean up with remove_dir_all.
+    fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "microclaw-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
     #[test]
-    fn test_format_duration_secs() {
-        assert_eq!(format_duration_secs(5), "5s");
-        assert_eq!(format_duration_secs(125), "2m");
-        assert_eq!(format_duration_secs(3 * 3600 + 25 * 60), "3h25m");
+    fn test_heartbeat_checklists_scans_both_layouts() {
+        let root = unique_temp_dir("heartbeat-test");
+        let canonical = root.join("groups"); // channel-aware layout
+        let flat = root.join("runtime/groups"); // SOUL-override layout
+        // chat 42 in canonical layout under a channel dir
+        std::fs::create_dir_all(canonical.join("telegram/42")).unwrap();
+        std::fs::write(
+            canonical.join("telegram/42/HEARTBEAT.md"),
+            "- check the deploy\n",
+        )
+        .unwrap();
+        // chat 8 in the flat legacy layout
+        std::fs::create_dir_all(flat.join("8")).unwrap();
+        std::fs::write(flat.join("8/HEARTBEAT.md"), "- water the plants\n").unwrap();
+        // chat 7: empty checklist -> skipped
+        std::fs::create_dir_all(canonical.join("web/7")).unwrap();
+        std::fs::write(canonical.join("web/7/HEARTBEAT.md"), "   \n").unwrap();
+        // chat 9: no HEARTBEAT.md -> skipped
+        std::fs::create_dir_all(canonical.join("telegram/9")).unwrap();
+        // chat 42 duplicated in flat layout -> first root wins
+        std::fs::create_dir_all(flat.join("42")).unwrap();
+        std::fs::write(flat.join("42/HEARTBEAT.md"), "- stale duplicate\n").unwrap();
+
+        let got = heartbeat_checklists(&[canonical.clone(), flat.clone()], 8000);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].0, 8);
+        assert_eq!(got[0].1, "- water the plants");
+        assert_eq!(got[1].0, 42);
+        assert_eq!(got[1].1, "- check the deploy");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn test_heartbeat_checklists_caps_content() {
+        let root = unique_temp_dir("heartbeat-cap-test");
+        let groups = root.join("groups");
+        std::fs::create_dir_all(groups.join("1")).unwrap();
+        std::fs::write(groups.join("1/HEARTBEAT.md"), "x".repeat(100)).unwrap();
+
+        let got = heartbeat_checklists(std::slice::from_ref(&groups), 10);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].1.starts_with("xxxxxxxxxx"));
+        assert!(got[0].1.contains("truncated"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn test_heartbeat_checklists_missing_dir_is_empty() {
+        let got = heartbeat_checklists(
+            &[std::path::PathBuf::from("/nonexistent/heartbeat-test")],
+            100,
+        );
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn test_proactive_deliverable_filters_skip_and_refusals() {
+        assert_eq!(proactive_deliverable("  hello there "), Some("hello there"));
+        assert_eq!(proactive_deliverable(""), None);
+        assert_eq!(proactive_deliverable("SKIP"), None);
+        assert_eq!(proactive_deliverable("skip"), None);
+        assert_eq!(proactive_deliverable("SKIP."), None);
+        assert_eq!(proactive_deliverable("SKIP!!\n"), None);
+        // A real sentence starting with "Skip" is still delivered.
+        assert_eq!(
+            proactive_deliverable("Skip the 3pm meeting — it moved to Friday"),
+            Some("Skip the 3pm meeting — it moved to Friday")
+        );
+        // Token-budget refusal stays silent.
+        let refusal = format!(
+            "{} for this chat (5000 of 4000 tokens in the last 24h).",
+            crate::agent_engine::TOKEN_BUDGET_REFUSAL_PREFIX
+        );
+        assert_eq!(proactive_deliverable(&refusal), None);
     }
 
     #[test]

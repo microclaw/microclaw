@@ -1101,6 +1101,81 @@ impl Default for SleepTimeConfig {
     }
 }
 
+fn default_token_budget_exempt_control_chats() -> bool {
+    true
+}
+
+/// Per-chat token spend cap. Counters Hermes-style "week-3 bill" drift:
+/// once a chat's rolling-24h total (input+output, all request kinds) hits
+/// `daily_per_chat`, new turns are refused with a notice until usage rolls
+/// out of the window. 0 (default) = unlimited; control chats exempt by
+/// default so operators can always reach the bot.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TokenBudgetConfig {
+    /// Total tokens (input+output) allowed per chat per rolling 24h. 0 = off.
+    #[serde(default)]
+    pub daily_per_chat: i64,
+    #[serde(default = "default_token_budget_exempt_control_chats")]
+    pub exempt_control_chats: bool,
+}
+
+impl Default for TokenBudgetConfig {
+    fn default() -> Self {
+        Self {
+            daily_per_chat: 0,
+            exempt_control_chats: default_token_budget_exempt_control_chats(),
+        }
+    }
+}
+
+impl TokenBudgetConfig {
+    /// True when a chat that has already spent `used` tokens in the window
+    /// must be refused a new turn.
+    pub fn blocks(&self, is_control_chat: bool, used: i64) -> bool {
+        if self.daily_per_chat <= 0 {
+            return false;
+        }
+        if self.exempt_control_chats && is_control_chat {
+            return false;
+        }
+        used >= self.daily_per_chat
+    }
+}
+
+fn default_heartbeat_interval_mins() -> u64 {
+    30
+}
+fn default_heartbeat_max_chars() -> usize {
+    8000
+}
+
+/// OpenClaw-style proactive heartbeat. When enabled, every `interval_mins`
+/// the bot reads each chat's `runtime/groups/<chat_id>/HEARTBEAT.md` checklist
+/// and runs an agent turn over it; the agent messages the chat only when
+/// something on the list genuinely needs attention, otherwise stays silent.
+/// OFF by default — and chats without a HEARTBEAT.md file are never touched.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HeartbeatConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Minutes between heartbeat sweeps. Default: 30.
+    #[serde(default = "default_heartbeat_interval_mins")]
+    pub interval_mins: u64,
+    /// Max characters of HEARTBEAT.md injected into the prompt. Default: 8000.
+    #[serde(default = "default_heartbeat_max_chars")]
+    pub max_chars: usize,
+}
+
+impl Default for HeartbeatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_mins: default_heartbeat_interval_mins(),
+            max_chars: default_heartbeat_max_chars(),
+        }
+    }
+}
+
 fn default_idle_checkin_idle_hours() -> u64 {
     24
 }
@@ -1357,6 +1432,10 @@ pub struct Config {
     #[serde(default)]
     pub idle_checkin: IdleCheckinConfig,
     #[serde(default)]
+    pub heartbeat: HeartbeatConfig,
+    #[serde(default)]
+    pub token_budget: TokenBudgetConfig,
+    #[serde(default)]
     pub sleep_time: SleepTimeConfig,
     #[serde(default)]
     pub interjection: InterjectionConfig,
@@ -1464,6 +1543,10 @@ pub struct Config {
     /// scans delivered bot messages for credential-like strings.
     #[serde(default)]
     pub output_guardrail: OutputGuardrailConfig,
+    /// Pre-tool-call policy (mode off | warn | block, deny_tools, max_risk,
+    /// allow_tools). Off by default; violations are sealed into the audit log.
+    #[serde(default)]
+    pub tool_policy: crate::tool_guardrails::ToolPolicyConfig,
 
     // --- Embedding ---
     #[serde(default)]
@@ -1600,6 +1683,14 @@ pub struct Config {
 }
 
 impl Config {
+    /// Whether `chat_id` is a control chat. An empty `control_chat_ids` list
+    /// means NO chat has control privileges (default deny) — every privileged
+    /// surface (skill management, /learn, /log, ...) must route through this
+    /// so that rule stays in one place.
+    pub fn is_control_chat(&self, chat_id: i64) -> bool {
+        self.control_chat_ids.contains(&chat_id)
+    }
+
     fn ensure_mapping_mut(value: &mut serde_yaml::Value) -> &mut serde_yaml::Mapping {
         if !matches!(value, serde_yaml::Value::Mapping(_)) {
             *value = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
@@ -2033,6 +2124,8 @@ impl Config {
             show_thinking: false,
             subagents: SubagentConfig::default(),
             idle_checkin: IdleCheckinConfig::default(),
+            heartbeat: HeartbeatConfig::default(),
+            token_budget: TokenBudgetConfig::default(),
             sleep_time: SleepTimeConfig::default(),
             interjection: InterjectionConfig::default(),
             a2a: A2AConfig::default(),
@@ -2051,6 +2144,7 @@ impl Config {
             web_fetch_url_validation: WebFetchUrlValidationConfig::default(),
             web_search: SearchProviderConfig::default(),
             output_guardrail: OutputGuardrailConfig::default(),
+            tool_policy: crate::tool_guardrails::ToolPolicyConfig::default(),
             model_prices: vec![],
             embedding_provider: None,
             embedding_api_key: None,
@@ -3187,6 +3281,32 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::env_lock()
+    }
+
+    #[test]
+    fn token_budget_disabled_never_blocks() {
+        let cfg = TokenBudgetConfig::default();
+        assert!(!cfg.blocks(false, i64::MAX));
+        assert!(!cfg.blocks(true, i64::MAX));
+    }
+
+    #[test]
+    fn token_budget_blocks_at_cap_but_exempts_control_chats() {
+        let cfg = TokenBudgetConfig {
+            daily_per_chat: 1000,
+            exempt_control_chats: true,
+        };
+        assert!(!cfg.blocks(false, 999));
+        assert!(cfg.blocks(false, 1000));
+        assert!(cfg.blocks(false, 5000));
+        // Control chat exempt by default
+        assert!(!cfg.blocks(true, 5000));
+        // ...unless exemption is turned off
+        let strict = TokenBudgetConfig {
+            daily_per_chat: 1000,
+            exempt_control_chats: false,
+        };
+        assert!(strict.blocks(true, 1000));
     }
 
     #[test]
