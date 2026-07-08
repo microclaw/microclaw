@@ -356,7 +356,80 @@ struct RunSubAgentTaskParams {
     task: String,
     context: String,
     specialist: String,
+    exit_criteria: Vec<crate::completion_contract::ExitCriterion>,
     local_cancel: Arc<AtomicBool>,
+}
+
+
+/// Bash-backed runner for `Command` exit criteria: routes through the
+/// sub-agent's own tool registry, so the sandbox router, dangerous-pattern
+/// checks, and tool_policy apply exactly as for agent-issued commands.
+struct SubagentBashRunner<'a> {
+    tools: &'a ToolRegistry,
+    auth: &'a ToolAuthContext,
+}
+
+#[async_trait::async_trait]
+impl crate::completion_contract::CommandRunner for SubagentBashRunner<'_> {
+    async fn run(&self, command: &str) -> (bool, String) {
+        let result = self
+            .tools
+            .execute_with_auth("bash", json!({ "command": command }), self.auth)
+            .await;
+        (!result.is_error, result.content)
+    }
+}
+
+/// Verify a finished result against its completion contract (if any) and
+/// prepend the evidence report, so the parent loop and the user see
+/// VERIFIED/FAILED with per-criterion evidence instead of trusting the
+/// sub-agent's self-report.
+#[allow(clippy::too_many_arguments)]
+async fn apply_completion_contract(
+    criteria: &[crate::completion_contract::ExitCriterion],
+    final_text: String,
+    config: &Config,
+    tools: &ToolRegistry,
+    auth: &ToolAuthContext,
+    db: Arc<Database>,
+    run_id: &str,
+) -> String {
+    if criteria.is_empty() {
+        return final_text;
+    }
+    let base = std::path::Path::new(&config.working_dir);
+    let working_dir = match config.working_dir_isolation {
+        crate::config::WorkingDirIsolation::Shared => base.join("shared"),
+        crate::config::WorkingDirIsolation::Chat => microclaw_tools::runtime::chat_working_dir(
+            base,
+            &auth.caller_channel,
+            auth.caller_chat_id,
+        ),
+    };
+    let runner = SubagentBashRunner { tools, auth };
+    let outcomes = crate::completion_contract::verify_criteria(
+        criteria,
+        &final_text,
+        &working_dir,
+        Some(&runner),
+    )
+    .await;
+    let passed = outcomes.iter().filter(|o| o.passed).count();
+    log_subagent_event(
+        db,
+        run_id,
+        "contract",
+        Some(format!(
+            "{} {passed}/{}",
+            if passed == outcomes.len() { "verified" } else { "failed" },
+            outcomes.len()
+        )),
+    )
+    .await;
+    format!(
+        "{}\n{final_text}",
+        crate::completion_contract::render_report(&outcomes)
+    )
 }
 
 async fn run_sub_agent_task(
@@ -375,6 +448,7 @@ async fn run_sub_agent_task(
         task,
         context,
         specialist,
+        exit_criteria,
         local_cancel,
     } = params;
     if matches!(runtime, SubagentExecutionRuntime::Acp) {
@@ -416,11 +490,14 @@ async fn run_sub_agent_task(
         persona = profile.persona
     );
 
-    let user_content = if context.is_empty() {
+    let mut user_content = if context.is_empty() {
         task.to_string()
     } else {
         format!("Context: {context}\n\nTask: {task}")
     };
+    if !exit_criteria.is_empty() {
+        user_content.push_str(&crate::completion_contract::render_for_prompt(&exit_criteria));
+    }
 
     let mut messages = vec![Message {
         role: "user".into(),
@@ -517,6 +594,16 @@ async fn run_sub_agent_task(
                 text
             };
             let (final_text, artifact_json) = normalize_subagent_artifact_payload(&source);
+            let final_text = apply_completion_contract(
+                &exit_criteria,
+                final_text,
+                &config,
+                &tools,
+                &auth_context,
+                db.clone(),
+                &run_id,
+            )
+            .await;
             return Ok((
                 final_text,
                 artifact_json,
@@ -539,6 +626,16 @@ async fn run_sub_agent_task(
                 log_subagent_event(db.clone(), &run_id, "submit_result", None).await;
                 let (final_text, artifact_json) =
                     normalize_subagent_artifact_payload(&submit_input.to_string());
+                let final_text = apply_completion_contract(
+                    &exit_criteria,
+                    final_text,
+                    &config,
+                    &tools,
+                    &auth_context,
+                    db.clone(),
+                    &run_id,
+                )
+                .await;
                 return Ok((
                     final_text,
                     artifact_json,
@@ -638,6 +735,16 @@ async fn run_sub_agent_task(
             text
         };
         let (final_text, artifact_json) = normalize_subagent_artifact_payload(&source);
+        let final_text = apply_completion_contract(
+            &exit_criteria,
+            final_text,
+            &config,
+            &tools,
+            &auth_context,
+            db.clone(),
+            &run_id,
+        )
+        .await;
         return Ok((
             final_text,
             artifact_json,
@@ -898,6 +1005,12 @@ impl Tool for SessionsSpawnTool {
                     "token_budget": {
                         "type": "integer",
                         "description": "Optional token budget cap for this run."
+                    },
+                    "exit_criteria": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "description": "Optional completion contract: machine-checkable exit criteria the runtime VERIFIES when the run finishes (the result is marked VERIFIED/FAILED with evidence). Entries: {type:'file_exists', path} | {type:'file_contains', path, needle} | {type:'file_min_bytes', path, min_bytes} | {type:'result_contains', needle} | {type:'command', run, expect_contains?}. Paths are relative to the chat working dir; commands run through the sandboxed bash tool. Declare criteria whenever the task has an objectively checkable outcome.",
+                        "items": {"type": "object"}
                     }
                 }),
                 &["task"],
@@ -939,6 +1052,11 @@ impl Tool for SessionsSpawnTool {
         )
         .name
         .to_string();
+        let exit_criteria =
+            match crate::completion_contract::parse_exit_criteria(input.get("exit_criteria")) {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
         // Optional human-friendly label ("competitor research") for "what am I working on".
         let label = input
             .get("label")
@@ -952,6 +1070,12 @@ impl Tool for SessionsSpawnTool {
                 Ok(v) => v,
                 Err(e) => return ToolResult::error(e),
             };
+        if !exit_criteria.is_empty() && matches!(execution_runtime, SubagentExecutionRuntime::Acp) {
+            return ToolResult::error(
+                "exit_criteria are not supported on the acp runtime yet; use the native runtime"
+                    .into(),
+            );
+        }
         let runtime_target = input
             .get("runtime_target")
             .and_then(|v| v.as_str())
@@ -1112,6 +1236,7 @@ impl Tool for SessionsSpawnTool {
         let task_async = task.clone();
         let context_async = context.clone();
         let specialist_async = specialist.clone();
+        let exit_criteria_async = exit_criteria.clone();
         let parent_run_id_async = parent_run_id.clone();
         let auth_async = ToolAuthContext {
             caller_channel: auth.caller_channel.clone(),
@@ -1172,6 +1297,7 @@ impl Tool for SessionsSpawnTool {
                 task: task_async,
                 context: context_async,
                 specialist: specialist_async,
+                exit_criteria: exit_criteria_async,
                 local_cancel,
             });
 

@@ -7,6 +7,7 @@ pub mod chat_commands;
 pub mod chat_turn_queue;
 pub mod checkpoint;
 pub mod clawhub;
+pub mod completion_contract;
 pub mod codex_auth;
 pub mod config;
 pub mod config_persistence;
