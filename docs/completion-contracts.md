@@ -67,10 +67,25 @@ Max 8 criteria per contract.
 - The ACP runtime does not support contracts yet; spawning with
   `exit_criteria` on `runtime: acp` is rejected.
 
-## Deferred (phase 2)
+## Phase 2 (shipped)
 
-- Contracts on `subagents_orchestrate` work packages with contract-aware
-  fan-in (retry a package whose contract failed).
-- Contracts on scheduled tasks ("backup exists and is dated today").
-- A bounded auto-retry (one re-spawn with failure evidence) — today the
-  parent model decides.
+- **Bounded in-run auto-retry**: when a run's contract fails, the sub-agent
+  gets exactly one chance to finish the unmet criteria (the failure report is
+  fed back into its conversation; `contract_retry` event logged) before the
+  FAILED result is returned.
+- **Orchestrate work-package contracts**: `subagents_orchestrate`
+  `work_packages` entries may be objects `{task, exit_criteria?}`. With
+  `wait: true`, a completed worker whose result carries the FAILED marker is
+  re-spawned once with the failure evidence as context (contract-aware
+  fan-in retry, reported in the `retried` field), and the replacement's
+  artifacts are merged instead.
+- **Scheduled-task contracts**: `schedule_task` accepts `exit_criteria`
+  (stored with the task). After each run the contract is verified; the
+  annotated report is delivered to the chat and a failed contract records the
+  run as failed — one-shot tasks then flow into the existing DLQ +
+  auto-replay, which bounds retries via `dlq_max_replay_attempts`.
+
+## Still deferred
+
+- ACP-runtime contracts (the ACP result path bypasses the verifier; spawns
+  with contracts on `runtime: acp` are rejected).

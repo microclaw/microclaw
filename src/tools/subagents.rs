@@ -380,22 +380,31 @@ impl crate::completion_contract::CommandRunner for SubagentBashRunner<'_> {
     }
 }
 
+/// Result of verifying a finished sub-agent result against its contract.
+struct ContractVerdict {
+    /// Result text with the evidence report prepended.
+    annotated: String,
+    /// The report alone (used to prompt the bounded in-run retry).
+    report: String,
+    passed: bool,
+}
+
 /// Verify a finished result against its completion contract (if any) and
-/// prepend the evidence report, so the parent loop and the user see
+/// build the evidence report, so the parent loop and the user see
 /// VERIFIED/FAILED with per-criterion evidence instead of trusting the
-/// sub-agent's self-report.
+/// sub-agent's self-report. Returns `None` when no contract was declared.
 #[allow(clippy::too_many_arguments)]
 async fn apply_completion_contract(
     criteria: &[crate::completion_contract::ExitCriterion],
-    final_text: String,
+    final_text: &str,
     config: &Config,
     tools: &ToolRegistry,
     auth: &ToolAuthContext,
     db: Arc<Database>,
     run_id: &str,
-) -> String {
+) -> Option<ContractVerdict> {
     if criteria.is_empty() {
-        return final_text;
+        return None;
     }
     let base = std::path::Path::new(&config.working_dir);
     let working_dir = match config.working_dir_isolation {
@@ -409,7 +418,7 @@ async fn apply_completion_contract(
     let runner = SubagentBashRunner { tools, auth };
     let outcomes = crate::completion_contract::verify_criteria(
         criteria,
-        &final_text,
+        final_text,
         &working_dir,
         Some(&runner),
     )
@@ -426,9 +435,21 @@ async fn apply_completion_contract(
         )),
     )
     .await;
+    let report = crate::completion_contract::render_report(&outcomes);
+    Some(ContractVerdict {
+        annotated: format!("{report}\n{final_text}"),
+        passed: passed == outcomes.len(),
+        report,
+    })
+}
+
+/// Prompt sent back into the sub-agent conversation for the single bounded
+/// contract retry.
+fn contract_retry_prompt(report: &str) -> String {
     format!(
-        "{}\n{final_text}",
-        crate::completion_contract::render_report(&outcomes)
+        "Completion contract verification FAILED:\n{report}\nThe failed criteria are unmet \
+         work — complete them now (use tools), then submit your result again via `submit_result`. \
+         This is your final attempt."
     )
 }
 
@@ -509,6 +530,10 @@ async fn run_sub_agent_task(
     // contract, we re-ask exactly once before falling back to best-effort
     // normalization. Prevents an unbounded re-ask loop.
     let mut repair_attempted = false;
+    // Bounded contract retry: when the completion contract fails, give the
+    // sub-agent exactly ONE chance to finish the unmet criteria before the
+    // failed result is returned as-is.
+    let mut contract_retry_attempted = false;
 
     for _ in 0..MAX_SUB_AGENT_ITERATIONS {
         if is_cancelled(db.clone(), &run_id, &local_cancel).await? {
@@ -594,22 +619,47 @@ async fn run_sub_agent_task(
                 text
             };
             let (final_text, artifact_json) = normalize_subagent_artifact_payload(&source);
-            let final_text = apply_completion_contract(
+            match apply_completion_contract(
                 &exit_criteria,
-                final_text,
+                &final_text,
                 &config,
                 &tools,
                 &auth_context,
                 db.clone(),
                 &run_id,
             )
-            .await;
-            return Ok((
-                final_text,
-                artifact_json,
-                input_tokens_sum,
-                output_tokens_sum,
-            ));
+            .await
+            {
+                Some(verdict) if !verdict.passed && !contract_retry_attempted => {
+                    contract_retry_attempted = true;
+                    log_subagent_event(db.clone(), &run_id, "contract_retry", None).await;
+                    messages.push(Message {
+                        role: "assistant".into(),
+                        content: MessageContent::Text(verdict.annotated),
+                    });
+                    messages.push(Message {
+                        role: "user".into(),
+                        content: MessageContent::Text(contract_retry_prompt(&verdict.report)),
+                    });
+                    continue;
+                }
+                Some(verdict) => {
+                    return Ok((
+                        verdict.annotated,
+                        artifact_json,
+                        input_tokens_sum,
+                        output_tokens_sum,
+                    ));
+                }
+                None => {
+                    return Ok((
+                        final_text,
+                        artifact_json,
+                        input_tokens_sum,
+                        output_tokens_sum,
+                    ));
+                }
+            }
         }
 
         if stop_reason == "tool_use" {
@@ -626,22 +676,88 @@ async fn run_sub_agent_task(
                 log_subagent_event(db.clone(), &run_id, "submit_result", None).await;
                 let (final_text, artifact_json) =
                     normalize_subagent_artifact_payload(&submit_input.to_string());
-                let final_text = apply_completion_contract(
+                match apply_completion_contract(
                     &exit_criteria,
-                    final_text,
+                    &final_text,
                     &config,
                     &tools,
                     &auth_context,
                     db.clone(),
                     &run_id,
                 )
-                .await;
-                return Ok((
-                    final_text,
-                    artifact_json,
-                    input_tokens_sum,
-                    output_tokens_sum,
-                ));
+                .await
+                {
+                    Some(verdict) if !verdict.passed && !contract_retry_attempted => {
+                        contract_retry_attempted = true;
+                        log_subagent_event(db.clone(), &run_id, "contract_retry", None).await;
+                        // Keep the tool_use/tool_result pairing the provider
+                        // requires: echo the assistant turn (including the
+                        // submit_result call), then answer that call with the
+                        // failure report.
+                        let submit_id = response
+                            .content
+                            .iter()
+                            .find_map(|b| match b {
+                                ResponseContentBlock::ToolUse { id, name, .. }
+                                    if name == SUBMIT_RESULT_TOOL =>
+                                {
+                                    Some(id.clone())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        let assistant_content: Vec<ContentBlock> = response
+                            .content
+                            .iter()
+                            .filter_map(|block| match block {
+                                ResponseContentBlock::Text { text } => {
+                                    Some(ContentBlock::Text { text: text.clone() })
+                                }
+                                ResponseContentBlock::ToolUse {
+                                    id,
+                                    name,
+                                    input,
+                                    thought_signature,
+                                } => Some(ContentBlock::ToolUse {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                    thought_signature: thought_signature.clone(),
+                                }),
+                                ResponseContentBlock::Other => None,
+                            })
+                            .collect();
+                        messages.push(Message {
+                            role: "assistant".into(),
+                            content: MessageContent::Blocks(assistant_content),
+                        });
+                        messages.push(Message {
+                            role: "user".into(),
+                            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                                tool_use_id: submit_id,
+                                content: contract_retry_prompt(&verdict.report),
+                                is_error: Some(true),
+                            }]),
+                        });
+                        continue;
+                    }
+                    Some(verdict) => {
+                        return Ok((
+                            verdict.annotated,
+                            artifact_json,
+                            input_tokens_sum,
+                            output_tokens_sum,
+                        ));
+                    }
+                    None => {
+                        return Ok((
+                            final_text,
+                            artifact_json,
+                            input_tokens_sum,
+                            output_tokens_sum,
+                        ));
+                    }
+                }
             }
 
             let assistant_content: Vec<ContentBlock> = response
@@ -735,22 +851,47 @@ async fn run_sub_agent_task(
             text
         };
         let (final_text, artifact_json) = normalize_subagent_artifact_payload(&source);
-        let final_text = apply_completion_contract(
+        match apply_completion_contract(
             &exit_criteria,
-            final_text,
+            &final_text,
             &config,
             &tools,
             &auth_context,
             db.clone(),
             &run_id,
         )
-        .await;
-        return Ok((
-            final_text,
-            artifact_json,
-            input_tokens_sum,
-            output_tokens_sum,
-        ));
+        .await
+        {
+            Some(verdict) if !verdict.passed && !contract_retry_attempted => {
+                contract_retry_attempted = true;
+                log_subagent_event(db.clone(), &run_id, "contract_retry", None).await;
+                messages.push(Message {
+                    role: "assistant".into(),
+                    content: MessageContent::Text(verdict.annotated),
+                });
+                messages.push(Message {
+                    role: "user".into(),
+                    content: MessageContent::Text(contract_retry_prompt(&verdict.report)),
+                });
+                continue;
+            }
+            Some(verdict) => {
+                return Ok((
+                    verdict.annotated,
+                    artifact_json,
+                    input_tokens_sum,
+                    output_tokens_sum,
+                ));
+            }
+            None => {
+                return Ok((
+                    final_text,
+                    artifact_json,
+                    input_tokens_sum,
+                    output_tokens_sum,
+                ));
+            }
+        }
     }
 
     Err("Sub-agent reached maximum iterations without completing the task.".into())
@@ -2058,6 +2199,16 @@ pub struct SubagentsLogTool {
     db: Arc<Database>,
 }
 
+/// One orchestrate work package: a task plus its optional completion contract.
+struct OrchestratePackage {
+    task: String,
+    exit_criteria: Vec<crate::completion_contract::ExitCriterion>,
+}
+
+/// Marker prefix a failed contract leaves at the head of result_text
+/// (produced by completion_contract::render_report).
+const CONTRACT_FAILED_MARKER: &str = "[completion contract] FAILED";
+
 pub struct SubagentsOrchestrateTool {
     config: Config,
     db: Arc<Database>,
@@ -2131,7 +2282,7 @@ impl Tool for SubagentsOrchestrateTool {
             input_schema: schema_object(
                 json!({
                     "goal": {"type":"string"},
-                    "work_packages": {"type":"array", "items":{"type":"string"}},
+                    "work_packages": {"type":"array", "items":{}, "description":"Work packages: plain strings, or objects {task, exit_criteria?} where exit_criteria is a completion contract (same shape as sessions_spawn) verified when the worker finishes. With wait=true, a worker whose contract FAILED is re-spawned once with the failure evidence (contract-aware fan-in retry)."},
                     "chat_id": {"type":"integer"},
                     "wait": {"type":"boolean"},
                     "wait_timeout_secs": {"type":"integer", "minimum":1, "maximum":1200},
@@ -2162,15 +2313,52 @@ impl Tool for SubagentsOrchestrateTool {
             Some(v) if !v.trim().is_empty() => v.trim().to_string(),
             _ => return ToolResult::error("Missing required parameter: goal".into()),
         };
-        let mut packages = input
+        let raw_packages = input
             .get("work_packages")
             .and_then(|v| v.as_array())
             .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>();
+            .unwrap_or_default();
+        let mut packages: Vec<OrchestratePackage> = Vec::new();
+        for (i, v) in raw_packages.iter().enumerate() {
+            if let Some(task) = v.as_str() {
+                if !task.trim().is_empty() {
+                    packages.push(OrchestratePackage {
+                        task: task.trim().to_string(),
+                        exit_criteria: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            if v.is_object() {
+                let task = v
+                    .get("task")
+                    .and_then(|t| t.as_str())
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string();
+                if task.is_empty() {
+                    return ToolResult::error(format!(
+                        "work_packages[{i}] object is missing a non-empty `task`"
+                    ));
+                }
+                let exit_criteria = match crate::completion_contract::parse_exit_criteria(
+                    v.get("exit_criteria"),
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return ToolResult::error(format!("work_packages[{i}]: {e}"));
+                    }
+                };
+                packages.push(OrchestratePackage {
+                    task,
+                    exit_criteria,
+                });
+                continue;
+            }
+            return ToolResult::error(format!(
+                "work_packages[{i}] must be a string or an object {{task, exit_criteria?}}"
+            ));
+        }
         if packages.is_empty() {
             return ToolResult::error("work_packages must include at least one item".into());
         }
@@ -2219,8 +2407,8 @@ impl Tool for SubagentsOrchestrateTool {
             SessionsSpawnTool::new(&self.config, self.db.clone(), self.channel_registry.clone());
         let mut spawned = Vec::new();
         for (idx, pkg) in packages.iter().enumerate() {
-            let spawn_input = json!({
-                "task": format!("Work package {}: {}", idx + 1, pkg),
+            let mut spawn_input = json!({
+                "task": format!("Work package {}: {}", idx + 1, pkg.task),
                 "context": format!(
                     "Orchestration goal: {goal}\nOutput strictly in protocol subagent_artifact_v1 with keys summary/findings/artifacts/next_actions/final_answer."
                 ),
@@ -2233,6 +2421,14 @@ impl Tool for SubagentsOrchestrateTool {
                     "env_files": auth.env_files.clone(),
                 }
             });
+            if !pkg.exit_criteria.is_empty() {
+                if let Some(obj) = spawn_input.as_object_mut() {
+                    obj.insert(
+                        "exit_criteria".to_string(),
+                        serde_json::to_value(&pkg.exit_criteria).unwrap_or_default(),
+                    );
+                }
+            }
             let spawn_input = if let (Some(meta), Some(parent_run_id)) =
                 (parent_meta.as_ref(), parent_run_id.as_deref())
             {
@@ -2319,6 +2515,128 @@ impl Tool for SubagentsOrchestrateTool {
         {
             wait_timed_out = true;
         }
+
+        // Contract-aware fan-in retry: a completed worker whose result carries
+        // the FAILED contract marker gets exactly ONE replacement run, spawned
+        // with the failure evidence as extra context. (The in-run bounded
+        // retry has already happened inside the worker, so this catches the
+        // cases where the worker gave up.)
+        let mut retried: Vec<serde_json::Value> = Vec::new();
+        if !wait_timed_out {
+            let mut replacements: Vec<(usize, String)> = Vec::new(); // (runs idx, new run_id)
+            for (idx, run) in runs.iter().enumerate() {
+                if run.status != "completed" {
+                    continue;
+                }
+                let Some(result_text) = run.result_text.as_deref() else {
+                    continue;
+                };
+                if !result_text.trim_start().starts_with(CONTRACT_FAILED_MARKER) {
+                    continue;
+                }
+                // Recover the package (spawn order matches `packages`).
+                let Some(pkg_idx) = spawned.iter().position(|id| *id == run.run_id) else {
+                    continue;
+                };
+                let Some(pkg) = packages.get(pkg_idx) else {
+                    continue;
+                };
+                let evidence_end = microclaw_core::text::floor_char_boundary(result_text, 600);
+                let mut spawn_input = json!({
+                    "task": format!("Work package {} (retry): {}", pkg_idx + 1, pkg.task),
+                    "context": format!(
+                        "Orchestration goal: {goal}\nA previous attempt FAILED its completion contract. Evidence:\n{}\nComplete the unmet criteria.\nOutput strictly in protocol subagent_artifact_v1 with keys summary/findings/artifacts/next_actions/final_answer.",
+                        &result_text[..evidence_end]
+                    ),
+                    "chat_id": chat_id,
+                    "token_budget": each_budget,
+                    "exit_criteria": serde_json::to_value(&pkg.exit_criteria).unwrap_or_default(),
+                    "__microclaw_auth": {
+                        "caller_channel": auth.caller_channel.clone(),
+                        "caller_chat_id": chat_id,
+                        "control_chat_ids": auth.control_chat_ids.clone(),
+                        "env_files": auth.env_files.clone(),
+                    }
+                });
+                if let (Some(meta), Some(parent_run_id)) =
+                    (parent_meta.as_ref(), parent_run_id.as_deref())
+                {
+                    if let Some(obj) = spawn_input.as_object_mut() {
+                        obj.insert(
+                            "__subagent_runtime".to_string(),
+                            json!({
+                                "run_id": parent_run_id,
+                                "depth": meta.depth,
+                                "runtime": meta.runtime.as_deref().unwrap_or("native"),
+                                "runtime_target": meta.runtime_target.clone(),
+                                "token_budget_remaining": each_budget,
+                            }),
+                        );
+                    }
+                }
+                let res = spawn_tool.execute(spawn_input).await;
+                if res.is_error {
+                    // Budget/depth exhausted: keep the failed result as-is.
+                    continue;
+                }
+                let new_run_id = serde_json::from_str::<serde_json::Value>(&res.content)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("run_id")
+                            .and_then(|r| r.as_str())
+                            .map(str::to_string)
+                    });
+                if let Some(new_run_id) = new_run_id {
+                    retried.push(json!({
+                        "package": pkg_idx + 1,
+                        "failed_run_id": run.run_id.clone(),
+                        "retry_run_id": new_run_id.clone(),
+                    }));
+                    replacements.push((idx, new_run_id));
+                }
+            }
+
+            if !replacements.is_empty() {
+                // Wait for the replacement runs within the remaining deadline.
+                let retry_ids: Vec<String> =
+                    replacements.iter().map(|(_, id)| id.clone()).collect();
+                loop {
+                    let ids = retry_ids.clone();
+                    let rows = match call_blocking(self.db.clone(), move |db| {
+                        let mut out = Vec::new();
+                        for run_id in ids {
+                            if let Some(row) = db.get_subagent_run(&run_id, chat_id)? {
+                                out.push(row);
+                            }
+                        }
+                        Ok::<_, microclaw_core::error::MicroClawError>(out)
+                    })
+                    .await
+                    {
+                        Ok(v) => v,
+                        Err(e) => return ToolResult::error(format!("Failed loading runs: {e}")),
+                    };
+                    let done = rows
+                        .iter()
+                        .all(|r| !matches!(r.status.as_str(), "accepted" | "queued" | "running"));
+                    if done {
+                        // Swap the finished replacements into the merge set.
+                        for (idx, retry_id) in &replacements {
+                            if let Some(row) = rows.iter().find(|r| r.run_id == *retry_id) {
+                                runs[*idx] = row.clone();
+                            }
+                        }
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        wait_timed_out = true;
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+
         let merged = Self::merge_run_artifacts(&runs);
         ToolResult::success(
             json!({
@@ -2327,6 +2645,7 @@ impl Tool for SubagentsOrchestrateTool {
                 "goal": goal,
                 "workers": spawned.len(),
                 "run_ids": spawned,
+                "retried": retried,
                 "runs": runs.into_iter().map(|r| json!({
                     "run_id": r.run_id,
                     "status": r.status,
@@ -2627,6 +2946,29 @@ mod tests {
         assert!(!answer.contains("<think>"));
         assert!(!answer.contains("write_memory"));
         assert!(!envelope.contains("<think>"));
+    }
+
+    #[test]
+    fn contract_failed_marker_matches_report_rendering() {
+        // The fan-in retry detects failed contracts by this marker; it must
+        // stay in sync with completion_contract::render_report.
+        let report = crate::completion_contract::render_report(&[
+            crate::completion_contract::CriterionOutcome {
+                description: "file `x` exists".into(),
+                passed: false,
+                evidence: "missing".into(),
+            },
+        ]);
+        assert!(report.starts_with(CONTRACT_FAILED_MARKER));
+        // And the VERIFIED path must NOT match the failure marker.
+        let ok_report = crate::completion_contract::render_report(&[
+            crate::completion_contract::CriterionOutcome {
+                description: "file `x` exists".into(),
+                passed: true,
+                evidence: "ok".into(),
+            },
+        ]);
+        assert!(!ok_report.starts_with(CONTRACT_FAILED_MARKER));
     }
 
     #[test]

@@ -180,6 +180,12 @@ impl Tool for ScheduleTaskTool {
                     "timezone": {
                         "type": "string",
                         "description": "Optional IANA timezone name (e.g. 'US/Eastern', 'Europe/London'). Defaults to server timezone setting."
+                    },
+                    "exit_criteria": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "description": "Optional completion contract verified after each run: {type:'file_exists', path} | {type:'file_contains', path, needle} | {type:'file_min_bytes', path, min_bytes} | {type:'result_contains', needle} | {type:'command', run, expect_contains?}. Paths are relative to the chat working dir. A run whose contract fails is recorded as failed (one-shot tasks then go to the DLQ and are auto-replayed).",
+                        "items": {"type": "object"}
                     }
                 }),
                 &["chat_id", "prompt", "schedule_type", "schedule_value"],
@@ -246,19 +252,34 @@ impl Tool for ScheduleTaskTool {
             _ => return ToolResult::error("schedule_type must be 'cron' or 'once'".into()),
         };
 
+        let exit_criteria =
+            match crate::completion_contract::parse_exit_criteria(input.get("exit_criteria")) {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
+        let exit_criteria_json = if exit_criteria.is_empty() {
+            None
+        } else {
+            match serde_json::to_string(&exit_criteria) {
+                Ok(v) => Some(v),
+                Err(e) => return ToolResult::error(format!("Invalid exit_criteria: {e}")),
+            }
+        };
+
         let prompt_owned = prompt.to_string();
         let schedule_type_owned = schedule_type.to_string();
         let schedule_value_owned = schedule_value.to_string();
         let tz_name_owned = tz_name.to_string();
         let next_run_owned = next_run.clone();
         match call_blocking(self.db.clone(), move |db| {
-            db.create_scheduled_task_with_timezone(
+            db.create_scheduled_task_full(
                 chat_id,
                 &prompt_owned,
                 &schedule_type_owned,
                 &schedule_value_owned,
                 &tz_name_owned,
                 &next_run_owned,
+                exit_criteria_json.as_deref(),
             )
         })
         .await

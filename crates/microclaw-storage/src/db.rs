@@ -253,6 +253,9 @@ pub struct ScheduledTask {
     pub last_run: Option<String>,
     pub status: String, // "active", "paused", "completed", "cancelled"
     pub created_at: String,
+    /// Optional completion contract: JSON array of exit criteria, verified
+    /// after each run (see src/completion_contract.rs).
+    pub exit_criteria: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -776,6 +779,12 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         version = 11;
     }
     if version < 12 {
+        if !table_has_column(conn, "scheduled_tasks", "exit_criteria")? {
+            conn.execute(
+                "ALTER TABLE scheduled_tasks ADD COLUMN exit_criteria TEXT",
+                [],
+            )?;
+        }
         if !table_has_column(conn, "scheduled_tasks", "timezone")? {
             conn.execute(
                 "ALTER TABLE scheduled_tasks ADD COLUMN timezone TEXT NOT NULL DEFAULT ''",
@@ -1225,7 +1234,8 @@ impl Database {
                 next_run TEXT NOT NULL,
                 last_run TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                exit_criteria TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status_next
@@ -1867,11 +1877,33 @@ impl Database {
         timezone: &str,
         next_run: &str,
     ) -> Result<i64, MicroClawError> {
+        self.create_scheduled_task_full(
+            chat_id,
+            prompt,
+            schedule_type,
+            schedule_value,
+            timezone,
+            next_run,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_scheduled_task_full(
+        &self,
+        chat_id: i64,
+        prompt: &str,
+        schedule_type: &str,
+        schedule_value: &str,
+        timezone: &str,
+        next_run: &str,
+        exit_criteria: Option<&str>,
+    ) -> Result<i64, MicroClawError> {
         let conn = self.lock_conn();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO scheduled_tasks (chat_id, prompt, schedule_type, schedule_value, timezone, next_run, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)",
+            "INSERT INTO scheduled_tasks (chat_id, prompt, schedule_type, schedule_value, timezone, next_run, status, created_at, exit_criteria)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8)",
             params![
                 chat_id,
                 prompt,
@@ -1879,7 +1911,8 @@ impl Database {
                 schedule_value,
                 timezone,
                 next_run,
-                now
+                now,
+                exit_criteria
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -1888,7 +1921,7 @@ impl Database {
     pub fn get_due_tasks(&self, now: &str) -> Result<Vec<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria
              FROM scheduled_tasks
              WHERE status = 'active' AND next_run <= ?1",
         )?;
@@ -1905,6 +1938,7 @@ impl Database {
                     last_run: row.get(7)?,
                     status: row.get(8)?,
                     created_at: row.get(9)?,
+                    exit_criteria: row.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1920,7 +1954,7 @@ impl Database {
         let tx = conn.unchecked_transaction()?;
 
         let mut stmt = tx.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria
              FROM scheduled_tasks
              WHERE status = 'active' AND next_run <= ?1
              ORDER BY next_run ASC, id ASC
@@ -1939,6 +1973,7 @@ impl Database {
                     last_run: row.get(7)?,
                     status: row.get(8)?,
                     created_at: row.get(9)?,
+                    exit_criteria: row.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1966,7 +2001,7 @@ impl Database {
     pub fn get_tasks_for_chat(&self, chat_id: i64) -> Result<Vec<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND status IN ('active', 'paused')
              ORDER BY id",
@@ -1984,6 +2019,7 @@ impl Database {
                     last_run: row.get(7)?,
                     status: row.get(8)?,
                     created_at: row.get(9)?,
+                    exit_criteria: row.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1993,7 +2029,7 @@ impl Database {
     pub fn get_task_by_id(&self, task_id: i64) -> Result<Option<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let result = conn.query_row(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria
              FROM scheduled_tasks
              WHERE id = ?1",
             params![task_id],
@@ -2009,6 +2045,7 @@ impl Database {
                     last_run: row.get(7)?,
                     status: row.get(8)?,
                     created_at: row.get(9)?,
+                    exit_criteria: row.get(10)?,
                 })
             },
         );

@@ -165,6 +165,91 @@ async fn run_due_tasks(state: &Arc<AppState>) {
     while set.join_next().await.is_some() {}
 }
 
+
+/// Bash-backed command runner for scheduled-task contracts: routes through
+/// the shared ToolRegistry choke point (sandbox, dangerous-pattern checks,
+/// tool_policy all apply).
+struct SchedulerBashRunner<'a> {
+    state: &'a Arc<AppState>,
+    auth: microclaw_tools::runtime::ToolAuthContext,
+}
+
+#[async_trait::async_trait]
+impl crate::completion_contract::CommandRunner for SchedulerBashRunner<'_> {
+    async fn run(&self, command: &str) -> (bool, String) {
+        let result = self
+            .state
+            .tools
+            .execute_with_auth(
+                "bash",
+                serde_json::json!({ "command": command }),
+                &self.auth,
+            )
+            .await;
+        (!result.is_error, result.content)
+    }
+}
+
+/// Verify a finished scheduled-task run against its stored completion
+/// contract (if any). Returns the (possibly annotated) response and whether
+/// the contract failed. Malformed stored criteria count as failure — a
+/// contract that can't be checked must not report success.
+async fn verify_task_contract(
+    state: &Arc<AppState>,
+    task: &microclaw_storage::db::ScheduledTask,
+    routing: &ChatRouting,
+    response: String,
+) -> (String, bool) {
+    let Some(raw) = task.exit_criteria.as_deref().filter(|s| !s.trim().is_empty()) else {
+        return (response, false);
+    };
+    let criteria: Vec<crate::completion_contract::ExitCriterion> = match serde_json::from_str(raw)
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Scheduler: task #{} has malformed exit_criteria: {e}", task.id);
+            return (
+                format!("[completion contract] FAILED — stored criteria are malformed: {e}\n{response}"),
+                true,
+            );
+        }
+    };
+    if criteria.is_empty() {
+        return (response, false);
+    }
+    let base = std::path::Path::new(&state.config.working_dir);
+    let working_dir = match state.config.working_dir_isolation {
+        crate::config::WorkingDirIsolation::Shared => base.join("shared"),
+        crate::config::WorkingDirIsolation::Chat => microclaw_tools::runtime::chat_working_dir(
+            base,
+            &routing.channel_name,
+            task.chat_id,
+        ),
+    };
+    let runner = SchedulerBashRunner {
+        state,
+        auth: microclaw_tools::runtime::ToolAuthContext {
+            caller_channel: routing.channel_name.clone(),
+            caller_chat_id: task.chat_id,
+            control_chat_ids: state.config.control_chat_ids.clone(),
+            env_files: Vec::new(),
+        },
+    };
+    let outcomes = crate::completion_contract::verify_criteria(
+        &criteria,
+        &response,
+        &working_dir,
+        Some(&runner),
+    )
+    .await;
+    let failed = outcomes.iter().any(|o| !o.passed);
+    let annotated = format!(
+        "{}\n{response}",
+        crate::completion_contract::render_report(&outcomes)
+    );
+    (annotated, failed)
+}
+
 /// Execute a single claimed scheduled task end-to-end: run the agent (bounded by
 /// a wall-clock timeout so a hung run can't pin a slot forever), deliver the
 /// reply, log the run, enqueue a DLQ entry on failure, and reschedule (or mark
@@ -228,6 +313,12 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
             )
         }
         Ok(Ok(response)) => {
+            // Completion contract: verify the run's outcome with real checks
+            // before deciding success. A failed contract marks the run failed,
+            // so one-shot tasks flow into the existing DLQ + auto-replay
+            // (bounded retry) instead of being recorded as done.
+            let (response, contract_failed) =
+                verify_task_contract(&state, &task, &routing, response).await;
             if response.starts_with(crate::agent_engine::TOKEN_BUDGET_REFUSAL_PREFIX) {
                 // Budget-refused turn: don't deliver the canned notice to the
                 // chat; record it in the run history instead.
@@ -236,6 +327,25 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
                     task.id, task.chat_id
                 );
                 (true, Some("skipped: token budget exhausted".to_string()))
+            } else if contract_failed {
+                // Deliver the annotated response so the user sees the evidence,
+                // but record the run as failed.
+                if !response.is_empty() {
+                    let bot_username =
+                        state.config.bot_username_for_channel(&routing.channel_name);
+                    let _ = deliver_scheduler_message_with_backoff(
+                        &state,
+                        &bot_username,
+                        task.chat_id,
+                        &response,
+                    )
+                    .await;
+                }
+                let summary_end = floor_char_boundary(&response, 200);
+                (
+                    false,
+                    Some(format!("completion contract failed: {}", &response[..summary_end])),
+                )
             } else if !response.is_empty() {
                 let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
                 if let Err(delivery_err) = deliver_scheduler_message_with_backoff(
