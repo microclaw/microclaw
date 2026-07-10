@@ -64,8 +64,8 @@ Max 8 criteria per contract.
 - **Fail closed**: unreadable files, runner errors, and malformed criteria
   are failures (malformed contracts are rejected at spawn time with a
   descriptive error).
-- The ACP runtime does not support contracts yet; spawning with
-  `exit_criteria` on `runtime: acp` is rejected.
+- On the ACP runtime, verification (and its command runner) run through
+  MicroClaw's own tool registry — never through the external agent.
 
 ## Phase 2 (shipped)
 
@@ -85,7 +85,8 @@ Max 8 criteria per contract.
   run as failed — one-shot tasks then flow into the existing DLQ +
   auto-replay, which bounds retries via `dlq_max_replay_attempts`.
 
-## Still deferred
-
-- ACP-runtime contracts (the ACP result path bypasses the verifier; spawns
-  with contracts on `runtime: acp` are rejected).
+- **ACP-runtime contracts**: contracts work on `runtime: acp` too. The
+  external agent's conversation is not ours to continue, so the bounded
+  retry is a single full re-run with the failure evidence appended to the
+  task context; verification always executes through MicroClaw's own
+  registry choke point.

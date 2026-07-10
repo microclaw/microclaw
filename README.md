@@ -3,6 +3,10 @@
 
 [English](README.md) | [中文](README_CN.md)
 
+> [!IMPORTANT]
+> **Looking for a stable version? Use the [`stable`](https://github.com/microclaw/microclaw/tree/stable) branch.**
+> The `main` branch is under very active and aggressive development — expect rapid changes.
+
 [![Website](https://img.shields.io/badge/Website-microclaw.org-blue)](https://microclaw.org)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/pvmezwkAk5)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2Fmicroclaw-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/microclaw/)

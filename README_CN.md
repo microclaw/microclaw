@@ -2,6 +2,10 @@
 
 [English](README.md) | [中文](README_CN.md)
 
+> [!IMPORTANT]
+> **需要稳定版？请使用 [`stable`](https://github.com/microclaw/microclaw/tree/stable) 分支。**
+> `main` 分支目前正在进行非常积极和激进的开发，变化会很快。
+
 [![Website](https://img.shields.io/badge/Website-microclaw.org-blue)](https://microclaw.org)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/pvmezwkAk5)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2Fmicroclaw-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/microclaw/)

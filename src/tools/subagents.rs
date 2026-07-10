@@ -476,19 +476,77 @@ async fn run_sub_agent_task(
         let Some(acp_target) = acp_target else {
             return Err("ACP runtime target was not resolved".into());
         };
-        return crate::acp_subagent::run_acp_subagent_task(
+        // Contracts on the ACP runtime: the external agent's conversation is
+        // not ours to continue, so the bounded retry is a full re-run with
+        // the failure evidence appended to the context.
+        let mut context = context;
+        if !exit_criteria.is_empty() {
+            context.push_str(&crate::completion_contract::render_for_prompt(&exit_criteria));
+        }
+        let first = crate::acp_subagent::run_acp_subagent_task(
             crate::acp_subagent::AcpSubagentTaskParams {
-                config,
-                db,
-                auth_context,
-                run_id,
-                task,
-                context,
-                local_cancel,
-                target: acp_target,
+                config: config.clone(),
+                db: db.clone(),
+                auth_context: auth_context.clone(),
+                run_id: run_id.clone(),
+                task: task.clone(),
+                context: context.clone(),
+                local_cancel: local_cancel.clone(),
+                target: acp_target.clone(),
             },
         )
-        .await;
+        .await?;
+        if exit_criteria.is_empty() {
+            return Ok(first);
+        }
+        // Verification (and its command runner) go through our own sub-agent
+        // tool registry — same sandbox/policy guards as the native runtime.
+        let tools = ToolRegistry::new_sub_agent(&config, db.clone(), Some(channel_registry), false);
+        let (final_text, artifact_json, mut in_tok, mut out_tok) = first;
+        let verdict = apply_completion_contract(
+            &exit_criteria,
+            &final_text,
+            &config,
+            &tools,
+            &auth_context,
+            db.clone(),
+            &run_id,
+        )
+        .await
+        .expect("criteria checked non-empty");
+        if verdict.passed {
+            return Ok((verdict.annotated, artifact_json, in_tok, out_tok));
+        }
+        log_subagent_event(db.clone(), &run_id, "contract_retry", None).await;
+        let retry_context = format!("{context}\n\n{}", contract_retry_prompt(&verdict.report));
+        let (retry_text, retry_artifact, retry_in, retry_out) =
+            crate::acp_subagent::run_acp_subagent_task(
+                crate::acp_subagent::AcpSubagentTaskParams {
+                    config: config.clone(),
+                    db: db.clone(),
+                    auth_context: auth_context.clone(),
+                    run_id: run_id.clone(),
+                    task,
+                    context: retry_context,
+                    local_cancel,
+                    target: acp_target,
+                },
+            )
+            .await?;
+        in_tok += retry_in;
+        out_tok += retry_out;
+        let verdict = apply_completion_contract(
+            &exit_criteria,
+            &retry_text,
+            &config,
+            &tools,
+            &auth_context,
+            db.clone(),
+            &run_id,
+        )
+        .await
+        .expect("criteria checked non-empty");
+        return Ok((verdict.annotated, retry_artifact, in_tok, out_tok));
     }
 
     let llm = crate::llm::create_provider(&config);
@@ -1211,12 +1269,6 @@ impl Tool for SessionsSpawnTool {
                 Ok(v) => v,
                 Err(e) => return ToolResult::error(e),
             };
-        if !exit_criteria.is_empty() && matches!(execution_runtime, SubagentExecutionRuntime::Acp) {
-            return ToolResult::error(
-                "exit_criteria are not supported on the acp runtime yet; use the native runtime"
-                    .into(),
-            );
-        }
         let runtime_target = input
             .get("runtime_target")
             .and_then(|v| v.as_str())
