@@ -129,18 +129,28 @@ pub fn parse_exit_criteria(value: Option<&serde_json::Value>) -> Result<Vec<Exit
 }
 
 /// File-criterion paths must stay inside the chat working dir: relative,
-/// no parent traversal, no absolute/rooted forms.
+/// no parent traversal, no absolute/rooted/drive-prefixed forms.
+///
+/// `has_root()` matters beyond `is_absolute()`: on Windows, `/etc/passwd`
+/// is NOT absolute (no drive) but IS rooted — and `Path::join` REPLACES the
+/// base entirely for any rooted path, which would escape the jail.
+/// `Component::Prefix` rejects drive/UNC forms (`C:foo`, `\\server\share`).
 fn validate_contract_path(path: &str) -> Result<(), String> {
     let p = Path::new(path);
-    if p.is_absolute() || path.starts_with('~') {
+    if p.is_absolute() || p.has_root() || path.starts_with('~') {
         return Err(format!(
             "path `{path}` must be relative to the chat working directory"
         ));
     }
-    if p.components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err(format!("path `{path}` must not contain `..`"));
+    if p.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(format!(
+            "path `{path}` must not contain `..` or a drive/UNC prefix"
+        ));
     }
     Ok(())
 }
