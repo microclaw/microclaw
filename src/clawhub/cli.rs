@@ -130,6 +130,43 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             }
             Ok(())
         }
+        Some(SkillCommand::Verify) => {
+            let lockfile_path = config.clawhub_lockfile_path();
+            let lock = gateway.read_lockfile(&lockfile_path)?;
+            if lock.skills.is_empty() {
+                println!("No ClawHub skills installed.");
+                return Ok(());
+            }
+            let skills_dir = PathBuf::from(config.skills_data_dir());
+            let mut bad = 0usize;
+            for (slug, entry) in &lock.skills {
+                use microclaw_clawhub::install::TreeVerification;
+                match microclaw_clawhub::install::verify_tree(entry, &skills_dir) {
+                    TreeVerification::Ok => println!("  ✓ {slug} — tree matches lockfile"),
+                    TreeVerification::Unpinned => println!(
+                        "  - {slug} — no tree hash recorded (installed before pinning; reinstall to pin)"
+                    ),
+                    TreeVerification::Missing => {
+                        bad += 1;
+                        println!("  ✗ {slug} — installed directory missing or unreadable");
+                    }
+                    TreeVerification::Modified { expected, actual } => {
+                        bad += 1;
+                        println!(
+                            "  ✗ {slug} — tree MODIFIED since install
+      expected {expected}
+      actual   {actual}"
+                        );
+                    }
+                }
+            }
+            if bad > 0 {
+                return Err(MicroClawError::Config(format!(
+                    "{bad} ClawHub skill(s) failed verification — inspect or reinstall them"
+                )));
+            }
+            Ok(())
+        }
         Some(SkillCommand::Available { all }) => {
             let manager = SkillManager::from_skills_and_runtime(
                 &config.skills_data_dir(),
@@ -229,6 +266,9 @@ enum SkillCommand {
     },
     /// Show skill details
     Inspect { slug: String },
+    /// Verify installed ClawHub skills against their lockfile tree hashes
+    /// (detects post-install modification). Exits non-zero on any mismatch.
+    Verify,
     /// Audit the local skill corpus for curation actions (duplicates, stale,
     /// thin, cap headroom). Read-only and deterministic.
     Audit {

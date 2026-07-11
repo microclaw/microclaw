@@ -1,0 +1,48 @@
+name: Nightly Health
+# Proactive main-branch health check. Two motivations from July 2026:
+# newly published RustSec advisories broke two unrelated PRs mid-review
+# (crossbeam-epoch, ttf-parser) — a nightly audit surfaces those on main
+# the morning they land instead of ambushing the next PR; and the full
+# test suite keeps running even on days with no PR activity.
+on:
+  schedule:
+    - cron: '17 3 * * *' # 03:17 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  audit:
+    name: Dependency Advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --locked
+      - run: cargo install cargo-deny --locked
+      # Keep the ignore list in sync with ci.yml / deny.toml.
+      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+      - run: cargo deny check advisories bans licenses
+
+  tests:
+    name: Full Test Suite
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: -Dwarnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: Swatinem/rust-cache@v2
+      - run: npm --prefix web ci
+      - run: npm --prefix web run build
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: scripts/ci/stability_smoke.sh

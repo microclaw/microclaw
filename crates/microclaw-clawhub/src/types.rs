@@ -139,6 +139,16 @@ pub struct LockEntry {
     pub installed_at: String,
     #[serde(rename = "contentHash")]
     pub content_hash: String,
+    /// sha256 over the EXTRACTED tree (sorted rel-paths + per-file hashes).
+    /// Verifiable against disk at any time, unlike contentHash which covers
+    /// the downloaded archive bytes. Absent on entries installed before this
+    /// field existed.
+    #[serde(
+        rename = "treeHash",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tree_hash: Option<String>,
     #[serde(rename = "localPath")]
     pub local_path: String,
 }
