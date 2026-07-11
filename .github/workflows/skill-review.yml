@@ -9,6 +9,37 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+    # The legacy tesslio/skill-review action is retired (see issue #451);
+    # its successor is the Tessl CLI (`tessl skill review`) installed via
+    # tesslio/setup-tessl. The CLI needs a TESSL_TOKEN workspace token —
+    # when the secret is not configured, skip gracefully instead of
+    # failing every SKILL.md pull request.
+    env:
+      TESSL_TOKEN: ${{ secrets.TESSL_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: tesslio/skill-review@main
+        with:
+          fetch-depth: 0
+      - name: Note when TESSL_TOKEN is missing
+        if: env.TESSL_TOKEN == ''
+        run: echo "::notice::TESSL_TOKEN secret not configured — skipping Tessl skill review."
+      - uses: tesslio/setup-tessl@v2
+        if: env.TESSL_TOKEN != ''
+        with:
+          token: ${{ env.TESSL_TOKEN }}
+      - name: Review changed SKILL.md files
+        if: env.TESSL_TOKEN != ''
+        run: |
+          set -euo pipefail
+          base="origin/${{ github.base_ref }}"
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          mapfile -t changed < <(git diff --name-only --diff-filter=d "$base"...HEAD -- '**/SKILL.md')
+          if [ "${#changed[@]}" -eq 0 ]; then
+            echo "No SKILL.md changes to review."
+            exit 0
+          fi
+          for f in "${changed[@]}"; do
+            echo "::group::tessl skill review $f"
+            tessl skill review "$f"
+            echo "::endgroup::"
+          done
