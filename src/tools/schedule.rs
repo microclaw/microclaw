@@ -170,16 +170,25 @@ impl Tool for ScheduleTaskTool {
                     },
                     "schedule_type": {
                         "type": "string",
-                        "enum": ["cron", "once"],
-                        "description": "Type of schedule: 'cron' for recurring (6-field: sec min hour dom month dow), 'once' for one-time"
+                        "enum": ["cron", "once", "random"],
+                        "description": "Type of schedule: 'cron' for recurring (6-field: sec min hour dom month dow), 'once' for one-time, 'random' for spontaneous firing at a uniformly random moment inside a duration window after each run (feels like the bot 'just thought of it')"
                     },
                     "schedule_value": {
                         "type": "string",
-                        "description": "The cron expression (6-field format, e.g. '0 */5 * * * *' for every 5 minutes) or ISO 8601 timestamp for one-time tasks"
+                        "description": "cron: 6-field expression (e.g. '0 */5 * * * *'); once: ISO 8601 timestamp; random: a duration window like '2h..3d', '30m..4h', or '1d..2mo' (units s/m/h/d/w/mo; window between 1 minute and 366 days)"
                     },
                     "timezone": {
                         "type": "string",
                         "description": "Optional IANA timezone name (e.g. 'US/Eastern', 'Europe/London'). Defaults to server timezone setting."
+                    },
+                    "max_runs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional: retire the task as completed after it has run this many times (e.g. 'remind me 3 times'). Works with any schedule_type."
+                    },
+                    "not_after": {
+                        "type": "string",
+                        "description": "Optional ISO 8601 deadline: the task retires as completed once the next firing would pass this instant (e.g. 'until the end of the month'). Works with any schedule_type."
                     },
                     "exit_criteria": {
                         "type": "array",
@@ -249,7 +258,46 @@ impl Tool for ScheduleTaskTool {
                 }
                 dt_utc.to_rfc3339()
             }
-            _ => return ToolResult::error("schedule_type must be 'cron' or 'once'".into()),
+            "random" => {
+                match crate::schedule_lifecycle::parse_duration_range(schedule_value) {
+                    Ok((min, max)) => crate::schedule_lifecycle::sample_random_next(
+                        Utc::now(),
+                        min,
+                        max,
+                        crate::schedule_lifecycle::random_unit(),
+                    )
+                    .to_rfc3339(),
+                    Err(e) => return ToolResult::error(e),
+                }
+            }
+            _ => return ToolResult::error("schedule_type must be 'cron', 'once', or 'random'".into()),
+        };
+
+        let max_runs = match input.get("max_runs") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => match v.as_i64() {
+                Some(n) if n >= 1 => Some(n),
+                _ => return ToolResult::error("max_runs must be a positive integer".into()),
+            },
+        };
+        let not_after = match input.get("not_after").and_then(|v| v.as_str()) {
+            None => None,
+            Some(raw) => match chrono::DateTime::parse_from_rfc3339(raw) {
+                Ok(dt) => {
+                    let dt_utc = dt.with_timezone(&Utc);
+                    if dt_utc <= Utc::now() {
+                        return ToolResult::error(
+                            "not_after must be in the future".into(),
+                        );
+                    }
+                    Some(dt_utc.to_rfc3339())
+                }
+                Err(e) => {
+                    return ToolResult::error(format!(
+                        "not_after must be an ISO 8601 timestamp (e.g. 2026-08-01T00:00:00Z): {e}"
+                    ))
+                }
+            },
         };
 
         let exit_criteria =
@@ -271,8 +319,9 @@ impl Tool for ScheduleTaskTool {
         let schedule_value_owned = schedule_value.to_string();
         let tz_name_owned = tz_name.to_string();
         let next_run_owned = next_run.clone();
+        let not_after_owned = not_after.clone();
         match call_blocking(self.db.clone(), move |db| {
-            db.create_scheduled_task_full(
+            db.create_scheduled_task_lifecycle(
                 chat_id,
                 &prompt_owned,
                 &schedule_type_owned,
@@ -280,6 +329,8 @@ impl Tool for ScheduleTaskTool {
                 &tz_name_owned,
                 &next_run_owned,
                 exit_criteria_json.as_deref(),
+                max_runs,
+                not_after_owned.as_deref(),
             )
         })
         .await
@@ -292,6 +343,17 @@ impl Tool for ScheduleTaskTool {
                 };
                 let mut message =
                     format!("Task #{id} scheduled (tz: {tz_name}). Next run: {next_run}");
+                if schedule_type == "random" {
+                    message.push_str(&format!(
+                        "\nSpontaneous cadence: fires at a random moment within {schedule_value} after each run."
+                    ));
+                }
+                if let Some(n) = max_runs {
+                    message.push_str(&format!("\nLifecycle: retires after {n} run(s)."));
+                }
+                if let Some(deadline) = &not_after {
+                    message.push_str(&format!("\nLifecycle: retires after {deadline}."));
+                }
                 if let Some(c) = cadence {
                     message.push_str(&format!("\nCron interpretation: {c}."));
                 }
@@ -356,6 +418,7 @@ impl Tool for ListTasksTool {
                 if tasks.is_empty() {
                     return ToolResult::success("No scheduled tasks found for this chat.".into());
                 }
+                let now = Utc::now();
                 let mut output = String::new();
                 for t in &tasks {
                     let tz_label = if t.timezone.trim().is_empty() {
@@ -367,19 +430,46 @@ impl Tool for ListTasksTool {
                         cron_human_hint(&t.schedule_value)
                             .map(|s| format!(" | cadence: {s}"))
                             .unwrap_or_default()
+                    } else if t.schedule_type == "random" {
+                        format!(" | cadence: random within {}", t.schedule_value)
                     } else {
                         String::new()
                     };
+                    let countdown = if t.status == "active" {
+                        crate::schedule_lifecycle::humanize_until(now, &t.next_run)
+                            .map(|h| format!(" ({h})"))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    let mut lifecycle = String::new();
+                    match t.max_runs {
+                        Some(max) => {
+                            lifecycle.push_str(&format!(" | runs: {}/{max}", t.run_count))
+                        }
+                        None if t.run_count > 0 => {
+                            lifecycle.push_str(&format!(" | runs: {}", t.run_count))
+                        }
+                        None => {}
+                    }
+                    if let Some(deadline) = &t.not_after {
+                        lifecycle.push_str(&format!(" | until: {deadline}"));
+                    }
+                    if t.exit_criteria.is_some() {
+                        lifecycle.push_str(" | contract: yes");
+                    }
                     output.push_str(&format!(
-                        "#{} [{}] {} | {} '{}'{} | tz: {} | next: {}\n",
+                        "#{} [{}] {} | {} '{}'{}{} | tz: {} | next: {}{}\n",
                         t.id,
                         t.status,
                         t.prompt,
                         t.schedule_type,
                         t.schedule_value,
                         cadence,
+                        lifecycle,
                         tz_label,
-                        t.next_run
+                        t.next_run,
+                        countdown
                     ));
                 }
                 ToolResult::success(output)
@@ -1104,7 +1194,7 @@ mod tests {
             }))
             .await;
         assert!(result.is_error);
-        assert!(result.content.contains("must be 'cron' or 'once'"));
+        assert!(result.content.contains("must be 'cron', 'once', or 'random'"));
         cleanup(&dir);
     }
 

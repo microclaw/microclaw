@@ -256,6 +256,12 @@ pub struct ScheduledTask {
     /// Optional completion contract: JSON array of exit criteria, verified
     /// after each run (see src/completion_contract.rs).
     pub exit_criteria: Option<String>,
+    /// Number of times this task has run (success or failure).
+    pub run_count: i64,
+    /// Retire as `completed` after this many runs. NULL = unlimited.
+    pub max_runs: Option<i64>,
+    /// Retire as `completed` once the next firing would pass this instant.
+    pub not_after: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -785,6 +791,18 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
                 [],
             )?;
         }
+        if !table_has_column(conn, "scheduled_tasks", "run_count")? {
+            conn.execute(
+                "ALTER TABLE scheduled_tasks ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !table_has_column(conn, "scheduled_tasks", "max_runs")? {
+            conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN max_runs INTEGER", [])?;
+        }
+        if !table_has_column(conn, "scheduled_tasks", "not_after")? {
+            conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN not_after TEXT", [])?;
+        }
         if !table_has_column(conn, "scheduled_tasks", "timezone")? {
             conn.execute(
                 "ALTER TABLE scheduled_tasks ADD COLUMN timezone TEXT NOT NULL DEFAULT ''",
@@ -1235,7 +1253,10 @@ impl Database {
                 last_run TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL,
-                exit_criteria TEXT
+                exit_criteria TEXT,
+                run_count INTEGER NOT NULL DEFAULT 0,
+                max_runs INTEGER,
+                not_after TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status_next
@@ -1899,11 +1920,37 @@ impl Database {
         next_run: &str,
         exit_criteria: Option<&str>,
     ) -> Result<i64, MicroClawError> {
+        self.create_scheduled_task_lifecycle(
+            chat_id,
+            prompt,
+            schedule_type,
+            schedule_value,
+            timezone,
+            next_run,
+            exit_criteria,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_scheduled_task_lifecycle(
+        &self,
+        chat_id: i64,
+        prompt: &str,
+        schedule_type: &str,
+        schedule_value: &str,
+        timezone: &str,
+        next_run: &str,
+        exit_criteria: Option<&str>,
+        max_runs: Option<i64>,
+        not_after: Option<&str>,
+    ) -> Result<i64, MicroClawError> {
         let conn = self.lock_conn();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO scheduled_tasks (chat_id, prompt, schedule_type, schedule_value, timezone, next_run, status, created_at, exit_criteria)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8)",
+            "INSERT INTO scheduled_tasks (chat_id, prompt, schedule_type, schedule_value, timezone, next_run, status, created_at, exit_criteria, max_runs, not_after)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8, ?9, ?10)",
             params![
                 chat_id,
                 prompt,
@@ -1912,7 +1959,9 @@ impl Database {
                 timezone,
                 next_run,
                 now,
-                exit_criteria
+                exit_criteria,
+                max_runs,
+                not_after
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -1921,7 +1970,7 @@ impl Database {
     pub fn get_due_tasks(&self, now: &str) -> Result<Vec<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria, run_count, max_runs, not_after
              FROM scheduled_tasks
              WHERE status = 'active' AND next_run <= ?1",
         )?;
@@ -1939,6 +1988,9 @@ impl Database {
                     status: row.get(8)?,
                     created_at: row.get(9)?,
                     exit_criteria: row.get(10)?,
+                    run_count: row.get(11)?,
+                    max_runs: row.get(12)?,
+                    not_after: row.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1954,7 +2006,7 @@ impl Database {
         let tx = conn.unchecked_transaction()?;
 
         let mut stmt = tx.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria, run_count, max_runs, not_after
              FROM scheduled_tasks
              WHERE status = 'active' AND next_run <= ?1
              ORDER BY next_run ASC, id ASC
@@ -1974,6 +2026,9 @@ impl Database {
                     status: row.get(8)?,
                     created_at: row.get(9)?,
                     exit_criteria: row.get(10)?,
+                    run_count: row.get(11)?,
+                    max_runs: row.get(12)?,
+                    not_after: row.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -2001,7 +2056,7 @@ impl Database {
     pub fn get_tasks_for_chat(&self, chat_id: i64) -> Result<Vec<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria, run_count, max_runs, not_after
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND status IN ('active', 'paused')
              ORDER BY id",
@@ -2020,6 +2075,9 @@ impl Database {
                     status: row.get(8)?,
                     created_at: row.get(9)?,
                     exit_criteria: row.get(10)?,
+                    run_count: row.get(11)?,
+                    max_runs: row.get(12)?,
+                    not_after: row.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -2029,7 +2087,7 @@ impl Database {
     pub fn get_task_by_id(&self, task_id: i64) -> Result<Option<ScheduledTask>, MicroClawError> {
         let conn = self.lock_conn();
         let result = conn.query_row(
-            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria, run_count, max_runs, not_after
              FROM scheduled_tasks
              WHERE id = ?1",
             params![task_id],
@@ -2046,6 +2104,9 @@ impl Database {
                     status: row.get(8)?,
                     created_at: row.get(9)?,
                     exit_criteria: row.get(10)?,
+                    run_count: row.get(11)?,
+                    max_runs: row.get(12)?,
+                    not_after: row.get(13)?,
                 })
             },
         );
@@ -2054,6 +2115,41 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Fetch one scheduled task by id regardless of status (management/
+    /// detail views and tests need retired tasks too).
+    pub fn get_scheduled_task(
+        &self,
+        task_id: i64,
+    ) -> Result<Option<ScheduledTask>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria, run_count, max_runs, not_after
+             FROM scheduled_tasks WHERE id = ?1",
+        )?;
+        let task = stmt
+            .query_map(params![task_id], |row| {
+                Ok(ScheduledTask {
+                    id: row.get(0)?,
+                    chat_id: row.get(1)?,
+                    prompt: row.get(2)?,
+                    schedule_type: row.get(3)?,
+                    schedule_value: row.get(4)?,
+                    timezone: row.get(5)?,
+                    next_run: row.get(6)?,
+                    last_run: row.get(7)?,
+                    status: row.get(8)?,
+                    created_at: row.get(9)?,
+                    exit_criteria: row.get(10)?,
+                    run_count: row.get(11)?,
+                    max_runs: row.get(12)?,
+                    not_after: row.get(13)?,
+                })
+            })?
+            .next()
+            .transpose()?;
+        Ok(task)
     }
 
     pub fn update_task_status(&self, task_id: i64, status: &str) -> Result<bool, MicroClawError> {
@@ -2087,6 +2183,21 @@ impl Database {
         next_run: Option<&str>,
         success: bool,
     ) -> Result<(), MicroClawError> {
+        self.update_task_after_run_lifecycle(task_id, last_run, next_run, success, false)
+    }
+
+    /// `lifecycle_finished` marks a RECURRING task that just retired on
+    /// purpose (max_runs reached / not_after passed): it becomes `completed`
+    /// regardless of this run's outcome, so DLQ auto-replay never resurrects
+    /// a task whose lifecycle has ended. `run_count` increments on every run.
+    pub fn update_task_after_run_lifecycle(
+        &self,
+        task_id: i64,
+        last_run: &str,
+        next_run: Option<&str>,
+        success: bool,
+        lifecycle_finished: bool,
+    ) -> Result<(), MicroClawError> {
         let conn = self.lock_conn();
         match next_run {
             Some(next) => {
@@ -2094,7 +2205,8 @@ impl Database {
                 // run's outcome (a transient failure retries on the next tick).
                 conn.execute(
                     "UPDATE scheduled_tasks
-                     SET last_run = ?1, next_run = ?2, status = 'active'
+                     SET last_run = ?1, next_run = ?2, status = 'active',
+                         run_count = run_count + 1
                      WHERE id = ?3",
                     params![last_run, next, task_id],
                 )?;
@@ -2102,10 +2214,17 @@ impl Database {
             None => {
                 // One-shot task: reflect the actual outcome. A failed one-shot
                 // becomes 'failed' (and is recorded in the DLQ) rather than
-                // masquerading as 'completed'.
-                let status = if success { "completed" } else { "failed" };
+                // masquerading as 'completed'. A lifecycle retirement is always
+                // 'completed' — the task did all the running it was asked to.
+                let status = if lifecycle_finished || success {
+                    "completed"
+                } else {
+                    "failed"
+                };
                 conn.execute(
-                    "UPDATE scheduled_tasks SET last_run = ?1, status = ?2 WHERE id = ?3",
+                    "UPDATE scheduled_tasks
+                     SET last_run = ?1, status = ?2, run_count = run_count + 1
+                     WHERE id = ?3",
                     params![last_run, status, task_id],
                 )?;
             }

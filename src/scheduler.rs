@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -265,6 +264,27 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
 
     let started_at = Utc::now();
     let started_at_str = started_at.to_rfc3339();
+
+    // Deadline gate at claim time: a task that was already queued when its
+    // not_after passed must retire, not fire late.
+    if crate::schedule_lifecycle::deadline_passed(task.not_after.as_deref(), started_at) {
+        info!(
+            "Scheduler: task #{} retired without running — not_after {} has passed",
+            task.id,
+            task.not_after.as_deref().unwrap_or("?")
+        );
+        let task_id = task.id;
+        if let Err(e) = call_blocking(state.db.clone(), move |db| {
+            db.update_task_status(task_id, "completed")?;
+            Ok(())
+        })
+        .await
+        {
+            error!("Scheduler: failed to retire task #{}: {e}", task.id);
+        }
+        return;
+    }
+
     let routing = get_chat_routing(&state.channel_registry, state.db.clone(), task.chat_id)
         .await
         .ok()
@@ -447,40 +467,68 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
         }
     }
 
-    // Compute next run (prefer task-specific timezone; fallback to app timezone).
+    // Lifecycle decision (prefer task-specific timezone; fallback to app
+    // timezone): recurring cadences (cron | random) either produce a concrete
+    // next_run or retire the task as completed with a logged reason;
+    // one-shots keep their success/failed semantics.
     let tz = resolve_task_timezone(&task.timezone, &state.config.timezone);
-    let next_run = if task.schedule_type == "cron" {
-        match cron::Schedule::from_str(&task.schedule_value) {
-            Ok(schedule) => schedule
-                .upcoming(tz)
-                .next()
-                .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339()),
-            Err(e) => {
-                error!("Scheduler: invalid cron for task #{}: {e}", task.id);
-                None
+    let not_after_parsed = task
+        .not_after
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&Utc));
+    let (next_run, lifecycle_finished) = if task.schedule_type == "once" {
+        (None, false)
+    } else {
+        match crate::schedule_lifecycle::decide_next_run(
+            &task.schedule_type,
+            &task.schedule_value,
+            tz,
+            Utc::now(),
+            task.run_count + 1,
+            task.max_runs,
+            not_after_parsed,
+            crate::schedule_lifecycle::random_unit(),
+        ) {
+            crate::schedule_lifecycle::NextRunDecision::RunAt(ts) => (Some(ts), false),
+            crate::schedule_lifecycle::NextRunDecision::Finished(reason) => {
+                info!("Scheduler: task #{} retiring — {reason}", task.id);
+                (None, true)
             }
         }
-    } else {
-        None // one-shot
     };
 
     match &next_run {
         Some(nr) => info!(
-            "Scheduler: task #{} finished (success={}, {}ms); next run at {}",
-            task.id, success, duration_ms, nr
-        ),
-        None => info!(
-            "Scheduler: one-shot task #{} finished (success={}, {}ms); marked {}",
+            "Scheduler: task #{} finished (success={}, {}ms, run #{}); next run at {}",
             task.id,
             success,
             duration_ms,
-            if success { "completed" } else { "failed" }
+            task.run_count + 1,
+            nr
+        ),
+        None => info!(
+            "Scheduler: task #{} finished (success={}, {}ms); marked {}",
+            task.id,
+            success,
+            duration_ms,
+            if lifecycle_finished || success {
+                "completed"
+            } else {
+                "failed"
+            }
         ),
     }
 
     let started_for_update = started_at_str.clone();
     if let Err(e) = call_blocking(state.db.clone(), move |db| {
-        db.update_task_after_run(task.id, &started_for_update, next_run.as_deref(), success)?;
+        db.update_task_after_run_lifecycle(
+            task.id,
+            &started_for_update,
+            next_run.as_deref(),
+            success,
+            lifecycle_finished,
+        )?;
         Ok(())
     })
     .await

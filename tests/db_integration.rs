@@ -194,6 +194,63 @@ fn test_scheduled_task_lifecycle() {
 
 /// Scheduled tasks are persisted and still queryable after DB reopen (restart simulation).
 #[test]
+fn test_lifecycle_run_count_max_runs_and_deadline_fields() {
+    let (db, dir) = test_db();
+    let id = db
+        .create_scheduled_task_lifecycle(
+            7,
+            "spontaneous nudge",
+            "random",
+            "2h..3d",
+            "",
+            "2026-07-12T00:00:00Z",
+            None,
+            Some(2),
+            Some("2026-09-01T00:00:00Z"),
+        )
+        .unwrap();
+
+    let task = db
+        .get_tasks_for_chat(7)
+        .unwrap()
+        .into_iter()
+        .find(|t| t.id == id)
+        .unwrap();
+    assert_eq!(task.schedule_type, "random");
+    assert_eq!(task.run_count, 0);
+    assert_eq!(task.max_runs, Some(2));
+    assert_eq!(task.not_after.as_deref(), Some("2026-09-01T00:00:00Z"));
+
+    // Run 1: rescheduled -> run_count increments, stays active.
+    db.update_task_after_run_lifecycle(id, "2026-07-12T00:00:01Z", Some("2026-07-13T00:00:00Z"), true, false)
+        .unwrap();
+    let task = db.get_tasks_for_chat(7).unwrap().into_iter().find(|t| t.id == id).unwrap();
+    assert_eq!(task.run_count, 1);
+    assert_eq!(task.status, "active");
+
+    // Run 2: lifecycle finished -> completed even though the run FAILED,
+    // so DLQ auto-replay can never resurrect a retired task.
+    db.update_task_after_run_lifecycle(id, "2026-07-13T00:00:01Z", None, false, true)
+        .unwrap();
+    let task = db.get_scheduled_task(id).unwrap().unwrap();
+    assert_eq!(task.run_count, 2);
+    assert_eq!(task.status, "completed");
+
+    // One-shot failure semantics unchanged: failed stays failed.
+    let once = db
+        .create_scheduled_task(7, "one shot", "once", "2026-07-12T00:00:00Z", "2026-07-12T00:00:00Z")
+        .unwrap();
+    db.update_task_after_run(once, "2026-07-12T00:00:01Z", None, false)
+        .unwrap();
+    let task = db.get_scheduled_task(once).unwrap().unwrap();
+    assert_eq!(task.status, "failed");
+    assert_eq!(task.run_count, 1);
+
+    drop(db);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn test_scheduled_task_persists_across_db_reopen() {
     let (db, dir) = test_db();
     let id = db

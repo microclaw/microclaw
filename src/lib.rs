@@ -28,6 +28,7 @@ pub mod prompt_cache;
 pub mod relationship;
 pub(crate) mod run_control;
 pub mod runtime;
+pub mod schedule_lifecycle;
 pub mod scheduler;
 pub mod setup;
 pub mod setup_def;
