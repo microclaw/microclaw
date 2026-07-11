@@ -517,6 +517,12 @@ pub async fn run(
         );
     }
 
+    {
+        let recovery_state = state.clone();
+        spawn_guarded("interrupted_turn_recovery".to_string(), async move {
+            crate::turn_recovery::run_startup_recovery(recovery_state).await;
+        });
+    }
     crate::scheduler::spawn_scheduler(state.clone());
     crate::scheduler::spawn_dlq_replay(state.clone());
     crate::scheduler::spawn_reflector(state.clone());

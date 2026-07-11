@@ -1177,7 +1177,56 @@ async fn handle_message(
         } else {
             None
         };
-    let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, injection_ack);
+    // Phase-3 progress heartbeat (opt-in via channels.telegram.progress_updates):
+    // first emission sends a "working…" message, later emissions edit it in
+    // place, and the terminal emission finalizes it when the turn ends.
+    let progress_settings =
+        crate::channels::event_tap::progress_updates_settings(&state.config, "telegram");
+    let is_private_chat = matches!(msg.chat.kind, teloxide::types::ChatKind::Private(_));
+    let progress: Option<(
+        crate::channels::event_tap::ProgressConfig,
+        crate::channels::event_tap::ProgressEmit,
+    )> = if progress_settings.enabled && (is_private_chat || progress_settings.groups) {
+        let bot_for_progress = bot.clone();
+        let chat_for_progress = msg.chat.id;
+        let thread_for_progress = msg.thread_id;
+        let progress_msg: std::sync::Arc<tokio::sync::Mutex<Option<MessageId>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let emit: crate::channels::event_tap::ProgressEmit = Box::new(move |text, _terminal| {
+            let bot = bot_for_progress.clone();
+            let chat = chat_for_progress;
+            let tid = thread_for_progress;
+            let progress_msg = progress_msg.clone();
+            Box::pin(async move {
+                let mut slot = progress_msg.lock().await;
+                match *slot {
+                    Some(message_id) => {
+                        if let Err(e) = bot.edit_message_text(chat, message_id, text).await {
+                            warn!("Telegram: progress edit failed: {e}");
+                        }
+                    }
+                    None => {
+                        let mut req = bot.send_message(chat, text);
+                        if let Some(tid) = tid {
+                            req = req.message_thread_id(tid);
+                        }
+                        match req.await {
+                            Ok(sent) => *slot = Some(sent.id),
+                            Err(e) => warn!("Telegram: progress send failed: {e}"),
+                        }
+                    }
+                }
+            })
+        });
+        Some((progress_settings.config, emit))
+    } else {
+        None
+    };
+    let mut tap = crate::channels::event_tap::EventTap::spawn_with_progress(
+        event_rx,
+        injection_ack,
+        progress,
+    );
     match process_with_agent_with_events_guarded(
         &state,
         AgentRequestContext {

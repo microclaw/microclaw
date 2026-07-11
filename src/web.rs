@@ -33,11 +33,13 @@ mod a2a;
 mod auth;
 mod chat_abort;
 mod config;
+mod governance;
 mod metrics;
 mod middleware;
 mod sessions;
 mod skills;
 mod stream;
+mod tasks;
 mod ws;
 use middleware::*;
 
@@ -2066,6 +2068,10 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/skills", get(skills::api_list_skills))
         .route("/api/skills/:name/enable", post(skills::api_enable_skill))
         .route("/api/skills/:name/disable", post(skills::api_disable_skill))
+        .route("/api/governance", get(governance::api_governance))
+        .route("/api/tasks", get(tasks::api_list_tasks))
+        .route("/api/tasks/:id/runs", get(tasks::api_task_runs))
+        .route("/api/tasks/:id/:action", post(tasks::api_task_action))
         .with_state(web_state)
 }
 
@@ -3993,6 +3999,166 @@ mod tests {
             "old chat history should be removed by /clear"
         );
         assert_eq!(tasks_len, 1);
+    }
+
+    #[tokio::test]
+    async fn test_web_tasks_endpoints_list_and_lifecycle_actions() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        let app = build_router(web_state.clone());
+        let db = web_state.app_state.db.clone();
+        let task_id = call_blocking(db, move |d| {
+            d.upsert_chat(777, Some("chat:777"), "web")?;
+            d.create_scheduled_task(
+                777,
+                "weekly digest",
+                "cron",
+                "0 0 8 * * 1",
+                "2099-01-01T08:00:00Z",
+            )
+        })
+        .await
+        .unwrap();
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tasks")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tasks = v.get("tasks").and_then(|t| t.as_array()).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["id"].as_i64(), Some(task_id));
+        assert_eq!(tasks[0]["status"].as_str(), Some("active"));
+        assert_eq!(tasks[0]["has_contract"].as_bool(), Some(false));
+
+        // pause → paused
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{task_id}/pause"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // pause again → conflict (invalid transition)
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{task_id}/pause"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+        // resume → active, then cancel → cancelled
+        for (action, expected) in [("resume", "active"), ("cancel", "cancelled")] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/tasks/{task_id}/{action}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{action} should succeed");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["status"].as_str(), Some(expected));
+        }
+
+        // cancelled task is immutable and unknown actions 404
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{task_id}/resume"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{task_id}/explode"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // runs endpoint returns the task and an empty run list
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/tasks/{task_id}/runs"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["task"]["id"].as_i64(), Some(task_id));
+        assert_eq!(v["runs"].as_array().map(|r| r.len()), Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_web_governance_snapshot() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        let app = build_router(web_state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/governance")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["ok"].as_bool(), Some(true));
+        assert_eq!(v["tool_policy"]["mode"].as_str(), Some("off"));
+        assert!(v["token_budget"].is_object());
+        assert!(v["heartbeat"].is_object());
+        assert!(v["progress_updates"]["telegram"].is_object());
+        assert!(v["scheduled_tasks"]["runs_24h"].is_i64());
     }
 
     #[tokio::test]

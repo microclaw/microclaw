@@ -46,6 +46,8 @@ import { ApiKeysSettings } from './components/api-keys-settings'
 import { SessionSidebar } from './components/session-sidebar'
 import { UsagePanel, type InjectionLogPoint, type MemoryObservability, type ReflectorRunPoint, type SubagentObservability } from './components/usage-panel'
 import { SkillsSettings } from './components/skills-settings'
+import { TasksPanel } from './components/tasks-panel'
+import { GovernancePanel } from './components/governance-panel'
 import { ConfigFieldCard, type ConfigFieldCardProps } from './components/config-field-card'
 import { api, makeHeaders, ApiError } from './lib/api'
 import type { SessionItem } from './types'
@@ -3615,6 +3617,8 @@ function App() {
                       <Tabs.Trigger value="general" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">⚙️  General</Tabs.Trigger>
                       <Tabs.Trigger value="model" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">🧠  Model</Tabs.Trigger>
                       <Tabs.Trigger value="skills" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">🧩  Skills</Tabs.Trigger>
+                      <Tabs.Trigger value="tasks" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">⏰  Tasks</Tabs.Trigger>
+                      <Tabs.Trigger value="governance" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">🛡️  Governance</Tabs.Trigger>
 
                       <Text size="1" color="gray" className="px-2 pt-3 uppercase tracking-wide">Channels</Text>
                       <Tabs.Trigger value="telegram" className="mc-settings-tab-trigger w-full justify-start rounded-lg px-3 py-2 text-[18px] leading-6 bg-transparent data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-200 hover:bg-white/8">✈️  Telegram</Tabs.Trigger>
@@ -4045,6 +4049,20 @@ function App() {
                       <div className={sectionCardClass} style={sectionCardStyle}>
                         <Text size="3" weight="bold">Skills</Text>
                         <SkillsSettings />
+                      </div>
+                    </Tabs.Content>
+
+                    <Tabs.Content value="tasks">
+                      <div className={sectionCardClass} style={sectionCardStyle}>
+                        <Text size="3" weight="bold">Scheduled Tasks</Text>
+                        <TasksPanel />
+                      </div>
+                    </Tabs.Content>
+
+                    <Tabs.Content value="governance">
+                      <div className={sectionCardClass} style={sectionCardStyle}>
+                        <Text size="3" weight="bold">Governance</Text>
+                        <GovernancePanel />
                       </div>
                     </Tabs.Content>
 

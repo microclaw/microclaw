@@ -185,6 +185,23 @@ pub async fn process_with_agent_with_events_guarded(
     });
     let (run_id, cancelled, notify) =
         run_control::register_run(context.caller_channel, context.chat_id, source_message_id).await;
+    // Interrupted-turn recovery bookkeeping: while an interactive (user-facing)
+    // turn is in flight, a row exists in `active_turns`. If the process dies
+    // mid-turn the row survives and startup recovery notifies the chat.
+    // Scheduler-driven runs (override_prompt) have their own recovery path
+    // (recover_running_tasks + DLQ), so they are not tracked here.
+    let track_turn = override_prompt.is_none();
+    if track_turn {
+        let chat_id = context.chat_id;
+        let channel = context.caller_channel.to_string();
+        if let Err(e) = call_blocking(state.db.clone(), move |db| {
+            db.mark_turn_active(chat_id, &channel)
+        })
+        .await
+        {
+            warn!("failed to mark turn active for chat {}: {e}", context.chat_id);
+        }
+    }
     let engine = DefaultAgentEngine;
     let result = tokio::select! {
         _ = async {
@@ -210,6 +227,14 @@ pub async fn process_with_agent_with_events_guarded(
         out = engine.process_with_events(state, context, override_prompt, image_data, event_tx) => out,
     };
     run_control::unregister_run(context.caller_channel, context.chat_id, run_id).await;
+    if track_turn {
+        let chat_id = context.chat_id;
+        if let Err(e) =
+            call_blocking(state.db.clone(), move |db| db.clear_turn_active(chat_id)).await
+        {
+            warn!("failed to clear active turn for chat {}: {e}", context.chat_id);
+        }
+    }
 
     // Outbound guardrail on the final reply (covers every channel's main reply,
     // which is delivered by the adapter rather than via the shared funnel).
@@ -3201,6 +3226,43 @@ mod tests {
             drop(restarted);
             let _ = std::fs::remove_dir_all(&base_dir);
         }
+    }
+
+    #[tokio::test]
+    async fn test_interactive_turn_leaves_no_active_turn_residue() {
+        let base_dir =
+            std::env::temp_dir().join(format!("mc_agent_turn_track_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let state = test_state_with_base_dir(&base_dir);
+        let chat_id = state
+            .db
+            .resolve_or_create_chat_id("web", "turn-track-chat", Some("turns"), "web")
+            .unwrap();
+        store_user_message(&state.db, chat_id, "hello there");
+
+        process_with_agent(
+            &state,
+            AgentRequestContext {
+                caller_channel: "web",
+                chat_id,
+                chat_type: "web",
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // A cleanly finished interactive turn must not leave an `active_turns`
+        // row behind — otherwise the next restart would send a spurious
+        // "I was interrupted" notice to this chat.
+        assert!(
+            state.db.take_interrupted_turns().unwrap().is_empty(),
+            "clean turn left an active_turns row behind"
+        );
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]
