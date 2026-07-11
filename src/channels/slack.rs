@@ -882,6 +882,92 @@ async fn send_slack_response(
     Ok(())
 }
 
+/// Post a single (short) Slack message and return its `ts`, so the caller can
+/// later edit it in place with `update_slack_message`. Unlike
+/// `send_slack_response` this never chunks — progress heartbeats are short.
+async fn post_slack_message_ts(
+    bot_token: &str,
+    channel: &str,
+    thread_ts: Option<&str>,
+    text: &str,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let mut body = serde_json::json!({
+        "channel": channel,
+        "text": text,
+    });
+    if let Some(thread_ts) = thread_ts {
+        if !thread_ts.trim().is_empty() {
+            body["thread_ts"] = serde_json::Value::String(thread_ts.to_string());
+        }
+    }
+    let resp = client
+        .post("https://slack.com/api/chat.postMessage")
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {bot_token}"),
+        )
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send Slack message: {e}"))?;
+    let resp_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Slack chat.postMessage response: {e}"))?;
+    if resp_json.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = resp_json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("Slack chat.postMessage error: {err}"));
+    }
+    resp_json
+        .get("ts")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Slack chat.postMessage response missing ts".to_string())
+}
+
+/// Edit an existing Slack message in place via chat.update.
+async fn update_slack_message(
+    bot_token: &str,
+    channel: &str,
+    ts: &str,
+    text: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "channel": channel,
+        "ts": ts,
+        "text": text,
+    });
+    let resp = client
+        .post("https://slack.com/api/chat.update")
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {bot_token}"),
+        )
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to update Slack message: {e}"))?;
+    let resp_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Slack chat.update response: {e}"))?;
+    if resp_json.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = resp_json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("Slack chat.update error: {err}"));
+    }
+    Ok(())
+}
+
 /// Start the Slack bot using Socket Mode.
 #[derive(Clone)]
 pub struct SlackRuntimeContext {
@@ -1386,7 +1472,53 @@ async fn handle_slack_message(
         } else {
             None
         };
-    let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, injection_ack);
+    // Phase-3 progress heartbeat (opt-in via channels.slack.progress_updates):
+    // first emission posts a "working…" message and remembers its ts, later
+    // emissions edit it in place via chat.update.
+    let progress_settings =
+        crate::channels::event_tap::progress_updates_settings(&app_state.config, "slack");
+    let progress: Option<(
+        crate::channels::event_tap::ProgressConfig,
+        crate::channels::event_tap::ProgressEmit,
+    )> = if progress_settings.enabled && (is_dm || progress_settings.groups) {
+        let token_for_progress = bot_token.to_string();
+        let channel_for_progress = channel.to_string();
+        let thread_for_progress = normalized_thread_ts.map(|s| s.to_string());
+        let progress_ts: Arc<tokio::sync::Mutex<Option<String>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
+        let emit: crate::channels::event_tap::ProgressEmit = Box::new(move |text, _terminal| {
+            let token = token_for_progress.clone();
+            let channel = channel_for_progress.clone();
+            let thread = thread_for_progress.clone();
+            let progress_ts = progress_ts.clone();
+            Box::pin(async move {
+                let mut slot = progress_ts.lock().await;
+                match slot.as_deref() {
+                    Some(ts) => {
+                        if let Err(e) = update_slack_message(&token, &channel, ts, &text).await {
+                            warn!("Slack: progress edit failed: {e}");
+                        }
+                    }
+                    None => {
+                        match post_slack_message_ts(&token, &channel, thread.as_deref(), &text)
+                            .await
+                        {
+                            Ok(ts) => *slot = Some(ts),
+                            Err(e) => warn!("Slack: progress send failed: {e}"),
+                        }
+                    }
+                }
+            })
+        });
+        Some((progress_settings.config, emit))
+    } else {
+        None
+    };
+    let mut tap = crate::channels::event_tap::EventTap::spawn_with_progress(
+        event_rx,
+        injection_ack,
+        progress,
+    );
 
     match process_with_agent_with_events_guarded(
         &app_state,

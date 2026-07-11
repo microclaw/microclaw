@@ -677,7 +677,55 @@ impl EventHandler for Handler {
             } else {
                 None
             };
-        let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, injection_ack);
+        // Phase-3 progress heartbeat (opt-in via channels.discord.progress_updates):
+        // first emission sends a "working…" message, later emissions edit it in
+        // place, and the terminal emission finalizes it when the turn ends.
+        let progress_settings = crate::channels::event_tap::progress_updates_settings(
+            &self.app_state.config,
+            "discord",
+        );
+        let is_private_chat = msg.guild_id.is_none();
+        let progress: Option<(
+            crate::channels::event_tap::ProgressConfig,
+            crate::channels::event_tap::ProgressEmit,
+        )> = if progress_settings.enabled && (is_private_chat || progress_settings.groups) {
+            let http_for_progress = ctx.http.clone();
+            let channel_for_progress = msg.channel_id;
+            let progress_msg: Arc<tokio::sync::Mutex<Option<serenity::model::id::MessageId>>> =
+                Arc::new(tokio::sync::Mutex::new(None));
+            let emit: crate::channels::event_tap::ProgressEmit =
+                Box::new(move |text, _terminal| {
+                    let http = http_for_progress.clone();
+                    let channel = channel_for_progress;
+                    let progress_msg = progress_msg.clone();
+                    Box::pin(async move {
+                        let mut slot = progress_msg.lock().await;
+                        match *slot {
+                            Some(message_id) => {
+                                let edit =
+                                    serenity::builder::EditMessage::new().content(text);
+                                if let Err(e) =
+                                    channel.edit_message(&http, message_id, edit).await
+                                {
+                                    warn!("Discord: progress edit failed: {e}");
+                                }
+                            }
+                            None => match channel.say(&http, text).await {
+                                Ok(sent) => *slot = Some(sent.id),
+                                Err(e) => warn!("Discord: progress send failed: {e}"),
+                            },
+                        }
+                    })
+                });
+            Some((progress_settings.config, emit))
+        } else {
+            None
+        };
+        let mut tap = crate::channels::event_tap::EventTap::spawn_with_progress(
+            event_rx,
+            injection_ack,
+            progress,
+        );
         // Process with shared agent engine (reuses the same loop as Telegram)
         match process_with_agent_with_events_guarded(
             &self.app_state,

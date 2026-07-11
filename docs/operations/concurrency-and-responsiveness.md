@@ -84,7 +84,8 @@ Telegram, Discord, Slack, Matrix, Feishu, and WeChat used to drain `AgentEvent`s
 
 ## Limits that still matter
 
-- Streaming visibility is strongest on the web surface. Chat channels now consume `MidTurnInjection` events concurrently with the agent loop and ack them in real time (see `src/channels/event_tap.rs`), but full progress heartbeats during long tool loops are still on the roadmap — see `docs/roadmap/non-web-channel-progress-events-plan.md`.
+- Streaming visibility is strongest on the web surface. Chat channels consume `MidTurnInjection` events concurrently with the agent loop and ack them in real time, and Telegram / Discord / Slack can additionally show a throttled progress heartbeat during long tool loops — an editable "⏳ Working — step N…" message that flips to "✅ Done" (opt-in via `channels.<name>.progress_updates`, see `src/channels/event_tap.rs` and `docs/roadmap/non-web-channel-progress-events-plan.md`).
+- If the process dies mid-turn, startup recovery (`src/turn_recovery.rs`) notifies each chat whose interactive turn was killed ("I was restarted while working on your last message…") and retires orphaned sub-agent runs as `interrupted`; scheduled tasks recover separately via `recover_running_tasks` + the DLQ.
 - Most chat adapters still handle one inbound message as one primary run, even if they keep typing indicators or progress pings alive.
 - Subagent concurrency is intentionally bounded by `subagents.max_concurrent`, `subagents.max_active_per_chat`, timeout settings, and spawn-depth limits.
 - Parallel tool execution stops at the wave boundary: a ReadOnly wave runs in parallel, but the model is still called once per tool-loop iteration.
@@ -119,7 +120,7 @@ Issue #307 was kept open as an umbrella for the broader concurrency direction. T
 | Safer parallelism within a single turn | Shipped | `src/tool_executor.rs`, PR #320 |
 | Mid-turn responsiveness (the nanobot midturn suggestion) | Shipped, default on | `src/agent_engine.rs` mid-turn injection, PR #330 |
 | Stronger parent/child contracts for orchestration-heavy subagent flows | Shipped | `subagents_orchestrate`, `subagents_focus`, `subagents_send` in `src/tools/subagents.rs` |
-| Richer progress events outside the web channel | First slice shipped: concurrent event tap and mid-turn injection ack on Telegram, Discord, Slack, Matrix, Feishu, WeChat (`src/channels/event_tap.rs`). Full progress heartbeats during long tool loops still tracked. | `docs/roadmap/non-web-channel-progress-events-plan.md` |
+| Richer progress events outside the web channel | Shipped: concurrent event tap + mid-turn injection ack on Telegram, Discord, Slack, Matrix, Feishu, WeChat; opt-in progress heartbeats (edit-in-place "⏳ Working…") on Telegram, Discord, Slack (`src/channels/event_tap.rs`). Feishu/Matrix/WeChat heartbeats deferred. | `docs/roadmap/non-web-channel-progress-events-plan.md` |
 | Deeper thread-bound routing and fan-out/fan-in for subagents | Partially in place via subagent orchestrate; further work folded into the progress-events plan above | same plan doc |
 
 With the first three bullets shipped and the remaining work tracked under a focused plan doc, the umbrella issue can be closed. New concurrency work should land against the focused tracker rather than re-opening the umbrella.

@@ -234,7 +234,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 27;
+const SCHEMA_VERSION_CURRENT: i64 = 28;
 
 /// Genesis link for the tamper-evident audit hash chain — the `prev_hash` of the
 /// first sealed entry.
@@ -1119,6 +1119,22 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         }
         set_schema_version(conn, 27)?;
         version = 27;
+    }
+    if version < 28 {
+        // Interrupted-turn recovery: one row per interactive turn in flight.
+        // Inserted when the agent loop starts a user-facing turn, deleted when
+        // the turn finishes (any outcome). Rows found at startup mean the
+        // process died mid-reply — those chats get an "I was interrupted"
+        // notice and the rows are cleared.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS active_turns (
+                chat_id INTEGER PRIMARY KEY,
+                channel TEXT NOT NULL,
+                started_at TEXT NOT NULL
+            );",
+        )?;
+        set_schema_version(conn, 28)?;
+        version = 28;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -2063,6 +2079,44 @@ impl Database {
         )?;
         let tasks = stmt
             .query_map(params![chat_id], |row| {
+                Ok(ScheduledTask {
+                    id: row.get(0)?,
+                    chat_id: row.get(1)?,
+                    prompt: row.get(2)?,
+                    schedule_type: row.get(3)?,
+                    schedule_value: row.get(4)?,
+                    timezone: row.get(5)?,
+                    next_run: row.get(6)?,
+                    last_run: row.get(7)?,
+                    status: row.get(8)?,
+                    created_at: row.get(9)?,
+                    exit_criteria: row.get(10)?,
+                    run_count: row.get(11)?,
+                    max_runs: row.get(12)?,
+                    not_after: row.get(13)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(tasks)
+    }
+
+    /// List scheduled tasks across all chats for management views.
+    /// `status` filters to one status; `None` returns every task. Newest first.
+    pub fn list_scheduled_tasks(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ScheduledTask>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria, run_count, max_runs, not_after
+             FROM scheduled_tasks
+             WHERE (?1 IS NULL OR status = ?1)
+             ORDER BY id DESC
+             LIMIT ?2",
+        )?;
+        let tasks = stmt
+            .query_map(params![status, limit as i64], |row| {
                 Ok(ScheduledTask {
                     id: row.get(0)?,
                     chat_id: row.get(1)?,
@@ -5275,6 +5329,69 @@ impl Database {
         Ok(())
     }
 
+    /// Startup crash recovery: sub-agent runs execute in-process, so any run
+    /// still marked in-flight when a new process boots was killed mid-run.
+    /// Retire them as `interrupted` so lists and gates stop counting them,
+    /// and return how many rows were fixed.
+    pub fn recover_orphaned_subagent_runs(&self) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let affected = conn.execute(
+            "UPDATE subagent_runs
+             SET status = 'interrupted',
+                 finished_at = ?1,
+                 error_text = COALESCE(error_text, 'process restarted while this run was in flight')
+             WHERE status IN ('accepted', 'queued', 'running')",
+            params![now],
+        )?;
+        Ok(affected)
+    }
+
+    /// Record that an interactive turn is in flight for `chat_id`. One row per
+    /// chat: a re-entrant start (queued follow-up in the same chat) just
+    /// refreshes the timestamp.
+    pub fn mark_turn_active(&self, chat_id: i64, channel: &str) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO active_turns (chat_id, channel, started_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(chat_id) DO UPDATE SET channel = ?2, started_at = ?3",
+            params![chat_id, channel, now],
+        )?;
+        Ok(())
+    }
+
+    /// The interactive turn for `chat_id` finished (any outcome).
+    pub fn clear_turn_active(&self, chat_id: i64) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "DELETE FROM active_turns WHERE chat_id = ?1",
+            params![chat_id],
+        )?;
+        Ok(())
+    }
+
+    /// Startup crash recovery: return-and-clear every turn that was in flight
+    /// when the previous process died. Each entry is (chat_id, channel,
+    /// started_at); the table is emptied in the same transaction so a second
+    /// caller can never double-notify.
+    pub fn take_interrupted_turns(&self) -> Result<Vec<(i64, String, String)>, MicroClawError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let rows: Vec<(i64, String, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT chat_id, channel, started_at FROM active_turns ORDER BY started_at",
+            )?;
+            let collected = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<Result<Vec<(i64, String, String)>, _>>()?;
+            collected
+        };
+        tx.execute("DELETE FROM active_turns", [])?;
+        tx.commit()?;
+        Ok(rows)
+    }
+
     pub fn request_subagent_cancel(
         &self,
         run_id: &str,
@@ -8288,6 +8405,91 @@ mod tests {
         assert_eq!(db.count_messages_for_chat(1).unwrap(), 1);
         assert_eq!(db.count_messages_for_chat(2).unwrap(), 1);
         assert_eq!(db.count_messages_for_chat(999).unwrap(), 0);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_active_turns_mark_clear_and_take() {
+        let (db, dir) = test_db();
+
+        // Nothing tracked → nothing to recover.
+        assert!(db.take_interrupted_turns().unwrap().is_empty());
+
+        db.mark_turn_active(10, "telegram").unwrap();
+        db.mark_turn_active(20, "discord").unwrap();
+        // Re-entrant mark for the same chat refreshes rather than duplicates.
+        db.mark_turn_active(10, "telegram").unwrap();
+        // A turn that finished cleanly leaves no residue.
+        db.clear_turn_active(20).unwrap();
+
+        let orphans = db.take_interrupted_turns().unwrap();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].0, 10);
+        assert_eq!(orphans[0].1, "telegram");
+        assert!(!orphans[0].2.is_empty());
+
+        // take is destructive: a second sweep can never double-notify.
+        assert!(db.take_interrupted_turns().unwrap().is_empty());
+        // Clearing an unknown chat is a no-op, not an error.
+        db.clear_turn_active(999).unwrap();
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_recover_orphaned_subagent_runs() {
+        let (db, dir) = test_db();
+        for (run_id, status) in [
+            ("orph-accepted", None),
+            ("orph-running", Some("running")),
+            ("done-ok", Some("done")),
+        ] {
+            db.create_subagent_run(CreateSubagentRunParams {
+                run_id,
+                parent_run_id: None,
+                depth: 1,
+                token_budget: 0,
+                chat_id: 7,
+                caller_channel: "telegram",
+                task: "t",
+                context: "",
+                provider: "anthropic",
+                model: "claude-test",
+                label: None,
+            })
+            .unwrap();
+            match status {
+                Some("running") => db.mark_subagent_running(run_id).unwrap(),
+                Some(s) => db
+                    .mark_subagent_finished(FinishSubagentRunParams {
+                        run_id,
+                        status: s,
+                        error_text: None,
+                        result_text: Some("ok"),
+                        artifact_json: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    })
+                    .unwrap(),
+                None => {}
+            }
+        }
+
+        let fixed = db.recover_orphaned_subagent_runs().unwrap();
+        assert_eq!(fixed, 2, "accepted + running rows must be retired");
+
+        for run_id in ["orph-accepted", "orph-running"] {
+            let run = db.get_subagent_run(run_id, 7).unwrap().unwrap();
+            assert_eq!(run.status, "interrupted");
+            assert!(run.finished_at.is_some());
+            assert!(run.error_text.as_deref().unwrap().contains("restarted"));
+        }
+        // Finished runs are untouched, and nothing counts as active anymore.
+        let done = db.get_subagent_run("done-ok", 7).unwrap().unwrap();
+        assert_eq!(done.status, "done");
+        assert!(done.error_text.is_none());
+        assert!(db.list_active_subagent_runs().unwrap().is_empty());
+        // Idempotent: a second recovery pass finds nothing.
+        assert_eq!(db.recover_orphaned_subagent_runs().unwrap(), 0);
         cleanup(&dir);
     }
 

@@ -52,9 +52,19 @@ The actual implementation diverged from the original design in two ways:
 
 Feishu's existing concurrent progress task in topic-progress mode picks up the ack as an additional progress line (still goes through the same edit-rate budget).
 
-### Phase 3 — Progress heartbeat (~1.5 days)
+### Phase 3 — Progress heartbeat (shipped)
 
-Config:
+Implemented in `src/channels/event_tap.rs` as `EventTap::spawn_with_progress`
+(`ProgressConfig` + `ProgressEmit` callback). The tap subscribes to
+`AgentEvent::Iteration` / `AgentEvent::ToolStart`, throttles to
+`update_interval_seconds` (floor 5s), stays silent for turns shorter than
+`min_turn_seconds`, and emits a terminal "✅ Done" edit only if a heartbeat was
+actually shown. Copy lives in `progress_text` / `progress_done_text`
+("⏳ Working — step N, using `tool`…"). Content priority diverged from the
+original design: the todo-list source was dropped for now (last tool name +
+iteration count proved sufficient and avoids a DB read per heartbeat).
+
+Config (per channel, default off; groups additionally gated by `groups: true`):
 
 ```yaml
 channels:
@@ -65,25 +75,20 @@ channels:
       update_interval_seconds: 20   # throttle (≤ 3/min, well under Telegram's 20/min edit cap)
 ```
 
-Subscribe to `AgentEvent::Iteration` and `AgentEvent::ToolStart`, throttle to `update_interval_seconds`.
+First trigger sends the working message and captures its id; subsequent heartbeats edit in place; on `end_turn` the message is terminal-edited to "✅ Done".
 
-Content source, by priority:
-1. Latest `todo_write` state via `state.db.get_todos(chat_id)` (existing API) → `"3/8 已完成，当前：smol"`
-2. Most recent tool name → `"正在使用 web_search..."`
-3. Fallback → `"仍在处理，已 N 次迭代"`
+### Phase 4 — Port to other channels (partially shipped)
 
-Implementation: first trigger sends `"🔄 正在处理..."`, captures the `message_id`; subsequent heartbeats edit in place. On `end_turn`, either replace with a terminal marker (`"✅ 已完成"`) or delete.
-
-### Phase 4 — Port to other channels (~1 day)
-
-| Channel | Edit API | Notes |
+| Channel | Edit API | Status |
 |---|---|---|
-| Discord | `channel.edit` | Standard |
-| Slack | `chat.update` | Standard |
-| Feishu | `im.v1.message.update` | Standard |
-| WeChat | none | Fall back to "send new message every 60s"; gate behind `progress_updates.mode: edit \| append` |
+| Telegram | `editMessageText` | **shipped** (`telegram.rs`, send-then-edit via stored `MessageId`) |
+| Discord | `channel.edit_message` | **shipped** (`discord.rs`, DM-gated unless `groups: true`) |
+| Slack | `chat.update` | **shipped** (`slack.rs`, new `post_slack_message_ts` + `update_slack_message` helpers) |
+| Feishu | `im.v1.message.update` | deferred — topic-progress mode already provides a concurrent progress line |
+| Matrix | `m.replace` edits | deferred |
+| WeChat | none | deferred — needs `progress_updates.mode: append` fallback |
 
-Each channel gets its own integration test via a mock sink.
+Throttle/turn-length behavior is covered by unit tests in `event_tap.rs` (`progress_heartbeat_throttles_and_finalizes`, `short_turns_stay_silent`); per-channel emit closures are thin wrappers around existing send/edit primitives.
 
 ### Phase 5 — Observability and docs (~0.5 day)
 

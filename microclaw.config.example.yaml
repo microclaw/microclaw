@@ -212,15 +212,28 @@ channels:
     #     bot_token: "123456:ABC-DEF..."
     #     bot_username: "my_bot"
     #     allowed_user_ids: [123456789]
+    # Live progress heartbeat during long agent turns (off by default).
+    # First trigger sends a "⏳ Working…" message, later updates edit it in
+    # place, and it flips to "✅ Done" when the turn finishes. Supported on
+    # telegram / discord / slack (same block shape under each channel).
+    # progress_updates:
+    #   enabled: true
+    #   groups: false                # also emit in group chats (default: private only)
+    #   min_turn_seconds: 30         # stay silent for turns shorter than this
+    #   update_interval_seconds: 20  # edit throttle (≤3/min, under Telegram's edit cap)
   discord:
     enabled: false
     bot_token: ""
     # allowed_channels: []
+    # progress_updates:            # same shape as channels.telegram.progress_updates
+    #   enabled: true
   # slack:
   #   enabled: false
   #   bot_token: "xoxb-..."
   #   app_token: "xapp-..."
   #   allowed_channels: []
+  #   progress_updates:            # same shape as channels.telegram.progress_updates
+  #     enabled: true
   # feishu:
   #   enabled: false
   #   app_id: "cli_xxx"

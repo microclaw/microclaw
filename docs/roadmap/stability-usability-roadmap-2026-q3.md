@@ -91,11 +91,18 @@ minutes, without reading source.**
    budget, heartbeat, contracts visibility (recent verdicts), skill curator
    status — visible and editable in the web panel. The differentiators must
    be operable by someone who never opens YAML.
+   *First slice shipped 2026-07:* read-only governance snapshot
+   (`/api/governance` + Governance tab: tool policy, token budget, heartbeat,
+   progress heartbeats, loop restarts, task health) and a full scheduled-task
+   management tab (`/api/tasks` list/pause/resume/cancel + run history).
+   Editing still happens in config.yaml.
 4. **Long-task feedback, non-web channels** (Phase 3 of the progress-events
    plan): periodic one-line progress edits on Telegram/Discord/Slack for runs
    >30s, wired to the existing `report_progress` events. Budget refusals and
    contract failures get human phrasing (bilingual zh/en message catalog —
    the user base warrants it; Hermes shipped full zh in v0.16).
+   *Progress edits shipped 2026-07* on Telegram/Discord/Slack (opt-in
+   `channels.<name>.progress_updates`); message catalog still open.
 5. **Task-oriented cookbook.** Five recipes end-to-end, each with a completion
    contract: daily digest, repo watcher, backup-with-verification, weekly
    report PDF, inbox triage. Usability of docs *is* usability of product.
@@ -123,6 +130,10 @@ channels; cookbook merged.
    restart mid-turn resumes or cleanly reports "I was interrupted, here's
    where I got to" — never silence. Channel delivery outbox with retry, so a
    flaky Telegram outage can't drop a finished answer.
+   *"Never silence" half shipped 2026-07* (`src/turn_recovery.rs`): interactive
+   turns are tracked in `active_turns`, restart notifies the affected chats,
+   and orphaned sub-agent runs retire as `interrupted`. Checkpoint/resume and
+   the delivery outbox remain.
 5. **Operability surface**: one `/status` web page + bot command showing runs,
    DLQ depth, contract verdict rates, token spend vs budget, provider
    failovers, restart counters; optional webhook alerts (DLQ growth, provider
