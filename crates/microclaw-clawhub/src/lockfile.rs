@@ -66,6 +66,7 @@ mod tests {
                 installed_version: "1.0.0".into(),
                 installed_at: "2026-02-18T00:00:00Z".into(),
                 content_hash: "sha256:abc".into(),
+                tree_hash: None,
                 local_path: "/tmp/test".into(),
             },
         );
@@ -93,6 +94,7 @@ mod tests {
                 installed_version: "1.0.0".into(),
                 installed_at: "2026-02-18T00:00:00Z".into(),
                 content_hash: "sha256:abc".into(),
+                tree_hash: None,
                 local_path: "/tmp/test".into(),
             },
         );

@@ -28,7 +28,9 @@ use microclaw_core::text::floor_char_boundary;
 use microclaw_storage::db::call_blocking;
 
 pub fn spawn_scheduler(state: Arc<AppState>) {
-    tokio::spawn(async move {
+    crate::supervision::spawn_supervised("scheduler", move || {
+        let state = state.clone();
+        async move {
         info!("Scheduler started");
         if let Ok(recovered) =
             call_blocking(state.db.clone(), move |db| db.recover_running_tasks()).await
@@ -61,6 +63,7 @@ pub fn spawn_scheduler(state: Arc<AppState>) {
             ticker.tick().await;
             run_due_tasks(&state).await;
         }
+    }
     });
 }
 
@@ -525,7 +528,9 @@ pub fn spawn_dlq_replay(state: Arc<AppState>) {
         return;
     }
     let interval_secs = state.config.dlq_replay_interval_secs.max(30);
-    tokio::spawn(async move {
+    crate::supervision::spawn_supervised("dlq_replay", move || {
+        let state = state.clone();
+        async move {
         info!("DLQ auto-replay started (interval: {}s)", interval_secs);
         let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -533,6 +538,7 @@ pub fn spawn_dlq_replay(state: Arc<AppState>) {
             ticker.tick().await;
             run_dlq_replay(&state).await;
         }
+    }
     });
 }
 
@@ -699,7 +705,9 @@ pub fn spawn_reflector(state: Arc<AppState>) {
         return;
     }
     let interval_secs = state.config.reflector_interval_mins * 60;
-    tokio::spawn(async move {
+    crate::supervision::spawn_supervised("reflector", move || {
+        let state = state.clone();
+        async move {
         info!(
             "Reflector started (interval: {}min)",
             state.config.reflector_interval_mins
@@ -708,6 +716,7 @@ pub fn spawn_reflector(state: Arc<AppState>) {
             tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
             run_reflector(&state).await;
         }
+    }
     });
 }
 
@@ -719,7 +728,9 @@ pub fn spawn_task_standup(state: Arc<AppState>) {
         return;
     }
     let interval_secs = state.config.subagents.standup.interval_secs.max(60);
-    tokio::spawn(async move {
+    crate::supervision::spawn_supervised("task_standup", move || {
+        let state = state.clone();
+        async move {
         info!("Task standup started (interval: {}s)", interval_secs);
         // Per-chat last standup time, so each chat gets at most one per interval.
         let mut last_standup: HashMap<i64, Instant> = HashMap::new();
@@ -729,6 +740,7 @@ pub fn spawn_task_standup(state: Arc<AppState>) {
             ticker.tick().await;
             run_task_standup(&state, interval_secs, &mut last_standup).await;
         }
+    }
     });
 }
 
@@ -812,7 +824,9 @@ pub fn spawn_idle_checkin(state: Arc<AppState>) {
     if !state.config.idle_checkin.enabled {
         return;
     }
-    tokio::spawn(async move {
+    crate::supervision::spawn_supervised("idle_checkin", move || {
+        let state = state.clone();
+        async move {
         info!(
             "Idle check-in started (idle_hours={}, min_interval_hours={})",
             state.config.idle_checkin.idle_hours, state.config.idle_checkin.min_interval_hours
@@ -824,6 +838,7 @@ pub fn spawn_idle_checkin(state: Arc<AppState>) {
             ticker.tick().await;
             run_idle_checkin(&state, &mut last_checkin).await;
         }
+    }
     });
 }
 
@@ -972,7 +987,9 @@ pub fn spawn_heartbeat(state: Arc<AppState>) {
     if !state.config.heartbeat.enabled {
         return;
     }
-    tokio::spawn(async move {
+    crate::supervision::spawn_supervised("heartbeat", move || {
+        let state = state.clone();
+        async move {
         let interval_mins = state.config.heartbeat.interval_mins.max(1);
         info!("Heartbeat started (interval_mins={interval_mins})");
         let mut ticker = tokio::time::interval(Duration::from_secs(interval_mins * 60));
@@ -984,6 +1001,7 @@ pub fn spawn_heartbeat(state: Arc<AppState>) {
             ticker.tick().await;
             run_heartbeat(&state).await;
         }
+    }
     });
 }
 
@@ -1105,7 +1123,9 @@ pub fn spawn_memory_consolidation(state: Arc<AppState>) {
     if !state.config.sleep_time.enabled {
         return;
     }
-    tokio::spawn(async move {
+    crate::supervision::spawn_supervised("memory_consolidation", move || {
+        let state = state.clone();
+        async move {
         info!(
             "Sleep-time consolidation started (idle_hours={}, min_interval_hours={}, threshold={})",
             state.config.sleep_time.idle_hours,
@@ -1119,6 +1139,7 @@ pub fn spawn_memory_consolidation(state: Arc<AppState>) {
             ticker.tick().await;
             run_memory_consolidation(&state, &mut last_run).await;
         }
+    }
     });
 }
 
@@ -1222,7 +1243,9 @@ pub fn spawn_interjection(state: Arc<AppState>) {
     if !state.config.interjection.enabled {
         return;
     }
-    tokio::spawn(async move {
+    crate::supervision::spawn_supervised("interjection", move || {
+        let state = state.clone();
+        async move {
         info!(
             "Interjection started (min_interval_secs={}, lookback_mins={})",
             state.config.interjection.min_interval_secs, state.config.interjection.lookback_mins
@@ -1234,6 +1257,7 @@ pub fn spawn_interjection(state: Arc<AppState>) {
             ticker.tick().await;
             run_interjection(&state, &mut last_interjection).await;
         }
+    }
     });
 }
 

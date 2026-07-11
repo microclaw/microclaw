@@ -32,6 +32,7 @@ pub mod scheduler;
 pub mod setup;
 pub mod setup_def;
 pub mod skill_audit;
+pub mod supervision;
 pub mod skill_review;
 pub mod skills;
 pub mod subdirectory_hints;

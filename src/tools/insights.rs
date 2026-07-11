@@ -138,6 +138,17 @@ impl Tool for InsightsTool {
             }
         }
 
+        // Crash visibility: supervised background loops that panicked and
+        // were restarted this process lifetime. Empty = healthy.
+        let restarts = crate::supervision::restart_counts();
+        if !restarts.is_empty() {
+            lines.push(String::new());
+            lines.push("⚠️ Background task restarts since process start:".to_string());
+            for (name, count) in restarts {
+                lines.push(format!("- {name}: {count} restart(s) after panic"));
+            }
+        }
+
         ToolResult::success(lines.join("\n"))
     }
 }

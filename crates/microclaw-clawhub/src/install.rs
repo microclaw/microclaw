@@ -188,6 +188,11 @@ pub async fn install_skill(
         }
     }
 
+    // Fingerprint the verified tree BEFORE it goes live, so later loads can
+    // detect post-install mutation (the ClawHavoc follow-up pattern).
+    let tree_hash = compute_tree_hash(&staging)
+        .map_err(|e| MicroClawError::Config(format!("Failed hashing skill tree: {e}")))?;
+
     // All checks passed — swap the staged tree into place.
     if skill_path.exists() {
         std::fs::remove_dir_all(&skill_path)?;
@@ -204,6 +209,7 @@ pub async fn install_skill(
             installed_version: actual_version.clone(),
             installed_at: now,
             content_hash: hash,
+            tree_hash: Some(tree_hash),
             local_path: skill_path.to_string_lossy().to_string(),
         },
     );
@@ -323,6 +329,71 @@ fn scan_extracted_skill(dir: &Path) -> Vec<String> {
     findings
 }
 
+/// Deterministic content fingerprint of an extracted skill tree: sha256 over
+/// `relpath \0 sha256(file) \n` entries in sorted rel-path order. Directories
+/// and symlinks contribute nothing (symlinked content is not followed).
+pub fn compute_tree_hash(dir: &Path) -> std::io::Result<String> {
+    let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                let rel = path
+                    .strip_prefix(dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.push((rel, path));
+            }
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hasher = Sha256::new();
+    for (rel, path) in files {
+        let bytes = std::fs::read(&path)?;
+        let file_hash = format!("{:x}", Sha256::digest(&bytes));
+        hasher.update(rel.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(file_hash.as_bytes());
+        hasher.update([b'\n']);
+    }
+    Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
+/// Result of verifying one lockfile entry against the tree on disk.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TreeVerification {
+    Ok,
+    Modified { expected: String, actual: String },
+    Missing,
+    /// Entry predates tree hashing (installed before the field existed).
+    Unpinned,
+}
+
+/// Compare a managed skill's on-disk tree against its lockfile fingerprint.
+pub fn verify_tree(entry: &LockEntry, skills_dir: &Path) -> TreeVerification {
+    let Some(expected) = entry.tree_hash.as_deref() else {
+        return TreeVerification::Unpinned;
+    };
+    let dir = skills_dir.join(&entry.slug);
+    if !dir.is_dir() {
+        return TreeVerification::Missing;
+    }
+    match compute_tree_hash(&dir) {
+        Ok(actual) if actual == expected => TreeVerification::Ok,
+        Ok(actual) => TreeVerification::Modified {
+            expected: expected.to_string(),
+            actual,
+        },
+        Err(_) => TreeVerification::Missing,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::types::LockFile;
@@ -348,7 +419,7 @@ mod tests {
         assert!(!check_update_available(&lock, "1.0.0", "1.0.0"));
     }
 
-    use super::{extract_bounded, scan_extracted_skill, MAX_FILE_BYTES};
+    use super::{compute_tree_hash, extract_bounded, scan_extracted_skill, verify_tree, LockEntry, TreeVerification, MAX_FILE_BYTES};
     use std::io::Write;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
@@ -410,6 +481,65 @@ mod tests {
             .unwrap_err()
             .contains("entries"));
         std::fs::remove_dir_all(&dest).ok();
+    }
+
+    #[test]
+    fn tree_hash_is_deterministic_and_detects_changes() {
+        let dir = temp_dest("treehash");
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "hello").unwrap();
+        std::fs::write(dir.join("nested/util.sh"), "echo hi").unwrap();
+
+        let h1 = compute_tree_hash(&dir).unwrap();
+        let h2 = compute_tree_hash(&dir).unwrap();
+        assert_eq!(h1, h2);
+        assert!(h1.starts_with("sha256:"));
+
+        // Content change -> different hash.
+        std::fs::write(dir.join("nested/util.sh"), "echo pwned").unwrap();
+        assert_ne!(compute_tree_hash(&dir).unwrap(), h1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn verify_tree_reports_ok_modified_missing_unpinned() {
+        let skills_dir = temp_dest("verify");
+        let skill_dir = skills_dir.join("demo");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "v1").unwrap();
+        let hash = compute_tree_hash(&skill_dir).unwrap();
+        let entry = |tree_hash: Option<String>| LockEntry {
+            slug: "demo".into(),
+            installed_version: "1.0.0".into(),
+            installed_at: "2026-07-11T00:00:00Z".into(),
+            content_hash: "sha256:x".into(),
+            tree_hash,
+            local_path: skill_dir.to_string_lossy().to_string(),
+        };
+
+        assert_eq!(
+            verify_tree(&entry(Some(hash.clone())), &skills_dir),
+            TreeVerification::Ok
+        );
+        assert_eq!(
+            verify_tree(&entry(None), &skills_dir),
+            TreeVerification::Unpinned
+        );
+
+        std::fs::write(skill_dir.join("SKILL.md"), "v2 tampered").unwrap();
+        assert!(matches!(
+            verify_tree(&entry(Some(hash.clone())), &skills_dir),
+            TreeVerification::Modified { .. }
+        ));
+
+        std::fs::remove_dir_all(&skill_dir).unwrap();
+        assert_eq!(
+            verify_tree(&entry(Some(hash)), &skills_dir),
+            TreeVerification::Missing
+        );
+
+        std::fs::remove_dir_all(&skills_dir).ok();
     }
 
     #[test]

@@ -447,8 +447,39 @@ async fn run_hook_command(
             patch: None,
         });
     }
-    let response: HookResponse = serde_json::from_slice(&output.stdout)?;
-    Ok(response)
+    parse_hook_stdout(&output.stdout).ok_or_else(|| {
+        anyhow!(
+            "hook stdout contained no parseable JSON reply: {}",
+            String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(200)])
+        )
+    })
+}
+
+/// Extract the hook's JSON reply from stdout, tolerating surrounding noise.
+///
+/// Hooks run under `sh -lc`, a LOGIN shell — user profiles (`~/.profile`,
+/// nvm init, greetings) may print to stdout before the hook's own output, and
+/// a strict whole-buffer parse would then reject every hook on that machine.
+/// Strategy: try the whole buffer first, then attempt a parse from each `{`
+/// (ignoring trailing data), taking the first candidate that decodes.
+fn parse_hook_stdout(stdout: &[u8]) -> Option<HookResponse> {
+    if let Ok(r) = serde_json::from_slice::<HookResponse>(stdout) {
+        return Some(r);
+    }
+    let text = String::from_utf8_lossy(stdout);
+    let mut fallback: Option<HookResponse> = None;
+    for (i, _) in text.match_indices('{') {
+        let mut stream = serde_json::Deserializer::from_str(&text[i..]).into_iter::<HookResponse>();
+        if let Some(Ok(r)) = stream.next() {
+            // Prefer a candidate that actually carries hook fields — noise
+            // like a literal `{}` in profile output decodes but says nothing.
+            if r.action.is_some() || r.reason.is_some() || r.patch.is_some() {
+                return Some(r);
+            }
+            fallback.get_or_insert(r);
+        }
+    }
+    fallback
 }
 
 fn hooks_runtime_settings(config: &Config) -> (bool, usize, usize) {
@@ -677,6 +708,33 @@ body
         let parsed = parse_hook_md(&file, &dir).unwrap();
         assert_eq!(parsed.name, "test-hook");
         assert_eq!(parsed.events.len(), 2);
+    }
+
+    #[test]
+    fn parse_hook_stdout_tolerates_login_shell_noise() {
+        // Clean JSON parses as before.
+        let clean = br#"{"action":"block","reason":"nope"}"#;
+        let r = parse_hook_stdout(clean).unwrap();
+        assert_eq!(r.action.as_deref(), Some("block"));
+
+        // Profile noise before the JSON (the `sh -lc` login-shell case).
+        let noisy = b"nvm\nWelcome to devbox!\n{\"action\":\"block\",\"reason\":\"nope\"}\n";
+        let r = parse_hook_stdout(noisy).unwrap();
+        assert_eq!(r.action.as_deref(), Some("block"));
+        assert_eq!(r.reason.as_deref(), Some("nope"));
+
+        // Trailing noise after the JSON.
+        let trailing = b"{\"action\":\"allow\"}\nbye\n";
+        let r = parse_hook_stdout(trailing).unwrap();
+        assert_eq!(r.action.as_deref(), Some("allow"));
+
+        // A meaningless `{}` in noise loses to a real reply later on.
+        let decoy = b"env {} ready\n{\"action\":\"block\"}\n";
+        let r = parse_hook_stdout(decoy).unwrap();
+        assert_eq!(r.action.as_deref(), Some("block"));
+
+        // No JSON at all -> None.
+        assert!(parse_hook_stdout(b"just some text").is_none());
     }
 
     #[tokio::test]
