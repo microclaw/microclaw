@@ -3140,6 +3140,132 @@ fn merge_provider_profile(
     }
 }
 
+/// Result of `microclaw config check` on one file. Errors mean the config
+/// won't load; warnings mean it loads but something is probably a typo.
+#[derive(Debug, Default)]
+pub struct ConfigCheckReport {
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    /// Present when the config parsed: (enabled channels, configured-but-
+    /// disabled channels, provider, model).
+    pub summary: Option<(Vec<&'static str>, Vec<&'static str>, String, String)>,
+}
+
+impl ConfigCheckReport {
+    pub fn ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+/// Validate config file content without starting anything: YAML syntax with
+/// line/column, unknown-key warnings with did-you-mean, full schema
+/// deserialization (typed enums reject typos), and post-deserialize
+/// normalization/validation. Pure function over the text for testability.
+pub fn check_config_content(path_str: &str, content: &str) -> ConfigCheckReport {
+    let mut report = ConfigCheckReport::default();
+
+    // 1) YAML syntax. serde_yaml errors carry line/column.
+    let raw: serde_yaml::Value = match serde_yaml::from_str(content) {
+        Ok(v) => v,
+        Err(e) => {
+            report.errors.push(format!("YAML syntax error: {e}"));
+            return report;
+        }
+    };
+
+    // 2) Unknown top-level keys (serde ignores them silently on load).
+    if let Some(map) = raw.as_mapping() {
+        report.warnings.extend(unknown_top_level_key_warnings(map));
+    } else {
+        report
+            .errors
+            .push("Config root must be a YAML mapping (key: value pairs).".to_string());
+        return report;
+    }
+
+    // 3) Full schema deserialization (typed enums catch value typos with a
+    //    did-you-mean suggestion) + post-deserialize validation.
+    match serde_yaml::from_str::<Config>(content) {
+        Err(e) => {
+            report.errors.push(friendly_yaml_error(path_str, &e));
+        }
+        Ok(mut config) => match config.post_deserialize() {
+            // Covers value validation including the "no channel enabled" case.
+            Err(e) => report.errors.push(e.to_string()),
+            Ok(()) => {
+                let (enabled, disabled) = config.channel_status();
+                report.summary = Some((
+                    enabled,
+                    disabled,
+                    config.llm_provider.clone(),
+                    config.model.clone(),
+                ));
+            }
+        },
+    }
+    report
+}
+
+/// CLI entry point for `microclaw config check`. Prints a human-readable
+/// report and returns the process exit code (0 = loadable, 1 = errors,
+/// 2 = file missing/unreadable).
+pub fn run_config_check() -> i32 {
+    let path = match Config::resolve_config_path() {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            eprintln!("✗ No microclaw.config.yaml found. Run `microclaw setup` to create one.");
+            return 2;
+        }
+        Err(e) => {
+            eprintln!("✗ {e}");
+            return 2;
+        }
+    };
+    let path_str = path.to_string_lossy().to_string();
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("✗ Failed to read {path_str}: {e}");
+            return 2;
+        }
+    };
+
+    println!("Checking {path_str}");
+    let report = check_config_content(&path_str, &content);
+    for w in &report.warnings {
+        println!("  ⚠ {w}");
+    }
+    for e in &report.errors {
+        println!("  ✗ {e}");
+    }
+    if let Some((enabled, disabled, provider, model)) = &report.summary {
+        let enabled_str = if enabled.is_empty() {
+            "none".to_string()
+        } else {
+            enabled.join(", ")
+        };
+        println!("  provider: {provider} · model: {model}");
+        println!("  channels enabled: {enabled_str}");
+        if !disabled.is_empty() {
+            println!("  configured but disabled: {}", disabled.join(", "));
+        }
+    }
+    if report.ok() {
+        println!(
+            "✓ Config OK{}",
+            if report.warnings.is_empty() {
+                ""
+            } else {
+                " (with warnings)"
+            }
+        );
+        0
+    } else {
+        println!("✗ Config has errors — fix them and re-run, or run `microclaw setup`.");
+        1
+    }
+}
+
 /// Turn a raw `serde_yaml` parse error into an actionable message. When the
 /// error is an unknown field or variant (the common YAML typo), suggest the
 /// closest valid name, and always point the user at `setup` / the example
@@ -3281,6 +3407,76 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_support::env_lock()
+    }
+
+    #[test]
+    fn config_check_reports_syntax_errors_with_location() {
+        let report = check_config_content("t.yaml", "telegram_bot_token: [unclosed");
+        assert!(!report.ok());
+        assert!(report.errors[0].contains("YAML syntax error"));
+        assert!(report.summary.is_none());
+    }
+
+    #[test]
+    fn config_check_warns_on_unknown_key_with_suggestion() {
+        let report = check_config_content(
+            "t.yaml",
+            "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nmax_tool_iterationz: 5\n",
+        );
+        assert!(report.ok(), "unknown keys warn but do not fail the check");
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("max_tool_iterationz") && w.contains("max_tool_iterations")),
+            "expected did-you-mean warning, got: {:?}",
+            report.warnings
+        );
+        let (enabled, _, provider, _) = report.summary.as_ref().unwrap();
+        assert!(enabled.contains(&"telegram"));
+        assert_eq!(provider, "anthropic");
+    }
+
+    #[test]
+    fn config_check_rejects_bad_enum_value_with_suggestion() {
+        let report = check_config_content(
+            "t.yaml",
+            "api_key: key\ntool_policy:\n  mode: blok\n",
+        );
+        assert!(!report.ok());
+        assert!(
+            report.errors[0].contains("blok") && report.errors[0].contains("block"),
+            "expected did-you-mean on enum typo, got: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn config_check_flags_no_enabled_channel() {
+        // The web channel is on by default, so a bare config is loadable.
+        let report = check_config_content("t.yaml", "api_key: key\n");
+        assert!(report.ok(), "errors: {:?}", report.errors);
+        let (enabled, ..) = report.summary.as_ref().unwrap();
+        assert!(enabled.contains(&"web"));
+
+        // Explicitly disabling every channel fails post-deserialize
+        // validation — the check surfaces that as an error.
+        let report = check_config_content(
+            "t.yaml",
+            "api_key: key\nchannels:\n  web:\n    enabled: false\n",
+        );
+        assert!(
+            !report.ok(),
+            "disabling all channels should be an error, got warnings: {:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn config_check_rejects_non_mapping_root() {
+        let report = check_config_content("t.yaml", "- just\n- a\n- list\n");
+        assert!(!report.ok());
+        assert!(report.errors[0].contains("mapping"));
     }
 
     #[test]

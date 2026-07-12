@@ -1331,6 +1331,27 @@ async fn process_with_agent_logic(
             "Agent iteration completed"
         );
 
+        // Checkpoint-lite: keep a rolling "how far did we get" snapshot on the
+        // interactive-turn row so a crash mid-run can tell the user where the
+        // work stopped. No-op for scheduler runs (no active_turns row).
+        if stop_reason == "tool_use" {
+            let tool_names: Vec<&str> = response
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ResponseContentBlock::ToolUse { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if !tool_names.is_empty() {
+                let progress = format!("step {}: {}", iteration + 1, tool_names.join(", "));
+                let _ = call_blocking(state.db.clone(), move |db| {
+                    db.update_turn_progress(chat_id, &progress)
+                })
+                .await;
+            }
+        }
+
         if iteration == 0 {
             let raw_first_reply = response
                 .content

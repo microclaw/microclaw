@@ -871,6 +871,11 @@ struct UpdateConfigRequest {
     reflector_enabled: Option<bool>,
     reflector_interval_mins: Option<u64>,
 
+    // Governance surface (web panel Governance tab).
+    tool_policy: Option<crate::tool_guardrails::ToolPolicyConfig>,
+    token_budget: Option<crate::config::TokenBudgetConfig>,
+    heartbeat: Option<crate::config::HeartbeatConfig>,
+
     show_thinking: Option<bool>,
     web_enabled: Option<bool>,
     web_host: Option<String>,

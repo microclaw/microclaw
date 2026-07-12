@@ -234,7 +234,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 28;
+const SCHEMA_VERSION_CURRENT: i64 = 29;
 
 /// Genesis link for the tamper-evident audit hash chain — the `prev_hash` of the
 /// first sealed entry.
@@ -262,6 +262,30 @@ pub struct ScheduledTask {
     pub max_runs: Option<i64>,
     /// Retire as `completed` once the next firing would pass this instant.
     pub not_after: Option<String>,
+}
+
+/// An interactive turn that was in flight when the previous process died.
+#[derive(Debug, Clone)]
+pub struct InterruptedTurn {
+    pub chat_id: i64,
+    pub channel: String,
+    pub started_at: String,
+    /// Rolling "step N: tool, tool" snapshot from the agent loop, if the run
+    /// got far enough to execute tools.
+    pub progress_text: Option<String>,
+}
+
+/// A final reply queued for redelivery after a failed channel send.
+#[derive(Debug, Clone)]
+pub struct OutboxMessageRecord {
+    pub id: i64,
+    pub chat_id: i64,
+    pub channel: String,
+    pub payload_text: String,
+    pub status: String,
+    pub attempts: i64,
+    pub next_attempt_at: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1135,6 +1159,37 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 28)?;
         version = 28;
+    }
+    if version < 29 {
+        // Delivery outbox: final agent replies that failed to send are queued
+        // here and retried with backoff by a supervised background loop, so a
+        // transient channel outage can't silently drop a finished answer.
+        // Also: `active_turns.progress_text` — a rolling "step N: tool, tool"
+        // snapshot so the interrupted-turn notice can say how far the run got.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS outbox_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                channel TEXT NOT NULL,
+                payload_text TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_outbox_status_next
+                ON outbox_messages(status, next_attempt_at);",
+        )?;
+        if !table_has_column(conn, "active_turns", "progress_text")? {
+            conn.execute(
+                "ALTER TABLE active_turns ADD COLUMN progress_text TEXT",
+                [],
+            )?;
+        }
+        set_schema_version(conn, 29)?;
+        version = 29;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -5354,9 +5409,25 @@ impl Database {
         let conn = self.lock_conn();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO active_turns (chat_id, channel, started_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(chat_id) DO UPDATE SET channel = ?2, started_at = ?3",
+            "INSERT INTO active_turns (chat_id, channel, started_at, progress_text)
+             VALUES (?1, ?2, ?3, NULL)
+             ON CONFLICT(chat_id) DO UPDATE SET channel = ?2, started_at = ?3, progress_text = NULL",
             params![chat_id, channel, now],
+        )?;
+        Ok(())
+    }
+
+    /// Update the rolling progress snapshot for an in-flight interactive turn.
+    /// No-op for chats without an active turn (e.g. scheduler-driven runs).
+    pub fn update_turn_progress(
+        &self,
+        chat_id: i64,
+        progress: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE active_turns SET progress_text = ?2 WHERE chat_id = ?1",
+            params![chat_id, progress],
         )?;
         Ok(())
     }
@@ -5372,24 +5443,120 @@ impl Database {
     }
 
     /// Startup crash recovery: return-and-clear every turn that was in flight
-    /// when the previous process died. Each entry is (chat_id, channel,
-    /// started_at); the table is emptied in the same transaction so a second
-    /// caller can never double-notify.
-    pub fn take_interrupted_turns(&self) -> Result<Vec<(i64, String, String)>, MicroClawError> {
+    /// when the previous process died. The table is emptied in the same
+    /// transaction so a second caller can never double-notify.
+    pub fn take_interrupted_turns(&self) -> Result<Vec<InterruptedTurn>, MicroClawError> {
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
-        let rows: Vec<(i64, String, String)> = {
+        let rows: Vec<InterruptedTurn> = {
             let mut stmt = tx.prepare(
-                "SELECT chat_id, channel, started_at FROM active_turns ORDER BY started_at",
+                "SELECT chat_id, channel, started_at, progress_text
+                 FROM active_turns ORDER BY started_at",
             )?;
             let collected = stmt
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-                .collect::<Result<Vec<(i64, String, String)>, _>>()?;
+                .query_map([], |row| {
+                    Ok(InterruptedTurn {
+                        chat_id: row.get(0)?,
+                        channel: row.get(1)?,
+                        started_at: row.get(2)?,
+                        progress_text: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<InterruptedTurn>, _>>()?;
             collected
         };
         tx.execute("DELETE FROM active_turns", [])?;
         tx.commit()?;
         Ok(rows)
+    }
+
+    /// Queue a final reply whose direct channel delivery failed. The outbox
+    /// flush loop retries it with backoff until delivered or terminally
+    /// failed.
+    pub fn enqueue_outbox_message(
+        &self,
+        chat_id: i64,
+        channel: &str,
+        payload_text: &str,
+    ) -> Result<i64, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO outbox_messages(chat_id, channel, payload_text, status, attempts, next_attempt_at, created_at, updated_at)
+             VALUES(?1, ?2, ?3, 'pending', 0, ?4, ?4, ?4)",
+            params![chat_id, channel, payload_text, now],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_due_outbox_messages(
+        &self,
+        now_iso: &str,
+        limit: usize,
+    ) -> Result<Vec<OutboxMessageRecord>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, chat_id, channel, payload_text, status, attempts, next_attempt_at, last_error
+             FROM outbox_messages
+             WHERE status IN ('pending', 'retry')
+               AND (next_attempt_at IS NULL OR unixepoch(next_attempt_at) <= unixepoch(?1))
+             ORDER BY id ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![now_iso, limit.max(1) as i64], |row| {
+            Ok(OutboxMessageRecord {
+                id: row.get(0)?,
+                chat_id: row.get(1)?,
+                channel: row.get(2)?,
+                payload_text: row.get(3)?,
+                status: row.get(4)?,
+                attempts: row.get(5)?,
+                next_attempt_at: row.get(6)?,
+                last_error: row.get(7)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn mark_outbox_delivered(&self, id: i64) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE outbox_messages SET status='delivered', updated_at=?2 WHERE id=?1",
+            params![id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_outbox_retry(
+        &self,
+        id: i64,
+        attempts: i64,
+        next_attempt_at: Option<&str>,
+        last_error: &str,
+        terminal_fail: bool,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let status = if terminal_fail { "failed" } else { "retry" };
+        conn.execute(
+            "UPDATE outbox_messages
+             SET status=?2, attempts=?3, next_attempt_at=?4, last_error=?5, updated_at=?6
+             WHERE id=?1",
+            params![id, status, attempts, next_attempt_at, last_error, now],
+        )?;
+        Ok(())
+    }
+
+    /// Pending + retry outbox depth (governance/observability).
+    pub fn count_outbox_pending(&self) -> Result<i64, MicroClawError> {
+        let conn = self.lock_conn();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM outbox_messages WHERE status IN ('pending', 'retry')",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count)
     }
 
     pub fn request_subagent_cancel(
@@ -8419,19 +8586,80 @@ mod tests {
         db.mark_turn_active(20, "discord").unwrap();
         // Re-entrant mark for the same chat refreshes rather than duplicates.
         db.mark_turn_active(10, "telegram").unwrap();
+        // Progress snapshots attach to the in-flight turn; unknown chat = no-op.
+        db.update_turn_progress(10, "step 3: web_search, read_file")
+            .unwrap();
+        db.update_turn_progress(999, "ignored").unwrap();
         // A turn that finished cleanly leaves no residue.
         db.clear_turn_active(20).unwrap();
 
         let orphans = db.take_interrupted_turns().unwrap();
         assert_eq!(orphans.len(), 1);
-        assert_eq!(orphans[0].0, 10);
-        assert_eq!(orphans[0].1, "telegram");
-        assert!(!orphans[0].2.is_empty());
+        assert_eq!(orphans[0].chat_id, 10);
+        assert_eq!(orphans[0].channel, "telegram");
+        assert!(!orphans[0].started_at.is_empty());
+        assert_eq!(
+            orphans[0].progress_text.as_deref(),
+            Some("step 3: web_search, read_file")
+        );
 
         // take is destructive: a second sweep can never double-notify.
         assert!(db.take_interrupted_turns().unwrap().is_empty());
         // Clearing an unknown chat is a no-op, not an error.
         db.clear_turn_active(999).unwrap();
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_outbox_lifecycle() {
+        let (db, dir) = test_db();
+        assert_eq!(db.count_outbox_pending().unwrap(), 0);
+
+        let id = db
+            .enqueue_outbox_message(42, "telegram", "the answer is 42")
+            .unwrap();
+        assert_eq!(db.count_outbox_pending().unwrap(), 1);
+
+        // Due immediately (next_attempt_at = enqueue time).
+        let due = db
+            .list_due_outbox_messages("2999-01-01T00:00:00Z", 10)
+            .unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].id, id);
+        assert_eq!(due[0].chat_id, 42);
+        assert_eq!(due[0].payload_text, "the answer is 42");
+        assert_eq!(due[0].status, "pending");
+
+        // Retry with a future next attempt → not due before that instant.
+        db.mark_outbox_retry(id, 1, Some("2999-06-01T00:00:00Z"), "network down", false)
+            .unwrap();
+        assert!(db
+            .list_due_outbox_messages("2999-01-01T00:00:00Z", 10)
+            .unwrap()
+            .is_empty());
+        let due = db
+            .list_due_outbox_messages("2999-07-01T00:00:00Z", 10)
+            .unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].attempts, 1);
+        assert_eq!(due[0].last_error.as_deref(), Some("network down"));
+
+        // Delivered → gone from the queue and the pending count.
+        db.mark_outbox_delivered(id).unwrap();
+        assert!(db
+            .list_due_outbox_messages("2999-07-01T00:00:00Z", 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(db.count_outbox_pending().unwrap(), 0);
+
+        // Terminal failure also leaves the queue.
+        let id2 = db.enqueue_outbox_message(43, "slack", "bye").unwrap();
+        db.mark_outbox_retry(id2, 8, None, "gave up", true).unwrap();
+        assert!(db
+            .list_due_outbox_messages("2999-07-01T00:00:00Z", 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(db.count_outbox_pending().unwrap(), 0);
         cleanup(&dir);
     }
 

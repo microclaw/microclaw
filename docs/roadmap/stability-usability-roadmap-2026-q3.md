@@ -87,15 +87,18 @@ minutes, without reading source.**
    precise errors, "did you mean" for misspelled keys (the tool_policy enum
    work set the pattern — typos fail at load, everywhere). Every failure
    message names the file, the key, and the fix.
+   *Shipped 2026-07*: `microclaw config check` (`check_config_content` in
+   `src/config.rs`) — YAML errors with line/column, unknown-key
+   did-you-mean, full schema + value validation, channel/provider summary,
+   exit codes for CI use.
 3. **Web settings parity for the new governance surface.** tool_policy, token
    budget, heartbeat, contracts visibility (recent verdicts), skill curator
    status — visible and editable in the web panel. The differentiators must
    be operable by someone who never opens YAML.
-   *First slice shipped 2026-07:* read-only governance snapshot
-   (`/api/governance` + Governance tab: tool policy, token budget, heartbeat,
-   progress heartbeats, loop restarts, task health) and a full scheduled-task
+   *Shipped 2026-07:* governance snapshot (`/api/governance` + Governance
+   tab) with **editing** for tool_policy / token budget / heartbeat (saved
+   through `PUT /api/config`, restart to apply), plus a full scheduled-task
    management tab (`/api/tasks` list/pause/resume/cancel + run history).
-   Editing still happens in config.yaml.
 4. **Long-task feedback, non-web channels** (Phase 3 of the progress-events
    plan): periodic one-line progress edits on Telegram/Discord/Slack for runs
    >30s, wired to the existing `report_progress` events. Budget refusals and
@@ -106,6 +109,8 @@ minutes, without reading source.**
 5. **Task-oriented cookbook.** Five recipes end-to-end, each with a completion
    contract: daily digest, repo watcher, backup-with-verification, weekly
    report PDF, inbox triage. Usability of docs *is* usability of product.
+   *Shipped 2026-07*: `docs/cookbook.md` (linked from the README quick
+   routes), all five recipes with contracts and lifecycle controls.
 6. **`microclaw upgrade` dry-run.** Show config keys added/deprecated between
    the running version and the target before touching anything.
 
@@ -130,10 +135,11 @@ channels; cookbook merged.
    restart mid-turn resumes or cleanly reports "I was interrupted, here's
    where I got to" — never silence. Channel delivery outbox with retry, so a
    flaky Telegram outage can't drop a finished answer.
-   *"Never silence" half shipped 2026-07* (`src/turn_recovery.rs`): interactive
-   turns are tracked in `active_turns`, restart notifies the affected chats,
-   and orphaned sub-agent runs retire as `interrupted`. Checkpoint/resume and
-   the delivery outbox remain.
+   *Shipped 2026-07 except full resume*: `src/turn_recovery.rs` notifies
+   interrupted chats including a checkpoint-lite "got as far as: step N,
+   tools" snapshot (`active_turns.progress_text`); `src/outbox.rs` queues
+   failed final-reply sends (Telegram/Discord/Slack) and redelivers with
+   backoff. True mid-turn resume remains future work.
 5. **Operability surface**: one `/status` web page + bot command showing runs,
    DLQ depth, contract verdict rates, token spend vs budget, provider
    failovers, restart counters; optional webhook alerts (DLQ growth, provider

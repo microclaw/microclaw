@@ -871,6 +871,18 @@ pub(super) async fn api_update_config(
         cfg.reflector_interval_mins = v;
     }
 
+    // Governance surface: whole-section replace (the panel always submits the
+    // full section it edited, so partial-merge semantics aren't needed).
+    if let Some(v) = body.tool_policy {
+        cfg.tool_policy = v;
+    }
+    if let Some(v) = body.token_budget {
+        cfg.token_budget = v;
+    }
+    if let Some(v) = body.heartbeat {
+        cfg.heartbeat = v;
+    }
+
     if let Some(v) = body.show_thinking {
         cfg.show_thinking = v;
     }

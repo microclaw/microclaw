@@ -31,6 +31,7 @@ const EXAMPLES: &str = concat!(
     "\x1b[1mExamples:\x1b[22m\n",
     "  microclaw setup                 Create or edit microclaw.config.yaml\n",
     "  microclaw doctor                Run preflight checks\n",
+    "  microclaw config check          Validate the config file (typos, schema)\n",
     "  microclaw doctor --online       Also test your API key/model with a live request\n",
     "  microclaw start                 Start the bot on the enabled channels\n",
     "  microclaw skill audit           Audit local skills (duplicates, stale, thin)\n",
@@ -90,6 +91,9 @@ enum MainCommand {
     Weixin(WeixinCommand),
     /// Manage Web UI configurations
     Web(WebCommand),
+    /// Validate the config file (syntax, typos, schema)
+    #[command(name = "config")]
+    ConfigCmd(ConfigCheckCommand),
     /// Evaluate recorded session trajectories (CI gate; no LLM call)
     Eval(EvalCommand),
     /// Inspect and verify the tamper-evident audit log
@@ -100,6 +104,22 @@ enum MainCommand {
     Upgrade,
     /// Show version
     Version,
+}
+
+#[derive(Debug, Args)]
+#[command(after_help = "\x1b[1mExamples:\x1b[22m\n  \
+    microclaw config check                      Validate microclaw.config.yaml\n  \
+    microclaw --config /etc/mc.yaml config check")]
+struct ConfigCheckCommand {
+    #[command(subcommand)]
+    action: ConfigCheckAction,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCheckAction {
+    /// Validate the config file: YAML syntax with line numbers, unknown keys
+    /// with did-you-mean suggestions, full schema + value validation.
+    Check,
 }
 
 #[derive(Debug, Args)]
@@ -730,6 +750,12 @@ async fn main() -> anyhow::Result<()> {
             handle_web_cli(web.action)?;
             return Ok(());
         }
+        Some(MainCommand::ConfigCmd(cmd)) => match cmd.action {
+            ConfigCheckAction::Check => {
+                let code = microclaw::config::run_config_check();
+                std::process::exit(code);
+            }
+        },
         Some(MainCommand::Skill { args }) => {
             let config = Config::load()?;
             microclaw::clawhub::cli::handle_skill_cli(&args, &config).await?;

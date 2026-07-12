@@ -44,7 +44,8 @@ Rust 2021, Tokio, teloxide 0.17, serenity 0.12, provider-agnostic LLM runtime (A
 - **Platform-extensible core**: Telegram/Discord/Slack/Feishu/Web adapters reuse `process_with_agent`; new platforms integrate through the same core loop
 - **SOUL.md**: optional personality file injected into system prompt. Loaded from `soul_path` config, `data_dir/SOUL.md`, or `./SOUL.md`. Per-chat overrides via `data_dir/runtime/groups/{chat_id}/SOUL.md`
 - **Event tap + progress heartbeat**: non-web channels consume `AgentEvent`s concurrently with the agent loop via `EventTap` (`src/channels/event_tap.rs`); Telegram/Discord/Slack can opt into a throttled edit-in-place "⏳ Working…" heartbeat (`channels.<name>.progress_updates`)
-- **Interrupted-turn recovery**: interactive turns are tracked in the `active_turns` table; on restart `src/turn_recovery.rs` notifies chats whose turn was killed mid-run and retires orphaned sub-agent runs as `interrupted`
+- **Interrupted-turn recovery**: interactive turns are tracked in the `active_turns` table (with a rolling `progress_text` checkpoint per tool iteration); on restart `src/turn_recovery.rs` notifies chats whose turn was killed mid-run — including how far it got — and retires orphaned sub-agent runs as `interrupted`
+- **Delivery outbox**: final replies whose channel send fails are queued in `outbox_messages` and redelivered with backoff by `src/outbox.rs` (supervised loop); depth surfaces in the web Governance tab
 
 ## Build & run
 

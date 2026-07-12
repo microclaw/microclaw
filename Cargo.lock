@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw"
-version = "0.2.6"
+version = "0.3.0-rc.1"
 dependencies = [
  "aes",
  "agent-client-protocol",

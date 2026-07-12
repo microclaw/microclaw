@@ -50,7 +50,7 @@ pub async fn api_governance(
         .collect();
 
     let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
-    let (runs_24h, contract_tasks, dlq_pending) =
+    let (runs_24h, contract_tasks, dlq_pending, outbox_pending) =
         call_blocking(state.app_state.db.clone(), move |db| {
             let (total, success) = db.get_task_run_summary_since(Some(&since))?;
             let contract_tasks = db
@@ -64,10 +64,12 @@ pub async fn api_governance(
                 })
                 .count();
             let dlq_pending = db.list_scheduled_task_dlq(None, None, false, 100)?.len();
+            let outbox_pending = db.count_outbox_pending()?;
             Ok::<_, microclaw_core::error::MicroClawError>((
                 (total, success),
                 contract_tasks,
                 dlq_pending,
+                outbox_pending,
             ))
         })
         .await
@@ -100,6 +102,9 @@ pub async fn api_governance(
             "success_24h": runs_24h.1,
             "with_contract": contract_tasks,
             "dlq_pending": dlq_pending,
+        },
+        "delivery": {
+            "outbox_pending": outbox_pending,
         },
     })))
 }

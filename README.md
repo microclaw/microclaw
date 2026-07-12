@@ -35,6 +35,7 @@
   <a href="docs/generated/tools.md">Tools</a> ·
   <a href="docs/generated/config-defaults.md">Config Defaults</a> ·
   <a href="docs/generated/provider-matrix.md">Provider Matrix</a> ·
+  <a href="docs/cookbook.md">Cookbook</a> ·
   <a href="docs/operations/runbook.md">Runbook</a> ·
   <a href="docs/operations/http-hook-trigger.md">Web Hooks</a> ·
   <a href="docs/clawhub/overview.md">ClawHub</a>

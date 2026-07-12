@@ -1552,22 +1552,36 @@ async fn handle_slack_message(
                     );
                 }
             } else if !response.is_empty() {
-                if let Err(e) =
-                    send_slack_response(bot_token, channel, normalized_thread_ts, &response).await
+                match send_slack_response(bot_token, channel, normalized_thread_ts, &response)
+                    .await
                 {
-                    error!("Slack: failed to send response: {e}");
+                    Ok(()) => {
+                        let bot_msg = StoredMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            chat_id,
+                            sender_name: runtime.bot_username.clone(),
+                            content: response,
+                            is_from_bot: true,
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        };
+                        let _ = call_blocking(app_state.db.clone(), move |db| {
+                            db.store_message(&bot_msg)
+                        })
+                        .await;
+                    }
+                    Err(e) => {
+                        // Delivery outbox: queue the finished answer for
+                        // background redelivery instead of dropping it.
+                        error!(
+                            "Slack: failed to send response for chat {chat_id}; queued to outbox: {e}"
+                        );
+                        let channel_name = runtime.channel_name.clone();
+                        let _ = call_blocking(app_state.db.clone(), move |db| {
+                            db.enqueue_outbox_message(chat_id, &channel_name, &response)
+                        })
+                        .await;
+                    }
                 }
-
-                let bot_msg = StoredMessage {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    chat_id,
-                    sender_name: runtime.bot_username.clone(),
-                    content: response,
-                    is_from_bot: true,
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                };
-                let _ =
-                    call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
             } else {
                 let fallback = "I couldn't produce a visible reply after an automatic retry. Please try again.";
                 let _ =

@@ -23,6 +23,7 @@ pub mod mcp;
 pub mod memory_backend;
 pub mod memory_service;
 pub mod mood;
+pub mod outbox;
 pub mod plugins;
 pub mod prompt_cache;
 pub mod relationship;

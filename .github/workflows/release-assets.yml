@@ -377,16 +377,24 @@ jobs:
           fi
           "${GENERATE_ARGS[@]}" --jq '.body' > "${NOTES_FILE}"
 
+          # Tags with a pre-release suffix (v0.3.0-rc.1, v1.0.0-beta.2, ...)
+          # are published as GitHub prereleases so they never show as "latest".
+          PRERELEASE_ARGS=()
+          if [[ "${RELEASE_TAG}" == *-* ]]; then
+            PRERELEASE_ARGS+=(--prerelease)
+          fi
           if ! gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release create "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
               -t "${RELEASE_TAG}" \
-              --notes-file "${NOTES_FILE}"
+              --notes-file "${NOTES_FILE}" \
+              "${PRERELEASE_ARGS[@]}"
           else
             gh release edit "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
               -t "${RELEASE_TAG}" \
-              --notes-file "${NOTES_FILE}"
+              --notes-file "${NOTES_FILE}" \
+              "${PRERELEASE_ARGS[@]}"
           fi
 
           rm -f "${NOTES_FILE}"
