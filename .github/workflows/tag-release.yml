@@ -1,0 +1,57 @@
+name: Tag Release
+
+# Create a release tag from CI. Exists because operator environments (bots,
+# proxied git remotes) may only be allowed to push branches — this gives them
+# a sanctioned, auditable way to cut a tag on a reviewed commit.
+#
+# Note: tags pushed with GITHUB_TOKEN do NOT trigger `on: push: tags`
+# workflows (GitHub suppresses recursive triggers), so after this completes,
+# start the release build explicitly:
+#   gh workflow run release-assets.yml -f tag=<tag>
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name to create (e.g. v0.3.0-rc.1)'
+        required: true
+        type: string
+      sha:
+        description: 'Commit SHA to tag (default: HEAD of the default branch)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate inputs and create tag
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Refusing to create non-semver tag: ${TAG}" >&2
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists — nothing to do."
+            exit 0
+          fi
+          TARGET="${SHA:-$(git rev-parse HEAD)}"
+          if ! git cat-file -e "${TARGET}^{commit}" 2>/dev/null; then
+            echo "SHA ${TARGET} is not a commit in this repository" >&2
+            exit 1
+          fi
+          git tag "${TAG}" "${TARGET}"
+          git push origin "refs/tags/${TAG}"
+          echo "Created ${TAG} -> ${TARGET}"
