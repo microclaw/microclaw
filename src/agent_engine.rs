@@ -2798,7 +2798,8 @@ async fn compact_messages(
 mod tests {
     use super::{
         build_db_memory_context, duplicate_call_key, format_mid_turn_injection,
-        history_to_claude_messages, process_with_agent, strip_thinking, AgentRequestContext,
+        history_to_claude_messages, process_with_agent, sanitize_user_visible_text,
+        strip_thinking, AgentRequestContext,
     };
     use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
