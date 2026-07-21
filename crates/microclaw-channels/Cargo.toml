@@ -11,4 +11,5 @@ microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
 microclaw-storage = { version = "0.1.0", path = "../microclaw-storage" }
 serde_json = "1"
 tracing = "0.1"
+tokio = { version = "1", features = ["time"] }
 uuid = { version = "1", features = ["v4"] }

@@ -26,7 +26,7 @@ use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_comman
 use crate::config::Config;
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
-use microclaw_channels::channel::ConversationKind;
+use microclaw_channels::channel::{deliver_and_store_bot_message, ConversationKind};
 use microclaw_channels::channel_adapter::ChannelAdapter;
 use microclaw_core::text::split_text;
 use microclaw_storage::db::{call_blocking, StoredMessage};
@@ -1334,6 +1334,26 @@ async fn send_text_message_native(
     context_token: &str,
 ) -> Result<String, String> {
     let client_id = generate_client_id();
+    send_text_message_native_with_client_id(
+        client,
+        account,
+        to_user_id,
+        text,
+        context_token,
+        &client_id,
+    )
+    .await?;
+    Ok(client_id)
+}
+
+async fn send_text_message_native_with_client_id(
+    client: &reqwest::Client,
+    account: &NativeWeixinAccount,
+    to_user_id: &str,
+    text: &str,
+    context_token: &str,
+    client_id: &str,
+) -> Result<(), String> {
     let body = serde_json::json!({
         "msg": {
             "from_user_id": "",
@@ -1363,7 +1383,7 @@ async fn send_text_message_native(
         DEFAULT_API_TIMEOUT_MS,
     )
     .await?;
-    Ok(client_id)
+    Ok(())
 }
 
 async fn send_single_item_message_native(
@@ -1942,6 +1962,55 @@ impl ChannelAdapter for WeixinAdapter {
         vec![("weixin_dm", ConversationKind::Private)]
     }
 
+    fn text_chunk_limit_bytes(&self) -> Option<usize> {
+        Some(WEIXIN_TEXT_MAX_LEN)
+    }
+
+    fn text_chunk_delay(&self) -> Option<Duration> {
+        Some(Duration::from_millis(250))
+    }
+
+    async fn send_text_chunk(
+        &self,
+        external_chat_id: &str,
+        text: &str,
+        idempotency_key: &str,
+    ) -> Result<(), String> {
+        let context_token = self.resolve_context_token(external_chat_id).ok_or_else(|| {
+            format!(
+                "weixin requires a cached context_token for target '{}'; wait for an inbound message before replying",
+                external_chat_id
+            )
+        })?;
+        let account = self.load_native_account()?;
+        let mut last_error = None;
+        for attempt in 1..=3 {
+            match send_text_message_native_with_client_id(
+                &self.http_client,
+                &account,
+                external_chat_id,
+                text,
+                &context_token,
+                idempotency_key,
+            )
+            .await
+            {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    last_error = Some(err);
+                    if attempt < 3 {
+                        tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64))
+                            .await;
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "Weixin text chunk failed after 3 attempts: {}",
+            last_error.unwrap_or_else(|| "unknown error".to_string())
+        ))
+    }
+
     async fn send_text(&self, external_chat_id: &str, text: &str) -> Result<(), String> {
         let context_token = self.resolve_context_token(external_chat_id).ok_or_else(|| {
             format!(
@@ -2499,7 +2568,6 @@ async fn process_weixin_inbound_message(
                 .await
                 .map(|r| r.used_send_message_tool)
                 .unwrap_or(false);
-            let adapter = WeixinAdapter::from_runtime(&runtime_ctx);
             if used_send_message_tool {
                 if !response.is_empty() {
                     info!(
@@ -2508,26 +2576,26 @@ async fn process_weixin_inbound_message(
                     );
                 }
             } else if !response.is_empty() {
-                if let Err(e) = adapter.send_text(&sender, &response).await {
-                    error!("Weixin: failed to send response: {e}");
-                }
-                let bot_msg = StoredMessage {
-                    id: uuid::Uuid::new_v4().to_string(),
+                if let Err(e) = deliver_and_store_bot_message(
+                    &app_state.channel_registry,
+                    app_state.db.clone(),
+                    &runtime_ctx.bot_username,
                     chat_id,
-                    sender_name: runtime_ctx.bot_username.clone(),
-                    content: response,
-                    is_from_bot: true,
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                };
-                let _ =
-                    call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                    &response,
+                )
+                .await
+                {
+                    error!("Weixin: failed to accept response for delivery: {e}");
+                }
             } else {
-                let _ = adapter
-                    .send_text(
-                        &sender,
-                        "I couldn't produce a visible reply after an automatic retry. Please try again.",
-                    )
-                    .await;
+                let _ = deliver_and_store_bot_message(
+                    &app_state.channel_registry,
+                    app_state.db.clone(),
+                    &runtime_ctx.bot_username,
+                    chat_id,
+                    "I couldn't produce a visible reply after an automatic retry. Please try again.",
+                )
+                .await;
             }
         }
         Err(e) => {

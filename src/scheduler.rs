@@ -20,7 +20,8 @@ use crate::agent_engine::AgentRequestContext;
 use crate::memory_service::apply_reflector_extractions;
 use crate::runtime::AppState;
 use microclaw_channels::channel::{
-    deliver_and_store_bot_message, get_chat_routing, ChatRouting, ConversationKind,
+    deliver_and_store_bot_message, deliver_and_store_bot_message_with_status, get_chat_routing,
+    ChatRouting, ConversationKind, DeliveryOutcome,
 };
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
 use microclaw_core::text::floor_char_boundary;
@@ -30,39 +31,40 @@ pub fn spawn_scheduler(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("scheduler", move || {
         let state = state.clone();
         async move {
-        info!("Scheduler started");
-        if let Ok(recovered) =
-            call_blocking(state.db.clone(), move |db| db.recover_running_tasks()).await
-        {
-            if recovered > 0 {
-                warn!(
+            info!("Scheduler started");
+            if let Ok(recovered) =
+                call_blocking(state.db.clone(), move |db| db.recover_running_tasks()).await
+            {
+                if recovered > 0 {
+                    warn!(
                     "Scheduler: recovered {} task(s) left in running state from previous process",
                     recovered
                 );
+                }
+            }
+            // Run once at startup so overdue tasks are not delayed until the first tick.
+            run_due_tasks(&state).await;
+
+            // Align polling to wall-clock minute boundaries for stable "every minute" behavior.
+            let now = Utc::now();
+            let secs_into_minute = now.timestamp().rem_euclid(60) as u64;
+            let nanos = now.timestamp_subsec_nanos() as u64;
+            let mut delay = Duration::from_secs(60 - secs_into_minute);
+            if secs_into_minute == 0 {
+                delay = Duration::from_secs(60);
+            }
+            delay = delay.saturating_sub(Duration::from_nanos(nanos));
+
+            let mut ticker =
+                tokio::time::interval_at(Instant::now() + delay, Duration::from_secs(60));
+            // If processing falls behind, skip missed ticks instead of burst catch-up runs.
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            loop {
+                ticker.tick().await;
+                run_due_tasks(&state).await;
             }
         }
-        // Run once at startup so overdue tasks are not delayed until the first tick.
-        run_due_tasks(&state).await;
-
-        // Align polling to wall-clock minute boundaries for stable "every minute" behavior.
-        let now = Utc::now();
-        let secs_into_minute = now.timestamp().rem_euclid(60) as u64;
-        let nanos = now.timestamp_subsec_nanos() as u64;
-        let mut delay = Duration::from_secs(60 - secs_into_minute);
-        if secs_into_minute == 0 {
-            delay = Duration::from_secs(60);
-        }
-        delay = delay.saturating_sub(Duration::from_nanos(nanos));
-
-        let mut ticker = tokio::time::interval_at(Instant::now() + delay, Duration::from_secs(60));
-        // If processing falls behind, skip missed ticks instead of burst catch-up runs.
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        loop {
-            ticker.tick().await;
-            run_due_tasks(&state).await;
-        }
-    }
     });
 }
 
@@ -92,11 +94,11 @@ async fn deliver_scheduler_message_with_backoff(
     bot_username: &str,
     chat_id: i64,
     text: &str,
-) -> Result<(), String> {
+) -> Result<DeliveryOutcome, String> {
     let mut attempt = 0u32;
     let max_attempts = 3u32;
     loop {
-        match deliver_and_store_bot_message(
+        match deliver_and_store_bot_message_with_status(
             &state.channel_registry,
             state.db.clone(),
             bot_username,
@@ -105,7 +107,7 @@ async fn deliver_scheduler_message_with_backoff(
         )
         .await
         {
-            Ok(()) => return Ok(()),
+            Ok(outcome) => return Ok(outcome),
             Err(err) if attempt + 1 < max_attempts && is_retryable_delivery_rate_limit(&err) => {
                 attempt += 1;
                 let delay = Duration::from_secs(2u64.pow(attempt));
@@ -115,44 +117,7 @@ async fn deliver_scheduler_message_with_backoff(
                 );
                 tokio::time::sleep(delay).await;
             }
-            Err(err) => {
-                // The scheduled work already completed, so do not drop its
-                // result merely because the channel is temporarily unavailable.
-                // Hand it to the supervised outbox for durable redelivery.
-                let channel = get_chat_routing(
-                    &state.channel_registry,
-                    state.db.clone(),
-                    chat_id,
-                )
-                .await
-                .ok()
-                .flatten()
-                .map(|routing| routing.channel_name);
-                if let Some(channel) = channel {
-                    let payload = text.to_string();
-                    let channel_for_queue = channel.clone();
-                    match call_blocking(state.db.clone(), move |db| {
-                        db.enqueue_outbox_message(chat_id, &channel_for_queue, &payload)
-                            .map(|_| ())
-                    })
-                    .await
-                    {
-                        Ok(()) => {
-                            warn!(
-                                "Scheduler: queued failed delivery for chat {} via {} in outbox: {}",
-                                chat_id, channel, err
-                            );
-                            return Ok(());
-                        }
-                        Err(queue_err) => {
-                            return Err(format!(
-                                "{err}; also failed to enqueue scheduler result: {queue_err}"
-                            ));
-                        }
-                    }
-                }
-                return Err(err);
-            }
+            Err(err) => return Err(err),
         }
     }
 }
@@ -204,7 +169,6 @@ async fn run_due_tasks(state: &Arc<AppState>) {
     while set.join_next().await.is_some() {}
 }
 
-
 /// Bash-backed command runner for scheduled-task contracts: routes through
 /// the shared ToolRegistry choke point (sandbox, dangerous-pattern checks,
 /// tool_policy all apply).
@@ -239,16 +203,24 @@ async fn verify_task_contract(
     routing: &ChatRouting,
     response: String,
 ) -> (String, bool) {
-    let Some(raw) = task.exit_criteria.as_deref().filter(|s| !s.trim().is_empty()) else {
+    let Some(raw) = task
+        .exit_criteria
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    else {
         return (response, false);
     };
-    let criteria: Vec<crate::completion_contract::ExitCriterion> = match serde_json::from_str(raw)
-    {
+    let criteria: Vec<crate::completion_contract::ExitCriterion> = match serde_json::from_str(raw) {
         Ok(v) => v,
         Err(e) => {
-            warn!("Scheduler: task #{} has malformed exit_criteria: {e}", task.id);
+            warn!(
+                "Scheduler: task #{} has malformed exit_criteria: {e}",
+                task.id
+            );
             return (
-                format!("[completion contract] FAILED — stored criteria are malformed: {e}\n{response}"),
+                format!(
+                    "[completion contract] FAILED — stored criteria are malformed: {e}\n{response}"
+                ),
                 true,
             );
         }
@@ -259,11 +231,9 @@ async fn verify_task_contract(
     let base = std::path::Path::new(&state.config.working_dir);
     let working_dir = match state.config.working_dir_isolation {
         crate::config::WorkingDirIsolation::Shared => base.join("shared"),
-        crate::config::WorkingDirIsolation::Chat => microclaw_tools::runtime::chat_working_dir(
-            base,
-            &routing.channel_name,
-            task.chat_id,
-        ),
+        crate::config::WorkingDirIsolation::Chat => {
+            microclaw_tools::runtime::chat_working_dir(base, &routing.channel_name, task.chat_id)
+        }
     };
     let runner = SchedulerBashRunner {
         state,
@@ -391,8 +361,7 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
                 // Deliver the annotated response so the user sees the evidence,
                 // but record the run as failed.
                 if !response.is_empty() {
-                    let bot_username =
-                        state.config.bot_username_for_channel(&routing.channel_name);
+                    let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
                     let _ = deliver_scheduler_message_with_backoff(
                         &state,
                         &bot_username,
@@ -404,11 +373,14 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
                 let summary_end = floor_char_boundary(&response, 200);
                 (
                     false,
-                    Some(format!("completion contract failed: {}", &response[..summary_end])),
+                    Some(format!(
+                        "completion contract failed: {}",
+                        &response[..summary_end]
+                    )),
                 )
             } else if !response.is_empty() {
                 let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
-                if let Err(delivery_err) = deliver_scheduler_message_with_backoff(
+                match deliver_scheduler_message_with_backoff(
                     &state,
                     &bot_username,
                     task.chat_id,
@@ -416,18 +388,31 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
                 )
                 .await
                 {
-                    error!(
-                        "Scheduler: task #{} generated a reply but delivery failed: {}",
-                        task.id, delivery_err
-                    );
-                    (false, Some(format!("Delivery error: {delivery_err}")))
-                } else {
-                    let summary = if response.len() > 200 {
-                        format!("{}...", &response[..floor_char_boundary(&response, 200)])
-                    } else {
-                        response
-                    };
-                    (true, Some(summary))
+                    Err(delivery_err) => {
+                        error!(
+                            "Scheduler: task #{} generated a reply but delivery failed: {}",
+                            task.id, delivery_err
+                        );
+                        (false, Some(format!("Delivery error: {delivery_err}")))
+                    }
+                    Ok(outcome) => {
+                        let mut summary = if response.len() > 200 {
+                            format!("{}...", &response[..floor_char_boundary(&response, 200)])
+                        } else {
+                            response
+                        };
+                        if let DeliveryOutcome::Queued {
+                            delivery_id,
+                            failed_chunk,
+                            total_chunks,
+                        } = outcome
+                        {
+                            summary.push_str(&format!(
+                                " [delivery queued: {delivery_id}, chunk {failed_chunk}/{total_chunks}]"
+                            ));
+                        }
+                        (true, Some(summary))
+                    }
                 }
             } else {
                 (true, None)
@@ -445,7 +430,10 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
             )
             .await
             {
-                Ok(()) => format!("Error: {e}"),
+                Ok(DeliveryOutcome::Delivered) => format!("Error: {e}"),
+                Ok(DeliveryOutcome::Queued { delivery_id, .. }) => {
+                    format!("Error: {e}; notification queued: {delivery_id}")
+                }
                 Err(delivery_err) => {
                     warn!(
                         "Scheduler: failed to notify chat {} about task #{} failure: {}",
@@ -500,7 +488,10 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
         })
         .await
         {
-            error!("Scheduler: failed to enqueue DLQ for task #{}: {e}", task.id);
+            error!(
+                "Scheduler: failed to enqueue DLQ for task #{}: {e}",
+                task.id
+            );
         }
     }
 
@@ -616,14 +607,14 @@ pub fn spawn_dlq_replay(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("dlq_replay", move || {
         let state = state.clone();
         async move {
-        info!("DLQ auto-replay started (interval: {}s)", interval_secs);
-        let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
-            ticker.tick().await;
-            run_dlq_replay(&state).await;
+            info!("DLQ auto-replay started (interval: {}s)", interval_secs);
+            let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                run_dlq_replay(&state).await;
+            }
         }
-    }
     });
 }
 
@@ -793,15 +784,15 @@ pub fn spawn_reflector(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("reflector", move || {
         let state = state.clone();
         async move {
-        info!(
-            "Reflector started (interval: {}min)",
-            state.config.reflector_interval_mins
-        );
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
-            run_reflector(&state).await;
+            info!(
+                "Reflector started (interval: {}min)",
+                state.config.reflector_interval_mins
+            );
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+                run_reflector(&state).await;
+            }
         }
-    }
     });
 }
 
@@ -816,16 +807,16 @@ pub fn spawn_task_standup(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("task_standup", move || {
         let state = state.clone();
         async move {
-        info!("Task standup started (interval: {}s)", interval_secs);
-        // Per-chat last standup time, so each chat gets at most one per interval.
-        let mut last_standup: HashMap<i64, Instant> = HashMap::new();
-        let mut ticker = tokio::time::interval(Duration::from_secs(60));
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
-            ticker.tick().await;
-            run_task_standup(&state, interval_secs, &mut last_standup).await;
+            info!("Task standup started (interval: {}s)", interval_secs);
+            // Per-chat last standup time, so each chat gets at most one per interval.
+            let mut last_standup: HashMap<i64, Instant> = HashMap::new();
+            let mut ticker = tokio::time::interval(Duration::from_secs(60));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                run_task_standup(&state, interval_secs, &mut last_standup).await;
+            }
         }
-    }
     });
 }
 
@@ -912,18 +903,18 @@ pub fn spawn_idle_checkin(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("idle_checkin", move || {
         let state = state.clone();
         async move {
-        info!(
-            "Idle check-in started (idle_hours={}, min_interval_hours={})",
-            state.config.idle_checkin.idle_hours, state.config.idle_checkin.min_interval_hours
-        );
-        let mut last_checkin: HashMap<i64, Instant> = HashMap::new();
-        let mut ticker = tokio::time::interval(Duration::from_secs(1800));
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
-            ticker.tick().await;
-            run_idle_checkin(&state, &mut last_checkin).await;
+            info!(
+                "Idle check-in started (idle_hours={}, min_interval_hours={})",
+                state.config.idle_checkin.idle_hours, state.config.idle_checkin.min_interval_hours
+            );
+            let mut last_checkin: HashMap<i64, Instant> = HashMap::new();
+            let mut ticker = tokio::time::interval(Duration::from_secs(1800));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                run_idle_checkin(&state, &mut last_checkin).await;
+            }
         }
-    }
     });
 }
 
@@ -1010,15 +1001,14 @@ async fn run_idle_checkin(state: &Arc<AppState>, last_checkin: &mut HashMap<i64,
             .saturating_mul(3600),
     );
     let cutoff = (Utc::now() - chrono::Duration::hours(idle_hours)).to_rfc3339();
-    let chats = match call_blocking(state.db.clone(), move |db| db.list_idle_chats(&cutoff, 100))
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("idle check-in: failed to list idle chats: {e}");
-            return;
-        }
-    };
+    let chats =
+        match call_blocking(state.db.clone(), move |db| db.list_idle_chats(&cutoff, 100)).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("idle check-in: failed to list idle chats: {e}");
+                return;
+            }
+        };
 
     for chat_id in chats {
         // Respect the per-chat min interval.
@@ -1075,18 +1065,18 @@ pub fn spawn_heartbeat(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("heartbeat", move || {
         let state = state.clone();
         async move {
-        let interval_mins = state.config.heartbeat.interval_mins.max(1);
-        info!("Heartbeat started (interval_mins={interval_mins})");
-        let mut ticker = tokio::time::interval(Duration::from_secs(interval_mins * 60));
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        // The first interval tick completes immediately; consume it so a
-        // restart doesn't instantly re-run every checklist.
-        ticker.tick().await;
-        loop {
+            let interval_mins = state.config.heartbeat.interval_mins.max(1);
+            info!("Heartbeat started (interval_mins={interval_mins})");
+            let mut ticker = tokio::time::interval(Duration::from_secs(interval_mins * 60));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            // The first interval tick completes immediately; consume it so a
+            // restart doesn't instantly re-run every checklist.
             ticker.tick().await;
-            run_heartbeat(&state).await;
+            loop {
+                ticker.tick().await;
+                run_heartbeat(&state).await;
+            }
         }
-    }
     });
 }
 
@@ -1103,7 +1093,10 @@ Do not narrate checks that came back clean.";
 fn heartbeat_checklists(roots: &[std::path::PathBuf], max_chars: usize) -> Vec<(i64, String)> {
     let mut out: Vec<(i64, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let visit_chat_dir = |dir: &std::path::Path, chat_id: i64, out: &mut Vec<(i64, String)>, seen: &mut std::collections::HashSet<i64>| {
+    let visit_chat_dir = |dir: &std::path::Path,
+                          chat_id: i64,
+                          out: &mut Vec<(i64, String)>,
+                          seen: &mut std::collections::HashSet<i64>| {
         if seen.contains(&chat_id) {
             return;
         }
@@ -1211,20 +1204,20 @@ pub fn spawn_memory_consolidation(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("memory_consolidation", move || {
         let state = state.clone();
         async move {
-        info!(
+            info!(
             "Sleep-time consolidation started (idle_hours={}, min_interval_hours={}, threshold={})",
             state.config.sleep_time.idle_hours,
             state.config.sleep_time.min_interval_hours,
             state.config.sleep_time.similarity_threshold
         );
-        let mut last_run: HashMap<i64, Instant> = HashMap::new();
-        let mut ticker = tokio::time::interval(Duration::from_secs(1800));
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
-            ticker.tick().await;
-            run_memory_consolidation(&state, &mut last_run).await;
+            let mut last_run: HashMap<i64, Instant> = HashMap::new();
+            let mut ticker = tokio::time::interval(Duration::from_secs(1800));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                run_memory_consolidation(&state, &mut last_run).await;
+            }
         }
-    }
     });
 }
 
@@ -1236,15 +1229,14 @@ async fn run_memory_consolidation(state: &Arc<AppState>, last_run: &mut HashMap<
     let max_archived = cfg.max_archived_per_pass.max(1);
     let cutoff = (Utc::now() - chrono::Duration::hours(idle_hours)).to_rfc3339();
 
-    let chats = match call_blocking(state.db.clone(), move |db| db.list_idle_chats(&cutoff, 100))
-        .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("sleep-time consolidation: failed to list idle chats: {e}");
-            return;
-        }
-    };
+    let chats =
+        match call_blocking(state.db.clone(), move |db| db.list_idle_chats(&cutoff, 100)).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("sleep-time consolidation: failed to list idle chats: {e}");
+                return;
+            }
+        };
 
     for chat_id in chats {
         // Respect the per-chat min interval.
@@ -1272,7 +1264,12 @@ async fn run_memory_consolidation(state: &Arc<AppState>, last_run: &mut HashMap<
         let mut active: Vec<_> = memories
             .into_iter()
             .filter(|m| !m.is_archived)
-            .filter(|m| m.expires_at.as_deref().map(|e| e > now.as_str()).unwrap_or(true))
+            .filter(|m| {
+                m.expires_at
+                    .as_deref()
+                    .map(|e| e > now.as_str())
+                    .unwrap_or(true)
+            })
             .collect();
         active.sort_by(|a, b| {
             b.confidence
@@ -1331,22 +1328,24 @@ pub fn spawn_interjection(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("interjection", move || {
         let state = state.clone();
         async move {
-        info!(
-            "Interjection started (min_interval_secs={}, lookback_mins={})",
-            state.config.interjection.min_interval_secs, state.config.interjection.lookback_mins
-        );
-        let mut last_interjection: HashMap<i64, Instant> = HashMap::new();
-        let mut ticker = tokio::time::interval(Duration::from_secs(120));
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
-            ticker.tick().await;
-            run_interjection(&state, &mut last_interjection).await;
+            info!(
+                "Interjection started (min_interval_secs={}, lookback_mins={})",
+                state.config.interjection.min_interval_secs,
+                state.config.interjection.lookback_mins
+            );
+            let mut last_interjection: HashMap<i64, Instant> = HashMap::new();
+            let mut ticker = tokio::time::interval(Duration::from_secs(120));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                run_interjection(&state, &mut last_interjection).await;
+            }
         }
-    }
     });
 }
 
-const INTERJECTION_PROMPT: &str = "[Group interjection check] You were NOT addressed in this group, \
+const INTERJECTION_PROMPT: &str =
+    "[Group interjection check] You were NOT addressed in this group, \
 but the recent conversation is visible to you.\n\
 - Only if you have something genuinely valuable, welcome, and on-topic to add (a useful fact, a \
 correction of a clear factual error, a helpful pointer), write ONE short message that fits in \
@@ -1486,7 +1485,11 @@ fn format_standup(
             .map(|c| (now - c.with_timezone(&Utc)).num_seconds().max(0));
         let stale_progress = progress_age.map(|a| a >= interval).unwrap_or(true);
         let stalled = age_secs.map(|a| a >= 2 * interval).unwrap_or(false) && stale_progress;
-        let flag = if stalled { " ⚠️ no recent progress" } else { "" };
+        let flag = if stalled {
+            " ⚠️ no recent progress"
+        } else {
+            ""
+        };
         // Rough ETA from the chat's historical average run duration, shown only
         // while the task is still under that average (and not flagged stalled).
         let eta = match (avg_duration_secs, age_secs) {
@@ -1727,11 +1730,8 @@ async fn run_reflector(state: &Arc<AppState>) {
     if archive_days > 0 {
         let skills_root = std::path::PathBuf::from(state.config.skills_data_dir());
         let _ = call_blocking(state.db.clone(), move |db| {
-            match crate::skill_review::archive_inactive_agent_skills(
-                &skills_root,
-                db,
-                archive_days,
-            ) {
+            match crate::skill_review::archive_inactive_agent_skills(&skills_root, db, archive_days)
+            {
                 Ok(n) if n > 0 => {
                     info!("Reflector: archived {n} inactive agent-created skill(s)");
                 }
@@ -1825,11 +1825,13 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
     // Strip thinking tags from message content so they don't confuse the LLM's JSON output
     let conversation = messages
         .iter()
-        .map(|m| format!(
-            "[{}]: {}",
-            m.sender_name,
-            strip_reflector_thinking_tags(&m.content)
-        ))
+        .map(|m| {
+            format!(
+                "[{}]: {}",
+                m.sender_name,
+                strip_reflector_thinking_tags(&m.content)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -2063,9 +2065,7 @@ async fn reflect_for_chat(state: &Arc<AppState>, chat_id: i64) {
             kg_inserted += 1;
         }
         if kg_inserted > 0 {
-            info!(
-                "Reflector: chat {chat_id} -> {kg_inserted} knowledge graph triples added"
-            );
+            info!("Reflector: chat {chat_id} -> {kg_inserted} knowledge graph triples added");
         }
     }
 
@@ -2167,7 +2167,10 @@ fn persist_curated_user_model(
     {
         return;
     }
-    match state.memory.write_chat_user_model(channel, chat_id, &capped) {
+    match state
+        .memory
+        .write_chat_user_model(channel, chat_id, &capped)
+    {
         Ok(()) => info!(
             "Reflector: USER.md updated for chat {chat_id} ({} chars)",
             capped.chars().count()
@@ -2197,7 +2200,7 @@ mod tests {
         let root = unique_temp_dir("heartbeat-test");
         let canonical = root.join("groups"); // channel-aware layout
         let flat = root.join("runtime/groups"); // SOUL-override layout
-        // chat 42 in canonical layout under a channel dir
+                                                // chat 42 in canonical layout under a channel dir
         std::fs::create_dir_all(canonical.join("telegram/42")).unwrap();
         std::fs::write(
             canonical.join("telegram/42/HEARTBEAT.md"),
@@ -2321,7 +2324,7 @@ mod tests {
         assert!(out.contains("competitor research"));
         assert!(out.contains("checked 3/5 vendors"));
         assert!(out.contains("10m")); // 630s rounds to 10m
-        // Fresh progress + short interval-relative age → not flagged stalled.
+                                      // Fresh progress + short interval-relative age → not flagged stalled.
         assert!(!out.contains("no recent progress"));
     }
 
@@ -2357,7 +2360,10 @@ mod tests {
             last_progress_at: None,
         };
         let out = format_standup(std::slice::from_ref(&run), now, 1800, Some(600));
-        assert!(out.contains("no recent progress"), "expected stalled flag: {out}");
+        assert!(
+            out.contains("no recent progress"),
+            "expected stalled flag: {out}"
+        );
     }
 
     #[test]
@@ -2405,7 +2411,10 @@ mod tests {
         }"#;
         let out = super::parse_reflector_response(raw, 1);
         assert_eq!(out.memories.len(), 1);
-        assert_eq!(out.user_model.as_deref(), Some("Senior Rust engineer at Acme."));
+        assert_eq!(
+            out.user_model.as_deref(),
+            Some("Senior Rust engineer at Acme.")
+        );
     }
 
     #[test]
@@ -2440,10 +2449,7 @@ mod tests {
             let out = super::parse_reflector_response(raw, 42);
             assert!(out.memories.is_empty(), "raw={raw:?} memories not empty");
             assert!(out.triples.is_empty(), "raw={raw:?} triples not empty");
-            assert!(
-                out.user_model.is_none(),
-                "raw={raw:?} user_model not None"
-            );
+            assert!(out.user_model.is_none(), "raw={raw:?} user_model not None");
         }
     }
 

@@ -8,6 +8,15 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Durable chunk-level outbound delivery.** User-visible channel messages are now persisted before
+  the first network call and tracked as independently retryable chunks. Interrupted sends resume
+  from the unfinished chunk after restart, the full logical reply is stored exactly once, and
+  Weixin reuses a stable native `client_id` for safe retries. Scheduler runs distinguish immediate
+  delivery from durable queued acceptance instead of duplicating the full message in the outbox.
+- **Shared user-visible output sanitization.** Final channel delivery strips private reasoning tags
+  and textual tool-call traces at the common delivery boundary, including scheduler and tool-driven
+  messages, so runtime protocol details do not leak into Weixin or other chat channels.
+
 - **Output guardrail (credential leak protection).** A new `output_guardrail` config block
   (`mode: off | redact | block`, default **off**) scans outbound bot messages for credential-like
   strings (OpenAI/Anthropic keys, GitHub PATs, AWS keys, Slack/Google tokens, Bearer tokens, PEM

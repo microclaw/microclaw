@@ -199,7 +199,10 @@ pub async fn process_with_agent_with_events_guarded(
         })
         .await
         {
-            warn!("failed to mark turn active for chat {}: {e}", context.chat_id);
+            warn!(
+                "failed to mark turn active for chat {}: {e}",
+                context.chat_id
+            );
         }
     }
     let engine = DefaultAgentEngine;
@@ -232,7 +235,10 @@ pub async fn process_with_agent_with_events_guarded(
         if let Err(e) =
             call_blocking(state.db.clone(), move |db| db.clear_turn_active(chat_id)).await
         {
-            warn!("failed to clear active turn for chat {}: {e}", context.chat_id);
+            warn!(
+                "failed to clear active turn for chat {}: {e}",
+                context.chat_id
+            );
         }
     }
 
@@ -724,7 +730,10 @@ async fn process_with_agent_logic(
         .await?
         .total_tokens;
         if state.config.token_budget.blocks(is_control_chat, used) {
-            warn!(chat_id, used, budget, "Token budget exhausted; refusing turn");
+            warn!(
+                chat_id,
+                used, budget, "Token budget exhausted; refusing turn"
+            );
             return Ok(format!(
                 "{TOKEN_BUDGET_REFUSAL_PREFIX} for this chat ({used} of {budget} tokens in the \
                  last 24h). I'll be available again once usage rolls out of the window. \
@@ -1394,8 +1403,8 @@ async fn process_with_agent_logic(
             // Always compute visible text without thinking tags for retry/fallback decisions.
             let visible_text = sanitize_user_visible_text(&text);
             // Keep raw thinking text only when show_thinking is enabled.
-            let is_weixin_channel = context.caller_channel == "weixin"
-                || context.caller_channel.starts_with("weixin.");
+            let is_weixin_channel =
+                context.caller_channel == "weixin" || context.caller_channel.starts_with("weixin.");
             let display_text = if effective_profile.show_thinking && !is_weixin_channel {
                 text.clone()
             } else {
@@ -2512,16 +2521,7 @@ pub(crate) fn strip_thinking(text: &str) -> String {
 /// ordinary user-facing text. Real tool calls travel as structured content;
 /// a textual `[tool_use: ...]` line is therefore always an implementation leak.
 pub(crate) fn sanitize_user_visible_text(text: &str) -> String {
-    strip_thinking(text)
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            !(trimmed.starts_with("[tool_use:") && trimmed.ends_with(']'))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
+    microclaw_core::text::sanitize_user_visible_text(text)
 }
 
 /// Extract text content from a Message for summarization/display.
@@ -2798,8 +2798,8 @@ async fn compact_messages(
 mod tests {
     use super::{
         build_db_memory_context, duplicate_call_key, format_mid_turn_injection,
-        history_to_claude_messages, process_with_agent, sanitize_user_visible_text,
-        strip_thinking, AgentRequestContext,
+        history_to_claude_messages, process_with_agent, sanitize_user_visible_text, strip_thinking,
+        AgentRequestContext,
     };
     use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
@@ -3092,11 +3092,21 @@ mod tests {
             .unwrap();
 
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
-        let context =
-            build_db_memory_context(
-                &memory_backend, &db, None, 100, "short", 20, 20, 30, 30.0, true, 2, 10,
-            )
-            .await;
+        let context = build_db_memory_context(
+            &memory_backend,
+            &db,
+            None,
+            100,
+            "short",
+            20,
+            20,
+            30,
+            30.0,
+            true,
+            2,
+            10,
+        )
+        .await;
         assert!(context.contains("<structured_memories>"));
         // With a tiny budget (20 tokens), not all memories fit — some are available via deep search
         assert!(

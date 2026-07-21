@@ -1,5 +1,5 @@
 use rusqlite::OptionalExtension;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction};
 use std::path::Path;
 #[cfg(feature = "sqlite-vec")]
 use std::sync::Once;
@@ -234,7 +234,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 29;
+const SCHEMA_VERSION_CURRENT: i64 = 30;
 
 /// Genesis link for the tamper-evident audit hash chain — the `prev_hash` of the
 /// first sealed entry.
@@ -279,13 +279,52 @@ pub struct InterruptedTurn {
 #[derive(Debug, Clone)]
 pub struct OutboxMessageRecord {
     pub id: i64,
+    pub delivery_id: String,
     pub chat_id: i64,
     pub channel: String,
     pub payload_text: String,
+    pub full_payload_text: String,
+    pub chunk_index: i64,
+    pub total_chunks: i64,
+    pub idempotency_key: String,
     pub status: String,
     pub attempts: i64,
     pub next_attempt_at: Option<String>,
     pub last_error: Option<String>,
+}
+
+fn refresh_delivery_status(
+    tx: &Transaction<'_>,
+    chunk_id: i64,
+    now: &str,
+) -> Result<(), MicroClawError> {
+    let delivery_id: String = tx.query_row(
+        "SELECT delivery_id FROM outbound_delivery_chunks WHERE id=?1",
+        params![chunk_id],
+        |row| row.get(0),
+    )?;
+    let (total, delivered, failed): (i64, i64, i64) = tx.query_row(
+        "SELECT COUNT(*),
+                SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END)
+         FROM outbound_delivery_chunks WHERE delivery_id=?1",
+        params![delivery_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let status = if failed > 0 {
+        "failed"
+    } else if total > 0 && delivered == total {
+        "delivered"
+    } else if delivered > 0 {
+        "partial"
+    } else {
+        "pending"
+    };
+    tx.execute(
+        "UPDATE outbound_deliveries SET status=?2, updated_at=?3 WHERE delivery_id=?1",
+        params![delivery_id, status, now],
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -822,7 +861,10 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
             )?;
         }
         if !table_has_column(conn, "scheduled_tasks", "max_runs")? {
-            conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN max_runs INTEGER", [])?;
+            conn.execute(
+                "ALTER TABLE scheduled_tasks ADD COLUMN max_runs INTEGER",
+                [],
+            )?;
         }
         if !table_has_column(conn, "scheduled_tasks", "not_after")? {
             conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN not_after TEXT", [])?;
@@ -1183,13 +1225,68 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
                 ON outbox_messages(status, next_attempt_at);",
         )?;
         if !table_has_column(conn, "active_turns", "progress_text")? {
-            conn.execute(
-                "ALTER TABLE active_turns ADD COLUMN progress_text TEXT",
-                [],
-            )?;
+            conn.execute("ALTER TABLE active_turns ADD COLUMN progress_text TEXT", [])?;
         }
         set_schema_version(conn, 29)?;
         version = 29;
+    }
+    if version < 30 {
+        // Durable chunk delivery ledger. The parent row represents one
+        // user-visible message; child rows are independently retryable chunks
+        // with stable idempotency keys. Legacy whole-message outbox rows are
+        // migrated as single-chunk deliveries.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS outbound_deliveries (
+                delivery_id TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                channel TEXT NOT NULL,
+                full_payload_text TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                stored_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS outbound_delivery_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                delivery_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                total_chunks INTEGER NOT NULL,
+                payload_text TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(delivery_id, chunk_index),
+                UNIQUE(idempotency_key),
+                FOREIGN KEY(delivery_id) REFERENCES outbound_deliveries(delivery_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_delivery_chunks_status_next
+                ON outbound_delivery_chunks(status, next_attempt_at);
+            INSERT OR IGNORE INTO outbound_deliveries(
+                delivery_id, chat_id, channel, full_payload_text, status,
+                stored_at, created_at, updated_at
+            )
+            SELECT 'legacy-' || id, chat_id, channel, payload_text,
+                   CASE WHEN status = 'delivered' THEN 'delivered'
+                        WHEN status = 'failed' THEN 'failed' ELSE 'pending' END,
+                   CASE WHEN status = 'delivered' THEN updated_at ELSE NULL END,
+                   created_at, updated_at
+            FROM outbox_messages;
+            INSERT OR IGNORE INTO outbound_delivery_chunks(
+                delivery_id, chunk_index, total_chunks, payload_text,
+                idempotency_key, status, attempts, next_attempt_at,
+                last_error, created_at, updated_at
+            )
+            SELECT 'legacy-' || id, 0, 1, payload_text, 'legacy-' || id,
+                   status, attempts, next_attempt_at, last_error,
+                   created_at, updated_at
+            FROM outbox_messages;",
+        )?;
+        set_schema_version(conn, 30)?;
+        version = 30;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -3368,8 +3465,8 @@ impl Database {
              ORDER BY id ASC",
         )?;
         // Collect first so the statement borrow is released before we iterate.
-        let rows: Vec<AuditChainRow> =
-            stmt.query_map([], |row| {
+        let rows: Vec<AuditChainRow> = stmt
+            .query_map([], |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
@@ -3387,7 +3484,9 @@ impl Database {
 
         let mut expected_prev = AUDIT_GENESIS_HASH.to_string();
         let mut sealed = 0usize;
-        for (id, kind, actor, action, target, status, detail, created_at, prev_hash, entry_hash) in &rows {
+        for (id, kind, actor, action, target, status, detail, created_at, prev_hash, entry_hash) in
+            &rows
+        {
             sealed += 1;
             let prev = prev_hash.as_deref().unwrap_or("");
             if prev != expected_prev {
@@ -3415,7 +3514,9 @@ impl Database {
                     sealed_entries: sealed,
                     intact: false,
                     broken_at: Some(*id),
-                    reason: Some("entry_hash does not match content (an entry was modified)".to_string()),
+                    reason: Some(
+                        "entry_hash does not match content (an entry was modified)".to_string(),
+                    ),
                 });
             }
             expected_prev = entry_hash.clone();
@@ -4754,7 +4855,9 @@ impl Database {
              LIMIT ?2",
         )?;
         let rows = stmt
-            .query_map(params![chat_id, limit as i64], |row| row.get::<_, String>(0))?
+            .query_map(params![chat_id, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -4804,7 +4907,8 @@ impl Database {
             })
         };
 
-        let mut visited_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut visited_entities: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let mut seen_triples: std::collections::HashSet<i64> = std::collections::HashSet::new();
         let mut frontier: Vec<String> = Vec::new();
         for s in seeds {
@@ -5419,11 +5523,7 @@ impl Database {
 
     /// Update the rolling progress snapshot for an in-flight interactive turn.
     /// No-op for chats without an active turn (e.g. scheduler-driven runs).
-    pub fn update_turn_progress(
-        &self,
-        chat_id: i64,
-        progress: &str,
-    ) -> Result<(), MicroClawError> {
+    pub fn update_turn_progress(&self, chat_id: i64, progress: &str) -> Result<(), MicroClawError> {
         let conn = self.lock_conn();
         conn.execute(
             "UPDATE active_turns SET progress_text = ?2 WHERE chat_id = ?1",
@@ -5479,14 +5579,60 @@ impl Database {
         channel: &str,
         payload_text: &str,
     ) -> Result<i64, MicroClawError> {
-        let conn = self.lock_conn();
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "INSERT INTO outbox_messages(chat_id, channel, payload_text, status, attempts, next_attempt_at, created_at, updated_at)
-             VALUES(?1, ?2, ?3, 'pending', 0, ?4, ?4, ?4)",
-            params![chat_id, channel, payload_text, now],
+        let delivery_id = format!("delivery-{}", uuid::Uuid::new_v4());
+        let ids = self.create_outbound_delivery(
+            &delivery_id,
+            chat_id,
+            channel,
+            payload_text,
+            &[payload_text.to_string()],
         )?;
-        Ok(conn.last_insert_rowid())
+        Ok(ids[0])
+    }
+
+    /// Persist a complete outbound message and its independently retryable
+    /// chunks before the first network call.
+    pub fn create_outbound_delivery(
+        &self,
+        delivery_id: &str,
+        chat_id: i64,
+        channel: &str,
+        full_payload_text: &str,
+        chunks: &[String],
+    ) -> Result<Vec<i64>, MicroClawError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let now = chrono::Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO outbound_deliveries(
+                delivery_id, chat_id, channel, full_payload_text, status,
+                created_at, updated_at
+             ) VALUES(?1, ?2, ?3, ?4, 'pending', ?5, ?5)",
+            params![delivery_id, chat_id, channel, full_payload_text, now],
+        )?;
+        let total = chunks.len().max(1) as i64;
+        let mut ids = Vec::with_capacity(chunks.len());
+        for (index, chunk) in chunks.iter().enumerate() {
+            let idempotency_key = format!("{delivery_id}:{}", index + 1);
+            tx.execute(
+                "INSERT INTO outbound_delivery_chunks(
+                    delivery_id, chunk_index, total_chunks, payload_text,
+                    idempotency_key, status, attempts, next_attempt_at,
+                    created_at, updated_at
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, ?6, ?6)",
+                params![
+                    delivery_id,
+                    index as i64,
+                    total,
+                    chunk,
+                    idempotency_key,
+                    now
+                ],
+            )?;
+            ids.push(tx.last_insert_rowid());
+        }
+        tx.commit()?;
+        Ok(ids)
     }
 
     pub fn list_due_outbox_messages(
@@ -5496,36 +5642,61 @@ impl Database {
     ) -> Result<Vec<OutboxMessageRecord>, MicroClawError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, channel, payload_text, status, attempts, next_attempt_at, last_error
-             FROM outbox_messages
-             WHERE status IN ('pending', 'retry')
-               AND (next_attempt_at IS NULL OR unixepoch(next_attempt_at) <= unixepoch(?1))
-             ORDER BY id ASC
+            "SELECT c.id, c.delivery_id, d.chat_id, d.channel,
+                    c.payload_text, d.full_payload_text, c.chunk_index,
+                    c.total_chunks, c.idempotency_key, c.status, c.attempts,
+                    c.next_attempt_at, c.last_error
+             FROM outbound_delivery_chunks c
+             JOIN outbound_deliveries d ON d.delivery_id = c.delivery_id
+             WHERE c.status IN ('pending', 'retry')
+               AND (c.next_attempt_at IS NULL OR unixepoch(c.next_attempt_at) <= unixepoch(?1))
+             ORDER BY c.id ASC
              LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![now_iso, limit.max(1) as i64], |row| {
             Ok(OutboxMessageRecord {
                 id: row.get(0)?,
-                chat_id: row.get(1)?,
-                channel: row.get(2)?,
-                payload_text: row.get(3)?,
-                status: row.get(4)?,
-                attempts: row.get(5)?,
-                next_attempt_at: row.get(6)?,
-                last_error: row.get(7)?,
+                delivery_id: row.get(1)?,
+                chat_id: row.get(2)?,
+                channel: row.get(3)?,
+                payload_text: row.get(4)?,
+                full_payload_text: row.get(5)?,
+                chunk_index: row.get(6)?,
+                total_chunks: row.get(7)?,
+                idempotency_key: row.get(8)?,
+                status: row.get(9)?,
+                attempts: row.get(10)?,
+                next_attempt_at: row.get(11)?,
+                last_error: row.get(12)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn mark_outbox_delivered(&self, id: i64) -> Result<(), MicroClawError> {
-        let conn = self.lock_conn();
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE outbox_messages SET status='delivered', updated_at=?2 WHERE id=?1",
+        tx.execute(
+            "UPDATE outbound_delivery_chunks
+             SET status='delivered', updated_at=?2 WHERE id=?1",
             params![id, now],
         )?;
+        refresh_delivery_status(&tx, id, &now)?;
+        tx.commit()?;
         Ok(())
+    }
+
+    pub fn mark_outbox_sending(&self, id: i64) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let changed = conn.execute(
+            "UPDATE outbound_delivery_chunks
+             SET status='sending', updated_at=?2
+             WHERE id=?1 AND status IN ('pending', 'retry')",
+            params![id, now],
+        )?;
+        Ok(changed == 1)
     }
 
     pub fn mark_outbox_retry(
@@ -5536,23 +5707,108 @@ impl Database {
         last_error: &str,
         terminal_fail: bool,
     ) -> Result<(), MicroClawError> {
-        let conn = self.lock_conn();
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
         let status = if terminal_fail { "failed" } else { "retry" };
-        conn.execute(
-            "UPDATE outbox_messages
+        tx.execute(
+            "UPDATE outbound_delivery_chunks
              SET status=?2, attempts=?3, next_attempt_at=?4, last_error=?5, updated_at=?6
              WHERE id=?1",
             params![id, status, attempts, next_attempt_at, last_error, now],
         )?;
+        refresh_delivery_status(&tx, id, &now)?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Reset chunks left in `sending` by an unclean shutdown. Stable channel
+    /// idempotency keys make replay safe on supporting transports (Weixin).
+    pub fn recover_sending_outbox_messages(&self) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let changed = conn.execute(
+            "UPDATE outbound_delivery_chunks
+             SET status='retry', next_attempt_at=?1,
+                 last_error='recovered after interrupted delivery', updated_at=?1
+             WHERE status='sending'",
+            params![now],
+        )?;
+        Ok(changed)
+    }
+
+    pub fn outbound_delivery_is_complete(&self, delivery_id: &str) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM outbound_delivery_chunks
+             WHERE delivery_id=?1 AND status != 'delivered'",
+            params![delivery_id],
+            |row| row.get(0),
+        )?;
+        Ok(remaining == 0)
+    }
+
+    /// Store the full logical message once, after every external chunk is
+    /// delivered. Returns true only for the caller that performed the insert.
+    pub fn finalize_outbound_delivery(
+        &self,
+        delivery_id: &str,
+        sender_name: &str,
+    ) -> Result<bool, MicroClawError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let delivery = tx.query_row(
+            "SELECT chat_id, full_payload_text, stored_at
+             FROM outbound_deliveries WHERE delivery_id=?1",
+            params![delivery_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
+        if delivery.2.is_some() {
+            return Ok(false);
+        }
+        let remaining: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM outbound_delivery_chunks
+             WHERE delivery_id=?1 AND status != 'delivered'",
+            params![delivery_id],
+            |row| row.get(0),
+        )?;
+        if remaining != 0 {
+            return Ok(false);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO messages(id, chat_id, sender_name, content, is_from_bot, timestamp)
+             VALUES(?1, ?2, ?3, ?4, 1, ?5)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                delivery.0,
+                sender_name,
+                delivery.1,
+                now
+            ],
+        )?;
+        tx.execute(
+            "UPDATE outbound_deliveries
+             SET status='delivered', stored_at=?2, updated_at=?2
+             WHERE delivery_id=?1 AND stored_at IS NULL",
+            params![delivery_id, now],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// Pending + retry outbox depth (governance/observability).
     pub fn count_outbox_pending(&self) -> Result<i64, MicroClawError> {
         let conn = self.lock_conn();
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM outbox_messages WHERE status IN ('pending', 'retry')",
+            "SELECT COUNT(*) FROM outbound_delivery_chunks
+             WHERE status IN ('pending', 'retry', 'sending')",
             [],
             |row| row.get(0),
         )?;
@@ -6284,9 +6540,19 @@ mod tests {
     #[test]
     fn audit_chain_intact_after_appends() {
         let (db, dir) = test_db();
-        db.log_audit_event("auth", "alice", "login", None, "ok", None).unwrap();
-        db.log_audit_event("tool", "bot", "web_fetch", Some("https://x"), "ok", Some("200")).unwrap();
-        db.log_audit_event("auth", "alice", "logout", None, "ok", None).unwrap();
+        db.log_audit_event("auth", "alice", "login", None, "ok", None)
+            .unwrap();
+        db.log_audit_event(
+            "tool",
+            "bot",
+            "web_fetch",
+            Some("https://x"),
+            "ok",
+            Some("200"),
+        )
+        .unwrap();
+        db.log_audit_event("auth", "alice", "logout", None, "ok", None)
+            .unwrap();
         let status = db.verify_audit_chain().unwrap();
         assert!(status.intact, "reason: {:?}", status.reason);
         assert_eq!(status.sealed_entries, 3);
@@ -6297,15 +6563,20 @@ mod tests {
     #[test]
     fn audit_chain_detects_modification() {
         let (db, dir) = test_db();
-        db.log_audit_event("auth", "alice", "login", None, "ok", None).unwrap();
+        db.log_audit_event("auth", "alice", "login", None, "ok", None)
+            .unwrap();
         let id = db
             .log_audit_event("tool", "bot", "web_fetch", Some("https://x"), "ok", None)
             .unwrap();
-        db.log_audit_event("auth", "alice", "logout", None, "ok", None).unwrap();
+        db.log_audit_event("auth", "alice", "logout", None, "ok", None)
+            .unwrap();
         {
             let conn = db.lock_conn();
-            conn.execute("UPDATE audit_logs SET status='tampered' WHERE id=?1", params![id])
-                .unwrap();
+            conn.execute(
+                "UPDATE audit_logs SET status='tampered' WHERE id=?1",
+                params![id],
+            )
+            .unwrap();
         }
         let status = db.verify_audit_chain().unwrap();
         assert!(!status.intact);
@@ -6317,14 +6588,17 @@ mod tests {
     #[test]
     fn audit_chain_detects_deletion() {
         let (db, dir) = test_db();
-        db.log_audit_event("auth", "alice", "login", None, "ok", None).unwrap();
+        db.log_audit_event("auth", "alice", "login", None, "ok", None)
+            .unwrap();
         let id = db
             .log_audit_event("tool", "bot", "web_fetch", Some("https://x"), "ok", None)
             .unwrap();
-        db.log_audit_event("auth", "alice", "logout", None, "ok", None).unwrap();
+        db.log_audit_event("auth", "alice", "logout", None, "ok", None)
+            .unwrap();
         {
             let conn = db.lock_conn();
-            conn.execute("DELETE FROM audit_logs WHERE id=?1", params![id]).unwrap();
+            conn.execute("DELETE FROM audit_logs WHERE id=?1", params![id])
+                .unwrap();
         }
         let status = db.verify_audit_chain().unwrap();
         assert!(!status.intact);
@@ -7044,8 +7318,13 @@ mod tests {
             .create_scheduled_task(100, "test", "cron", "0 * * * * *", "2024-01-01T00:00:00Z")
             .unwrap();
 
-        db.update_task_after_run(id, "2024-01-01T00:01:00Z", Some("2024-01-01T00:02:00Z"), true)
-            .unwrap();
+        db.update_task_after_run(
+            id,
+            "2024-01-01T00:01:00Z",
+            Some("2024-01-01T00:02:00Z"),
+            true,
+        )
+        .unwrap();
 
         let tasks = db.get_tasks_for_chat(100).unwrap();
         assert_eq!(tasks[0].last_run.as_deref(), Some("2024-01-01T00:01:00Z"));
@@ -7891,8 +8170,17 @@ mod tests {
             .unwrap();
         db.kg_insert_triple("Acme", "located_in", "Berlin", chat, vf, 0.8, "test", None)
             .unwrap();
-        db.kg_insert_triple("Berlin", "capital_of", "Germany", chat, vf, 0.7, "test", None)
-            .unwrap();
+        db.kg_insert_triple(
+            "Berlin",
+            "capital_of",
+            "Germany",
+            chat,
+            vf,
+            0.7,
+            "test",
+            None,
+        )
+        .unwrap();
         db.kg_insert_triple("Zoe", "likes", "Tea", chat, vf, 0.6, "test", None)
             .unwrap();
 
@@ -7902,17 +8190,23 @@ mod tests {
         assert!(ents.iter().any(|e| e == "Germany"));
 
         // 1 hop from Alice reaches the works_at edge but not located_in.
-        let one = db.kg_neighborhood(chat, &["Alice".to_string()], 1, 10).unwrap();
+        let one = db
+            .kg_neighborhood(chat, &["Alice".to_string()], 1, 10)
+            .unwrap();
         assert!(one.iter().any(|t| t.predicate == "works_at"));
         assert!(!one.iter().any(|t| t.predicate == "located_in"));
 
         // 2 hops from Alice pulls in Acme's edges (multi-hop), but never Zoe's.
-        let two = db.kg_neighborhood(chat, &["Alice".to_string()], 2, 10).unwrap();
+        let two = db
+            .kg_neighborhood(chat, &["Alice".to_string()], 2, 10)
+            .unwrap();
         assert!(two.iter().any(|t| t.predicate == "located_in"));
         assert!(!two.iter().any(|t| t.subject == "Zoe"));
 
         // total_limit is respected.
-        let capped = db.kg_neighborhood(chat, &["Alice".to_string()], 3, 1).unwrap();
+        let capped = db
+            .kg_neighborhood(chat, &["Alice".to_string()], 3, 1)
+            .unwrap();
         assert_eq!(capped.len(), 1);
 
         // Empty seeds → empty result, no panic.
@@ -8664,6 +8958,51 @@ mod tests {
     }
 
     #[test]
+    fn test_chunked_delivery_resumes_and_stores_logical_message_once() {
+        let (db, dir) = test_db();
+        let ids = db
+            .create_outbound_delivery(
+                "delivery-test",
+                77,
+                "weixin",
+                "first second third",
+                &["first".into(), "second".into(), "third".into()],
+            )
+            .unwrap();
+        assert_eq!(ids.len(), 3);
+
+        assert!(db.mark_outbox_sending(ids[0]).unwrap());
+        db.mark_outbox_delivered(ids[0]).unwrap();
+        assert!(db.mark_outbox_sending(ids[1]).unwrap());
+        assert_eq!(db.recover_sending_outbox_messages().unwrap(), 1);
+
+        let due = db
+            .list_due_outbox_messages("2999-01-01T00:00:00Z", 10)
+            .unwrap();
+        assert_eq!(due.len(), 2);
+        assert_eq!(due[0].chunk_index, 1);
+        assert_eq!(due[0].idempotency_key, "delivery-test:2");
+        assert_eq!(due[1].chunk_index, 2);
+
+        for row in due {
+            assert!(db.mark_outbox_sending(row.id).unwrap());
+            db.mark_outbox_delivered(row.id).unwrap();
+        }
+        assert!(db.outbound_delivery_is_complete("delivery-test").unwrap());
+        assert!(db
+            .finalize_outbound_delivery("delivery-test", "bot")
+            .unwrap());
+        assert!(!db
+            .finalize_outbound_delivery("delivery-test", "bot")
+            .unwrap());
+
+        let messages = db.get_all_messages(77).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "first second third");
+        cleanup(&dir);
+    }
+
+    #[test]
     fn test_recover_orphaned_subagent_runs() {
         let (db, dir) = test_db();
         for (run_id, status) in [
@@ -8756,7 +9095,9 @@ mod tests {
 
         // Resolve by exact run_id, by label, and a miss.
         assert_eq!(
-            db.resolve_subagent_run_id(42, "subrun-1").unwrap().as_deref(),
+            db.resolve_subagent_run_id(42, "subrun-1")
+                .unwrap()
+                .as_deref(),
             Some("subrun-1")
         );
         assert_eq!(
@@ -8767,7 +9108,10 @@ mod tests {
         );
         assert!(db.resolve_subagent_run_id(42, "nope").unwrap().is_none());
         // Wrong chat → no match.
-        assert!(db.resolve_subagent_run_id(99, "competitor research").unwrap().is_none());
+        assert!(db
+            .resolve_subagent_run_id(99, "competitor research")
+            .unwrap()
+            .is_none());
 
         // Children listing for fan-in: a child of subrun-1.
         db.create_subagent_run(CreateSubagentRunParams {
@@ -8805,10 +9149,7 @@ mod tests {
             .unwrap();
         assert!(prev2.is_some());
         let events = db.list_subagent_events("subrun-1", 50).unwrap();
-        let progress_events = events
-            .iter()
-            .filter(|e| e.event_type == "progress")
-            .count();
+        let progress_events = events.iter().filter(|e| e.event_type == "progress").count();
         assert_eq!(progress_events, 2);
 
         cleanup(&dir);

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::channel_adapter::ChannelRegistry;
-use microclaw_storage::db::{call_blocking, Database, StoredMessage};
+use microclaw_core::text::{sanitize_user_visible_text, split_text};
+use microclaw_storage::db::{call_blocking, Database, OutboxMessageRecord, StoredMessage};
 
 #[derive(Clone, Debug)]
 struct ToolAuthContext {
@@ -217,6 +218,16 @@ pub async fn enforce_channel_policy(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeliveryOutcome {
+    Delivered,
+    Queued {
+        delivery_id: String,
+        failed_chunk: usize,
+        total_chunks: usize,
+    },
+}
+
 pub async fn deliver_and_store_bot_message(
     registry: &ChannelRegistry,
     db: Arc<Database>,
@@ -224,14 +235,34 @@ pub async fn deliver_and_store_bot_message(
     chat_id: i64,
     text: &str,
 ) -> Result<(), String> {
+    deliver_and_store_bot_message_with_status(registry, db, bot_username, chat_id, text)
+        .await
+        .map(|_| ())
+}
+
+pub async fn deliver_and_store_bot_message_with_status(
+    registry: &ChannelRegistry,
+    db: Arc<Database>,
+    bot_username: &str,
+    chat_id: i64,
+    text: &str,
+) -> Result<DeliveryOutcome, String> {
     let routing = get_required_chat_routing(registry, db.clone(), chat_id).await?;
     let external_chat_id = call_blocking(db.clone(), move |d| d.get_chat_external_id(chat_id))
         .await
         .map_err(|e| format!("Failed to read external chat id for chat {chat_id}: {e}"))?
         .unwrap_or_else(|| chat_id.to_string());
 
+    // This choke point is the final defense against model/runtime protocol
+    // details leaking into any user-facing channel.
+    let visible = sanitize_user_visible_text(text);
+    if visible.is_empty() && !text.trim().is_empty() {
+        return Err("outbound message contained no user-visible text".to_string());
+    }
+
     // Outbound guardrail: scan for credential-like strings before delivery.
-    let guarded = microclaw_core::redact::apply_output_guardrail(text, registry.output_guardrail());
+    let guarded =
+        microclaw_core::redact::apply_output_guardrail(&visible, registry.output_guardrail());
     if let Some(outcome) = &guarded {
         tracing::warn!(
             target: "output_guardrail",
@@ -241,19 +272,104 @@ pub async fn deliver_and_store_bot_message(
             "outbound message tripped the output guardrail"
         );
     }
-    let text: &str = guarded.as_ref().map(|o| o.text.as_str()).unwrap_or(text);
+    let text: &str = guarded
+        .as_ref()
+        .map(|o| o.text.as_str())
+        .unwrap_or(&visible);
 
     if let Some(adapter) = registry.get(&routing.channel_name) {
-        if !adapter.is_local_only() {
-            adapter.send_text(&external_chat_id, text).await?;
+        if adapter.is_local_only() {
+            store_bot_message(db, bot_username, chat_id, text).await?;
+            return Ok(DeliveryOutcome::Delivered);
         }
+
+        let chunks = adapter
+            .text_chunk_limit_bytes()
+            .map(|limit| split_text(text, limit))
+            .unwrap_or_else(|| vec![text.to_string()]);
+        let delivery_id = format!("delivery-{}", uuid::Uuid::new_v4());
+        let delivery_id_for_create = delivery_id.clone();
+        let channel_for_create = routing.channel_name.clone();
+        let full_text = text.to_string();
+        let chunks_for_create = chunks.clone();
+        let chunk_ids = call_blocking(db.clone(), move |d| {
+            d.create_outbound_delivery(
+                &delivery_id_for_create,
+                chat_id,
+                &channel_for_create,
+                &full_text,
+                &chunks_for_create,
+            )
+        })
+        .await
+        .map_err(|e| format!("Failed to persist outbound delivery: {e}"))?;
+
+        for (index, (chunk_id, chunk)) in chunk_ids.iter().zip(chunks.iter()).enumerate() {
+            let chunk_id = *chunk_id;
+            let claimed = call_blocking(db.clone(), move |d| d.mark_outbox_sending(chunk_id))
+                .await
+                .map_err(|e| format!("Failed to claim outbound chunk: {e}"))?;
+            if !claimed {
+                continue;
+            }
+            let idempotency_key = format!("{delivery_id}:{}", index + 1);
+            if let Err(err) = adapter
+                .send_text_chunk(&external_chat_id, chunk, &idempotency_key)
+                .await
+            {
+                let retry_at = chrono::Utc::now().to_rfc3339();
+                let error_for_db = err.clone();
+                call_blocking(db.clone(), move |d| {
+                    d.mark_outbox_retry(chunk_id, 1, Some(&retry_at), &error_for_db, false)
+                })
+                .await
+                .map_err(|e| format!("{err}; failed to queue chunk retry: {e}"))?;
+                tracing::warn!(
+                    delivery_id,
+                    failed_chunk = index + 1,
+                    total_chunks = chunks.len(),
+                    error = %err,
+                    "outbound delivery accepted durably and queued for retry"
+                );
+                return Ok(DeliveryOutcome::Queued {
+                    delivery_id,
+                    failed_chunk: index + 1,
+                    total_chunks: chunks.len(),
+                });
+            }
+            call_blocking(db.clone(), move |d| d.mark_outbox_delivered(chunk_id))
+                .await
+                .map_err(|e| format!("Chunk sent but delivery ledger update failed: {e}"))?;
+            if index + 1 < chunks.len() {
+                if let Some(delay) = adapter.text_chunk_delay() {
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+
+        let delivery_for_finalize = delivery_id.clone();
+        let sender = bot_username.to_string();
+        call_blocking(db.clone(), move |d| {
+            d.finalize_outbound_delivery(&delivery_for_finalize, &sender)
+                .map(|_| ())
+        })
+        .await
+        .map_err(|e| format!("Delivery completed but message persistence failed: {e}"))?;
+        Ok(DeliveryOutcome::Delivered)
     } else {
-        return Err(format!(
+        Err(format!(
             "No adapter registered for channel '{}'",
             routing.channel_name
-        ));
+        ))
     }
+}
 
+async fn store_bot_message(
+    db: Arc<Database>,
+    bot_username: &str,
+    chat_id: i64,
+    text: &str,
+) -> Result<(), String> {
     let msg = StoredMessage {
         id: uuid::Uuid::new_v4().to_string(),
         chat_id,
@@ -265,6 +381,54 @@ pub async fn deliver_and_store_bot_message(
     call_blocking(db.clone(), move |d| d.store_message(&msg))
         .await
         .map_err(|e| format!("Failed to store sent message: {e}"))
+}
+
+/// Send one persisted outbox chunk. The caller owns retry/backoff policy.
+pub async fn send_persisted_outbox_chunk(
+    registry: &ChannelRegistry,
+    db: Arc<Database>,
+    bot_username: &str,
+    row: &OutboxMessageRecord,
+) -> Result<bool, String> {
+    let row_id = row.id;
+    let claimed = call_blocking(db.clone(), move |d| d.mark_outbox_sending(row_id))
+        .await
+        .map_err(|e| format!("Failed to claim outbox chunk: {e}"))?;
+    if !claimed {
+        return Ok(false);
+    }
+    let routing = get_required_chat_routing(registry, db.clone(), row.chat_id).await?;
+    if routing.channel_name != row.channel {
+        return Err(format!(
+            "delivery channel changed from '{}' to '{}'",
+            row.channel, routing.channel_name
+        ));
+    }
+    let chat_id = row.chat_id;
+    let external_chat_id = call_blocking(db.clone(), move |d| d.get_chat_external_id(chat_id))
+        .await
+        .map_err(|e| format!("Failed to read external chat id for chat {chat_id}: {e}"))?
+        .unwrap_or_else(|| chat_id.to_string());
+    let adapter = registry.get(&routing.channel_name).ok_or_else(|| {
+        format!(
+            "No adapter registered for channel '{}'",
+            routing.channel_name
+        )
+    })?;
+    adapter
+        .send_text_chunk(&external_chat_id, &row.payload_text, &row.idempotency_key)
+        .await?;
+    let chunk_id = row.id;
+    call_blocking(db.clone(), move |d| d.mark_outbox_delivered(chunk_id))
+        .await
+        .map_err(|e| format!("Chunk sent but ledger update failed: {e}"))?;
+    let delivery_id = row.delivery_id.clone();
+    let sender = bot_username.to_string();
+    call_blocking(db, move |d| {
+        d.finalize_outbound_delivery(&delivery_id, &sender)
+    })
+    .await
+    .map_err(|e| format!("Failed to finalize outbound delivery: {e}"))
 }
 
 #[cfg(test)]

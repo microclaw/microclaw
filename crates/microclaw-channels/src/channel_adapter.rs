@@ -27,6 +27,28 @@ pub trait ChannelAdapter: Send + Sync {
     /// Send text to external chat. Called by deliver_and_store_bot_message.
     async fn send_text(&self, external_chat_id: &str, text: &str) -> Result<(), String>;
 
+    /// Maximum UTF-8 byte length for one native text item. When present, the
+    /// shared delivery pipeline persists and sends chunks independently.
+    fn text_chunk_limit_bytes(&self) -> Option<usize> {
+        None
+    }
+
+    /// Optional pacing between consecutive chunks of one logical message.
+    fn text_chunk_delay(&self) -> Option<std::time::Duration> {
+        None
+    }
+
+    /// Send one already-split chunk. Channels with native idempotency support
+    /// should use `idempotency_key` as their request/client message id.
+    async fn send_text_chunk(
+        &self,
+        external_chat_id: &str,
+        text: &str,
+        _idempotency_key: &str,
+    ) -> Result<(), String> {
+        self.send_text(external_chat_id, text).await
+    }
+
     /// Send file attachment. Default: not supported.
     async fn send_attachment(
         &self,

@@ -15,7 +15,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::runtime::AppState;
-use microclaw_channels::channel::deliver_and_store_bot_message;
+use microclaw_channels::channel::send_persisted_outbox_chunk;
 use microclaw_storage::db::call_blocking;
 
 const FLUSH_INTERVAL_SECS: u64 = 10;
@@ -47,26 +47,34 @@ pub async fn flush_outbox_once(state: &Arc<AppState>, max_batch: usize) -> usize
     let mut processed = 0usize;
     for row in rows {
         let bot_username = state.config.bot_username_for_channel(&row.channel);
-        let delivery = deliver_and_store_bot_message(
+        let delivery = send_persisted_outbox_chunk(
             state.channel_registry.as_ref(),
             state.db.clone(),
             &bot_username,
-            row.chat_id,
-            &row.payload_text,
+            &row,
         )
         .await;
         match delivery {
-            Ok(()) => {
+            Ok(true) => {
                 info!(
-                    "outbox: redelivered reply to chat {} via {} after {} failed attempt(s)",
+                    "outbox: delivered chunk {}/{} to chat {} via {} after {} failed attempt(s)",
+                    row.chunk_index + 1,
+                    row.total_chunks,
                     row.chat_id,
                     row.channel,
                     row.attempts + 1
                 );
-                let id = row.id;
-                let _ = call_blocking(state.db.clone(), move |db| db.mark_outbox_delivered(id))
-                    .await;
+                if row.chunk_index + 1 < row.total_chunks {
+                    if let Some(delay) = state
+                        .channel_registry
+                        .get(&row.channel)
+                        .and_then(|adapter| adapter.text_chunk_delay())
+                    {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
             }
+            Ok(false) => continue,
             Err(err) => {
                 let next_attempts = row.attempts + 1;
                 let terminal = next_attempts >= MAX_ATTEMPTS;
@@ -99,6 +107,16 @@ pub async fn flush_outbox_once(state: &Arc<AppState>, max_batch: usize) -> usize
 
 /// Spawn the supervised background flush loop.
 pub fn spawn_outbox_flush(state: Arc<AppState>) {
+    let recovery_db = state.db.clone();
+    tokio::spawn(async move {
+        match call_blocking(recovery_db, |db| db.recover_sending_outbox_messages()).await {
+            Ok(count) if count > 0 => {
+                warn!("outbox: recovered {count} interrupted delivery chunk(s)")
+            }
+            Ok(_) => {}
+            Err(err) => warn!("outbox: failed to recover interrupted chunks: {err}"),
+        }
+    });
     crate::supervision::spawn_supervised("outbox_flush", move || {
         let state = state.clone();
         async move {
