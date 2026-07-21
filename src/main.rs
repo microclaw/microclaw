@@ -33,6 +33,7 @@ const EXAMPLES: &str = concat!(
     "  microclaw doctor                Run preflight checks\n",
     "  microclaw config check          Validate the config file (typos, schema)\n",
     "  microclaw doctor --online       Also test your API key/model with a live request\n",
+    "  microclaw doctor delivery       Inspect durable delivery and retry health\n",
     "  microclaw start                 Start the bot on the enabled channels\n",
     "  microclaw skill audit           Audit local skills (duplicates, stale, thin)\n",
     "  microclaw audit verify          Verify the tamper-evident audit log\n",

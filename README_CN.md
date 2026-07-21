@@ -165,6 +165,14 @@ microclaw doctor --json
 microclaw doctor sandbox
 ```
 
+仅检查消息投递状态（只读，不会实际发送消息）：
+
+```sh
+microclaw doctor delivery
+```
+
+该命令会显示持久化投递账本中的待发送、发送中、重试中及最终失败分片，并标出最早尚未完成的投递时间。
+
 ### 卸载（脚本）
 
 macOS/Linux：

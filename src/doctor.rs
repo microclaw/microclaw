@@ -107,6 +107,7 @@ impl DoctorReport {
     after_help = "\x1b[1mExamples:\x1b[22m\n  \
         microclaw doctor             Run the offline preflight checks\n  \
         microclaw doctor --online    …and verify the API key/model with a live request\n  \
+        microclaw doctor delivery    Inspect durable delivery and retry health\n  \
         microclaw doctor sandbox     Check container runtime + image readiness\n  \
         microclaw doctor --json      Machine-readable report"
 )]
@@ -125,6 +126,8 @@ struct DoctorCli {
 #[derive(Debug, Subcommand)]
 enum DoctorCommand {
     Sandbox,
+    /// Inspect the durable outbound-delivery ledger without sending a message.
+    Delivery,
 }
 
 pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
@@ -145,6 +148,7 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
     };
     let json_output = cli.json;
     let sandbox_only = matches!(cli.command, Some(DoctorCommand::Sandbox));
+    let delivery_only = matches!(cli.command, Some(DoctorCommand::Delivery));
 
     match migrate_channels_config(cli.apply_config_migrations) {
         Ok(Some((path, changed, applied))) => {
@@ -173,10 +177,12 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
 
     let mut report = if sandbox_only {
         build_sandbox_report()
+    } else if delivery_only {
+        build_delivery_report()?
     } else {
         build_report()
     };
-    if !sandbox_only {
+    if !sandbox_only && !delivery_only {
         // Network probe lives outside `build_report` so the offline report stays
         // pure (and hermetic for tests).
         check_llm_credentials(&mut report, cli.online);
@@ -194,6 +200,62 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn build_delivery_report() -> anyhow::Result<DoctorReport> {
+    let config = Config::load()?;
+    let db = microclaw_storage::db::Database::new(&config.runtime_data_dir())?;
+    let health = db.outbound_delivery_health()?;
+    let mut report = DoctorReport::new();
+
+    let active = health.pending_chunks + health.sending_chunks + health.retry_chunks;
+    report.push(
+        "delivery-ledger",
+        "Durable delivery ledger",
+        CheckStatus::Pass,
+        format!(
+            "{} logical deliveries tracked; {} completed",
+            health.total_deliveries, health.delivered_deliveries
+        ),
+        None,
+    );
+    report.push(
+        "delivery-queue",
+        "Outbound retry queue",
+        if active == 0 {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Warn
+        },
+        format!(
+            "{active} unfinished chunk(s): {} pending, {} sending, {} retrying{}",
+            health.pending_chunks,
+            health.sending_chunks,
+            health.retry_chunks,
+            health
+                .oldest_unfinished_at
+                .as_deref()
+                .map(|value| format!("; oldest {value}"))
+                .unwrap_or_default()
+        ),
+        (active > 0).then(|| {
+            "Keep MicroClaw running so the supervised outbox can retry; inspect logs for `outbox:` if the count does not fall.".to_string()
+        }),
+    );
+    report.push(
+        "delivery-failures",
+        "Terminal delivery failures",
+        if health.failed_chunks == 0 {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        },
+        format!("{} terminally failed chunk(s)", health.failed_chunks),
+        (health.failed_chunks > 0).then(|| {
+            "Check channel credentials/connectivity and the `outbound_delivery_chunks.last_error` diagnostic field before replaying.".to_string()
+        }),
+    );
+    Ok(report)
 }
 
 fn migrate_channels_config(apply: bool) -> anyhow::Result<Option<(PathBuf, usize, bool)>> {

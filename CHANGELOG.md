@@ -16,6 +16,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - **Shared user-visible output sanitization.** Final channel delivery strips private reasoning tags
   and textual tool-call traces at the common delivery boundary, including scheduler and tool-driven
   messages, so runtime protocol details do not leak into Weixin or other chat channels.
+- **`microclaw doctor delivery`.** A read-only diagnostic now reports durable-ledger totals,
+  unfinished chunks, retry state, oldest unfinished work, and terminal delivery failures without
+  sending a test message or exposing credentials.
 
 - **Output guardrail (credential leak protection).** A new `output_guardrail` config block
   (`mode: off | redact | block`, default **off**) scans outbound bot messages for credential-like

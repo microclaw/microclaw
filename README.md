@@ -179,6 +179,15 @@ Sandbox-only diagnostics:
 microclaw doctor sandbox
 ```
 
+Delivery-only diagnostics (read-only; sends no message):
+
+```sh
+microclaw doctor delivery
+```
+
+This reports pending, sending, retrying, and terminally failed chunks from the durable delivery
+ledger, including the age of the oldest unfinished delivery.
+
 ### Uninstall (script)
 
 macOS/Linux:

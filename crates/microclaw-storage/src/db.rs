@@ -293,6 +293,17 @@ pub struct OutboxMessageRecord {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboundDeliveryHealth {
+    pub total_deliveries: i64,
+    pub delivered_deliveries: i64,
+    pub pending_chunks: i64,
+    pub sending_chunks: i64,
+    pub retry_chunks: i64,
+    pub failed_chunks: i64,
+    pub oldest_unfinished_at: Option<String>,
+}
+
 fn refresh_delivery_status(
     tx: &Transaction<'_>,
     chunk_id: i64,
@@ -5815,6 +5826,47 @@ impl Database {
         Ok(count)
     }
 
+    /// Read-only delivery health snapshot for diagnostics and monitoring.
+    pub fn outbound_delivery_health(&self) -> Result<OutboundDeliveryHealth, MicroClawError> {
+        let conn = self.lock_conn();
+        let (total_deliveries, delivered_deliveries): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END), 0)
+             FROM outbound_deliveries",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let (pending_chunks, sending_chunks, retry_chunks, failed_chunks, oldest_unfinished_at) =
+            conn.query_row(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status='sending' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status='retry' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0),
+                    MIN(CASE WHEN status != 'delivered' THEN created_at END)
+                 FROM outbound_delivery_chunks",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )?;
+        Ok(OutboundDeliveryHealth {
+            total_deliveries,
+            delivered_deliveries,
+            pending_chunks,
+            sending_chunks,
+            retry_chunks,
+            failed_chunks,
+            oldest_unfinished_at,
+        })
+    }
+
     pub fn request_subagent_cancel(
         &self,
         run_id: &str,
@@ -8970,6 +9022,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ids.len(), 3);
+        let health = db.outbound_delivery_health().unwrap();
+        assert_eq!(health.total_deliveries, 1);
+        assert_eq!(health.pending_chunks, 3);
 
         assert!(db.mark_outbox_sending(ids[0]).unwrap());
         db.mark_outbox_delivered(ids[0]).unwrap();
@@ -8999,6 +9054,13 @@ mod tests {
         let messages = db.get_all_messages(77).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "first second third");
+        let health = db.outbound_delivery_health().unwrap();
+        assert_eq!(health.delivered_deliveries, 1);
+        assert_eq!(
+            health.pending_chunks + health.sending_chunks + health.retry_chunks,
+            0
+        );
+        assert_eq!(health.failed_chunks, 0);
         cleanup(&dir);
     }
 
