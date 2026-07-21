@@ -60,6 +60,23 @@ It works with Anthropic and OpenAI-compatible providers, supports multi-step too
 - **Extensible where it matters**: add skills, MCP servers, plugins, hooks, and new channel adapters without replacing the core.
 - **Runs on a $5 VPS**: a single static Rust binary with embedded SQLite — no Python interpreter, no separate vector DB, no service mesh. RAM/CPU footprint is small enough for the cheapest cloud tier (1 vCPU / 1 GB).
 
+### Reliability you can verify
+
+MicroClaw's differentiator is not the longest feature checklist. It is making chat delivery predictable, recoverable, and easy to diagnose.
+
+| Failure scenario | Runtime guarantee | How to verify |
+|---|---|---|
+| A long reply exceeds a channel limit | The full reply is durably accepted first, then split into ordered chunks without dropping boundary bytes | Send a multiline reply and compare the received text byte-for-byte |
+| The process stops during delivery | Unfinished chunks resume after restart with stable idempotency keys | Restart MicroClaw during a long delivery, then run `microclaw doctor delivery` |
+| A scheduled task finishes while its channel is unavailable | Task execution and message delivery are tracked separately; the result remains queued for retry | Inspect task runs and `microclaw doctor delivery` |
+| The model emits reasoning or tool trace wrappers | Shared outbound sanitization removes private execution traces before any channel adapter sends text | Test the same prompt through different channels |
+
+This delivery ledger is shared by interactive replies, scheduled work, and recovery. Operators get one health command instead of channel-specific guesswork:
+
+```sh
+microclaw doctor delivery
+```
+
 ## Quick Start
 
 Install:
