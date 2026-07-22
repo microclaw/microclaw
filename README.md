@@ -980,6 +980,12 @@ From Windows, trigger the native Windows, macOS, and Linux GitHub Actions builde
 
 The script requires `git`, an authenticated GitHub CLI (`gh`), a clean worktree, a commit on `origin/main`, and successful CI. It creates the matching `v<version>` tag through the audited tag workflow, then builds and uploads release archives, checksums, and container images. Omit `-Wait` to return after triggering the asset workflow.
 
+The equivalent command on macOS or Linux is:
+
+```sh
+./scripts/trigger_release.sh --wait
+```
+
 On Unix, publish both installer mode (GitHub Release asset used by `install.sh`) and Homebrew mode with one command:
 
 ```sh

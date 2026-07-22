@@ -795,6 +795,12 @@ curl -sS http://127.0.0.1:10961/hooks/wake \
 
 脚本要求已安装 `git`、GitHub CLI (`gh`) 并完成登录，同时要求工作区干净、提交已进入 `origin/main` 且 CI 成功。它会通过可审计的标签工作流创建对应的 `v<版本>` 标签，再构建并上传各平台压缩包、校验文件和容器镜像。不加 `-Wait` 时，触发资产工作流后立即返回。
 
+macOS 或 Linux 上的等价命令为：
+
+```sh
+./scripts/trigger_release.sh --wait
+```
+
 在 Unix 环境中，可用一条命令同时发布安装脚本模式（GitHub Release 资产）和 Homebrew 模式：
 
 ```sh
