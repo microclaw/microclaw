@@ -42,7 +42,7 @@ pub enum ToolPolicyMode {
 /// nudges the model out of unproductive loops, this policy is a hard gate the
 /// operator sets ahead of time. Default mode is `off` — existing deployments
 /// see no behavior change.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolPolicyConfig {
     #[serde(default)]
     pub mode: ToolPolicyMode,
@@ -57,6 +57,52 @@ pub struct ToolPolicyConfig {
     /// Tool names exempt from `deny_tools` / `max_risk` (allow wins).
     #[serde(default)]
     pub allow_tools: Vec<String>,
+    /// Per-chat/per-principal capability enforcement. Separate from the
+    /// global mode so deployments can introduce grants in warn mode first.
+    #[serde(default)]
+    pub grants_mode: ToolPolicyMode,
+    #[serde(default = "default_control_chat_grant_bypass")]
+    pub control_chat_bypass: bool,
+    #[serde(default)]
+    pub grants: Vec<ToolGrantRule>,
+}
+
+impl Default for ToolPolicyConfig {
+    fn default() -> Self {
+        Self {
+            mode: ToolPolicyMode::Off,
+            deny_tools: Vec::new(),
+            max_risk: None,
+            allow_tools: Vec::new(),
+            grants_mode: ToolPolicyMode::Off,
+            control_chat_bypass: true,
+            grants: Vec::new(),
+        }
+    }
+}
+
+fn default_control_chat_grant_bypass() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ToolGrantRule {
+    /// Omit to match every chat.
+    #[serde(default)]
+    pub chat_id: Option<i64>,
+    /// Omit to match every channel.
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// Exact principal or trailing wildcard (`subagent:*`). Omit for all.
+    #[serde(default)]
+    pub principal: Option<String>,
+    /// Capability allowlist. `*` permits all tools subject to deny/max_risk.
+    #[serde(default)]
+    pub allow_tools: Vec<String>,
+    #[serde(default)]
+    pub deny_tools: Vec<String>,
+    #[serde(default)]
+    pub max_risk: Option<ToolRisk>,
 }
 
 /// Outcome of evaluating one pending tool call against the policy.
@@ -103,6 +149,94 @@ pub fn evaluate_tool_policy(cfg: &ToolPolicyConfig, tool_name: &str) -> PolicyDe
             }
         }
     }
+}
+
+/// Evaluate the global policy and the caller's least-privilege capability
+/// grants. A grant never weakens a global block.
+pub fn evaluate_tool_policy_for_auth(
+    cfg: &ToolPolicyConfig,
+    tool_name: &str,
+    auth: &microclaw_tools::runtime::ToolAuthContext,
+) -> PolicyDecision {
+    let global = evaluate_tool_policy(cfg, tool_name);
+    if matches!(global, PolicyDecision::Block(_))
+        || cfg.grants_mode == ToolPolicyMode::Off
+        || (cfg.control_chat_bypass && auth.is_control_chat())
+    {
+        return global;
+    }
+
+    let matching: Vec<&ToolGrantRule> = cfg
+        .grants
+        .iter()
+        .filter(|rule| grant_matches(rule, auth))
+        .collect();
+    let violation = if matching.is_empty() {
+        Some(format!(
+            "no tool grant matches chat {} principal `{}`",
+            auth.caller_chat_id, auth.principal
+        ))
+    } else if matching
+        .iter()
+        .any(|rule| tool_list_contains(&rule.deny_tools, tool_name))
+    {
+        Some(format!(
+            "tool `{tool_name}` is denied for principal `{}`",
+            auth.principal
+        ))
+    } else if matching.iter().any(|rule| {
+        rule
+            .max_risk
+            .is_some_and(|max_risk| tool_risk(tool_name) > max_risk)
+    }) {
+        Some(format!(
+            "tool `{tool_name}` risk `{}` exceeds a matching capability grant",
+            tool_risk(tool_name).as_str()
+        ))
+    } else if !matching
+        .iter()
+        .any(|rule| tool_list_contains(&rule.allow_tools, tool_name))
+    {
+        Some(format!(
+            "tool `{tool_name}` is not granted to chat {} principal `{}`",
+            auth.caller_chat_id, auth.principal
+        ))
+    } else {
+        None
+    };
+
+    match violation {
+        Some(reason) if cfg.grants_mode == ToolPolicyMode::Block => PolicyDecision::Block(reason),
+        Some(reason) => PolicyDecision::Warn(reason),
+        None => global,
+    }
+}
+
+fn grant_matches(
+    rule: &ToolGrantRule,
+    auth: &microclaw_tools::runtime::ToolAuthContext,
+) -> bool {
+    rule.chat_id
+        .is_none_or(|chat_id| chat_id == auth.caller_chat_id)
+        && rule
+            .channel
+            .as_deref()
+            .is_none_or(|channel| channel.eq_ignore_ascii_case(&auth.caller_channel))
+        && rule
+            .principal
+            .as_deref()
+            .is_none_or(|principal| wildcard_match(principal, &auth.principal))
+}
+
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    pattern
+        .strip_suffix('*')
+        .map_or(pattern == value, |prefix| value.starts_with(prefix))
+}
+
+fn tool_list_contains(list: &[String], tool_name: &str) -> bool {
+    list.iter()
+        .any(|pattern| pattern == "*" || wildcard_match(pattern, tool_name))
 }
 
 /// Default thresholds (keeping warnings light — these are nudges, not gates).
@@ -279,9 +413,66 @@ mod tests {
     #[test]
     fn policy_invalid_max_risk_rejected_at_parse() {
         // Typos now fail at config load instead of runtime fail-closed.
-        assert!(serde_yaml::from_str::<ToolPolicyConfig>("mode: block\nmax_risk: extreme").is_err());
+        assert!(
+            serde_yaml::from_str::<ToolPolicyConfig>("mode: block\nmax_risk: extreme").is_err()
+        );
         let ok: ToolPolicyConfig = serde_yaml::from_str("mode: block\nmax_risk: medium").unwrap();
         assert_eq!(ok.max_risk, Some(ToolRisk::Medium));
+    }
+
+    fn auth(chat_id: i64, principal: &str) -> microclaw_tools::runtime::ToolAuthContext {
+        microclaw_tools::runtime::ToolAuthContext {
+            caller_channel: "telegram".into(),
+            caller_chat_id: chat_id,
+            principal: principal.into(),
+            control_chat_ids: vec![],
+            env_files: vec![],
+        }
+    }
+
+    #[test]
+    fn capability_grants_are_chat_and_principal_scoped() {
+        let mut config = cfg(ToolPolicyMode::Off);
+        config.grants_mode = ToolPolicyMode::Block;
+        config.grants = vec![ToolGrantRule {
+            chat_id: Some(7),
+            principal: Some("subagent:*".into()),
+            allow_tools: vec!["read_*".into(), "web_search".into()],
+            max_risk: Some(ToolRisk::Low),
+            ..Default::default()
+        }];
+
+        assert_eq!(
+            evaluate_tool_policy_for_auth(&config, "read_file", &auth(7, "subagent:abc")),
+            PolicyDecision::Allow
+        );
+        assert!(matches!(
+            evaluate_tool_policy_for_auth(&config, "write_file", &auth(7, "subagent:abc")),
+            PolicyDecision::Block(_)
+        ));
+        assert!(matches!(
+            evaluate_tool_policy_for_auth(&config, "read_file", &auth(8, "subagent:abc")),
+            PolicyDecision::Block(_)
+        ));
+        assert!(matches!(
+            evaluate_tool_policy_for_auth(&config, "read_file", &auth(7, "main")),
+            PolicyDecision::Block(_)
+        ));
+    }
+
+    #[test]
+    fn global_block_cannot_be_weakened_by_grant() {
+        let mut config = cfg(ToolPolicyMode::Block);
+        config.deny_tools = vec!["bash".into()];
+        config.grants_mode = ToolPolicyMode::Block;
+        config.grants = vec![ToolGrantRule {
+            allow_tools: vec!["*".into()],
+            ..Default::default()
+        }];
+        assert!(matches!(
+            evaluate_tool_policy_for_auth(&config, "bash", &auth(7, "main")),
+            PolicyDecision::Block(_)
+        ));
     }
 
     #[test]

@@ -222,6 +222,10 @@ pub fn validate_execution_policy(
 pub struct ToolAuthContext {
     pub caller_channel: String,
     pub caller_chat_id: i64,
+    /// Stable authorization principal (`main`, `scheduler`, or
+    /// `subagent:<run-id>`). Tool grants can match this value or a trailing
+    /// wildcard such as `subagent:*`.
+    pub principal: String,
     pub control_chat_ids: Vec<i64>,
     pub env_files: Vec<String>,
 }
@@ -251,6 +255,11 @@ pub fn auth_context_from_input(input: &serde_json::Value) -> Option<ToolAuthCont
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
         .unwrap_or_default();
+    let principal = ctx
+        .get("principal")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main")
+        .to_string();
     let env_files = ctx
         .get("env_files")
         .and_then(|v| v.as_array())
@@ -263,6 +272,7 @@ pub fn auth_context_from_input(input: &serde_json::Value) -> Option<ToolAuthCont
     Some(ToolAuthContext {
         caller_channel,
         caller_chat_id,
+        principal,
         control_chat_ids,
         env_files,
     })
@@ -288,6 +298,7 @@ pub fn inject_auth_context(input: serde_json::Value, auth: &ToolAuthContext) -> 
     let mut auth_val = json!({
         "caller_channel": auth.caller_channel,
         "caller_chat_id": auth.caller_chat_id,
+        "principal": auth.principal,
         "control_chat_ids": auth.control_chat_ids,
     });
     if !auth.env_files.is_empty() {

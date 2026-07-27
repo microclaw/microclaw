@@ -873,6 +873,8 @@ struct UpdateConfigRequest {
 
     // Governance surface (web panel Governance tab).
     tool_policy: Option<crate::tool_guardrails::ToolPolicyConfig>,
+    egress_policy: Option<crate::config::EgressPolicyConfig>,
+    sandbox_credential_env_allowlist: Option<Vec<String>>,
     token_budget: Option<crate::config::TokenBudgetConfig>,
     heartbeat: Option<crate::config::HeartbeatConfig>,
 

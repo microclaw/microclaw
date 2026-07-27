@@ -1473,7 +1473,7 @@ enabled: true
 commands:
   - command: /echo
     run:
-      command: "printf 'echo=%s\n' {{args}}"
+      command: "echo echo={{args}}"
       timeout_secs: 5
       execution_policy: host_only
 "#,
@@ -1498,7 +1498,7 @@ enabled: true
 commands:
   - command: /echo
     run:
-      command: "printf 'echo=%s\n' {{args}}"
+      command: "echo echo={{args}}"
       timeout_secs: 5
       execution_policy: host_only
 "#,
@@ -1528,7 +1528,7 @@ tools:
       properties: {}
       required: []
     run:
-      command: "printf sandbox"
+      command: "echo sandbox"
       timeout_secs: 5
       execution_policy: sandbox_only
   - name: dual_tool
@@ -1538,7 +1538,7 @@ tools:
       properties: {}
       required: []
     run:
-      command: "printf dual-ok"
+      command: "echo dual-ok"
       timeout_secs: 5
       execution_policy: dual
 "#,
@@ -1619,7 +1619,7 @@ context_providers:
   - name: doc-run
     kind: document
     run:
-      command: "printf 'Doc for chat=%s' {{chat_id}}"
+      command: "echo Doc for chat={{chat_id}}"
       timeout_secs: 5
       execution_policy: host_only
 "#,

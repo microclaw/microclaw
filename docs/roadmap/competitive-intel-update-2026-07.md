@@ -1,6 +1,6 @@
 # Competitive Intel Update — 2026-07-05
 
-Status: **intel refresh** · Companion to
+Status: **intel refresh, plan updated 2026-07-27** · Companion to
 [`competitive-landscape-and-direction-2026-h2.md`](./competitive-landscape-and-direction-2026-h2.md) (2026-06-20)
 and [`v0.3.0-completion-and-v0.4.0-kickoff.md`](./v0.3.0-completion-and-v0.4.0-kickoff.md)
 
@@ -97,12 +97,17 @@ becomes a stated, benchmarked property of the $5-VPS pitch rather than an implic
 3. Sandbox credential hygiene (P4c), then gVisor/SSH backends.
 
 **v0.4.0 (adjusted):**
-4. Native egress control (headline, unchanged).
-5. Per-chat / per-agent least-privilege tool authorization (unchanged).
-6. Resilience remainder: interrupted-tool-call recovery + non-web progress heartbeat
-   (DLQ replay ✅ shipped #450).
+4. Native egress control — **implemented in the current change; merge pending** for configured endpoints and shared
+   tool-input HTTP(S) destinations; OS/container enforcement remains the boundary for arbitrary
+   dynamically constructed command traffic.
+5. Per-chat / per-agent least-privilege tool authorization — **implemented; merge pending**, including
+   main, scheduler, channel, and subagent principals.
+6. Resilience remainder: interrupted-tool-call recovery — **implemented; merge pending** with
+   safe-boundary resume and uncertain-side-effect stop; non-web progress heartbeat remains.
 7. Contract-governed orchestration **with completion-contract verification** (C+E).
 8. Opt-in heartbeat proactivity (G) + token budget caps — small items, schedule opportunistically.
+9. TypeScript plugin host — RFC 0006 proposes deterministic builds, supervised stdio JSON-RPC,
+   per-plugin principals, and mediated filesystem/network/secret capabilities; no WASM.
 
 Guarantees unchanged: no default behavior change; every autonomous/isolation-changing feature
 off by default; per-PR checklist from `feature-completion-tracking-board.md` applies.

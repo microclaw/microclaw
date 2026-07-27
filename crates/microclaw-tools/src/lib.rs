@@ -1,6 +1,7 @@
 //! Tool runtime and built-in tool implementations for MicroClaw.
 
 pub mod command_runner;
+pub mod egress;
 pub mod env_file;
 pub mod media_client;
 pub mod path_guard;

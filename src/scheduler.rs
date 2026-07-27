@@ -240,6 +240,7 @@ async fn verify_task_contract(
         auth: microclaw_tools::runtime::ToolAuthContext {
             caller_channel: routing.channel_name.clone(),
             caller_chat_id: task.chat_id,
+            principal: "scheduler".to_string(),
             control_chat_ids: state.config.control_chat_ids.clone(),
             env_files: Vec::new(),
         },

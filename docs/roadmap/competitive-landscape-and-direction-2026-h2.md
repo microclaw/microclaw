@@ -1,8 +1,14 @@
 # Competitive Landscape & Direction — 2026 H2
 
-Status: **strategy** · Date: 2026-06-20 · Companion to
+Status: **historical strategy; sequence superseded 2026-07-27** · Date: 2026-06-20 · Companion to
 [`v0.3.0-self-improving-runtime.md`](./v0.3.0-self-improving-runtime.md) and
 [`v0.3.0-completion-and-v0.4.0-kickoff.md`](./v0.3.0-completion-and-v0.4.0-kickoff.md)
+
+> This file preserves the 2026-06-20 competitive snapshot. Its delivery
+> sequence is no longer current. See
+> [`competitive-intel-update-2026-07.md`](./competitive-intel-update-2026-07.md)
+> and
+> [`durable-secure-runtime-2026-07.md`](./durable-secure-runtime-2026-07.md).
 
 A fresh (mid-2026) competitive-intelligence pass on the two reference projects, what it changes
 for MicroClaw, and the resulting direction. Confidence is marked per claim: **[primary]** =
@@ -110,14 +116,14 @@ The existing v0.3.0→v0.4.0 plan holds. The intel produces **four adjustments**
 | C | **Formalize `subagents_orchestrate` into a contract-governed orchestration story** (a Workboard analog: declared tasks, dependencies, deterministic routing, fan-in). | OpenClaw Workboard + Hermes Raft [primary] | New v0.4.0 line item; builds on existing subagents. |
 | D | **Keep the skill curator deterministic and skills-only**; explicitly *reject* code/prompt self-evolution. Add the trajectory-export schema as a deferred researcher affordance. | Hermes self-evolution as cautionary contrast [primary] | Tightens P2 scope; no new heavy work. |
 
-### Resulting sequence
+### Historical proposed sequence
 
 **v0.3.0 finish (unchanged order, from the completion doc):**
 1. Skill curator (P2) — deterministic, skills-only, creates *disabled* + security-scanned skills.
 2. Finish guardrails (P5b) — warn→block policy + post-output secret/PII scan.
 3. Sandbox credential hygiene (P4c), then gVisor/SSH backends.
 
-**v0.4.0 — "Secure-by-default, durable, governed" (intel-adjusted):**
+**v0.4.0 — "Secure-by-default, durable, governed" (historical proposal):**
 4. **Native network egress control** (Track B headline; fail-closed, auditable, in-process).
 5. **Per-chat / per-agent least-privilege tool authorization** (OWASP Agentic Top 10).
 6. **Resilience/recovery** (Track C, now table stakes): interrupted-tool-call recovery, resumable

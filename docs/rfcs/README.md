@@ -17,6 +17,7 @@ This directory tracks RFCs for the MicroClaw feature-completion program.
 - `0003-session-fork-model.md`
 - `0004-metrics-naming.md`
 - `0005-subagents-runtime-v1.md`
+- `0006-typescript-plugin-host.md`
 
 ## Status Lifecycle
 

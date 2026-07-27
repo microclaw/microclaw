@@ -106,6 +106,24 @@ timezone: "UTC"
 #   deny_tools: [bash]
 #   max_risk: medium
 #   allow_tools: []
+#   grants_mode: block
+#   control_chat_bypass: true
+#   grants:
+#     - channel: slack
+#       principal: "subagent:*"
+#       allow_tools: [read_file, grep, web_search]
+#       deny_tools: [bash, send_message]
+#       max_risk: medium
+#
+# Central outbound destination policy. In `block` mode configured endpoints
+# are validated during startup and HTTP(S) URLs in tool inputs are checked at
+# the shared registry boundary. Keep `sandbox.no_network: true` for shell-level
+# enforcement because a command can construct a destination dynamically.
+# egress_policy:
+#   mode: block
+#   allow_hosts: [api.openai.com, "*.example.com"]
+#   deny_hosts: []
+#   block_private_ips: true
 
 # RTK (Rust Token Killer) integration — opt-in, off by default.
 # When enabled, bash tool commands are passed through `rtk rewrite` before
@@ -325,6 +343,9 @@ web_session_idle_ttl_seconds: 300
 #   security_profile: "hardened"
 #   no_network: true
 #   require_runtime: true
+#   # Credential-like variables from tool/skill dotenv files are withheld.
+#   # List only exact variable names a reviewed sandboxed workload requires.
+#   credential_env_allowlist: []
 #   # mount_allowlist_path: "~/.microclaw/sandbox-mount-allowlist.txt"
 
 # Concurrent sub-agents (the "specialist team" that runs tasks in the background).

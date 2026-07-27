@@ -8,6 +8,23 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Durable coworker checkpoints.** Interactive agent turns now persist
+  provider-neutral message snapshots at safe model/tool-result boundaries. Fresh safe
+  checkpoints resume automatically after restart; interruptions during tool execution
+  stop with progress/tool evidence and never blindly replay an uncertain side effect.
+  `/status`, Web Governance, and `turn_recovery` audit events expose the lifecycle.
+- **Scoped secure-runtime policy.** Tool authorization can now apply least-privilege
+  grants by chat, channel, and principal (main, scheduler, channel, or subagent), with
+  global policy blocks remaining authoritative. A central egress policy validates
+  configured endpoints and tool-input HTTP(S) destinations, including private/metadata
+  address blocking and host allow/deny lists.
+- **Sandbox credential isolation.** Dotenv files are no longer forwarded wholesale to
+  containers. Credential-like variables are withheld by default and require an exact
+  `sandbox.credential_env_allowlist` entry. Doctor/config self-check and Web Governance
+  expose the new capability, egress, and credential posture.
+- Added RFC 0006 for TypeScript-authored plugins: deterministic locked builds,
+  supervised stdio JSON-RPC host, per-plugin principals, mediated filesystem/network/
+  secret APIs, container isolation, and a phased SDK/runtime/distribution plan.
 - Added `scripts/trigger_release.ps1` so Windows operators can validate and trigger the audited
   tag plus native Windows, macOS, Linux, checksum, and container release workflows with one command.
 - Added the equivalent `scripts/trigger_release.sh` entry point for macOS and Linux release operators.

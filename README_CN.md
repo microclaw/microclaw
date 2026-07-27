@@ -467,6 +467,13 @@ MicroClaw 支持 [Anthropic Agent Skills](https://github.com/anthropics/skills) 
 - 未知 slash 命令返回 `Unknown command.`。
 - 需要中断正在执行的请求时用 `/stop`；仅清空上下文用 `/clear`；清空上下文并重置定时任务用 `/reset`。
 
+## 插件与 TypeScript 方向
+
+当前插件以 YAML/JSON manifest 提供 slash command、动态工具和上下文
+provider。TypeScript 插件计划采用进程外、能力受限的 plugin host，而不是把
+JavaScript 引擎嵌入 Rust 主进程。协议、安全模型、依赖锁定、打包规则与分阶段
+落地计划见 `docs/rfcs/0006-typescript-plugin-host.md`。
+
 ## MCP
 
 MicroClaw 支持从以下位置加载 MCP 配置并合并：
@@ -1037,6 +1044,29 @@ microclaw gateway uninstall
 
 `*` 需要至少启用一个渠道配置；`web_enabled` 默认是开启的。
 
+## Durable Coworker 与 Secure Runtime
+
+交互式 agent turn 会在 provider 无关的安全边界持久化检查点。进程在模型调用前
+或工具结果落库后退出时，重启后可自动继续；如果退出发生在工具执行中，运行时会
+停止并保留工具与进度证据，请用户核对外部状态，绝不会盲目重放可能已生效的副作用。
+`/status` 与 Web Governance 面板可查看活动检查点和最近的恢复结果。
+
+安全运行时由三层策略组成：
+
+- `tool_policy.grants_mode` 与 `tool_policy.grants`：按 chat、channel 和
+  principal（包括 `subagent:*`）分配最小工具能力，且不能放宽全局拒绝规则。
+- `egress_policy`：在共享工具边界检查 HTTP(S) 目标，并在启动时校验已配置
+  endpoint；生产环境可使用 `allow_hosts` 收紧到明确域名。
+- `sandbox.credential_env_allowlist`：dotenv 文件不会整份传入容器；疑似 token、
+  key、secret、password 或 auth 的变量默认隔离，只有精确列名才会放行。
+
+命令可能动态构造网络目标，因此需要强保证时仍应保持
+`sandbox.mode: all`、`sandbox.no_network: true`、`require_runtime: true` 和
+`security_profile: hardened`。运行 `microclaw doctor` 可检查上述策略是否启用。
+
+运维与故障注入说明见 `docs/operations/durable-coworker.md`，完整安全配置与渐进
+启用步骤见 `docs/security/secure-runtime.md`。
+
 ## Docker 沙箱
 
 用于让 `bash` 工具在 Docker 容器执行，而不是在宿主执行。
@@ -1057,7 +1087,8 @@ sandbox:
   image: "ubuntu:25.10"
   container_prefix: "microclaw-sandbox"
   no_network: true
-  require_runtime: false
+  require_runtime: true
+  credential_env_allowlist: [] # 默认不向容器传入疑似凭据变量
   # 可选外部白名单文件
   # mount_allowlist_path: "~/.microclaw/sandbox-mount-allowlist.txt"
 ```
@@ -1076,6 +1107,8 @@ microclaw start
 
 说明：
 - `sandbox.mode: "off"`（默认）时，`bash` 在宿主执行。
+- dotenv 文件不会整份传给容器；疑似凭据变量仅在
+  `sandbox.credential_env_allowlist` 精确列出时放行。
 - `mode: "all"` 但 Docker 不可用时：
   - `require_runtime: false`：降级宿主执行并告警。
   - `require_runtime: true`：直接报错，不降级。

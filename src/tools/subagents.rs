@@ -1435,6 +1435,7 @@ impl Tool for SessionsSpawnTool {
         let auth_async = ToolAuthContext {
             caller_channel: auth.caller_channel.clone(),
             caller_chat_id: chat_id,
+            principal: format!("subagent:{run_id}"),
             control_chat_ids: auth.control_chat_ids.clone(),
             env_files: auth.env_files.clone(),
         };

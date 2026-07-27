@@ -46,6 +46,10 @@ fn default_sandbox_cap_add() -> Vec<String> {
     Vec::new()
 }
 
+fn default_sandbox_credential_env_allowlist() -> Vec<String> {
+    Vec::new()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxMode {
@@ -110,6 +114,11 @@ pub struct SandboxConfig {
     pub cpu_quota: Option<f64>,
     #[serde(default)]
     pub pids_limit: Option<u32>,
+    /// Credential-like environment variables are withheld from container
+    /// processes unless their exact name appears here. Dotenv files are parsed
+    /// on the host and are never mounted or passed wholesale to the container.
+    #[serde(default = "default_sandbox_credential_env_allowlist")]
+    pub credential_env_allowlist: Vec<String>,
 }
 
 impl Default for SandboxConfig {
@@ -127,6 +136,7 @@ impl Default for SandboxConfig {
             memory_limit: None,
             cpu_quota: None,
             pids_limit: None,
+            credential_env_allowlist: default_sandbox_credential_env_allowlist(),
         }
     }
 }
@@ -380,10 +390,7 @@ impl Sandbox for DockerSandbox {
         if let Some(dir) = &opts.working_dir {
             args.extend(["-w".to_string(), dir.display().to_string()]);
         }
-        for env_file in &opts.env_files {
-            args.extend(["--env-file".to_string(), env_file.display().to_string()]);
-        }
-        for (k, v) in &opts.envs {
+        for (k, v) in sandbox_environment(opts, &self.config.credential_env_allowlist) {
             args.extend(["-e".to_string(), format!("{k}={v}")]);
         }
         args.push(name);
@@ -480,6 +487,55 @@ impl SandboxRouter {
         self.backend.ensure_ready(session_key).await?;
         self.backend.exec(session_key, command, opts).await
     }
+}
+
+fn sandbox_environment(
+    opts: &SandboxExecOptions,
+    credential_allowlist: &[String],
+) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    for env_file in &opts.env_files {
+        if let Ok(content) = std::fs::read_to_string(env_file) {
+            for (key, value) in crate::env_file::parse_dotenv(&content) {
+                if sandbox_env_allowed(&key, credential_allowlist) {
+                    env.insert(key, value);
+                }
+            }
+        }
+    }
+    for (key, value) in &opts.envs {
+        if sandbox_env_allowed(key, credential_allowlist) {
+            env.insert(key.clone(), value.clone());
+        }
+    }
+    env
+}
+
+fn sandbox_env_allowed(name: &str, credential_allowlist: &[String]) -> bool {
+    if credential_allowlist
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(name))
+    {
+        return true;
+    }
+    !looks_like_credential_env(name)
+}
+
+fn looks_like_credential_env(name: &str) -> bool {
+    let normalized = name.to_ascii_uppercase();
+    [
+        "API_KEY",
+        "ACCESS_KEY",
+        "PRIVATE_KEY",
+        "SECRET",
+        "TOKEN",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "AUTHORIZATION",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
 }
 
 pub async fn exec_host_command(
@@ -743,5 +799,46 @@ mod tests {
             Some(ContainerRuntime::Podman)
         );
         assert_eq!(pick_runtime(SandboxBackend::Podman, true, false), None);
+    }
+
+    #[test]
+    fn sandbox_environment_withholds_credentials_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join("plugin.env");
+        std::fs::write(
+            &env_file,
+            "PUBLIC_MODE=fast\nSERVICE_API_KEY=do-not-forward\n",
+        )
+        .unwrap();
+        let opts = SandboxExecOptions {
+            timeout: Duration::from_secs(1),
+            working_dir: None,
+            envs: HashMap::from([
+                ("LANG".to_string(), "C.UTF-8".to_string()),
+                ("AUTH_TOKEN".to_string(), "secret".to_string()),
+            ]),
+            env_files: vec![env_file],
+        };
+
+        let env = sandbox_environment(&opts, &[]);
+
+        assert_eq!(env.get("PUBLIC_MODE").map(String::as_str), Some("fast"));
+        assert_eq!(env.get("LANG").map(String::as_str), Some("C.UTF-8"));
+        assert!(!env.contains_key("SERVICE_API_KEY"));
+        assert!(!env.contains_key("AUTH_TOKEN"));
+    }
+
+    #[test]
+    fn sandbox_environment_forwards_explicitly_allowed_credential() {
+        let opts = SandboxExecOptions {
+            timeout: Duration::from_secs(1),
+            working_dir: None,
+            envs: HashMap::from([("PLUGIN_TOKEN".to_string(), "secret".to_string())]),
+            env_files: Vec::new(),
+        };
+
+        let env = sandbox_environment(&opts, &["plugin_token".to_string()]);
+
+        assert_eq!(env.get("PLUGIN_TOKEN").map(String::as_str), Some("secret"));
     }
 }

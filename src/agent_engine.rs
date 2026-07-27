@@ -28,6 +28,10 @@ use opentelemetry_semantic_conventions::attribute::{
     GEN_AI_USAGE_OUTPUT_TOKENS, USER_ID,
 };
 
+const RUNTIME_RESUME_PROMPT: &str = "[runtime_resume]: The previous process stopped at a safe \
+checkpoint. Continue the unfinished request from the stored tool results. Do not repeat completed \
+side effects; finish the task and explain any remaining uncertainty.";
+
 #[derive(Debug, Clone, Copy)]
 pub struct AgentRequestContext<'a> {
     pub caller_channel: &'a str,
@@ -160,6 +164,49 @@ pub async fn process_with_agent_with_events_guarded(
     event_tx: Option<&UnboundedSender<AgentEvent>>,
     turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
 ) -> anyhow::Result<String> {
+    process_with_agent_with_events_guarded_mode(
+        state,
+        context,
+        override_prompt,
+        image_data,
+        event_tx,
+        turn_guard,
+        false,
+    )
+    .await
+}
+
+/// Continue an interactive turn from a durable, provider-neutral checkpoint.
+///
+/// Startup recovery restores the checkpoint into `sessions` first. The
+/// runtime prompt is deliberately an override so explicit-memory fast paths
+/// cannot re-handle the original user message, while `track_turn=true` keeps
+/// the resumed run itself crash recoverable.
+pub async fn resume_interrupted_turn(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+) -> anyhow::Result<String> {
+    process_with_agent_with_events_guarded_mode(
+        state,
+        context,
+        Some(RUNTIME_RESUME_PROMPT),
+        None,
+        None,
+        None,
+        true,
+    )
+    .await
+}
+
+async fn process_with_agent_with_events_guarded_mode(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+    override_prompt: Option<&str>,
+    image_data: Option<(String, String)>,
+    event_tx: Option<&UnboundedSender<AgentEvent>>,
+    turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
+    resume_interrupted: bool,
+) -> anyhow::Result<String> {
     // Use provided guard, or acquire per-chat turn lock.
     let _turn_guard = match turn_guard {
         Some(g) => Some(g),
@@ -190,12 +237,18 @@ pub async fn process_with_agent_with_events_guarded(
     // mid-turn the row survives and startup recovery notifies the chat.
     // Scheduler-driven runs (override_prompt) have their own recovery path
     // (recover_running_tasks + DLQ), so they are not tracked here.
-    let track_turn = override_prompt.is_none();
+    let track_turn = override_prompt.is_none() || resume_interrupted;
     if track_turn {
         let chat_id = context.chat_id;
         let channel = context.caller_channel.to_string();
+        let chat_type = context.chat_type.to_string();
+        let run_id_text = run_id.to_string();
         if let Err(e) = call_blocking(state.db.clone(), move |db| {
-            db.mark_turn_active(chat_id, &channel)
+            if resume_interrupted {
+                db.mark_turn_recovery_started(chat_id, &run_id_text)
+            } else {
+                db.mark_turn_active_with_context(chat_id, &channel, &chat_type, Some(&run_id_text))
+            }
         })
         .await
         {
@@ -804,12 +857,25 @@ async fn process_with_agent_logic(
         load_messages_from_db(state, chat_id, context.chat_type, context.caller_channel).await?
     };
 
-    // If override_prompt is provided (from scheduler), add it as a user message
+    // Override prompts normally come from the scheduler. Startup recovery uses
+    // an explicit runtime marker instead and avoids stacking the same marker
+    // if recovery itself crashes before the next model response.
     if let Some(prompt) = override_prompt {
-        messages.push(Message {
-            role: "user".into(),
-            content: MessageContent::Text(format!("[scheduler]: {prompt}")),
+        let prompt = if prompt == RUNTIME_RESUME_PROMPT {
+            prompt.to_string()
+        } else {
+            format!("[scheduler]: {prompt}")
+        };
+        let already_present = messages.last().is_some_and(|message| {
+            message.role == "user"
+                && matches!(&message.content, MessageContent::Text(text) if text == &prompt)
         });
+        if !already_present {
+            messages.push(Message {
+                role: "user".into(),
+                content: MessageContent::Text(prompt),
+            });
+        }
     }
 
     // Expand `@`-prefix context references in the most recent user message
@@ -1012,6 +1078,7 @@ async fn process_with_agent_logic(
     let mut tool_auth = ToolAuthContext {
         caller_channel: context.caller_channel.to_string(),
         caller_chat_id: chat_id,
+        principal: "main".to_string(),
         control_chat_ids: state.config.control_chat_ids.clone(),
         env_files: skill_env_files.clone(),
     };
@@ -1091,6 +1158,19 @@ async fn process_with_agent_logic(
     }
 
     for iteration in 0..state.config.max_tool_iterations {
+        // Safe replay boundary: all preceding tool calls have paired results
+        // and no tool is currently executing.
+        checkpoint_turn_state(
+            state,
+            chat_id,
+            "calling_llm",
+            iteration,
+            &messages,
+            true,
+            Some(format!("step {}: calling model", iteration + 1)),
+            None,
+        )
+        .await;
         if let Some(tx) = event_tx {
             let _ = tx.send(AgentEvent::Iteration {
                 iteration: iteration + 1,
@@ -1675,6 +1755,33 @@ async fn process_with_agent_logic(
                 tool_errors: 0,
             };
 
+            if !pending_calls.is_empty() {
+                let tool_summary = pending_calls
+                    .iter()
+                    .map(|call| {
+                        format!(
+                            "{}({})",
+                            call.name,
+                            crate::tools::tool_risk(&call.name).as_str()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                // Never claim this boundary is resumable: a process death can
+                // leave an external side effect committed without a result.
+                checkpoint_turn_state(
+                    state,
+                    chat_id,
+                    "executing_tools",
+                    iteration,
+                    &messages,
+                    false,
+                    Some(format!("step {}: executing tools", iteration + 1)),
+                    Some(tool_summary),
+                )
+                .await;
+            }
+
             let mut tool_results = crate::tool_executor::execute_tool_batch(
                 state,
                 &pending_calls,
@@ -1806,6 +1913,17 @@ async fn process_with_agent_logic(
                 role: "user".into(),
                 content: MessageContent::Blocks(tool_results),
             });
+            checkpoint_turn_state(
+                state,
+                chat_id,
+                "ready_for_llm",
+                iteration + 1,
+                &messages,
+                true,
+                Some(format!("step {}: tool results stored", iteration + 1)),
+                None,
+            )
+            .await;
             if batch_ctx.waiting_for_user_approval {
                 persist_session_with_skill_env_files(
                     state,
@@ -1974,6 +2092,45 @@ fn effective_data_root_dir(config: &crate::config::Config) -> std::path::PathBuf
         data_dir.parent().unwrap_or(&data_dir).to_path_buf()
     } else {
         data_dir
+    }
+}
+
+#[expect(clippy::too_many_arguments)]
+async fn checkpoint_turn_state(
+    state: &AppState,
+    chat_id: i64,
+    phase: &'static str,
+    iteration: usize,
+    messages: &[Message],
+    resumable: bool,
+    progress_text: Option<String>,
+    tool_summary: Option<String>,
+) {
+    let session_json = if resumable {
+        let mut checkpoint_messages = messages.to_vec();
+        strip_images_for_session(&mut checkpoint_messages);
+        serde_json::to_string(&checkpoint_messages).ok()
+    } else {
+        None
+    };
+    let db = state.db.clone();
+    if let Err(error) = call_blocking(db, move |db| {
+        db.checkpoint_active_turn(
+            chat_id,
+            phase,
+            iteration as i64,
+            session_json.as_deref(),
+            resumable,
+            progress_text.as_deref(),
+            tool_summary.as_deref(),
+        )
+    })
+    .await
+    {
+        warn!(
+            chat_id,
+            phase, iteration, "failed to persist durable turn checkpoint: {error}"
+        );
     }
 }
 
@@ -2902,7 +3059,7 @@ mod tests {
                     content: vec![ResponseContentBlock::ToolUse {
                         id: "tool-bash-1".to_string(),
                         name: "bash".to_string(),
-                        input: json!({"command": "printf approved"}),
+                        input: json!({"command": "echo approved"}),
                         thought_signature: None,
                     }],
                     stop_reason: Some("tool_use".to_string()),
@@ -2954,7 +3111,7 @@ mod tests {
                     content: vec![ResponseContentBlock::ToolUse {
                         id: format!("tool-bash-retry-{idx}"),
                         name: "bash".to_string(),
-                        input: json!({"command": "printf approved"}),
+                        input: json!({"command": "echo approved"}),
                         thought_signature: None,
                     }],
                     stop_reason: Some("tool_use".to_string()),

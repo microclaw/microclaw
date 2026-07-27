@@ -50,7 +50,7 @@ pub async fn api_governance(
         .collect();
 
     let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
-    let (runs_24h, contract_tasks, dlq_pending, outbox_pending) =
+    let (runs_24h, contract_tasks, dlq_pending, outbox_pending, active_turns, recoveries) =
         call_blocking(state.app_state.db.clone(), move |db| {
             let (total, success) = db.get_task_run_summary_since(Some(&since))?;
             let contract_tasks = db
@@ -65,11 +65,15 @@ pub async fn api_governance(
                 .count();
             let dlq_pending = db.list_scheduled_task_dlq(None, None, false, 100)?.len();
             let outbox_pending = db.count_outbox_pending()?;
+            let active_turns = db.list_active_turns()?;
+            let recoveries = db.list_audit_logs(Some("turn_recovery"), 20)?;
             Ok::<_, microclaw_core::error::MicroClawError>((
                 (total, success),
                 contract_tasks,
                 dlq_pending,
                 outbox_pending,
+                active_turns,
+                recoveries,
             ))
         })
         .await
@@ -82,6 +86,20 @@ pub async fn api_governance(
             "deny_tools": tool_policy.deny_tools,
             "allow_tools": tool_policy.allow_tools,
             "max_risk": tool_policy.max_risk,
+            "grants_mode": tool_policy.grants_mode,
+            "control_chat_bypass": tool_policy.control_chat_bypass,
+            "grants": tool_policy.grants,
+        },
+        "egress_policy": {
+            "mode": config.egress_policy.mode,
+            "allow_hosts": config.egress_policy.allow_hosts,
+            "deny_hosts": config.egress_policy.deny_hosts,
+            "block_private_ips": config.egress_policy.block_private_ips,
+        },
+        "sandbox_credentials": {
+            "credential_env_allowlist": config.sandbox.credential_env_allowlist,
+            "no_network": config.sandbox.no_network,
+            "security_profile": config.sandbox.security_profile,
         },
         "token_budget": {
             "daily_per_chat": token_budget.daily_per_chat,
@@ -105,6 +123,26 @@ pub async fn api_governance(
         },
         "delivery": {
             "outbox_pending": outbox_pending,
+        },
+        "durable_runs": {
+            "active": active_turns.into_iter().map(|turn| json!({
+                "run_id": turn.run_id,
+                "chat_id": turn.chat_id,
+                "channel": turn.channel,
+                "phase": turn.phase,
+                "iteration": turn.iteration,
+                "resumable": turn.resumable,
+                "progress": turn.progress_text,
+                "tool_summary": turn.tool_summary,
+                "started_at": turn.started_at,
+                "last_checkpoint_at": turn.last_checkpoint_at,
+            })).collect::<Vec<_>>(),
+            "recent_recoveries": recoveries.into_iter().map(|event| json!({
+                "action": event.action,
+                "status": event.status,
+                "detail": event.detail,
+                "created_at": event.created_at,
+            })).collect::<Vec<_>>(),
         },
     })))
 }

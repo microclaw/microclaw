@@ -488,6 +488,7 @@ fn build_report() -> DoctorReport {
     check_web_fetch_validation(&mut report);
     check_context_layers(&mut report);
     check_bash_dangerous_patterns(&mut report);
+    check_secure_runtime_policy(&mut report);
     check_path(&mut report);
     check_shell(&mut report);
     check_browser_dependency(&mut report);
@@ -511,11 +512,83 @@ fn build_sandbox_report() -> DoctorReport {
     check_config(&mut report);
     check_acp_subagent_config(&mut report);
     check_web_fetch_validation(&mut report);
+    check_secure_runtime_policy(&mut report);
     check_sandbox_config(&mut report);
     check_docker_runtime(&mut report);
     check_sandbox_image(&mut report);
     check_mount_allowlist(&mut report);
     report
+}
+
+fn check_secure_runtime_policy(report: &mut DoctorReport) {
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(_) => return,
+    };
+    let grants_enabled =
+        config.tool_policy.grants_mode != crate::tool_guardrails::ToolPolicyMode::Off;
+    report.push(
+        "security.capability_grants",
+        "Tool capability grants",
+        if grants_enabled {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Warn
+        },
+        format!(
+            "mode={:?}; {} scoped grant(s); control_chat_bypass={}",
+            config.tool_policy.grants_mode,
+            config.tool_policy.grants.len(),
+            config.tool_policy.control_chat_bypass
+        )
+        .to_ascii_lowercase(),
+        (!grants_enabled).then(|| {
+            "Set tool_policy.grants_mode to warn or block and define least-privilege grants."
+                .to_string()
+        }),
+    );
+
+    let egress_enabled = config.egress_policy.mode != crate::config::EgressPolicyMode::Off;
+    report.push(
+        "security.egress_policy",
+        "Outbound network policy",
+        if egress_enabled {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Warn
+        },
+        format!(
+            "mode={:?}; allow_hosts={}; deny_hosts={}; block_private_ips={}",
+            config.egress_policy.mode,
+            config.egress_policy.allow_hosts.len(),
+            config.egress_policy.deny_hosts.len(),
+            config.egress_policy.block_private_ips
+        )
+        .to_ascii_lowercase(),
+        (!egress_enabled).then(|| {
+            "Set egress_policy.mode to warn or block; use allow_hosts for production lockdown."
+                .to_string()
+        }),
+    );
+
+    report.push(
+        "security.sandbox_credentials",
+        "Sandbox credential boundary",
+        if config.sandbox.no_network {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Warn
+        },
+        format!(
+            "network_disabled={}; {} credential variable(s) explicitly allowed",
+            config.sandbox.no_network,
+            config.sandbox.credential_env_allowlist.len()
+        ),
+        (!config.sandbox.no_network).then(|| {
+            "Set sandbox.no_network: true unless a reviewed sandbox workload requires network."
+                .to_string()
+        }),
+    );
 }
 
 fn check_config(report: &mut DoctorReport) {
@@ -567,7 +640,10 @@ fn check_channels(report: &mut DoctorReport) {
             "Channels",
             CheckStatus::Fail,
             "no channels are enabled".to_string(),
-            Some("Enable a channel with `channels.<name>.enabled: true`, or run `microclaw setup`.".to_string()),
+            Some(
+                "Enable a channel with `channels.<name>.enabled: true`, or run `microclaw setup`."
+                    .to_string(),
+            ),
         );
     } else {
         report.push(
@@ -583,7 +659,10 @@ fn check_channels(report: &mut DoctorReport) {
             "channels.configured_disabled",
             "Channels configured but disabled",
             CheckStatus::Warn,
-            format!("{} configured but not enabled", configured_but_disabled.join(", ")),
+            format!(
+                "{} configured but not enabled",
+                configured_but_disabled.join(", ")
+            ),
             Some(format!(
                 "Set `channels.{}.enabled: true` to activate (or remove the unused config).",
                 configured_but_disabled[0]
@@ -601,8 +680,16 @@ fn check_data_dirs(report: &mut DoctorReport) {
         Err(_) => return,
     };
     for (id, label, raw) in [
-        ("storage.data_dir", "Data dir writable", config.runtime_data_dir()),
-        ("storage.working_dir", "Working dir writable", config.working_dir.clone()),
+        (
+            "storage.data_dir",
+            "Data dir writable",
+            config.runtime_data_dir(),
+        ),
+        (
+            "storage.working_dir",
+            "Working dir writable",
+            config.working_dir.clone(),
+        ),
     ] {
         let path = PathBuf::from(shellexpand::tilde(&raw).as_ref());
         match check_dir_writable(&path) {
@@ -627,8 +714,7 @@ fn check_data_dirs(report: &mut DoctorReport) {
 /// Create `dir` if needed and confirm a file can be written there, cleaning up
 /// the probe file. Returns a human-readable reason on failure.
 fn check_dir_writable(dir: &std::path::Path) -> Result<(), String> {
-    std::fs::create_dir_all(dir)
-        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let probe = dir.join(format!(".microclaw-doctor-{}.tmp", std::process::id()));
     std::fs::write(&probe, b"ok").map_err(|e| format!("cannot write to {}: {e}", dir.display()))?;
     let _ = std::fs::remove_file(&probe);
@@ -663,7 +749,10 @@ fn check_llm_credentials(report: &mut DoctorReport, online: bool) {
             "LLM credentials",
             CheckStatus::Miss,
             "not verified (offline)".to_string(),
-            Some("Run `microclaw doctor --online` to send a test request to the provider.".to_string()),
+            Some(
+                "Run `microclaw doctor --online` to send a test request to the provider."
+                    .to_string(),
+            ),
         );
         return;
     }
@@ -675,7 +764,14 @@ fn check_llm_credentials(report: &mut DoctorReport, online: bool) {
 
     // Blocking probe on its own thread (doctor runs under Tokio).
     let probe = std::thread::spawn(move || {
-        crate::setup::validate_llm_credentials(&provider, &api_key, &base_url, &user_agent, &model, None)
+        crate::setup::validate_llm_credentials(
+            &provider,
+            &api_key,
+            &base_url,
+            &user_agent,
+            &model,
+            None,
+        )
     })
     .join();
 
@@ -1044,7 +1140,10 @@ fn check_context_layers(report: &mut DoctorReport) {
     let ctx_fix = if ctx_cap == 0 {
         Some("context_max_chars=0 disables project context entirely; set a positive cap (default 8000) to re-enable.".to_string())
     } else if ctx_cap > 32_000 {
-        Some("context_max_chars > 32000 risks blowing the prefix-cache budget; consider 8000–16000.".to_string())
+        Some(
+            "context_max_chars > 32000 risks blowing the prefix-cache budget; consider 8000–16000."
+                .to_string(),
+        )
     } else {
         None
     };
@@ -1064,7 +1163,10 @@ fn check_context_layers(report: &mut DoctorReport) {
         CheckStatus::Pass
     };
     let um_fix = if um_cap == 0 {
-        Some("user_model_max_chars=0 disables USER.md curation; set a positive cap (default 1500).".to_string())
+        Some(
+            "user_model_max_chars=0 disables USER.md curation; set a positive cap (default 1500)."
+                .to_string(),
+        )
     } else if um_cap > 8_000 {
         Some("user_model_max_chars > 8000 defeats the point of a curated narrative; Hermes ships 1375.".to_string())
     } else {
@@ -1902,7 +2004,9 @@ mod tests {
     #[test]
     fn auth_error_classification() {
         // Provider rejections → auth (Fail).
-        assert!(looks_like_auth_error("LLM validation failed: invalid x-api-key"));
+        assert!(looks_like_auth_error(
+            "LLM validation failed: invalid x-api-key"
+        ));
         assert!(looks_like_auth_error("HTTP 401 Unauthorized"));
         assert!(looks_like_auth_error("Incorrect API key provided"));
         // Network/transient → not auth (Warn).

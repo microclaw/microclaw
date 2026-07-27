@@ -887,7 +887,13 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "DeepSeek",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.deepseek.com/v1",
-        models: &["deepseek-chat", "deepseek-reasoner", "deepseek-v3", "deepseek-v4", "deepseek-v4-flash"],
+        models: &[
+            "deepseek-chat",
+            "deepseek-reasoner",
+            "deepseek-v3",
+            "deepseek-v4",
+            "deepseek-v4-flash",
+        ],
     },
     ProviderPreset {
         id: "fireworks",
@@ -7219,6 +7225,18 @@ fn save_config_yaml(
         "high_risk_tool_user_confirmation_required: {}\n",
         high_risk_confirm_required
     ));
+    yaml.push_str("# Central tool policy plus optional per-chat/per-principal capability grants\n");
+    yaml.push_str("tool_policy:\n");
+    yaml.push_str("  mode: \"off\"\n");
+    yaml.push_str("  grants_mode: \"off\"\n");
+    yaml.push_str("  control_chat_bypass: true\n");
+    yaml.push_str("  grants: []\n");
+    yaml.push_str("# Central HTTP(S) destination policy for tools and configured endpoints\n");
+    yaml.push_str("egress_policy:\n");
+    yaml.push_str("  mode: \"off\"\n");
+    yaml.push_str("  allow_hosts: []\n");
+    yaml.push_str("  deny_hosts: []\n");
+    yaml.push_str("  block_private_ips: true\n");
     let sandbox_enabled = values
         .get("SANDBOX_ENABLED")
         .map(|v| {
@@ -7234,6 +7252,10 @@ fn save_config_yaml(
     } else {
         yaml.push_str("  mode: \"off\"\n");
     }
+    yaml.push_str("  no_network: true\n");
+    yaml.push_str("  require_runtime: true\n");
+    yaml.push_str("  security_profile: \"hardened\"\n");
+    yaml.push_str("  credential_env_allowlist: []\n");
 
     let reflector_enabled = values
         .get("REFLECTOR_ENABLED")
@@ -7308,7 +7330,11 @@ fn save_config_yaml(
     yaml.push_str(&format!("souls_dir: {}\n", yaml_double_quoted(&souls_dir)));
 
     fs::write(path, yaml).map_err(|e| {
-        MicroClawError::Config(format!("Failed to write config to {}: {}", path.display(), e))
+        MicroClawError::Config(format!(
+            "Failed to write config to {}: {}",
+            path.display(),
+            e
+        ))
     })?;
     Ok(backup)
 }

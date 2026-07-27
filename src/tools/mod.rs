@@ -592,7 +592,11 @@ impl ToolRegistry {
         // covered; a denied tool cannot be reached by delegation. Decisions
         // are sealed into the audit chain fire-and-forget (the DB write
         // itself preserves chain order).
-        match crate::tool_guardrails::evaluate_tool_policy(&self.config.tool_policy, name) {
+        match crate::tool_guardrails::evaluate_tool_policy_for_auth(
+            &self.config.tool_policy,
+            name,
+            auth,
+        ) {
             crate::tool_guardrails::PolicyDecision::Allow => {}
             decision => {
                 let (action, status, block_reason) = match decision {
@@ -610,13 +614,14 @@ impl ToolRegistry {
                 tracing::warn!(
                     tool = name,
                     chat_id = auth.caller_chat_id,
+                    principal = %auth.principal,
                     action,
                     %reason,
                     "Tool policy violation"
                 );
                 if let Some(db) = self.audit_db.clone() {
                     let tool = name.to_string();
-                    let actor = format!("chat:{}", auth.caller_chat_id);
+                    let actor = format!("chat:{}:{}", auth.caller_chat_id, auth.principal);
                     let detail = reason.clone();
                     tokio::spawn(async move {
                         let _ = microclaw_storage::db::call_blocking(db, move |db| {
@@ -639,6 +644,53 @@ impl ToolRegistry {
                     ))
                     .with_error_type("tool_policy_blocked");
                 }
+            }
+        }
+        for (url, decision) in microclaw_tools::egress::evaluate_tool_input(
+            &self.config.egress_policy,
+            &input,
+        ) {
+            let (action, status, reason, blocked) = match decision {
+                microclaw_tools::egress::EgressDecision::Allow => continue,
+                microclaw_tools::egress::EgressDecision::Warn(reason) => {
+                    ("warn", "allowed", reason, false)
+                }
+                microclaw_tools::egress::EgressDecision::Block(reason) => {
+                    ("block", "blocked", reason, true)
+                }
+            };
+            tracing::warn!(
+                tool = name,
+                chat_id = auth.caller_chat_id,
+                principal = %auth.principal,
+                %url,
+                action,
+                %reason,
+                "Egress policy violation"
+            );
+            if let Some(db) = self.audit_db.clone() {
+                let tool = name.to_string();
+                let actor = format!("chat:{}:{}", auth.caller_chat_id, auth.principal);
+                let detail = format!("{reason}; url={url}");
+                tokio::spawn(async move {
+                    let _ = microclaw_storage::db::call_blocking(db, move |db| {
+                        db.log_audit_event(
+                            "egress_policy",
+                            &actor,
+                            action,
+                            Some(&tool),
+                            status,
+                            Some(&detail),
+                        )
+                    })
+                    .await;
+                });
+            }
+            if blocked {
+                return ToolResult::error(format!(
+                    "Tool call blocked by egress policy: {reason}. Do not retry this destination."
+                ))
+                .with_error_type("egress_policy_blocked");
             }
         }
         if let Err(msg) =
@@ -859,6 +911,7 @@ mod tests {
         let auth = ToolAuthContext {
             caller_channel: "telegram".into(),
             caller_chat_id: 1,
+            principal: "main".into(),
             control_chat_ids: vec![],
             env_files: vec![],
         };
@@ -882,7 +935,11 @@ mod tests {
             })],
         };
         let result = registry.execute_with_auth("bash", json!({}), &auth).await;
-        assert!(!result.is_error, "warn mode must still execute: {}", result.content);
+        assert!(
+            !result.is_error,
+            "warn mode must still execute: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -900,6 +957,7 @@ mod tests {
         let auth = ToolAuthContext {
             caller_channel: "web".into(),
             caller_chat_id: 1,
+            principal: "main".into(),
             control_chat_ids: vec![],
             env_files: vec![],
         };
@@ -938,6 +996,7 @@ mod tests {
         let auth = ToolAuthContext {
             caller_channel: "telegram".into(),
             caller_chat_id: 123,
+            principal: "main".into(),
             control_chat_ids: vec![123],
             env_files: vec![],
         };
@@ -974,6 +1033,7 @@ mod tests {
         let auth = ToolAuthContext {
             caller_channel: "web".into(),
             caller_chat_id: 1,
+            principal: "main".into(),
             control_chat_ids: vec![],
             env_files: vec![],
         };
@@ -1001,6 +1061,7 @@ mod tests {
         let auth = ToolAuthContext {
             caller_channel: "telegram".into(),
             caller_chat_id: 123,
+            principal: "main".into(),
             control_chat_ids: vec![123],
             env_files: vec![],
         };
@@ -1025,6 +1086,7 @@ mod tests {
         let auth = ToolAuthContext {
             caller_channel: "web".into(),
             caller_chat_id: 1,
+            principal: "main".into(),
             control_chat_ids: vec![],
             env_files: vec![],
         };
@@ -1055,7 +1117,7 @@ tools:
       properties: {}
       required: []
     run:
-      command: "printf plugin-ok"
+      command: "echo plugin-ok"
       timeout_secs: 5
 "#,
         )
@@ -1077,6 +1139,7 @@ tools:
         let auth = ToolAuthContext {
             caller_channel: "web".into(),
             caller_chat_id: 7,
+            principal: "main".into(),
             control_chat_ids: vec![],
             env_files: vec![],
         };
@@ -1108,6 +1171,7 @@ tools:
         let auth = ToolAuthContext {
             caller_channel: "feishu".into(),
             caller_chat_id: 8009499081,
+            principal: "main".into(),
             control_chat_ids: vec![],
             env_files: vec![],
         };
@@ -1139,6 +1203,7 @@ tools:
         let auth = ToolAuthContext {
             caller_channel: "feishu".into(),
             caller_chat_id: 8009499081,
+            principal: "main".into(),
             control_chat_ids: vec![],
             env_files: vec![],
         };
@@ -1170,6 +1235,7 @@ tools:
         let auth = ToolAuthContext {
             caller_channel: "web".into(),
             caller_chat_id: 9001,
+            principal: "main".into(),
             control_chat_ids: vec![],
             env_files: vec![],
         };

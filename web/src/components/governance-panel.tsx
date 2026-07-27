@@ -10,6 +10,15 @@ type ProgressChannel = {
   update_interval_seconds: number
 }
 
+type ToolGrant = {
+  chat_id?: number | null
+  channel?: string | null
+  principal?: string | null
+  allow_tools: string[]
+  deny_tools: string[]
+  max_risk?: 'low' | 'medium' | 'high' | null
+}
+
 type Governance = {
   ok: boolean
   tool_policy: {
@@ -17,6 +26,20 @@ type Governance = {
     deny_tools: string[]
     allow_tools: string[]
     max_risk?: 'low' | 'medium' | 'high' | null
+    grants_mode: 'off' | 'warn' | 'block'
+    control_chat_bypass: boolean
+    grants: ToolGrant[]
+  }
+  egress_policy: {
+    mode: 'off' | 'warn' | 'block'
+    allow_hosts: string[]
+    deny_hosts: string[]
+    block_private_ips: boolean
+  }
+  sandbox_credentials: {
+    credential_env_allowlist: string[]
+    no_network: boolean
+    security_profile: 'hardened' | 'standard' | 'privileged'
   }
   token_budget: {
     daily_per_chat: number
@@ -41,6 +64,26 @@ type Governance = {
   delivery?: {
     outbox_pending: number
   }
+  durable_runs?: {
+    active: {
+      run_id?: string | null
+      chat_id: number
+      channel: string
+      phase: string
+      iteration: number
+      resumable: boolean
+      progress?: string | null
+      tool_summary?: string | null
+      started_at: string
+      last_checkpoint_at?: string | null
+    }[]
+    recent_recoveries: {
+      action: string
+      status: string
+      detail?: string | null
+      created_at: string
+    }[]
+  }
 }
 
 function OnOff({ on }: { on: boolean }) {
@@ -64,6 +107,14 @@ export function GovernancePanel() {
   const [maxRisk, setMaxRisk] = useState<'none' | 'low' | 'medium' | 'high'>('none')
   const [denyTools, setDenyTools] = useState('')
   const [allowTools, setAllowTools] = useState('')
+  const [grantsMode, setGrantsMode] = useState<'off' | 'warn' | 'block'>('off')
+  const [controlChatBypass, setControlChatBypass] = useState(true)
+  const [grantsJson, setGrantsJson] = useState('[]')
+  const [egressMode, setEgressMode] = useState<'off' | 'warn' | 'block'>('off')
+  const [egressAllowHosts, setEgressAllowHosts] = useState('')
+  const [egressDenyHosts, setEgressDenyHosts] = useState('')
+  const [blockPrivateIps, setBlockPrivateIps] = useState(true)
+  const [credentialEnvAllowlist, setCredentialEnvAllowlist] = useState('')
   const [budget, setBudget] = useState('0')
   const [exemptControl, setExemptControl] = useState(true)
   const [hbEnabled, setHbEnabled] = useState(false)
@@ -79,6 +130,14 @@ export function GovernancePanel() {
       setMaxRisk(g.tool_policy.max_risk ?? 'none')
       setDenyTools(g.tool_policy.deny_tools.join(', '))
       setAllowTools(g.tool_policy.allow_tools.join(', '))
+      setGrantsMode(g.tool_policy.grants_mode)
+      setControlChatBypass(g.tool_policy.control_chat_bypass)
+      setGrantsJson(JSON.stringify(g.tool_policy.grants, null, 2))
+      setEgressMode(g.egress_policy.mode)
+      setEgressAllowHosts(g.egress_policy.allow_hosts.join(', '))
+      setEgressDenyHosts(g.egress_policy.deny_hosts.join(', '))
+      setBlockPrivateIps(g.egress_policy.block_private_ips)
+      setCredentialEnvAllowlist(g.sandbox_credentials.credential_env_allowlist.join(', '))
       setBudget(String(g.token_budget.daily_per_chat))
       setExemptControl(g.token_budget.exempt_control_chats)
       setHbEnabled(g.heartbeat.enabled)
@@ -105,17 +164,50 @@ export function GovernancePanel() {
     }
   }
 
-  const saveToolPolicy = () =>
+  const saveToolPolicy = () => {
+    try {
+      const grants = JSON.parse(grantsJson) as unknown
+      if (!Array.isArray(grants)) {
+        throw new Error('grants must be a JSON array')
+      }
+      void saveSection(
+        {
+          tool_policy: {
+            mode,
+            deny_tools: parseToolList(denyTools),
+            allow_tools: parseToolList(allowTools),
+            max_risk: maxRisk === 'none' ? null : maxRisk,
+            grants_mode: grantsMode,
+            control_chat_bypass: controlChatBypass,
+            grants,
+          },
+        },
+        'Tool policy',
+      )
+    } catch (e) {
+      setError(`Invalid grants JSON: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  const saveEgressPolicy = () =>
     saveSection(
       {
-        tool_policy: {
-          mode,
-          deny_tools: parseToolList(denyTools),
-          allow_tools: parseToolList(allowTools),
-          max_risk: maxRisk === 'none' ? null : maxRisk,
+        egress_policy: {
+          mode: egressMode,
+          allow_hosts: parseToolList(egressAllowHosts),
+          deny_hosts: parseToolList(egressDenyHosts),
+          block_private_ips: blockPrivateIps,
         },
       },
-      'Tool policy',
+      'Egress policy',
+    )
+
+  const saveSandboxCredentials = () =>
+    saveSection(
+      {
+        sandbox_credential_env_allowlist: parseToolList(credentialEnvAllowlist),
+      },
+      'Sandbox credential policy',
     )
 
   const saveTokenBudget = () =>
@@ -204,8 +296,102 @@ export function GovernancePanel() {
                   placeholder="read_file"
                 />
               </div>
+              <Flex align="center" gap="3" wrap="wrap">
+                <Text size="1" color="gray">capability grants</Text>
+                <Select.Root value={grantsMode} onValueChange={(v) => setGrantsMode(v as typeof grantsMode)}>
+                  <Select.Trigger variant="surface" />
+                  <Select.Content>
+                    <Select.Item value="off">off</Select.Item>
+                    <Select.Item value="warn">warn</Select.Item>
+                    <Select.Item value="block">block</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+                <Text size="1" color="gray">control chats bypass grants</Text>
+                <Switch checked={controlChatBypass} onCheckedChange={setControlChatBypass} />
+              </Flex>
+              <div>
+                <Text as="div" size="1" color="gray">
+                  per-chat / channel / principal grants (JSON array; trailing * wildcards are supported)
+                </Text>
+                <textarea
+                  className="mt-1 min-h-32 w-full rounded-md border border-white/10 bg-black/20 p-2 font-mono text-xs"
+                  value={grantsJson}
+                  onChange={(e) => setGrantsJson(e.target.value)}
+                  spellCheck={false}
+                />
+              </div>
               <Flex>
                 <Button size="1" onClick={() => void saveToolPolicy()}>Save tool policy</Button>
+              </Flex>
+            </div>
+          </ConfigFieldCard>
+
+          <ConfigFieldCard
+            label="Outbound network policy"
+            description="Checks HTTP(S) destinations at the shared tool boundary and validates configured endpoints on startup."
+          >
+            <div className="mt-2 flex flex-col gap-3">
+              <Flex align="center" gap="3" wrap="wrap">
+                <Text size="1" color="gray">mode</Text>
+                <Select.Root value={egressMode} onValueChange={(v) => setEgressMode(v as typeof egressMode)}>
+                  <Select.Trigger variant="surface" />
+                  <Select.Content>
+                    <Select.Item value="off">off</Select.Item>
+                    <Select.Item value="warn">warn</Select.Item>
+                    <Select.Item value="block">block</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+                <Text size="1" color="gray">block private / metadata IPs</Text>
+                <Switch checked={blockPrivateIps} onCheckedChange={setBlockPrivateIps} />
+              </Flex>
+              <div>
+                <Text size="1" color="gray">allowed hosts (empty permits public hosts; supports *.example.com)</Text>
+                <TextField.Root
+                  className="mt-1"
+                  value={egressAllowHosts}
+                  onChange={(e) => setEgressAllowHosts(e.target.value)}
+                  placeholder="api.openai.com, *.example.com"
+                />
+              </div>
+              <div>
+                <Text size="1" color="gray">denied hosts</Text>
+                <TextField.Root
+                  className="mt-1"
+                  value={egressDenyHosts}
+                  onChange={(e) => setEgressDenyHosts(e.target.value)}
+                  placeholder="tracking.example.com"
+                />
+              </div>
+              <Flex>
+                <Button size="1" onClick={() => void saveEgressPolicy()}>Save egress policy</Button>
+              </Flex>
+            </div>
+          </ConfigFieldCard>
+
+          <ConfigFieldCard
+            label="Sandbox credentials"
+            description="Credential-like environment variables are withheld from containers by default. Add only exact names a sandboxed tool must receive."
+          >
+            <div className="mt-2 flex flex-col gap-3">
+              <Flex align="center" gap="2" wrap="wrap">
+                <Badge size="1" color={gov.sandbox_credentials.no_network ? 'green' : 'orange'}>
+                  network: {gov.sandbox_credentials.no_network ? 'disabled' : 'enabled'}
+                </Badge>
+                <Badge size="1" color={gov.sandbox_credentials.security_profile === 'hardened' ? 'green' : 'orange'}>
+                  {gov.sandbox_credentials.security_profile}
+                </Badge>
+              </Flex>
+              <div>
+                <Text size="1" color="gray">credential environment allowlist (exact names, comma separated)</Text>
+                <TextField.Root
+                  className="mt-1"
+                  value={credentialEnvAllowlist}
+                  onChange={(e) => setCredentialEnvAllowlist(e.target.value)}
+                  placeholder="SEARCH_API_TOKEN"
+                />
+              </div>
+              <Flex>
+                <Button size="1" onClick={() => void saveSandboxCredentials()}>Save credential policy</Button>
               </Flex>
             </div>
           </ConfigFieldCard>
@@ -316,6 +502,46 @@ export function GovernancePanel() {
                 reply outbox: {gov.delivery?.outbox_pending ?? 0}
               </Badge>
             </Flex>
+          </ConfigFieldCard>
+
+          <ConfigFieldCard
+            label="Durable coworker runs"
+            description="Live agent-loop checkpoints and recent restart outcomes. A resumable checkpoint can continue automatically; an uncertain tool boundary always stops for verification."
+          >
+            <div className="mt-2 flex flex-col gap-2">
+              {(gov.durable_runs?.active.length ?? 0) === 0 && (
+                <Badge size="1" color="green">no interactive runs in flight</Badge>
+              )}
+              {gov.durable_runs?.active.map((run) => (
+                <div key={`${run.channel}:${run.chat_id}`} className="rounded-md border border-white/10 p-2">
+                  <Flex align="center" gap="2" wrap="wrap">
+                    <Badge size="1" color={run.resumable ? 'green' : 'orange'}>
+                      {run.resumable ? 'resumable' : 'uncertain boundary'}
+                    </Badge>
+                    <Text size="1">{run.channel}:{run.chat_id}</Text>
+                    <Badge size="1" color="gray">{run.phase}</Badge>
+                    <Badge size="1" color="gray">iteration {run.iteration + 1}</Badge>
+                  </Flex>
+                  {(run.progress || run.tool_summary) && (
+                    <Text as="div" size="1" color="gray" className="mt-1">
+                      {run.progress ?? run.tool_summary}
+                    </Text>
+                  )}
+                </div>
+              ))}
+              {(gov.durable_runs?.recent_recoveries.length ?? 0) > 0 && (
+                <div className="mt-1">
+                  <Text as="div" size="1" weight="bold">Recent restart outcomes</Text>
+                  {gov.durable_runs?.recent_recoveries.slice(0, 5).map((event, index) => (
+                    <Flex key={`${event.created_at}:${index}`} align="center" gap="2" className="py-0.5" wrap="wrap">
+                      <Badge size="1" color={event.action === 'resume' ? 'green' : 'orange'}>{event.action}</Badge>
+                      <Text size="1" color="gray">{event.created_at}</Text>
+                      {event.detail && <Text size="1" color="gray">{event.detail}</Text>}
+                    </Flex>
+                  ))}
+                </div>
+              )}
+            </div>
           </ConfigFieldCard>
         </>
       )}

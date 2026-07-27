@@ -576,6 +576,7 @@ impl EventHandler for Handler {
                 let auth = ToolAuthContext {
                     caller_channel: self.runtime.channel_name.clone(),
                     caller_chat_id: channel_id,
+                    principal: "channel:discord".to_string(),
                     control_chat_ids: self.app_state.config.control_chat_ids.clone(),
                     env_files: Vec::new(),
                 };

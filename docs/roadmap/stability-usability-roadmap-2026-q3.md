@@ -1,9 +1,14 @@
 # Stability & Usability Roadmap — 2026 Q3
 
-Status: **strategy** · Date: 2026-07-11 · Horizons: 2 weeks / 1 month / 3 months
+Status: **execution plan, updated 2026-07-27** · Date: 2026-07-11 · Horizons: 2 weeks / 1 month / 3 months
 Companions: [`competitive-intel-update-2026-07.md`](./competitive-intel-update-2026-07.md) ·
 [`v0.3.0-completion-and-v0.4.0-kickoff.md`](./v0.3.0-completion-and-v0.4.0-kickoff.md) ·
 [`../completion-contracts.md`](../completion-contracts.md)
+
+Current milestone status is maintained in
+[`durable-secure-runtime-2026-07.md`](./durable-secure-runtime-2026-07.md).
+Items below marked as gaps describe the original 2026-07-11 review unless an
+updated status is stated explicitly.
 
 ## 0. Thesis for this quarter
 
@@ -38,9 +43,9 @@ first five minutes.
 |---|---|---|---|
 | 1 | **`stable` branch is stale at v0.2.3 (Jun 11), 20 commits behind main** — while README now sends stability-seeking users there. It lacks every security feature shipped since (output guardrail, tool_policy, ClawHub hardening, dependency CVE bumps). | `git log 3ff2899..main` | README actively directs users to a *less safe* build. Most urgent item in this plan. |
 | 2 | No release/promotion process: no cadence, no soak criteria, no upgrade guide per release, CHANGELOG drifts. | releases/ docs are policy fragments | "Stable" is a label, not a process. |
-| 3 | Interrupted-turn recovery missing: a crash/restart mid-agent-turn loses the in-flight run silently (scheduled runs recover via DLQ; interactive turns don't). | agent_engine has no resume path | OpenClaw made this their 2026.6.1 headline — table stakes. |
+| 3 | ~~Interrupted-turn recovery missing.~~ **Implemented in the current change; verification/merge pending:** safe checkpoints resume and uncertain tool boundaries stop with evidence. | `agent_engine`, schema v31, `turn_recovery` | Closed when the linked PR merges green. |
 | 4 | Two env-dependent hook tests fail in exec-restricted containers — dev/CI parity noise that trains people to ignore red. | hooks::tests, agent_engine::tests | Broken-windows effect on test discipline. |
-| 5 | New governance knobs (tool_policy, token_budget, heartbeat, contracts) are config-file/tool-call only — invisible in the web settings panel; config errors surface late. | web/config.rs coverage | The differentiators exist but aren't *operable* by non-experts. |
+| 5 | ~~Governance knobs invisible in Web settings.~~ **Implemented:** tool policy, scoped grants, egress, sandbox credentials, token budget, heartbeat, and durable runs are visible; supported policy sections are editable. | `/api/governance`, Governance panel | Closed subject to web build/PR checks. |
 | 6 | Long-task feedback on non-web channels still Phase-3-pending (typing indicator only); budget refusals/contract failures read like system logs. | non-web-channel-progress-events-plan.md | Usability of the flagship "8-hour coworker" story. |
 | 7 | No leak/soak evidence: Stability Smoke is minutes-long; no RSS-over-24h data, no crash-free-days metric. | CI workflow | "Runs for a month on 1GB RAM" is asserted, not measured. |
 
@@ -122,24 +127,21 @@ channels; cookbook merged.
 
 **Theme: finish the security pillar, make operations self-explaining, cut LTS-1.**
 
-1. **Native egress control** (Track B headline, unchanged from the kickoff
-   doc): process-level outbound policy — private/metadata ranges blocked by
-   default, allow-list opt-in, `explain`-style audit of denials. Warn-only
-   first release, block the next.
-2. **Per-chat least-privilege tool authorization**: scope tools to chats/roles
-   on top of tool_policy (the OWASP agentic top-10 root cause is
-   over-permissioning). Web panel edits it; audit chain records grants.
-3. **Sandbox credential hygiene (P4c) + gVisor backend**: sandboxed processes
-   never see raw API keys; secrets injected only at the egress boundary.
-4. **Durable interactive runs (Track C)**: persist agent-loop checkpoints so a
-   restart mid-turn resumes or cleanly reports "I was interrupted, here's
-   where I got to" — never silence. Channel delivery outbox with retry, so a
-   flaky Telegram outage can't drop a finished answer.
-   *Shipped 2026-07 except full resume*: `src/turn_recovery.rs` notifies
-   interrupted chats including a checkpoint-lite "got as far as: step N,
-   tools" snapshot (`active_turns.progress_text`); `src/outbox.rs` queues
-   failed final-reply sends (Telegram/Discord/Slack) and redelivers with
-   backoff. True mid-turn resume remains future work.
+1. **Central egress control — implemented, pending merge.** Configured
+   endpoints and HTTP(S) URLs at the shared tool boundary support warn/block,
+   private/metadata denial, host lists, and audit evidence. Arbitrary command
+   traffic still relies on `sandbox.no_network`; this is intentionally not
+   described as process-wide packet filtering.
+2. **Per-chat/per-principal least-privilege tool authorization — implemented,
+   pending merge.** Main, scheduler, direct-channel, and subagent callers carry
+   principals; global blocks cannot be weakened by grants.
+3. **Sandbox credential hygiene — implemented, pending merge.** Dotenv files
+   are parsed on the host and credential-like variables are withheld unless
+   explicitly allowed. gVisor remains a separate future backend.
+4. **Durable interactive runs — implemented, pending merge.** Safe checkpoints
+   resume; uncertain tool boundaries stop with evidence; recovery itself may
+   crash without discarding the prior safe snapshot. Durable outbound delivery
+   remains the final-message path.
 5. **Operability surface**: one `/status` web page + bot command showing runs,
    DLQ depth, contract verdict rates, token spend vs budget, provider
    failovers, restart counters; optional webhook alerts (DLQ growth, provider

@@ -293,6 +293,35 @@ pub(super) async fn api_config_self_check(
                     .to_string(),
         });
     }
+    if state.app_state.config.egress_policy.mode == crate::config::EgressPolicyMode::Off {
+        warnings.push(ConfigWarning {
+            code: "egress_policy_disabled",
+            severity: "medium",
+            message:
+                "Outbound destination policy is disabled; agent-controlled HTTP targets are not centrally restricted."
+                    .to_string(),
+        });
+    }
+    if state.app_state.config.tool_policy.grants_mode
+        == crate::tool_guardrails::ToolPolicyMode::Off
+    {
+        warnings.push(ConfigWarning {
+            code: "tool_capability_grants_disabled",
+            severity: "medium",
+            message:
+                "Per-chat and per-principal capability grants are disabled; only the global tool policy applies."
+                    .to_string(),
+        });
+    }
+    if !state.app_state.config.sandbox.no_network {
+        warnings.push(ConfigWarning {
+            code: "sandbox_network_enabled",
+            severity: "high",
+            message:
+                "Sandbox networking is enabled; command egress is not constrained by the container boundary."
+                    .to_string(),
+        });
+    }
     if state.app_state.config.subagents.acp.default_target.enabled {
         let acp = &state.app_state.config.subagents.acp;
         if let Some(default_target) = acp.default_target_name.as_deref() {
@@ -670,6 +699,10 @@ pub(super) async fn api_config_self_check(
             "sandbox_runtime_cli": sandbox_runtime_cli,
             "sandbox_backend": format!("{:?}", state.app_state.config.sandbox.backend).to_lowercase(),
             "sandbox_require_runtime": state.app_state.config.sandbox.require_runtime,
+            "sandbox_no_network": state.app_state.config.sandbox.no_network,
+            "sandbox_credential_env_allowlist": state.app_state.config.sandbox.credential_env_allowlist,
+            "egress_policy_mode": state.app_state.config.egress_policy.mode,
+            "tool_grants_mode": state.app_state.config.tool_policy.grants_mode,
             "execution_policies": execution_policy_items,
             "mount_allowlist": mount_allowlist_status
         },
@@ -875,6 +908,12 @@ pub(super) async fn api_update_config(
     // full section it edited, so partial-merge semantics aren't needed).
     if let Some(v) = body.tool_policy {
         cfg.tool_policy = v;
+    }
+    if let Some(v) = body.egress_policy {
+        cfg.egress_policy = v;
+    }
+    if let Some(v) = body.sandbox_credential_env_allowlist {
+        cfg.sandbox.credential_env_allowlist = v;
     }
     if let Some(v) = body.token_budget {
         cfg.token_budget = v;

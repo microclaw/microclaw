@@ -11,10 +11,11 @@ use crate::codex_auth::{
 };
 use crate::plugins::PluginsConfig;
 use microclaw_core::error::MicroClawError;
+use microclaw_core::redact::OutputGuardrailConfig;
+pub use microclaw_tools::egress::{EgressPolicyConfig, EgressPolicyMode};
 pub use microclaw_tools::sandbox::{SandboxBackend, SandboxConfig, SandboxMode, SecurityProfile};
 pub use microclaw_tools::types::WorkingDirIsolation;
 use microclaw_tools::web_content_validation::WebContentValidationConfig;
-use microclaw_core::redact::OutputGuardrailConfig;
 use microclaw_tools::web_fetch::WebFetchUrlValidationConfig;
 use microclaw_tools::web_search::SearchProviderConfig;
 
@@ -49,6 +50,24 @@ pub fn normalize_model_name(value: &str) -> Option<String> {
         Some(trimmed.to_string())
     }
 }
+
+fn normalize_string_list(values: &mut Vec<String>, lowercase: bool) {
+    *values = values
+        .drain(..)
+        .map(|value| {
+            let value = value.trim();
+            if lowercase {
+                value.to_ascii_lowercase()
+            } else {
+                value.to_string()
+            }
+        })
+        .filter(|value| !value.is_empty())
+        .collect();
+    values.sort();
+    values.dedup();
+}
+
 pub fn resolve_model_name_with_fallback(
     provider: &str,
     candidate: Option<&str>,
@@ -1547,6 +1566,10 @@ pub struct Config {
     /// allow_tools). Off by default; violations are sealed into the audit log.
     #[serde(default)]
     pub tool_policy: crate::tool_guardrails::ToolPolicyConfig,
+    /// Process policy for configured HTTP(S) endpoints and every URL exposed
+    /// through the shared tool registry. Off by default for compatibility.
+    #[serde(default)]
+    pub egress_policy: EgressPolicyConfig,
 
     // --- Embedding ---
     #[serde(default)]
@@ -1680,6 +1703,48 @@ pub struct Config {
     pub bot_username: String,
     #[serde(default)]
     pub allowed_groups: Vec<i64>,
+}
+
+fn collect_enabled_channel_endpoints(value: &serde_yaml::Value, out: &mut Vec<String>) {
+    let Some(mapping) = value.as_mapping() else {
+        return;
+    };
+    if mapping
+        .get(serde_yaml::Value::String("enabled".into()))
+        .and_then(serde_yaml::Value::as_bool)
+        == Some(false)
+    {
+        return;
+    }
+
+    for (key, value) in mapping {
+        let Some(key) = key.as_str() else {
+            continue;
+        };
+        let key = key.to_ascii_lowercase();
+        let is_endpoint_key = key.contains("url")
+            || key.contains("endpoint")
+            || key == "homeserver"
+            || key == "homeserver_url";
+        if is_endpoint_key {
+            if let Some(endpoint) = value
+                .as_str()
+                .map(str::trim)
+                .filter(|endpoint| !endpoint.is_empty())
+            {
+                out.push(endpoint.to_string());
+            }
+        }
+        match value {
+            serde_yaml::Value::Mapping(_) => collect_enabled_channel_endpoints(value, out),
+            serde_yaml::Value::Sequence(values) => {
+                for value in values {
+                    collect_enabled_channel_endpoints(value, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Config {
@@ -2145,6 +2210,7 @@ impl Config {
             web_search: SearchProviderConfig::default(),
             output_guardrail: OutputGuardrailConfig::default(),
             tool_policy: crate::tool_guardrails::ToolPolicyConfig::default(),
+            egress_policy: EgressPolicyConfig::default(),
             model_prices: vec![],
             embedding_provider: None,
             embedding_api_key: None,
@@ -2501,6 +2567,25 @@ impl Config {
         if self.sandbox.container_prefix.is_empty() {
             self.sandbox.container_prefix = default_sandbox_container_prefix();
         }
+        normalize_string_list(&mut self.sandbox.credential_env_allowlist, false);
+        normalize_string_list(&mut self.egress_policy.allow_hosts, true);
+        normalize_string_list(&mut self.egress_policy.deny_hosts, true);
+        normalize_string_list(&mut self.tool_policy.allow_tools, false);
+        normalize_string_list(&mut self.tool_policy.deny_tools, false);
+        for grant in &mut self.tool_policy.grants {
+            grant.channel = grant
+                .channel
+                .take()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .filter(|value| !value.is_empty());
+            grant.principal = grant
+                .principal
+                .take()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .filter(|value| !value.is_empty());
+            normalize_string_list(&mut grant.allow_tools, false);
+            normalize_string_list(&mut grant.deny_tools, false);
+        }
         if self.web_host.trim().is_empty() {
             self.web_host = default_web_host();
         }
@@ -2820,7 +2905,87 @@ Use operator password + API keys for Web auth."
             }
         }
 
+        self.validate_configured_egress()?;
+
         Ok(())
+    }
+
+    fn validate_configured_egress(&self) -> Result<(), MicroClawError> {
+        if self.egress_policy.mode == EgressPolicyMode::Off {
+            return Ok(());
+        }
+        for url in self.configured_egress_endpoints() {
+            let decision = microclaw_tools::egress::evaluate_url(&self.egress_policy, &url);
+            match decision {
+                microclaw_tools::egress::EgressDecision::Warn(reason) => {
+                    warn!(url = %url, reason = %reason, "configured endpoint violates egress policy");
+                }
+                microclaw_tools::egress::EgressDecision::Block(reason) => {
+                    return Err(MicroClawError::Config(format!(
+                        "configured endpoint `{url}` blocked by egress policy: {reason}"
+                    )));
+                }
+                microclaw_tools::egress::EgressDecision::Allow => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn configured_egress_endpoints(&self) -> Vec<String> {
+        let mut urls = Vec::new();
+        {
+            let mut add = |value: Option<&str>| {
+                if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+                    urls.push(value.to_string());
+                }
+            };
+
+            add(self.llm_base_url.as_deref());
+            for profile in self
+                .provider_presets
+                .values()
+                .chain(self.llm_providers.values())
+            {
+                add(profile.llm_base_url.as_deref());
+            }
+            add(self.embedding_base_url.as_deref());
+            add(self.openai_base_url.as_deref());
+
+            let media_enabled = self.media.image_gen.enabled
+                || self.media.vision.enabled
+                || self.media.tts.enabled
+                || self.media.stt.enabled
+                || self.media.podcast.enabled;
+            if media_enabled {
+                add(self.media.base_url.as_deref());
+            }
+            if self.media.tts.enabled || self.media.podcast.enabled {
+                add(self.media.tts.base_url.as_deref());
+            }
+            if self.media.podcast.enabled {
+                add(self.media.podcast.base_url.as_deref());
+            }
+
+            if self.web_search.effective_backend()
+                == microclaw_tools::web_search::SearchBackend::Searxng
+            {
+                add(Some(&self.web_search.searxng_base_url));
+            }
+            for peer in self.a2a.peers.values().filter(|peer| peer.enabled) {
+                add(Some(&peer.base_url));
+            }
+            if self.clawhub.agent_tools_enabled {
+                add(Some(&self.clawhub.registry));
+            }
+        }
+
+        for channel in self.channels.values() {
+            collect_enabled_channel_endpoints(channel, &mut urls);
+        }
+
+        urls.sort();
+        urls.dedup();
+        urls
     }
 
     fn merged_profile_from_alias(&self, alias: &str) -> Option<ResolvedLlmProviderProfile> {
@@ -3342,7 +3507,10 @@ fn unknown_top_level_key_warnings(map: &serde_yaml::Mapping) -> Vec<String> {
 
 /// Extract `(kind, token)` from a serde "unknown variant/field `X`" message.
 fn extract_unknown_token(raw: &str) -> Option<(&'static str, &str)> {
-    for (needle, kind) in [("unknown variant `", "variant"), ("unknown field `", "field")] {
+    for (needle, kind) in [
+        ("unknown variant `", "variant"),
+        ("unknown field `", "field"),
+    ] {
         if let Some(start) = raw.find(needle) {
             let rest = &raw[start + needle.len()..];
             if let Some(end) = rest.find('`') {
@@ -3439,10 +3607,7 @@ mod tests {
 
     #[test]
     fn config_check_rejects_bad_enum_value_with_suggestion() {
-        let report = check_config_content(
-            "t.yaml",
-            "api_key: key\ntool_policy:\n  mode: blok\n",
-        );
+        let report = check_config_content("t.yaml", "api_key: key\ntool_policy:\n  mode: blok\n");
         assert!(!report.ok());
         assert!(
             report.errors[0].contains("blok") && report.errors[0].contains("block"),
@@ -3532,7 +3697,10 @@ mod tests {
         assert_eq!(extract_unknown_token(raw), Some(("variant", "discrod")));
         let opts = extract_backtick_options(raw);
         assert_eq!(opts, vec!["telegram", "discord", "slack"]);
-        assert_eq!(suggest_closest("discrod", &opts).as_deref(), Some("discord"));
+        assert_eq!(
+            suggest_closest("discrod", &opts).as_deref(),
+            Some("discord")
+        );
         // Nothing close → no suggestion.
         assert_eq!(suggest_closest("zzzzzz", &opts), None);
     }
@@ -4528,6 +4696,66 @@ channels:
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
         assert!(config.llm_base_url.is_none());
+    }
+
+    #[test]
+    fn test_post_deserialize_egress_policy_blocks_private_endpoint() {
+        let mut config = test_config();
+        config.llm_base_url = Some("http://127.0.0.1:11434/v1".into());
+        config.egress_policy.mode = EgressPolicyMode::Block;
+
+        let err = config.post_deserialize().unwrap_err().to_string();
+
+        assert!(err.contains("blocked by egress policy"), "{err}");
+        assert!(err.contains("127.0.0.1"), "{err}");
+    }
+
+    #[test]
+    fn test_post_deserialize_egress_allowlist_applies_to_configured_endpoint() {
+        let mut config = test_config();
+        config.llm_base_url = Some("https://api.example.test/v1".into());
+        config.clawhub.agent_tools_enabled = false;
+        config.egress_policy = EgressPolicyConfig {
+            mode: EgressPolicyMode::Block,
+            allow_hosts: vec!["api.example.test".into()],
+            block_private_ips: false,
+            ..Default::default()
+        };
+
+        config.post_deserialize().unwrap();
+    }
+
+    #[test]
+    fn test_post_deserialize_egress_ignores_non_endpoint_urls() {
+        let mut config = test_config();
+        config.clawhub.agent_tools_enabled = false;
+        config.soul_path = Some("https://docs.example.test/SOUL.md".into());
+        config.egress_policy = EgressPolicyConfig {
+            mode: EgressPolicyMode::Block,
+            allow_hosts: vec!["api.example.test".into()],
+            block_private_ips: false,
+            ..Default::default()
+        };
+
+        config.post_deserialize().unwrap();
+    }
+
+    #[test]
+    fn test_post_deserialize_egress_checks_enabled_channel_endpoint() {
+        let mut config = test_config();
+        config.clawhub.agent_tools_enabled = false;
+        config.channels.insert(
+            "matrix".into(),
+            serde_yaml::from_str(
+                "enabled: true\nhomeserver_url: http://127.0.0.1:8008\naccess_token: tok\nbot_user_id: '@bot:localhost'\n",
+            )
+            .unwrap(),
+        );
+        config.egress_policy.mode = EgressPolicyMode::Block;
+
+        let err = config.post_deserialize().unwrap_err().to_string();
+
+        assert!(err.contains("127.0.0.1"), "{err}");
     }
 
     #[test]

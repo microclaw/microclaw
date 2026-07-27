@@ -269,7 +269,8 @@ fn build_log_response(config: &Config, chat_id: i64, command: &str) -> String {
         return "Log access is disabled. Set `control_chat_ids` in the config to your admin chat(s) first — logs can contain other chats' content and secrets, so this is admin-only.".to_string();
     }
     if !config.is_control_chat(chat_id) {
-        return "Not authorized: `/log` is restricted to the configured control chat(s).".to_string();
+        return "Not authorized: `/log` is restricted to the configured control chat(s)."
+            .to_string();
     }
 
     // Parse the args after `/log`: a bare number sets the line count; the verbs
@@ -591,8 +592,39 @@ pub async fn build_status_response(
         Err(e) => format!("Scheduled tasks: unavailable ({e})"),
     };
 
+    let runtime_line = match call_blocking(db.clone(), move |db| {
+        let active = db
+            .list_active_turns()?
+            .into_iter()
+            .find(|turn| turn.chat_id == chat_id);
+        let delivery = db.outbound_delivery_health()?;
+        let recoveries = db.list_audit_logs(Some("turn_recovery"), 20)?.len();
+        Ok::<_, microclaw_core::error::MicroClawError>((active, delivery, recoveries))
+    })
+    .await
+    {
+        Ok((Some(turn), delivery, recoveries)) => format!(
+            "Durable run: {} iteration={} resumable={} progress={}\n\
+             Delivery: pending={} retrying={} failed={}\n\
+             Recoveries recorded: {}",
+            turn.phase,
+            turn.iteration + 1,
+            turn.resumable,
+            turn.progress_text.as_deref().unwrap_or("starting"),
+            delivery.pending_chunks,
+            delivery.retry_chunks,
+            delivery.failed_chunks,
+            recoveries
+        ),
+        Ok((None, delivery, recoveries)) => format!(
+            "Durable run: idle\nDelivery: pending={} retrying={} failed={}\nRecoveries recorded: {}",
+            delivery.pending_chunks, delivery.retry_chunks, delivery.failed_chunks, recoveries
+        ),
+        Err(error) => format!("Durable runtime: unavailable ({error})"),
+    };
+
     format!(
-        "Status\nChannel: {caller_channel}\nProvider: {provider}\nModel: {model}\n{session_line}\n{task_line}"
+        "Status\nChannel: {caller_channel}\nProvider: {provider}\nModel: {model}\n{session_line}\n{task_line}\n{runtime_line}"
     )
 }
 
@@ -1811,7 +1843,10 @@ mod slash_command_tests {
 
         // No filter tails everything.
         let all = build_log_response(&cfg, 7, "/log");
-        assert!(all.contains("all good") && all.contains("starting up"), "got: {all}");
+        assert!(
+            all.contains("all good") && all.contains("starting up"),
+            "got: {all}"
+        );
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
@@ -1831,9 +1866,23 @@ mod slash_command_tests {
         let help = build_help_response();
         // Every command surfaced in help must be a real dispatch entry.
         for cmd in [
-            "/status", "/clear", "/reset", "/stop", "/archive", "/model", "/models",
-            "/provider", "/providers", "/skills", "/reload-skills", "/learn", "/user",
-            "/usage", "/rewind", "/log", "/help",
+            "/status",
+            "/clear",
+            "/reset",
+            "/stop",
+            "/archive",
+            "/model",
+            "/models",
+            "/provider",
+            "/providers",
+            "/skills",
+            "/reload-skills",
+            "/learn",
+            "/user",
+            "/usage",
+            "/rewind",
+            "/log",
+            "/help",
         ] {
             assert!(help.contains(cmd), "help missing {cmd}");
         }

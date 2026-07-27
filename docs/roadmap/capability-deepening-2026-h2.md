@@ -1,6 +1,6 @@
 # Capability Deepening — 2026 H2
 
-Status: **strategy** · Date: 2026-06-20 · Companion to
+Status: **strategy, updated 2026-07-27** · Date: 2026-06-20 · Companion to
 [`competitive-landscape-and-direction-2026-h2.md`](./competitive-landscape-and-direction-2026-h2.md)
 
 Five capability axes we want to deepen — **smarter · more human · better at research · more
@@ -74,10 +74,13 @@ autonomous/"smarter" features drift.
 - **Have:** stability board + SLO targets, eval gate, scheduler, full `Vec<Message>` persistence.
 - **Signal:** OpenClaw 2026.6.1's headline was interrupted-tool-call recovery — resilience is the
   bar, not a bonus.
-- **Do (raise Track C to parallel with v0.3.0):** interrupted-tool-call recovery and resumable
-  long runs (transcript already persisted); scheduler **dead-letter queue + replay** (stability
-  board P1); per-tool/MCP **timeout budget matrix**; finish the non-web progress heartbeat
-  (`non-web-channel-progress-events-plan.md` Phase 3).
+- **Implemented in the current change; verification/merge pending:** interactive turns now checkpoint safe provider-neutral boundaries,
+  resume after restart, and stop with evidence instead of replaying a tool with uncertain side
+  effects. Active/recovered runs are visible in `/status`, Governance, and the audit log.
+  Scheduler DLQ/replay and durable outbound chunk delivery were already shipped.
+- **Next:** per-tool/MCP **timeout budget matrix**; finish the non-web progress heartbeat
+  (`non-web-channel-progress-events-plan.md` Phase 3); add the end-to-end crash drill to release
+  qualification.
 - **Eval:** kill-and-resume fixture continues a half-finished tool loop; DLQ replay restores a
   failed scheduled run.
 - **Priority: high** (table stakes).
@@ -87,10 +90,12 @@ autonomous/"smarter" features drift.
 ### 5a. Harden MicroClaw itself (defensive posture — Track B)
 - **Have:** `path_guard`, `web_fetch` SSRF guard, hash-chained audit (#418), Docker sandbox wired
   to `bash`, warn-only `GuardrailController`.
-- **Do:** promote guardrails **warn → block** (pre-tool-call policy + post-output secret/PII scan);
-  **native process-wide egress control** (Rust, fail-closed, in-process — the OpenClaw Proxyline
-  pattern done better); per-chat/per-agent **least-privilege tool authorization** (OWASP Agentic
-  Top 10); sandbox **credential hygiene** (sandboxed `bash` never sees real API keys).
+- **Implemented in the current change; verification/merge pending:** block-capable pre-tool policy and post-output secret scan; central Rust
+  HTTP(S) egress policy for configured endpoints and shared tool inputs; per-chat/channel/
+  principal least-privilege grants; sandbox dotenv/credential isolation; doctor and Governance
+  posture views.
+- **Next:** mediated egress for the planned TypeScript plugin host, OS-level per-host enforcement
+  for workloads that require container networking, and expanded output PII policy.
 - **Eval:** a blocked tool call and a redacted post-output are covered by fixtures.
 - **Priority: high** — low-risk, pure-additive, reinforces the signature pitch.
 
@@ -113,9 +118,9 @@ autonomous/"smarter" features drift.
 | 1 | Pluggable search backends + `deep_research` | research/smarter | **shipped** | low |
 | 2 | Skill curator (deterministic, skills-only) | smarter | v0.3.0 | medium |
 | 3 | Guardrails warn→block + post-output scan | security 5a | v0.3.0 | medium |
-| 4 | Resilience/recovery + scheduler DLQ replay | stable | v0.3.0→v0.4.0 | medium |
+| 4 | Resilience/recovery + scheduler DLQ replay | stable | **implemented; pending merge** | medium |
 | 5 | Deep-research workflow (contract orchestration) | research | v0.4.0 | medium |
-| 6 | Native egress control + per-chat tool authz | security 5a | v0.4.0 | high |
+| 6 | Native egress control + per-chat tool authz | security 5a | **implemented; pending merge** | high |
 | 7 | Security vertical (dep-monitor / CVE summarize) | security 5b | v0.4.0 | medium |
 | 8 | Personality growth / inner monologue | human | after eval coverage | high |
 
