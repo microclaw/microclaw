@@ -1,6 +1,6 @@
 # Durable Coworker and Secure Runtime — Delivery Record
 
-Status: **implemented in branch; verification and merge pending**
+Status: **implemented; draft PR validation pending**
 Date: 2026-07-27
 
 This is the authoritative status document for the Durable Coworker and Secure
@@ -90,7 +90,8 @@ This record must not be changed to **complete** until all are true:
 - [x] generated documentation check passes;
 - [x] linked GitHub issue:
   [#463](https://github.com/microclaw/microclaw/issues/463);
-- [ ] a draft pull request exists;
+- [x] draft pull request:
+  [#464](https://github.com/microclaw/microclaw/pull/464);
 - [ ] every required GitHub Actions check is green.
 
 `cargo fmt --all -- --check` was also run. It reports repository-wide
@@ -100,5 +101,7 @@ does not currently define rustfmt as a required check. This baseline should be
 fixed in a dedicated formatting-only change rather than hidden inside a
 runtime/security review.
 
-After issue/PR creation, replace this checklist with links and final check
-results rather than creating another status document.
+GitHub delivery is tracked in
+[Issue #463](https://github.com/microclaw/microclaw/issues/463) and
+[draft PR #464](https://github.com/microclaw/microclaw/pull/464). Record the
+final required-check result here rather than creating another status document.
