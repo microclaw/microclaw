@@ -13,6 +13,11 @@ type Run = {
   output_tokens: number
   tool_calls: number
   tool_errors: number
+  task_signature: {
+    task_type: string
+    task_family: string
+    capability_tags: string[]
+  }
 }
 
 type Outcome = {
@@ -48,6 +53,17 @@ type Detail = {
 
 type ObservabilityResponse = {
   recent_runs: Run[]
+  skill_task_utilities: SkillUtility[]
+}
+
+type SkillUtility = {
+  skill_name: string
+  skill_version: number
+  task_type: string
+  task_family: string
+  total_outcomes: number
+  success_rate: number
+  utility_lower_bound: number
 }
 
 type DetailResponse = {
@@ -56,6 +72,7 @@ type DetailResponse = {
 
 export function LearningPanel({ sessionKey }: { sessionKey: string }) {
   const [runs, setRuns] = useState<Run[]>([])
+  const [utilities, setUtilities] = useState<SkillUtility[]>([])
   const [detail, setDetail] = useState<Detail | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -80,6 +97,7 @@ export function LearningPanel({ sessionKey }: { sessionKey: string }) {
         `/api/learning_observability?session_key=${encodeURIComponent(sessionKey)}`,
       )
       setRuns(result.recent_runs)
+      setUtilities(result.skill_task_utilities)
       if (result.recent_runs.length > 0) {
         await loadDetail(result.recent_runs[0].run_id)
       } else {
@@ -109,6 +127,30 @@ export function LearningPanel({ sessionKey }: { sessionKey: string }) {
         </Button>
         <Text size="1" color="gray">{runs.length} recent run(s)</Text>
       </Flex>
+
+      {utilities.length > 0 && (
+        <div className="rounded-md border border-white/10 p-3">
+          <Text as="div" size="2" weight="bold">Risk-adjusted skill utility by task family</Text>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {utilities.slice(0, 12).map((item) => (
+              <div
+                key={`${item.skill_name}:${item.skill_version}:${item.task_family}`}
+                className="rounded-md bg-black/20 p-2"
+              >
+                <Flex align="center" gap="2" wrap="wrap">
+                  <Text size="1" weight="bold">{item.skill_name} v{item.skill_version}</Text>
+                  <Badge size="1" color="purple">{item.task_family}</Badge>
+                  <Badge size="1" color="gray">n={item.total_outcomes}</Badge>
+                </Flex>
+                <Text as="div" size="1" color="gray" className="mt-1">
+                  pass {(item.success_rate * 100).toFixed(0)}% · conservative utility floor{' '}
+                  {(item.utility_lower_bound * 100).toFixed(0)}%
+                </Text>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid min-h-0 grid-cols-[minmax(220px,0.8fr)_minmax(0,1.7fr)] gap-3">
         <div className="max-h-[65vh] overflow-auto rounded-md border border-white/10 p-2">
@@ -140,12 +182,19 @@ export function LearningPanel({ sessionKey }: { sessionKey: string }) {
                   {detail.run.result_summary || '(no result summary)'}
                 </Text>
                 <Flex gap="2" wrap="wrap" className="mt-2">
+                  <Badge size="1" color="blue">{detail.run.task_signature.task_type}</Badge>
+                  <Badge size="1" color="purple">{detail.run.task_signature.task_family}</Badge>
                   <Badge size="1" color="gray">
                     {detail.run.input_tokens + detail.run.output_tokens} tokens
                   </Badge>
                   <Badge size="1" color={detail.run.tool_errors > 0 ? 'red' : 'gray'}>
                     {detail.run.tool_calls} tools / {detail.run.tool_errors} errors
                   </Badge>
+                </Flex>
+                <Flex gap="1" wrap="wrap" className="mt-1">
+                  {detail.run.task_signature.capability_tags.map((tag) => (
+                    <Badge key={tag} size="1" color="gray">{tag}</Badge>
+                  ))}
                 </Flex>
               </div>
 

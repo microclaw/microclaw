@@ -1261,8 +1261,12 @@ async fn process_with_agent_logic(
                 (
                     experience.run_id.clone(),
                     format!(
-                        "strong_verified; lexical_or_phrase_relevance; environment_match={environment_match}; verifier={}; verdict={}",
-                        experience.verifier_type, experience.verdict
+                        "strong_verified; task_type={}; task_family={}; utility_lower_bound={:.3}; environment_match={environment_match}; verifier={}; verdict={}",
+                        experience.task_signature.task_type,
+                        experience.task_signature.task_family,
+                        experience.utility_lower_bound,
+                        experience.verifier_type,
+                        experience.verdict
                     ),
                     experience.relevance_score,
                 )
@@ -1284,7 +1288,10 @@ async fn process_with_agent_logic(
             let summary = experience.result_summary.unwrap_or_default();
             let summary_end = floor_char_boundary(&summary, summary.len().min(600));
             system_prompt.push_str(&format!(
-                "- verdict={} verifier={} confidence={:.2} objective={:?} summary={:?} duration_ms={} tokens={} tool_calls={} tool_errors={} cost_usd={}\n",
+                "- task_type={} task_family={} utility_lower_bound={:.3} verdict={} verifier={} confidence={:.2} objective={:?} summary={:?} duration_ms={} tokens={} tool_calls={} tool_errors={} cost_usd={}\n",
+                experience.task_signature.task_type,
+                experience.task_signature.task_family,
+                experience.utility_lower_bound,
                 experience.verdict,
                 experience.verifier_type,
                 experience.confidence,
@@ -3975,9 +3982,13 @@ mod tests {
             detail.retrieved_experiences[0].source_run_id,
             "verified-source"
         );
+        assert_eq!(detail.run.task_signature.task_family, "deployment");
         assert!(detail.retrieved_experiences[0]
             .selection_reason
             .contains("strong_verified"));
+        assert!(detail.retrieved_experiences[0]
+            .selection_reason
+            .contains("utility_lower_bound="));
 
         drop(state);
         let _ = std::fs::remove_dir_all(&base_dir);

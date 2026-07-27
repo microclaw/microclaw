@@ -132,6 +132,12 @@ fn format_learning_run_detail(detail: &microclaw_storage::db::ExperienceRunDetai
         ),
         format!("objective: {}", detail.run.objective),
         format!(
+            "task: {} / {} [{}]",
+            detail.run.task_signature.task_type,
+            detail.run.task_signature.task_family,
+            detail.run.task_signature.capability_tags.join(", ")
+        ),
+        format!(
             "result: {}",
             detail.run.result_summary.as_deref().unwrap_or("(none)")
         ),

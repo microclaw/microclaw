@@ -282,12 +282,13 @@ pub async fn build_usage_report(db: Arc<Database>, chat_id: i64) -> Result<Strin
         lines.push("  Governed skills:".to_string());
         for skill in skill_learning.iter().take(8) {
             lines.push(format!(
-                "    - {} v{} [{}] outcomes={} pass_rate={:.0}%",
+                "    - {} v{} [{}] outcomes={} pass_rate={:.0}% utility_lb={:.0}%",
                 skill.skill_name,
                 skill.active_version,
                 skill.state,
                 fmt_int(skill.total_outcomes),
-                skill.success_rate * 100.0
+                skill.success_rate * 100.0,
+                skill.utility_lower_bound * 100.0
             ));
         }
     }

@@ -1523,13 +1523,14 @@ async fn api_learning_observability(
 
     let session_key = normalize_session_key(query.session_key.as_deref());
     let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
-    let (goal, experience_summary, recent_runs, skills, policy) =
+    let (goal, experience_summary, recent_runs, skills, task_utilities, policy) =
         call_blocking(state.app_state.db.clone(), move |db| {
             Ok((
                 db.get_active_goal_state(chat_id)?,
                 db.get_experience_summary(Some(chat_id))?,
                 db.get_recent_experience_runs(Some(chat_id), 50)?,
                 db.get_skill_learning_summaries()?,
+                db.get_skill_task_utility_summaries(None)?,
                 db.get_skill_governance_policy()?,
             ))
         })
@@ -1544,6 +1545,7 @@ async fn api_learning_observability(
         "experience_summary": experience_summary,
         "recent_runs": recent_runs,
         "skills": skills,
+        "skill_task_utilities": task_utilities,
         "governance_policy": policy,
     })))
 }
@@ -3573,9 +3575,18 @@ mod tests {
         );
         assert_eq!(value["recent_runs"][0]["run_id"].as_str(), Some("run-web"));
         assert_eq!(
+            value["recent_runs"][0]["task_signature"]["task_family"].as_str(),
+            Some("testing")
+        );
+        assert_eq!(
             value["governance_policy"]["trial_min_outcomes"].as_i64(),
             Some(3)
         );
+        assert_eq!(
+            value["governance_policy"]["utility_confidence_z"].as_f64(),
+            Some(1.96)
+        );
+        assert!(value["skill_task_utilities"].is_array());
 
         let experience_request = Request::builder()
             .method("GET")

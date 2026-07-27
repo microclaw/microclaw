@@ -225,6 +225,16 @@ pub struct ExperienceRunRecord {
     pub tool_calls: i64,
     pub tool_errors: i64,
     pub estimated_cost_usd: Option<f64>,
+    pub task_signature: TaskSignatureV1,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct TaskSignatureV1 {
+    pub version: i64,
+    pub task_type: String,
+    pub task_family: String,
+    pub capability_tags: Vec<String>,
+    pub signature_hash: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -346,10 +356,25 @@ pub struct SkillLearningSummary {
     pub passed_outcomes: i64,
     pub failed_outcomes: i64,
     pub success_rate: f64,
+    pub utility_lower_bound: f64,
     pub last_outcome_at: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillTaskUtilitySummary {
+    pub skill_name: String,
+    pub skill_version: i64,
+    pub task_type: String,
+    pub task_family: String,
+    pub total_outcomes: i64,
+    pub passed_outcomes: i64,
+    pub failed_outcomes: i64,
+    pub success_rate: f64,
+    pub utility_lower_bound: f64,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SkillGovernancePolicy {
     pub candidate_failures_to_degrade: i64,
     pub trial_min_outcomes: i64,
@@ -357,6 +382,8 @@ pub struct SkillGovernancePolicy {
     pub trial_degrade_rate: f64,
     pub trusted_min_outcomes: i64,
     pub trusted_degrade_rate: f64,
+    pub utility_confidence_z: f64,
+    pub trial_promote_utility_lower_bound: f64,
 }
 
 impl Default for SkillGovernancePolicy {
@@ -368,6 +395,8 @@ impl Default for SkillGovernancePolicy {
             trial_degrade_rate: 0.5,
             trusted_min_outcomes: 5,
             trusted_degrade_rate: 0.6,
+            utility_confidence_z: 1.96,
+            trial_promote_utility_lower_bound: 0.4,
         }
     }
 }
@@ -375,10 +404,13 @@ impl Default for SkillGovernancePolicy {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SkillApplicability {
     pub environment_fingerprint: Option<String>,
+    pub task_type: Option<String>,
+    pub task_family: Option<String>,
     pub matching_outcomes: i64,
     pub passed_outcomes: i64,
     pub failed_outcomes: i64,
     pub success_rate: Option<f64>,
+    pub utility_lower_bound: Option<f64>,
     pub allowed: bool,
     pub reason: String,
 }
@@ -399,6 +431,8 @@ pub struct VerifiedExperienceMatch {
     pub tool_errors: i64,
     pub estimated_cost_usd: Option<f64>,
     pub relevance_score: f64,
+    pub utility_lower_bound: f64,
+    pub task_signature: TaskSignatureV1,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -457,7 +491,101 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 37;
+const SCHEMA_VERSION_CURRENT: i64 = 38;
+
+pub fn wilson_lower_bound(passed: i64, total: i64, z: f64) -> f64 {
+    if total <= 0 || passed < 0 || passed > total || !z.is_finite() || z < 0.0 {
+        return 0.0;
+    }
+    let n = total as f64;
+    let p = passed as f64 / n;
+    let z2 = z * z;
+    ((p + z2 / (2.0 * n) - z * ((p * (1.0 - p) + z2 / (4.0 * n)) / n).sqrt()) / (1.0 + z2 / n))
+        .clamp(0.0, 1.0)
+}
+
+pub fn derive_task_signature(objective: &str, run_kind: &str) -> TaskSignatureV1 {
+    let normalized = objective.to_lowercase();
+    let contains_any = |terms: &[&str]| terms.iter().any(|term| normalized.contains(term));
+    let (task_type, task_family) =
+        if contains_any(&["debug", "bug", "fix", "报错", "修复", "故障", "失败原因"]) {
+            ("software_development", "debugging")
+        } else if contains_any(&["test", "verify", "验证", "测试", "coverage", "clippy"]) {
+            ("software_development", "testing")
+        } else if contains_any(&[
+            "implement",
+            "code",
+            "refactor",
+            "代码",
+            "实现",
+            "开发",
+            "重构",
+        ]) {
+            ("software_development", "code_change")
+        } else if contains_any(&["deploy", "release", "ci", "部署", "发布", "上线"]) {
+            ("operations", "deployment")
+        } else if contains_any(&[
+            "search", "research", "look up", "调研", "搜索", "查找", "资料",
+        ]) {
+            ("information_retrieval", "research")
+        } else if contains_any(&["analy", "metric", "sql", "dataset", "分析", "指标", "数据"])
+        {
+            ("data_analysis", "analysis")
+        } else if contains_any(&["document", "report", "pdf", "slide", "文档", "报告", "演示"])
+        {
+            ("content_creation", "document_creation")
+        } else if contains_any(&["email", "message", "notify", "邮件", "消息", "通知"]) {
+            ("communication", "messaging")
+        } else if contains_any(&["schedule", "remind", "calendar", "定时", "提醒", "日历"])
+            || run_kind == "scheduled"
+        {
+            ("operations", "scheduling")
+        } else if contains_any(&["memory", "remember", "记忆", "记住", "忘记"]) {
+            ("agent_learning", "memory_management")
+        } else if contains_any(&["skill", "技能", "学习"]) {
+            ("agent_learning", "skill_management")
+        } else if contains_any(&["plan", "roadmap", "规划", "计划", "路线"]) {
+            ("reasoning", "planning")
+        } else {
+            ("general", "general_assistance")
+        };
+
+    let mut tags = Vec::new();
+    for (tag, terms) in [
+        ("browser", &["browser", "chrome", "网页", "浏览器"][..]),
+        ("filesystem", &["file", "directory", "文件", "目录"][..]),
+        (
+            "shell",
+            &["shell", "command", "terminal", "命令", "终端"][..],
+        ),
+        ("web", &["web", "http", "url", "网站", "网络"][..]),
+        ("coding", &["code", "rust", "python", "代码", "编程"][..]),
+        (
+            "verification",
+            &["test", "verify", "check", "测试", "验证"][..],
+        ),
+        ("data", &["data", "sql", "metric", "数据", "指标"][..]),
+        ("messaging", &["email", "message", "邮件", "消息"][..]),
+        ("scheduling", &["schedule", "calendar", "定时", "日历"][..]),
+    ] {
+        if contains_any(terms) {
+            tags.push(tag.to_string());
+        }
+    }
+    tags.push(task_type.to_string());
+    tags.sort();
+    tags.dedup();
+    let canonical = format!("v1|{task_type}|{task_family}|{}", tags.join(","));
+    use sha2::Digest;
+    let signature_hash = to_hex(&sha2::Sha256::digest(canonical.as_bytes()));
+    TaskSignatureV1 {
+        version: 1,
+        task_type: task_type.into(),
+        task_family: task_family.into(),
+        capability_tags: tags,
+        signature_hash,
+    }
+}
 
 /// Genesis link for the tamper-evident audit hash chain — the `prev_hash` of the
 /// first sealed entry.
@@ -1887,6 +2015,78 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         set_schema_version(conn, 37)?;
         version = 37;
     }
+    if version < 38 {
+        for (column, definition) in [
+            ("task_signature_version", "INTEGER NOT NULL DEFAULT 1"),
+            ("task_type", "TEXT NOT NULL DEFAULT 'general'"),
+            ("task_family", "TEXT NOT NULL DEFAULT 'general_assistance'"),
+            ("capability_tags_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("task_signature_hash", "TEXT NOT NULL DEFAULT ''"),
+        ] {
+            if !table_has_column(conn, "experience_runs", column)? {
+                conn.execute(
+                    &format!("ALTER TABLE experience_runs ADD COLUMN {column} {definition}"),
+                    [],
+                )?;
+            }
+        }
+        if !table_has_column(conn, "skill_governance_policy", "utility_confidence_z")? {
+            conn.execute(
+                "ALTER TABLE skill_governance_policy
+                 ADD COLUMN utility_confidence_z REAL NOT NULL DEFAULT 1.96",
+                [],
+            )?;
+        }
+        if !table_has_column(
+            conn,
+            "skill_governance_policy",
+            "trial_promote_utility_lower_bound",
+        )? {
+            conn.execute(
+                "ALTER TABLE skill_governance_policy
+                 ADD COLUMN trial_promote_utility_lower_bound REAL NOT NULL DEFAULT 0.4",
+                [],
+            )?;
+        }
+        let mut stmt = conn.prepare(
+            "SELECT run_id, objective, run_kind FROM experience_runs
+             WHERE task_signature_hash=''",
+        )?;
+        let existing = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        for (run_id, objective, run_kind) in existing {
+            let signature = derive_task_signature(&objective, &run_kind);
+            conn.execute(
+                "UPDATE experience_runs SET task_signature_version=?2,
+                    task_type=?3, task_family=?4, capability_tags_json=?5,
+                    task_signature_hash=?6 WHERE run_id=?1",
+                params![
+                    run_id,
+                    signature.version,
+                    signature.task_type,
+                    signature.task_family,
+                    serde_json::to_string(&signature.capability_tags)
+                        .unwrap_or_else(|_| "[]".into()),
+                    signature.signature_hash
+                ],
+            )?;
+        }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_experience_runs_task_signature
+             ON experience_runs(task_type, task_family, started_at DESC)",
+            [],
+        )?;
+        set_schema_version(conn, 38)?;
+        version = 38;
+    }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
     }
@@ -2047,10 +2247,14 @@ fn validate_skill_governance_policy(policy: &SkillGovernancePolicy) -> Result<()
         || !(0.0..=1.0).contains(&policy.trial_promote_rate)
         || !(0.0..=1.0).contains(&policy.trial_degrade_rate)
         || !(0.0..=1.0).contains(&policy.trusted_degrade_rate)
+        || !(0.0..=1.0).contains(&policy.trial_promote_utility_lower_bound)
+        || !policy.utility_confidence_z.is_finite()
+        || !(0.0..=5.0).contains(&policy.utility_confidence_z)
         || policy.trial_degrade_rate >= policy.trial_promote_rate
     {
         return Err(MicroClawError::ToolExecution(
-            "invalid skill governance policy: counts must be positive and degradation rates must be below promotion rate".into(),
+            "invalid skill governance policy: counts, rates, confidence, or utility lower bound"
+                .into(),
         ));
     }
     Ok(())
@@ -2350,7 +2554,8 @@ fn evaluate_skill_lifecycle(
     let policy = tx.query_row(
         "SELECT candidate_failures_to_degrade, trial_min_outcomes,
                 trial_promote_rate, trial_degrade_rate, trusted_min_outcomes,
-                trusted_degrade_rate
+                trusted_degrade_rate, utility_confidence_z,
+                trial_promote_utility_lower_bound
          FROM skill_governance_policy WHERE singleton_id=1",
         [],
         |row| {
@@ -2361,18 +2566,26 @@ fn evaluate_skill_lifecycle(
                 trial_degrade_rate: row.get(3)?,
                 trusted_min_outcomes: row.get(4)?,
                 trusted_degrade_rate: row.get(5)?,
+                utility_confidence_z: row.get(6)?,
+                trial_promote_utility_lower_bound: row.get(7)?,
             })
         },
     )?;
+    let utility_lower_bound = wilson_lower_bound(passed, total, policy.utility_confidence_z);
     let transition = match current.as_str() {
         "candidate" if failed >= policy.candidate_failures_to_degrade => {
             Some(("degraded", "candidate exceeded verified failure threshold"))
         }
         "candidate" if passed >= 1 => Some(("trial", "first verified success")),
         "trial"
-            if total >= policy.trial_min_outcomes && success_rate >= policy.trial_promote_rate =>
+            if total >= policy.trial_min_outcomes
+                && success_rate >= policy.trial_promote_rate
+                && utility_lower_bound >= policy.trial_promote_utility_lower_bound =>
         {
-            Some(("trusted", "trial passed promotion threshold"))
+            Some((
+                "trusted",
+                "trial passed raw-rate and risk-adjusted utility thresholds",
+            ))
         }
         "trial"
             if total >= policy.trial_min_outcomes && success_rate < policy.trial_degrade_rate =>
@@ -4089,11 +4302,17 @@ impl Database {
             ));
         }
         let conn = self.lock_conn();
+        let signature = derive_task_signature(objective, run_kind);
+        let capability_tags_json = serde_json::to_string(&signature.capability_tags)
+            .map_err(|error| MicroClawError::ToolExecution(error.to_string()))?;
         conn.execute(
             "INSERT INTO experience_runs(
                 run_id, goal_id, chat_id, channel, run_kind, objective,
-                environment_fingerprint, status, started_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8)",
+                environment_fingerprint, status, started_at,
+                task_signature_version, task_type, task_family,
+                capability_tags_json, task_signature_hash
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8,
+                       ?9, ?10, ?11, ?12, ?13)",
             params![
                 run_id,
                 goal_id,
@@ -4102,7 +4321,12 @@ impl Database {
                 run_kind,
                 objective,
                 environment_fingerprint,
-                chrono::Utc::now().to_rfc3339()
+                chrono::Utc::now().to_rfc3339(),
+                signature.version,
+                signature.task_type,
+                signature.task_family,
+                capability_tags_json,
+                signature.signature_hash
             ],
         )?;
         Ok(())
@@ -4262,14 +4486,18 @@ impl Database {
             "SELECT run_id, goal_id, chat_id, channel, run_kind, objective,
                     environment_fingerprint, status, result_summary, started_at,
                     finished_at, duration_ms, input_tokens, output_tokens,
-                    llm_requests, tool_calls, tool_errors, estimated_cost_usd
+                    llm_requests, tool_calls, tool_errors, estimated_cost_usd,
+                    task_signature_version, task_type, task_family,
+                    capability_tags_json, task_signature_hash
              FROM experience_runs WHERE chat_id=?1
              ORDER BY started_at DESC LIMIT ?2"
         } else {
             "SELECT run_id, goal_id, chat_id, channel, run_kind, objective,
                     environment_fingerprint, status, result_summary, started_at,
                     finished_at, duration_ms, input_tokens, output_tokens,
-                    llm_requests, tool_calls, tool_errors, estimated_cost_usd
+                    llm_requests, tool_calls, tool_errors, estimated_cost_usd,
+                    task_signature_version, task_type, task_family,
+                    capability_tags_json, task_signature_hash
              FROM experience_runs
              ORDER BY started_at DESC LIMIT ?2"
         };
@@ -4293,6 +4521,16 @@ impl Database {
                 tool_calls: row.get(15)?,
                 tool_errors: row.get(16)?,
                 estimated_cost_usd: row.get(17)?,
+                task_signature: TaskSignatureV1 {
+                    version: row.get(18)?,
+                    task_type: row.get(19)?,
+                    task_family: row.get(20)?,
+                    capability_tags: serde_json::from_str::<Vec<String>>(
+                        &row.get::<_, String>(21)?,
+                    )
+                    .unwrap_or_default(),
+                    signature_hash: row.get(22)?,
+                },
             })
         };
         let mut stmt = conn.prepare(sql)?;
@@ -4386,6 +4624,8 @@ impl Database {
                         environment_fingerprint, status, result_summary, started_at,
                         finished_at, duration_ms, input_tokens, output_tokens,
                         llm_requests, tool_calls, tool_errors, estimated_cost_usd
+                        , task_signature_version, task_type, task_family,
+                        capability_tags_json, task_signature_hash
                  FROM experience_runs WHERE run_id=?1",
                 params![run_id],
                 |row| {
@@ -4408,6 +4648,16 @@ impl Database {
                         tool_calls: row.get(15)?,
                         tool_errors: row.get(16)?,
                         estimated_cost_usd: row.get(17)?,
+                        task_signature: TaskSignatureV1 {
+                            version: row.get(18)?,
+                            task_type: row.get(19)?,
+                            task_family: row.get(20)?,
+                            capability_tags: serde_json::from_str::<Vec<String>>(
+                                &row.get::<_, String>(21)?,
+                            )
+                            .unwrap_or_default(),
+                            signature_hash: row.get(22)?,
+                        },
                     })
                 },
             )
@@ -4575,7 +4825,9 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT run_id, objective, environment_fingerprint, result_summary,
                     started_at, duration_ms, input_tokens + output_tokens,
-                    tool_calls, tool_errors, estimated_cost_usd
+                    tool_calls, tool_errors, estimated_cost_usd,
+                    task_signature_version, task_type, task_family,
+                    capability_tags_json, task_signature_hash
              FROM experience_runs
              WHERE chat_id=?1 AND status IN ('completed','failed','cancelled')
              ORDER BY started_at DESC LIMIT 200",
@@ -4593,12 +4845,18 @@ impl Database {
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
                     row.get::<_, Option<f64>>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, String>(14)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
 
         let query_lower = query.trim().to_lowercase();
+        let query_signature = derive_task_signature(query, "interactive");
         let query_terms = query_lower
             .split(|ch: char| !ch.is_alphanumeric())
             .filter(|term| term.chars().count() >= 2)
@@ -4616,6 +4874,11 @@ impl Database {
             tool_calls,
             tool_errors,
             estimated_cost_usd,
+            signature_version,
+            task_type,
+            task_family,
+            capability_tags_json,
+            signature_hash,
         ) in candidates
         {
             let searchable = format!(
@@ -4706,6 +4969,29 @@ impl Database {
                 (Some(expected), Some(actual)) if expected == actual => 0.25,
                 _ => 0.0,
             };
+            let capability_tags =
+                serde_json::from_str::<Vec<String>>(&capability_tags_json).unwrap_or_default();
+            let task_bonus = if task_family == query_signature.task_family {
+                0.3
+            } else if task_type == query_signature.task_type {
+                0.15
+            } else {
+                0.0
+            };
+            let shared_tags = capability_tags
+                .iter()
+                .filter(|tag| query_signature.capability_tags.contains(tag))
+                .count();
+            let tag_bonus = if capability_tags.is_empty()
+                && query_signature.capability_tags.is_empty()
+            {
+                0.0
+            } else {
+                0.2 * shared_tags as f64
+                    / capability_tags
+                        .len()
+                        .max(query_signature.capability_tags.len()) as f64
+            };
             matches.push(VerifiedExperienceMatch {
                 run_id,
                 objective,
@@ -4720,8 +5006,34 @@ impl Database {
                 tool_calls,
                 tool_errors,
                 estimated_cost_usd,
-                relevance_score: lexical + environment_bonus,
+                relevance_score: lexical + environment_bonus + task_bonus + tag_bonus,
+                utility_lower_bound: 0.0,
+                task_signature: TaskSignatureV1 {
+                    version: signature_version,
+                    task_type,
+                    task_family,
+                    capability_tags,
+                    signature_hash,
+                },
             });
+        }
+        let mut utility_samples = std::collections::HashMap::<String, (i64, i64)>::new();
+        for item in &matches {
+            let entry = utility_samples
+                .entry(item.task_signature.task_family.clone())
+                .or_default();
+            entry.1 += 1;
+            if item.verdict == "passed" {
+                entry.0 += 1;
+            }
+        }
+        for item in &mut matches {
+            let (passed, total) = utility_samples
+                .get(&item.task_signature.task_family)
+                .copied()
+                .unwrap_or_default();
+            item.utility_lower_bound = wilson_lower_bound(passed, total, 1.96);
+            item.relevance_score += 0.25 * item.utility_lower_bound;
         }
         matches.sort_by(|left, right| {
             right
@@ -5066,26 +5378,34 @@ impl Database {
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
         refresh_expired_skill_outcomes(&tx)?;
-        let environment: Option<String> = tx
+        let utility_confidence_z: f64 = tx.query_row(
+            "SELECT utility_confidence_z FROM skill_governance_policy WHERE singleton_id=1",
+            [],
+            |row| row.get(0),
+        )?;
+        let context: Option<(Option<String>, String, String)> = tx
             .query_row(
-                "SELECT environment_fingerprint FROM experience_runs
+                "SELECT environment_fingerprint, task_type, task_family
+                 FROM experience_runs
                  WHERE chat_id=?1 AND status='running'
                  ORDER BY started_at DESC LIMIT 1",
                 params![chat_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .optional()?
-            .flatten();
-        let Some(environment_fingerprint) = environment else {
+            .optional()?;
+        let Some((environment, task_type, task_family)) = context else {
             tx.commit()?;
             return Ok(SkillApplicability {
                 environment_fingerprint: None,
+                task_type: None,
+                task_family: None,
                 matching_outcomes: 0,
                 passed_outcomes: 0,
                 failed_outcomes: 0,
                 success_rate: None,
+                utility_lower_bound: None,
                 allowed: true,
-                reason: "no comparable verified environment history".into(),
+                reason: "no comparable verified task history".into(),
             });
         };
         let (total, passed, failed): (i64, i64, i64) = tx.query_row(
@@ -5096,30 +5416,39 @@ impl Database {
              JOIN skill_lifecycle l
                ON l.skill_name=o.skill_name AND l.active_version=o.skill_version
              JOIN experience_runs r ON r.run_id=o.run_id
-             WHERE o.skill_name=?1 AND r.environment_fingerprint=?2
+             WHERE o.skill_name=?1
+               AND (?2 IS NULL OR r.environment_fingerprint=?2)
+               AND r.task_family=?3
                AND o.verifier_type IN ('deterministic','environmental','human','rule_based')
                AND o.attribution_confidence >= 0.999
-               AND (o.valid_until IS NULL OR o.valid_until > ?3)",
+               AND (o.valid_until IS NULL OR o.valid_until > ?4)",
             params![
                 skill_name,
-                environment_fingerprint,
+                environment,
+                task_family,
                 chrono::Utc::now().to_rfc3339()
             ],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         let success_rate = (total > 0).then_some(passed as f64 / total as f64);
+        let utility_lower_bound =
+            (total > 0).then_some(wilson_lower_bound(passed, total, utility_confidence_z));
         let allowed = total < 2 || success_rate.unwrap_or(0.0) >= 0.5;
         let result = SkillApplicability {
-            environment_fingerprint: Some(environment_fingerprint),
+            environment_fingerprint: environment,
+            task_type: Some(task_type),
+            task_family: Some(task_family),
             matching_outcomes: total,
             passed_outcomes: passed,
             failed_outcomes: failed,
             success_rate,
+            utility_lower_bound,
             allowed,
             reason: if allowed {
-                "no learned contraindication for this environment".into()
+                "no learned contraindication for this task family and environment".into()
             } else {
-                "verified outcomes show repeated failure in this environment".into()
+                "verified outcomes show repeated failure for this task family and environment"
+                    .into()
             },
         };
         tx.commit()?;
@@ -5227,6 +5556,11 @@ impl Database {
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
         refresh_expired_skill_outcomes(&tx)?;
+        let utility_confidence_z: f64 = tx.query_row(
+            "SELECT utility_confidence_z FROM skill_governance_policy WHERE singleton_id=1",
+            [],
+            |row| row.get(0),
+        )?;
         let mut stmt = tx.prepare(
             "SELECT l.skill_name, l.state, l.active_version,
                     COUNT(o.id),
@@ -5259,6 +5593,7 @@ impl Database {
                 } else {
                     passed as f64 / total as f64
                 },
+                utility_lower_bound: wilson_lower_bound(passed, total, utility_confidence_z),
                 last_outcome_at: row.get(6)?,
             })
         })?;
@@ -5268,12 +5603,68 @@ impl Database {
         Ok(summaries)
     }
 
+    pub fn get_skill_task_utility_summaries(
+        &self,
+        skill_name: Option<&str>,
+    ) -> Result<Vec<SkillTaskUtilitySummary>, MicroClawError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        refresh_expired_skill_outcomes(&tx)?;
+        let z: f64 = tx.query_row(
+            "SELECT utility_confidence_z FROM skill_governance_policy WHERE singleton_id=1",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut stmt = tx.prepare(
+            "SELECT o.skill_name, o.skill_version, r.task_type, r.task_family,
+                    COUNT(o.id),
+                    COALESCE(SUM(CASE WHEN o.verdict='passed' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN o.verdict='failed' THEN 1 ELSE 0 END), 0)
+             FROM skill_outcomes o
+             JOIN experience_runs r ON r.run_id=o.run_id
+             JOIN skill_lifecycle l
+               ON l.skill_name=o.skill_name AND l.active_version=o.skill_version
+             WHERE (?1 IS NULL OR o.skill_name=?1)
+               AND o.verifier_type IN ('deterministic','environmental','human','rule_based')
+               AND o.attribution_confidence >= 0.999
+               AND (o.valid_until IS NULL OR o.valid_until >
+                    strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+             GROUP BY o.skill_name, o.skill_version, r.task_type, r.task_family
+             ORDER BY o.skill_name, COUNT(o.id) DESC, r.task_family",
+        )?;
+        let rows = stmt
+            .query_map(params![skill_name], |row| {
+                let total: i64 = row.get(4)?;
+                let passed: i64 = row.get(5)?;
+                Ok(SkillTaskUtilitySummary {
+                    skill_name: row.get(0)?,
+                    skill_version: row.get(1)?,
+                    task_type: row.get(2)?,
+                    task_family: row.get(3)?,
+                    total_outcomes: total,
+                    passed_outcomes: passed,
+                    failed_outcomes: row.get(6)?,
+                    success_rate: if total == 0 {
+                        0.0
+                    } else {
+                        passed as f64 / total as f64
+                    },
+                    utility_lower_bound: wilson_lower_bound(passed, total, z),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        tx.commit()?;
+        Ok(rows)
+    }
+
     pub fn get_skill_governance_policy(&self) -> Result<SkillGovernancePolicy, MicroClawError> {
         let conn = self.lock_conn();
         conn.query_row(
             "SELECT candidate_failures_to_degrade, trial_min_outcomes,
-                    trial_promote_rate, trial_degrade_rate, trusted_min_outcomes,
-                    trusted_degrade_rate
+                trial_promote_rate, trial_degrade_rate, trusted_min_outcomes,
+                    trusted_degrade_rate, utility_confidence_z,
+                    trial_promote_utility_lower_bound
              FROM skill_governance_policy WHERE singleton_id=1",
             [],
             |row| {
@@ -5284,6 +5675,8 @@ impl Database {
                     trial_degrade_rate: row.get(3)?,
                     trusted_min_outcomes: row.get(4)?,
                     trusted_degrade_rate: row.get(5)?,
+                    utility_confidence_z: row.get(6)?,
+                    trial_promote_utility_lower_bound: row.get(7)?,
                 })
             },
         )
@@ -5302,7 +5695,9 @@ impl Database {
              SET candidate_failures_to_degrade=?1, trial_min_outcomes=?2,
                  trial_promote_rate=?3, trial_degrade_rate=?4,
                  trusted_min_outcomes=?5, trusted_degrade_rate=?6,
-                 updated_at=?7
+                 utility_confidence_z=?7,
+                 trial_promote_utility_lower_bound=?8,
+                 updated_at=?9
              WHERE singleton_id=1",
             params![
                 policy.candidate_failures_to_degrade,
@@ -5311,6 +5706,8 @@ impl Database {
                 policy.trial_degrade_rate,
                 policy.trusted_min_outcomes,
                 policy.trusted_degrade_rate,
+                policy.utility_confidence_z,
+                policy.trial_promote_utility_lower_bound,
                 chrono::Utc::now().to_rfc3339()
             ],
         )?;
@@ -12098,6 +12495,23 @@ mod tests {
         assert!(!applicability.allowed);
         assert_eq!(applicability.matching_outcomes, 2);
         assert_eq!(applicability.failed_outcomes, 2);
+        assert_eq!(applicability.task_family.as_deref(), Some("deployment"));
+        db.finish_experience_run("linux-current", "completed", None, 1)
+            .unwrap();
+        db.start_experience_run(
+            "linux-debug-current",
+            None,
+            9,
+            "web",
+            "interactive",
+            "debug parser failure",
+            Some("os=linux;provider=acme"),
+        )
+        .unwrap();
+        let different_family = db.evaluate_skill_applicability("deploy", 9).unwrap();
+        assert!(different_family.allowed);
+        assert_eq!(different_family.matching_outcomes, 0);
+        assert_eq!(different_family.task_family.as_deref(), Some("debugging"));
 
         db.transition_skill_state("deploy", "archived", "operator archive")
             .unwrap();
@@ -12203,6 +12617,8 @@ mod tests {
         assert_eq!(recalled[0].run_id, "human-run");
         assert_eq!(recalled[0].verdict, "passed");
         assert!(recalled[0].relevance_score > 1.0);
+        assert_eq!(recalled[0].task_signature.task_type, "general");
+        assert!(recalled[0].utility_lower_bound > 0.0);
 
         db.start_experience_run(
             "expired-run",
@@ -12323,22 +12739,29 @@ mod tests {
             .is_err());
         let defaults = db.get_skill_governance_policy().unwrap();
         assert_eq!(defaults.trial_min_outcomes, 3);
+        assert_eq!(defaults.utility_confidence_z, 1.96);
+        assert_eq!(defaults.trial_promote_utility_lower_bound, 0.4);
 
         let mut invalid = defaults.clone();
         invalid.trial_degrade_rate = invalid.trial_promote_rate;
         assert!(db.update_skill_governance_policy(&invalid).is_err());
+        let mut invalid_confidence = defaults.clone();
+        invalid_confidence.utility_confidence_z = -1.0;
+        assert!(db
+            .update_skill_governance_policy(&invalid_confidence)
+            .is_err());
 
         let mut updated = defaults;
         updated.candidate_failures_to_degrade = 3;
         updated.trial_min_outcomes = 4;
         updated.trusted_min_outcomes = 6;
+        updated.utility_confidence_z = 1.645;
+        updated.trial_promote_utility_lower_bound = 0.3;
         db.update_skill_governance_policy(&updated).unwrap();
-        assert_eq!(
-            db.get_skill_governance_policy()
-                .unwrap()
-                .candidate_failures_to_degrade,
-            3
-        );
+        let saved = db.get_skill_governance_policy().unwrap();
+        assert_eq!(saved.candidate_failures_to_degrade, 3);
+        assert_eq!(saved.utility_confidence_z, 1.645);
+        assert_eq!(saved.trial_promote_utility_lower_bound, 0.3);
         cleanup(&dir);
     }
 
@@ -12535,7 +12958,150 @@ mod tests {
             let conn = db.lock_conn();
             get_schema_version(&conn).unwrap()
         };
-        assert_eq!(version, 37);
+        assert_eq!(version, SCHEMA_VERSION_CURRENT);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn task_signature_v1_is_deterministic_and_multilingual() {
+        let first = derive_task_signature("Fix Rust parser bug and run tests", "interactive");
+        let repeated = derive_task_signature("Fix Rust parser bug and run tests", "interactive");
+        assert_eq!(first, repeated);
+        assert_eq!(first.task_type, "software_development");
+        assert_eq!(first.task_family, "debugging");
+        assert!(first.capability_tags.contains(&"coding".to_string()));
+        assert!(first.capability_tags.contains(&"verification".to_string()));
+
+        let chinese = derive_task_signature("调研长周期智能体的最新资料", "interactive");
+        assert_eq!(chinese.task_type, "information_retrieval");
+        assert_eq!(chinese.task_family, "research");
+        assert_ne!(first.signature_hash, chinese.signature_hash);
+    }
+
+    #[test]
+    fn wilson_utility_lower_bound_is_conservative_and_monotonic() {
+        let three_of_three = wilson_lower_bound(3, 3, 1.96);
+        let four_of_four = wilson_lower_bound(4, 4, 1.96);
+        assert!(three_of_three > 0.4 && three_of_three < 0.5);
+        assert!(four_of_four > 0.5);
+        assert!(four_of_four > three_of_three);
+        assert_eq!(wilson_lower_bound(0, 0, 1.96), 0.0);
+    }
+
+    #[test]
+    fn utility_lower_bound_gates_promotion_and_summaries_are_task_stratified() {
+        let (db, dir) = test_db();
+        db.register_skill_version("bounded", 1, "instructions", "agent-created")
+            .unwrap();
+        let mut policy = db.get_skill_governance_policy().unwrap();
+        policy.trial_promote_rate = 0.6;
+        policy.trial_promote_utility_lower_bound = 0.5;
+        db.update_skill_governance_policy(&policy).unwrap();
+
+        for index in 0..3 {
+            let run_id = format!("bounded-pass-{index}");
+            db.start_experience_run(
+                &run_id,
+                None,
+                61,
+                "web",
+                "interactive",
+                "deploy service safely",
+                Some("env=prod"),
+            )
+            .unwrap();
+            db.log_skill_activation("bounded", 61).unwrap();
+            db.record_verifier_result(
+                &run_id,
+                "deterministic",
+                "check",
+                "passed",
+                1.0,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            db.finish_experience_run(&run_id, "completed", None, 1)
+                .unwrap();
+        }
+        assert_eq!(
+            db.get_skill_lifecycle("bounded").unwrap().unwrap().state,
+            "trial",
+            "three perfect samples remain too uncertain at z=1.96"
+        );
+
+        db.start_experience_run(
+            "bounded-pass-3",
+            None,
+            61,
+            "web",
+            "interactive",
+            "deploy service safely",
+            Some("env=prod"),
+        )
+        .unwrap();
+        db.log_skill_activation("bounded", 61).unwrap();
+        db.record_verifier_result(
+            "bounded-pass-3",
+            "deterministic",
+            "check",
+            "passed",
+            1.0,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        db.finish_experience_run("bounded-pass-3", "completed", None, 1)
+            .unwrap();
+        assert_eq!(
+            db.get_skill_lifecycle("bounded").unwrap().unwrap().state,
+            "trusted"
+        );
+
+        let summaries = db
+            .get_skill_task_utility_summaries(Some("bounded"))
+            .unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].task_family, "deployment");
+        assert_eq!(summaries[0].total_outcomes, 4);
+        assert!(summaries[0].utility_lower_bound > 0.5);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn migration_38_backfills_task_signatures() {
+        let (db, dir) = test_db();
+        db.start_experience_run(
+            "pre-v38-run",
+            None,
+            62,
+            "web",
+            "interactive",
+            "debug Rust build failure",
+            None,
+        )
+        .unwrap();
+        {
+            let conn = db.lock_conn();
+            conn.execute(
+                "UPDATE experience_runs SET task_type='general',
+                    task_family='general_assistance', capability_tags_json='[]',
+                    task_signature_hash='' WHERE run_id='pre-v38-run'",
+                [],
+            )
+            .unwrap();
+            set_schema_version(&conn, 37).unwrap();
+            apply_schema_migrations(&conn).unwrap();
+        }
+        let run = db
+            .get_experience_run_detail("pre-v38-run")
+            .unwrap()
+            .unwrap()
+            .run;
+        assert_eq!(run.task_signature.task_family, "debugging");
+        assert!(!run.task_signature.signature_hash.is_empty());
         cleanup(&dir);
     }
 }

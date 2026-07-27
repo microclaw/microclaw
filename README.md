@@ -517,6 +517,12 @@ explicitly treated as data, never instructions. A versioned outcome envelope
 normalizes runtime completion, tool results, scheduler failures, completion
 contracts, and human corrections. Retrieval audit records preserve exactly
 which prior experiences were injected and why.
+Task Signature v1 classifies each run by task type, task family, and capability
+tags. Skill quality is aggregated at the same task grain and includes a Wilson
+confidence lower bound; trial promotion requires both the configured raw pass
+rate and the risk-adjusted utility threshold. Retrieval ranks verified history
+using task compatibility and utility in addition to lexical and environment
+matching.
 The `/usage` report and `GET /api/learning_observability` expose this history;
 the Web settings **Learning** panel provides a per-run evidence browser;
 `/learning [run_id]` shows a single run's used experiences and outcome evidence;

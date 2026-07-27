@@ -10,7 +10,8 @@ proof of success.
 - `goal_states` stores the active objective, constraints, progress, and budget.
 - `experience_runs` records one interactive, recovery, or scheduled execution
   with its environment fingerprint, status, summary, duration, token counts,
-  model-request count, tool calls/errors, and estimated cost.
+  model-request count, tool calls/errors, estimated cost, and a versioned task
+  signature.
 - `outcome_envelopes` is the versioned, replayable ingestion log shared by
   runtime completion, tool-result summaries, scheduler/environment failures,
   completion contracts, rules, models, and human reviewers. Normalized
@@ -54,7 +55,7 @@ Agent-created versions begin as `candidate`.
 | --- | --- |
 | candidate -> trial | first verified passing outcome |
 | candidate -> degraded | two verified failing outcomes |
-| trial -> trusted | at least three outcomes and at least 80% pass rate |
+| trial -> trusted | at least three outcomes, at least 80% pass rate, and Wilson utility lower bound at least 40% (`z=1.96`) |
 | trial -> degraded | at least three outcomes and below 50% pass rate |
 | trusted -> degraded | at least five outcomes and below 60% pass rate |
 | any active state -> archived | operator deletion or inactive-skill archive |
@@ -115,3 +116,31 @@ Memory erasure includes chat-scoped goals and experience evidence. After that
 evidence is removed, affected skill lifecycles are recomputed from their source
 baseline and the remaining valid, unambiguous evidence; derived trust therefore
 cannot survive deletion of all supporting data.
+
+## Task signatures and risk-adjusted utility
+
+Task Signature v1 deterministically assigns every run:
+
+- a broad `task_type`, such as `software_development`, `operations`, or
+  `information_retrieval`;
+- a narrower `task_family`, such as `debugging`, `deployment`, or `research`;
+- sorted capability tags such as `coding`, `verification`, `browser`, or
+  `data`;
+- a stable SHA-256 signature hash over the canonical classification.
+
+The classifier supports common English and Chinese task language. Schema v38
+backfills existing runs, so historical outcomes participate in the same
+stratified statistics.
+
+Skill quality is reported both overall and by
+`skill × version × task_type × task_family`. Alongside raw pass rate, MicroClaw
+computes the Wilson score lower bound using the governance policy's confidence
+`z` value (default `1.96`). Trial promotion requires the minimum sample count,
+the raw pass-rate threshold, and the utility lower-bound threshold. This keeps
+a tiny perfect sample from being treated as established quality.
+
+Verified-experience retrieval combines lexical relevance, exact environment
+match, task type/family compatibility, capability overlap, and the
+risk-adjusted utility lower bound. Applicability contraindications are scoped
+to the current task family and environment rather than treating a skill as
+universally bad after a context-specific failure.
