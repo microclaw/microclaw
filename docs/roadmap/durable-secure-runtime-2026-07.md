@@ -1,6 +1,6 @@
 # Durable Coworker and Secure Runtime — Delivery Record
 
-Status: **implemented; draft PR validation pending**
+Status: **complete; draft PR ready for review**
 Date: 2026-07-27
 
 This is the authoritative status document for the Durable Coworker and Secure
@@ -92,7 +92,9 @@ This record must not be changed to **complete** until all are true:
   [#463](https://github.com/microclaw/microclaw/issues/463);
 - [x] draft pull request:
   [#464](https://github.com/microclaw/microclaw/pull/464);
-- [ ] every required GitHub Actions check is green.
+- [x] all 10 GitHub Actions checks are green on draft PR #464, including
+  cross-platform Rust, Web/Docs, Docker, Nix, coverage, security, stability,
+  and release-build gates.
 
 `cargo fmt --all -- --check` was also run. It reports repository-wide
 formatting drift in untouched files that exists independently of this change.
@@ -105,3 +107,6 @@ GitHub delivery is tracked in
 [Issue #463](https://github.com/microclaw/microclaw/issues/463) and
 [draft PR #464](https://github.com/microclaw/microclaw/pull/464). Record the
 final required-check result here rather than creating another status document.
+The first complete remote validation finished successfully on 2026-07-27:
+[CI](https://github.com/microclaw/microclaw/actions/runs/30233151784) and
+[Extended CI](https://github.com/microclaw/microclaw/actions/runs/30233151758).
