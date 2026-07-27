@@ -3,7 +3,8 @@ use std::sync::Arc;
 use chrono::SecondsFormat;
 
 use crate::db::{
-    call_blocking, Database, LlmModelUsageSummary, LlmUsageSummary, MemoryObservabilitySummary,
+    call_blocking, Database, ExperienceSummary, LlmModelUsageSummary, LlmUsageSummary,
+    MemoryObservabilitySummary, SkillLearningSummary,
 };
 
 fn fmt_int(v: i64) -> String {
@@ -116,6 +117,21 @@ async fn query_memory_summary(
         .map_err(|e| e.to_string())
 }
 
+async fn query_learning_summary(
+    db: Arc<Database>,
+    chat_id: Option<i64>,
+) -> Result<ExperienceSummary, String> {
+    call_blocking(db, move |d| d.get_experience_summary(chat_id))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn query_skill_learning(db: Arc<Database>) -> Result<Vec<SkillLearningSummary>, String> {
+    call_blocking(db, move |d| d.get_skill_learning_summaries())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 pub async fn build_usage_report(db: Arc<Database>, chat_id: i64) -> Result<String, String> {
     let now = chrono::Utc::now();
     let since_24h = (now - chrono::Duration::hours(24)).to_rfc3339();
@@ -154,6 +170,9 @@ pub async fn build_usage_report(db: Arc<Database>, chat_id: i64) -> Result<Strin
     .await?;
     let chat_mem = query_memory_summary(db.clone(), Some(chat_id)).await?;
     let global_mem = query_memory_summary(db.clone(), None).await?;
+    let chat_learning = query_learning_summary(db.clone(), Some(chat_id)).await?;
+    let global_learning = query_learning_summary(db.clone(), None).await?;
+    let skill_learning = query_skill_learning(db).await?;
 
     let mut lines = vec![
         "📊 Token Usage".to_string(),
@@ -230,6 +249,48 @@ pub async fn build_usage_report(db: Arc<Database>, chat_id: i64) -> Result<Strin
         fmt_int(global_mem.injection_selected_24h),
         fmt_int(global_mem.injection_candidates_24h)
     ));
+    lines.push("".to_string());
+    lines.push("Long-Horizon Learning".to_string());
+    lines.push("".to_string());
+    lines.push(format!(
+        "  This chat: runs={} completed={} failed/cancelled={} with_evidence={} tokens={}/{} tools={}/{} cost=${:.4}",
+        fmt_int(chat_learning.total_runs),
+        fmt_int(chat_learning.completed_runs),
+        fmt_int(chat_learning.failed_runs),
+        fmt_int(chat_learning.verified_runs),
+        fmt_int(chat_learning.input_tokens),
+        fmt_int(chat_learning.output_tokens),
+        fmt_int(chat_learning.tool_calls),
+        fmt_int(chat_learning.tool_errors),
+        chat_learning.estimated_cost_usd
+    ));
+    lines.push(format!(
+        "  Global: runs={} completed={} failed/cancelled={} with_evidence={} tokens={}/{} tools={}/{} cost=${:.4}",
+        fmt_int(global_learning.total_runs),
+        fmt_int(global_learning.completed_runs),
+        fmt_int(global_learning.failed_runs),
+        fmt_int(global_learning.verified_runs),
+        fmt_int(global_learning.input_tokens),
+        fmt_int(global_learning.output_tokens),
+        fmt_int(global_learning.tool_calls),
+        fmt_int(global_learning.tool_errors),
+        global_learning.estimated_cost_usd
+    ));
+    if skill_learning.is_empty() {
+        lines.push("  Skills: no governed versions yet".to_string());
+    } else {
+        lines.push("  Governed skills:".to_string());
+        for skill in skill_learning.iter().take(8) {
+            lines.push(format!(
+                "    - {} v{} [{}] outcomes={} pass_rate={:.0}%",
+                skill.skill_name,
+                skill.active_version,
+                skill.state,
+                fmt_int(skill.total_outcomes),
+                skill.success_rate * 100.0
+            ));
+        }
+    }
 
     Ok(lines.join("\n"))
 }

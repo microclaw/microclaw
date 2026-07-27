@@ -502,6 +502,31 @@ LIMIT 50;
 
 MicroClaw supports the [Anthropic Agent Skills](https://github.com/anthropics/skills) standard. Skills are modular packages that give the bot specialized capabilities for specific tasks.
 
+Agent-created skills are governed as evaluated behavior rather than trusted
+immediately. Each version starts as a candidate, advances through verified
+trial outcomes, becomes trusted only after sufficient passing evidence, and
+degrades after verified regressions. `skill_manage` can roll back to a recorded
+version. Repeated failures in the same runtime environment become a learned
+contraindication that blocks activation until a corrected version is published.
+
+Every agent turn also creates an experience run linked to its goal, activated
+skills, completion evidence, token/tool/error/cost metrics, and optional human
+feedback. Strongly verified experiences from the same chat are recalled for
+similar future tasks as historical evidence; they are injection-scanned and
+explicitly treated as data, never instructions. A versioned outcome envelope
+normalizes runtime completion, tool results, scheduler failures, completion
+contracts, and human corrections. Retrieval audit records preserve exactly
+which prior experiences were injected and why.
+The `/usage` report and `GET /api/learning_observability` expose this history;
+the Web settings **Learning** panel provides a per-run evidence browser;
+`/learning [run_id]` shows a single run's used experiences and outcome evidence;
+`POST /api/learning/feedback` attaches a `passed` or `failed` human verdict to a
+specific run. `GET /api/learning/experiences` searches verified experience,
+`GET /api/learning/experiences/:run_id` returns its complete evidence detail,
+while `GET/PUT /api/learning/policy` reads or admin-updates lifecycle
+thresholds. See [Long-horizon learning](docs/long-horizon-learning.md) for the
+data model and promotion policy.
+
 ```
 <data_dir>/skills/
     pdf/
@@ -570,7 +595,9 @@ security model, packaging rules, and phased implementation plan are in
 - `/stop` -- abort the current active run in this chat (keeps history/session data)
 - `/clear` -- clear current chat context (session + chat history), keep scheduled tasks
 - `/reset` -- clear current chat context (session + chat history) and scheduled task state
-- `/reset memory` -- clear current chat memory (chat AGENTS.md + structured memories), keep conversation and tasks
+- `/reset memory` -- clear current chat memory (chat AGENTS.md, structured
+  memories, goals, and verified experience), recompute skill trust from
+  remaining evidence, and keep conversation/tasks
 - `/skills` -- list all available skills
 - `/reload-skills` -- reload skills from disk
 - `/learn` -- distill the current session into a reusable skill (control chats only)

@@ -422,6 +422,25 @@ LIMIT 50;
 
 MicroClaw 支持 [Anthropic Agent Skills](https://github.com/anthropics/skills) 标准。技能是为特定任务提供专业能力的模块化包。
 
+智能体创建的技能不会立即被默认信任，而是作为可评估行为接受治理。每个版本先进入
+`candidate`，在经过有验证证据的试用后进入 `trial`，只有积累足够的成功结果才会成为
+`trusted`；验证到回归时会降级。`skill_manage` 可回滚到已记录版本。同一运行环境中的
+重复失败会形成学习到的禁用条件，在发布修正版之前阻止该技能再次激活。
+
+每次智能体执行还会生成 experience run，并关联目标、激活技能、完成证据、运行上下文和
+token、工具调用、错误、费用指标及可选人工反馈。同一聊天中经过强验证的相似经验会作为
+历史证据被召回；这些内容会经过注入扫描，并始终被视为数据而非指令。版本化 outcome
+envelope 统一承接运行完成、工具结果、调度失败、completion contract 和人工纠正；
+召回审计记录会保留本次具体注入了哪些历史经验及选择原因。
+`/usage` 与 `GET /api/learning_observability` 可查看这些记录；
+Web 设置中的 **Learning** 面板提供按运行查看的证据浏览器；
+`/learning [run_id]` 可查看单次运行使用的经验、技能和结果证据；
+`POST /api/learning/feedback` 可给指定 run 添加 `passed` 或 `failed` 人工判定，
+`GET /api/learning/experiences` 可检索验证经验，
+`GET /api/learning/experiences/:run_id` 可查看完整证据详情，`GET/PUT /api/learning/policy`
+用于读取或由管理员修改生命周期阈值。
+数据模型和晋级规则见[长周期学习](docs/long-horizon-learning.md)。
+
 ```
 <data_dir>/skills/
     pdf/

@@ -107,7 +107,9 @@ fn push_text_step(steps: &mut Vec<TrajectoryStep>, role: &str, text: &str) {
 fn push_block_step(steps: &mut Vec<TrajectoryStep>, role: &str, block: &ContentBlock) {
     match block {
         ContentBlock::Text { text } => push_text_step(steps, role, text),
-        ContentBlock::ToolUse { id, name, input, .. } => {
+        ContentBlock::ToolUse {
+            id, name, input, ..
+        } => {
             let input_preview = head_preview(
                 &serde_json::to_string(input).unwrap_or_else(|_| "{}".into()),
                 DEFAULT_TOOL_INPUT_PREVIEW_CHARS,
@@ -164,10 +166,12 @@ fn render_steps(steps: &[TrajectoryStep]) -> String {
                 preview,
                 is_error,
             } => {
-                let tag = if *is_error { "tool_result_error" } else { "tool_result" };
-                out.push_str(&format!(
-                    "{n}. [{tag} for={tool_use_id}] {preview}\n"
-                ));
+                let tag = if *is_error {
+                    "tool_result_error"
+                } else {
+                    "tool_result"
+                };
+                out.push_str(&format!("{n}. [{tag} for={tool_use_id}] {preview}\n"));
             }
         }
     }
@@ -321,7 +325,11 @@ fn head_preview(text: &str, max_chars: usize) -> String {
         return trimmed.replace('\n', " ");
     }
     let head: String = trimmed.chars().take(max_chars).collect();
-    format!("{}… (+{} chars)", head.replace('\n', " "), total - max_chars)
+    format!(
+        "{}… (+{} chars)",
+        head.replace('\n', " "),
+        total - max_chars
+    )
 }
 
 /// Cap on how many `agent-created` skills can coexist before the
@@ -500,11 +508,7 @@ pub enum LearnOutcome {
 /// bypasses the feature gate, the tool-call threshold, and the success
 /// heuristic — the user explicitly asked for distillation — but keeps the
 /// agent-created cap and every content-security check.
-pub async fn run_skill_review_core(
-    state: &AppState,
-    chat_id: i64,
-    forced: bool,
-) -> LearnOutcome {
+pub async fn run_skill_review_core(state: &AppState, chat_id: i64, forced: bool) -> LearnOutcome {
     // `skill_review_min_tool_calls: 0` is the documented master switch for
     // agent skill creation — /learn honors it too rather than becoming a
     // bypass of an operator decision.
@@ -550,8 +554,7 @@ pub async fn run_skill_review_core(
     if agent_created_count >= MAX_AGENT_CREATED_SKILLS {
         info!(
             chat_id,
-            agent_created_count,
-            "Skill review: skipping — agent-created skill cap reached"
+            agent_created_count, "Skill review: skipping — agent-created skill cap reached"
         );
         return LearnOutcome::Skipped(format!(
             "agent-created skill cap reached ({agent_created_count}/{MAX_AGENT_CREATED_SKILLS}) — delete one first"
@@ -572,7 +575,11 @@ pub async fn run_skill_review_core(
         let mut buf = String::from("\n\nExisting skills:\n");
         for s in &existing_skills {
             let mutable = s.source == "agent-created";
-            let tag = if mutable { "agent-created, mutable" } else { "human, immutable" };
+            let tag = if mutable {
+                "agent-created, mutable"
+            } else {
+                "human, immutable"
+            };
             buf.push_str(&format!("- {} ({tag}): {}\n", s.name, s.description));
         }
         buf
@@ -622,6 +629,28 @@ pub async fn run_skill_review_core(
     let skills_root = std::path::PathBuf::from(state.config.skills_data_dir());
     match apply_review_action(&skills_root, &existing_skills, action) {
         Ok(Some(applied)) => {
+            let skill_file = skills_root.join(&applied.name).join("SKILL.md");
+            match std::fs::read_to_string(&skill_file) {
+                Ok(content) => {
+                    if let Err(e) = state.db.register_skill_version(
+                        &applied.name,
+                        i64::from(applied.version),
+                        &content,
+                        "agent-created",
+                    ) {
+                        warn!(
+                            chat_id,
+                            skill = %applied.name,
+                            "Skill review: failed to register governed skill version: {e}"
+                        );
+                    }
+                }
+                Err(e) => warn!(
+                    chat_id,
+                    skill = %applied.name,
+                    "Skill review: failed to read applied skill for version registration: {e}"
+                ),
+            }
             info!(
                 chat_id,
                 skill = %applied.name,
@@ -699,8 +728,14 @@ pub fn parse_review_action(value: &serde_json::Value) -> ReviewAction {
 
 fn parse_create_payload(value: &serde_json::Value) -> Option<ReviewAction> {
     let name = value.get("name").and_then(|v| v.as_str())?.to_string();
-    let description = value.get("description").and_then(|v| v.as_str())?.to_string();
-    let instructions = value.get("instructions").and_then(|v| v.as_str())?.to_string();
+    let description = value
+        .get("description")
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let instructions = value
+        .get("instructions")
+        .and_then(|v| v.as_str())?
+        .to_string();
     Some(ReviewAction::Create {
         name,
         description,
@@ -710,8 +745,14 @@ fn parse_create_payload(value: &serde_json::Value) -> Option<ReviewAction> {
 
 fn parse_edit_payload(value: &serde_json::Value) -> Option<ReviewAction> {
     let name = value.get("name").and_then(|v| v.as_str())?.to_string();
-    let description = value.get("description").and_then(|v| v.as_str())?.to_string();
-    let instructions = value.get("instructions").and_then(|v| v.as_str())?.to_string();
+    let description = value
+        .get("description")
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let instructions = value
+        .get("instructions")
+        .and_then(|v| v.as_str())?
+        .to_string();
     Some(ReviewAction::Edit {
         name,
         description,
@@ -757,7 +798,9 @@ pub fn apply_review_action(
             instructions,
         } => {
             if existing_skills.iter().any(|s| s.name == name) {
-                return Err(format!("skill `{name}` already exists; refusing to overwrite via create"));
+                return Err(format!(
+                    "skill `{name}` already exists; refusing to overwrite via create"
+                ));
             }
             validate_skill_name(&name)?;
             scan_or_reject(&instructions)?;
@@ -776,7 +819,13 @@ pub fn apply_review_action(
             let target = require_mutable_target(existing_skills, &name)?;
             scan_or_reject(&instructions)?;
             let next_version = bump_version(target.version.as_deref());
-            write_skill_file(skills_root, &name, &description, &instructions, next_version)?;
+            write_skill_file(
+                skills_root,
+                &name,
+                &description,
+                &instructions,
+                next_version,
+            )?;
             Ok(Some(AppliedAction {
                 name,
                 action_kind: "edit",
@@ -795,7 +844,9 @@ pub fn apply_review_action(
                 .map_err(|e| format!("failed to read {}: {e}", skill_md.display()))?;
             let occurrences = content.matches(&search_text).count();
             if occurrences == 0 {
-                return Err(format!("search_text not found in skill `{name}`; no patch applied"));
+                return Err(format!(
+                    "search_text not found in skill `{name}`; no patch applied"
+                ));
             }
             if occurrences > 1 {
                 return Err(format!(
@@ -1010,14 +1061,17 @@ pub fn archive_inactive_agent_skills(
             Err(_) => continue,
         };
         let agent_created = is_agent_created(&content);
-        let mtime: chrono::DateTime<chrono::Utc> = match std::fs::metadata(&skill_md)
-            .and_then(|m| m.modified())
-        {
-            Ok(t) => t.into(),
-            Err(_) => continue,
-        };
+        let mtime: chrono::DateTime<chrono::Utc> =
+            match std::fs::metadata(&skill_md).and_then(|m| m.modified()) {
+                Ok(t) => t.into(),
+                Err(_) => continue,
+            };
 
-        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let last_activation = match db.last_skill_activation_at(&name) {
             Ok(v) => v
                 .as_deref()
@@ -1043,6 +1097,11 @@ pub fn archive_inactive_agent_skills(
             warn!(skill = %name, "skill archive: rename failed: {e}");
             continue;
         }
+        if let Err(e) =
+            db.transition_skill_state(&name, "archived", "inactive agent-created skill archived")
+        {
+            warn!(skill = %name, "skill archive: lifecycle update failed: {e}");
+        }
         archived += 1;
         info!(skill = %name, dest = %dest.display(), "Skill archive: moved inactive skill");
     }
@@ -1060,10 +1119,9 @@ fn is_agent_created(content: &str) -> bool {
         Some(i) => 4 + i,
         None => return false,
     };
-    content[4..end]
-        .lines()
-        .map(|l| l.trim())
-        .any(|l| l.starts_with("source:") && l.split(':').nth(1).map(|v| v.trim()) == Some("agent-created"))
+    content[4..end].lines().map(|l| l.trim()).any(|l| {
+        l.starts_with("source:") && l.split(':').nth(1).map(|v| v.trim()) == Some("agent-created")
+    })
 }
 
 fn count_tool_uses(messages: &[Message]) -> usize {
@@ -1366,7 +1424,11 @@ mod tests {
         std::fs::read_to_string(root.join(name).join("SKILL.md")).unwrap()
     }
 
-    fn agent_skill_meta(root: &std::path::Path, name: &str, version: Option<&str>) -> crate::skills::SkillMetadata {
+    fn agent_skill_meta(
+        root: &std::path::Path,
+        name: &str,
+        version: Option<&str>,
+    ) -> crate::skills::SkillMetadata {
         crate::skills::SkillMetadata {
             name: name.into(),
             description: "stub".into(),
@@ -1426,13 +1488,7 @@ mod tests {
     fn should_archive_skips_recently_activated_skill() {
         let now = chrono::Utc::now();
         // mtime old, but activated yesterday → keep.
-        assert!(!should_archive_skill(
-            true,
-            dt(60),
-            Some(dt(1)),
-            now,
-            30
-        ));
+        assert!(!should_archive_skill(true, dt(60), Some(dt(1)), now, 30));
     }
 
     #[test]
@@ -1444,8 +1500,7 @@ mod tests {
 
     #[test]
     fn is_agent_created_recognizes_frontmatter_field() {
-        let body =
-            "---\nname: x\nsource: agent-created\nversion: 1\n---\nbody\n";
+        let body = "---\nname: x\nsource: agent-created\nversion: 1\n---\nbody\n";
         assert!(is_agent_created(body));
         let body_human = "---\nname: x\nsource: builtin\n---\nbody\n";
         assert!(!is_agent_created(body_human));
@@ -1464,7 +1519,9 @@ mod tests {
     fn parse_review_action_accepts_new_action_shape() {
         let v = serde_json::json!({"action": "patch", "name": "x", "search_text": "a", "replace_text": "b"});
         match parse_review_action(&v) {
-            ReviewAction::Patch { name, search_text, .. } => {
+            ReviewAction::Patch {
+                name, search_text, ..
+            } => {
                 assert_eq!(name, "x");
                 assert_eq!(search_text, "a");
             }
@@ -1536,7 +1593,9 @@ mod tests {
             description: "v2 desc".into(),
             instructions: "v2 body".into(),
         };
-        let result = apply_review_action(&root, &existing, action).unwrap().unwrap();
+        let result = apply_review_action(&root, &existing, action)
+            .unwrap()
+            .unwrap();
         assert_eq!(result.action_kind, "edit");
         assert_eq!(result.version, 2);
         let body = read_skill(&root, "beta");
@@ -1578,7 +1637,9 @@ mod tests {
             search_text: "old tool".into(),
             replace_text: "new improved tool".into(),
         };
-        let result = apply_review_action(&root, &existing, action).unwrap().unwrap();
+        let result = apply_review_action(&root, &existing, action)
+            .unwrap()
+            .unwrap();
         assert_eq!(result.action_kind, "patch");
         assert_eq!(result.version, 2);
         let body = read_skill(&root, "gamma");

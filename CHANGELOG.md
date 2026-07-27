@@ -8,6 +8,24 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Verified long-horizon learning substrate.** Agent turns now produce durable
+  goal, experience-run, verifier-evidence, skill-version, and attributed
+  skill-outcome records. Governed skills progress through
+  `candidate -> trial -> trusted`, degrade on verified regressions, can be rolled
+  back to a recorded version, and are blocked when repeated failures establish
+  an environment-specific contraindication. `/usage` and Web learning APIs
+  expose the evidence and lifecycle; users can attach human feedback to a run.
+  Experience records also capture token, model-request, tool, error, duration,
+  and estimated-cost metrics. Strongly verified prior runs are recalled for
+  similar tasks as untrusted historical evidence. Multiple human reviews are
+  confidence-aggregated, expiring evidence is excluded, ambiguous multi-skill
+  credit cannot govern skills, and an admin-scoped policy controls promotion
+  and degradation thresholds. All evidence producers now enter through a
+  versioned outcome envelope, human corrections have a normalized
+  `experience_feedback` projection, and retrieval audit logs identify every
+  prior experience injected into a run. `/learning [run_id]` and the
+  run-detail Web API expose the experiences used, activated skills, and
+  supporting evidence for an individual run.
 - **Durable coworker checkpoints.** Interactive agent turns now persist
   provider-neutral message snapshots at safe model/tool-result boundaries. Fresh safe
   checkpoints resume automatically after restart; interruptions during tool execution

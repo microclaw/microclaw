@@ -299,13 +299,16 @@ impl ToolRegistry {
                 )
                 .with_db(db.clone()),
             ),
-            Box::new(skill_manage::SkillManageTool::new(
-                &skills_data_dir,
-                config.control_chat_ids.clone(),
-            )),
+            Box::new(
+                skill_manage::SkillManageTool::new(
+                    &skills_data_dir,
+                    config.control_chat_ids.clone(),
+                )
+                .with_db(db.clone()),
+            ),
             Box::new(sync_skills::SyncSkillsTool::new(&skills_data_dir)),
             Box::new(todo::TodoReadTool::new(&config.data_dir)),
-            Box::new(todo::TodoWriteTool::new(&config.data_dir)),
+            Box::new(todo::TodoWriteTool::new(&config.data_dir).with_db(db.clone())),
             Box::new(structured_memory::StructuredMemorySearchTool::new(
                 db.clone(),
                 memory_backend.clone(),
@@ -646,10 +649,9 @@ impl ToolRegistry {
                 }
             }
         }
-        for (url, decision) in microclaw_tools::egress::evaluate_tool_input(
-            &self.config.egress_policy,
-            &input,
-        ) {
+        for (url, decision) in
+            microclaw_tools::egress::evaluate_tool_input(&self.config.egress_policy, &input)
+        {
             let (action, status, reason, blocked) = match decision {
                 microclaw_tools::egress::EgressDecision::Allow => continue,
                 microclaw_tools::egress::EgressDecision::Warn(reason) => {

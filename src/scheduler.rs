@@ -15,8 +15,8 @@ const MAX_CONCURRENT_SCHEDULED_TASKS: usize = 4;
 /// stopped, marked failed (and DLQ'd) rather than pinning a slot indefinitely.
 const SCHEDULED_TASK_TIMEOUT_SECS: u64 = 600;
 
-use crate::agent_engine::process_with_agent;
 use crate::agent_engine::AgentRequestContext;
+use crate::agent_engine::{process_with_agent, process_with_agent_with_experience_id};
 use crate::memory_service::apply_reflector_extractions;
 use crate::runtime::AppState;
 use microclaw_channels::channel::{
@@ -32,6 +32,17 @@ pub fn spawn_scheduler(state: Arc<AppState>) {
         let state = state.clone();
         async move {
             info!("Scheduler started");
+            match call_blocking(state.db.clone(), move |db| {
+                db.recover_running_experience_runs()
+            })
+            .await
+            {
+                Ok(count) if count > 0 => {
+                    warn!("Scheduler: retired {count} interrupted experience run(s)")
+                }
+                Ok(_) => {}
+                Err(e) => warn!("Scheduler: failed to recover experience runs: {e}"),
+            }
             if let Ok(recovered) =
                 call_blocking(state.db.clone(), move |db| db.recover_running_tasks()).await
             {
@@ -201,6 +212,7 @@ async fn verify_task_contract(
     state: &Arc<AppState>,
     task: &microclaw_storage::db::ScheduledTask,
     routing: &ChatRouting,
+    experience_run_id: &str,
     response: String,
 ) -> (String, bool) {
     let Some(raw) = task
@@ -253,10 +265,30 @@ async fn verify_task_contract(
     )
     .await;
     let failed = outcomes.iter().any(|o| !o.passed);
-    let annotated = format!(
-        "{}\n{response}",
-        crate::completion_contract::render_report(&outcomes)
-    );
+    let report = crate::completion_contract::render_report(&outcomes);
+    let run_id = experience_run_id.to_string();
+    let verdict = if failed { "failed" } else { "passed" };
+    let evidence = report.clone();
+    if let Err(e) = call_blocking(state.db.clone(), move |db| {
+        db.record_verifier_result(
+            &run_id,
+            "deterministic",
+            "scheduled_completion_contract",
+            verdict,
+            1.0,
+            Some(&evidence),
+            Some("scheduled_task"),
+            None,
+        )
+    })
+    .await
+    {
+        warn!(
+            "Scheduler: failed to persist verifier evidence for task #{}: {e}",
+            task.id
+        );
+    }
+    let annotated = format!("{report}\n{response}");
     (annotated, failed)
 }
 
@@ -309,7 +341,8 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
         });
 
     // Run agent loop with the task prompt, bounded by a wall-clock timeout.
-    let agent_future = process_with_agent(
+    let experience_run_id = uuid::Uuid::new_v4().to_string();
+    let mut agent_future = Box::pin(process_with_agent_with_experience_id(
         &state,
         AgentRequestContext {
             caller_channel: &routing.channel_name,
@@ -318,9 +351,10 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
         },
         Some(&task.prompt),
         None,
-    );
+        experience_run_id.clone(),
+    ));
     let timeout = Duration::from_secs(SCHEDULED_TASK_TIMEOUT_SECS);
-    let (success, result_summary) = match tokio::time::timeout(timeout, agent_future).await {
+    let (success, result_summary) = match tokio::time::timeout(timeout, &mut agent_future).await {
         Err(_elapsed) => {
             error!(
                 "Scheduler: task #{} timed out after {}s",
@@ -338,6 +372,37 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
                 &err_text,
             )
             .await;
+            // Keep the future alive while signalling cancellation so its
+            // normal epilogue unregisters the exact active run and releases
+            // the per-chat guard before another turn can start.
+            crate::run_control::abort_runs(&routing.channel_name, task.chat_id).await;
+            let _ = agent_future.await;
+            let timed_out_run_id = experience_run_id.clone();
+            if let Err(e) = call_blocking(state.db.clone(), move |db| {
+                db.finish_experience_run(
+                    &timed_out_run_id,
+                    "failed",
+                    Some("scheduled task timed out"),
+                    (SCHEDULED_TASK_TIMEOUT_SECS * 1000) as i64,
+                )?;
+                db.record_verifier_result(
+                    &timed_out_run_id,
+                    "environmental",
+                    "scheduler_timeout",
+                    "failed",
+                    1.0,
+                    Some("agent future exceeded the scheduler wall-clock timeout"),
+                    Some("scheduled_task"),
+                    None,
+                )
+            })
+            .await
+            {
+                warn!(
+                    "Scheduler: failed to close timed-out experience for task #{}: {e}",
+                    task.id
+                );
+            }
             (
                 false,
                 Some(format!("Timed out after {}s", SCHEDULED_TASK_TIMEOUT_SECS)),
@@ -349,7 +414,7 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
             // so one-shot tasks flow into the existing DLQ + auto-replay
             // (bounded retry) instead of being recorded as done.
             let (response, contract_failed) =
-                verify_task_contract(&state, &task, &routing, response).await;
+                verify_task_contract(&state, &task, &routing, &experience_run_id, response).await;
             if response.starts_with(crate::agent_engine::TOKEN_BUDGET_REFUSAL_PREFIX) {
                 // Budget-refused turn: don't deliver the canned notice to the
                 // chat; record it in the run history instead.
@@ -455,6 +520,7 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
     let log_summary = result_summary.clone();
     let started_for_log = started_at_str.clone();
     let finished_for_log = finished_at_str.clone();
+    let scheduler_experience_run_id = experience_run_id.clone();
     if let Err(e) = call_blocking(state.db.clone(), move |db| {
         db.log_task_run(
             task.id,
@@ -465,6 +531,29 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
             success,
             log_summary.as_deref(),
         )?;
+        db.ingest_outcome_envelope(&microclaw_storage::db::OutcomeEnvelopeV1 {
+            envelope_id: format!("scheduler-run-log:{scheduler_experience_run_id}"),
+            run_id: scheduler_experience_run_id,
+            source_kind: "runtime".into(),
+            source_name: "scheduler_run_log".into(),
+            verdict: if success {
+                "passed".into()
+            } else {
+                "failed".into()
+            },
+            confidence: 1.0,
+            evidence: log_summary,
+            scope: Some("scheduled_task".into()),
+            valid_until: None,
+            payload: serde_json::json!({
+                "task_id": task.id,
+                "duration_ms": duration_ms,
+                "started_at": started_for_log,
+                "finished_at": finished_for_log,
+                "success": success
+            }),
+            feedback: None,
+        })?;
         Ok(())
     })
     .await

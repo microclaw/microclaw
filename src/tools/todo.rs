@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::info;
 
 use microclaw_core::llm_types::ToolDefinition;
+use microclaw_storage::db::Database;
 use microclaw_tools::todo_store::{format_todos, read_todos, write_todos, TodoItem};
 
 use super::{auth_context_from_input, authorize_chat_access, schema_object, Tool, ToolResult};
@@ -71,13 +73,20 @@ impl Tool for TodoReadTool {
 
 pub struct TodoWriteTool {
     groups_dir: PathBuf,
+    db: Option<Arc<Database>>,
 }
 
 impl TodoWriteTool {
     pub fn new(data_dir: &str) -> Self {
         TodoWriteTool {
             groups_dir: PathBuf::from(data_dir).join("groups"),
+            db: None,
         }
+    }
+
+    pub fn with_db(mut self, db: Arc<Database>) -> Self {
+        self.db = Some(db);
+        self
     }
 }
 
@@ -145,11 +154,44 @@ impl Tool for TodoWriteTool {
         info!("Writing {} todo items for chat {}", todos.len(), chat_id);
 
         match write_todos(&self.groups_dir, &channel, chat_id, &todos) {
-            Ok(()) => ToolResult::success(format!(
-                "Todo list updated ({} tasks).\n\n{}",
-                todos.len(),
-                format_todos(&todos)
-            )),
+            Ok(()) => {
+                if let Some(db) = &self.db {
+                    let goal_id = format!("chat:{chat_id}:active-plan");
+                    let objective = todos
+                        .iter()
+                        .find(|todo| todo.status == "in_progress")
+                        .or_else(|| todos.iter().find(|todo| todo.status == "pending"))
+                        .or_else(|| todos.first())
+                        .map(|todo| todo.task.as_str())
+                        .unwrap_or("No active plan");
+                    let status = if todos.is_empty()
+                        || todos.iter().all(|todo| todo.status == "completed")
+                    {
+                        "completed"
+                    } else {
+                        "active"
+                    };
+                    let progress = serde_json::to_string(&todos).ok();
+                    if let Err(e) = db.upsert_goal_state(
+                        &goal_id,
+                        chat_id,
+                        objective,
+                        status,
+                        None,
+                        progress.as_deref(),
+                        None,
+                    ) {
+                        return ToolResult::error(format!(
+                            "Todo list was written, but durable goal-state synchronization failed: {e}"
+                        ));
+                    }
+                }
+                ToolResult::success(format!(
+                    "Todo list updated ({} tasks).\n\n{}",
+                    todos.len(),
+                    format_todos(&todos)
+                ))
+            }
             Err(e) => ToolResult::error(format!("Failed to write todo list: {e}")),
         }
     }

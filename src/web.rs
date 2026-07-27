@@ -812,6 +812,31 @@ struct UsageQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct LearningFeedbackRequest {
+    session_key: Option<String>,
+    run_id: String,
+    verdict: String,
+    evidence: Option<String>,
+    confidence: Option<f64>,
+    scope: Option<String>,
+    feedback_id: Option<String>,
+    valid_until: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LearningExperienceQuery {
+    session_key: Option<String>,
+    query: String,
+    environment: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LearningRunDetailQuery {
+    session_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct MemoryObservabilityQuery {
     session_key: Option<String>,
     scope: Option<String>, // chat | global
@@ -1488,6 +1513,284 @@ async fn api_usage(
     })))
 }
 
+async fn api_learning_observability(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Query(query): Query<UsageQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    require_scope(&state, &headers, AuthScope::Read).await?;
+
+    let session_key = normalize_session_key(query.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let (goal, experience_summary, recent_runs, skills, policy) =
+        call_blocking(state.app_state.db.clone(), move |db| {
+            Ok((
+                db.get_active_goal_state(chat_id)?,
+                db.get_experience_summary(Some(chat_id))?,
+                db.get_recent_experience_runs(Some(chat_id), 50)?,
+                db.get_skill_learning_summaries()?,
+                db.get_skill_governance_policy()?,
+            ))
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "session_key": session_key,
+        "chat_id": chat_id,
+        "active_goal": goal,
+        "experience_summary": experience_summary,
+        "recent_runs": recent_runs,
+        "skills": skills,
+        "governance_policy": policy,
+    })))
+}
+
+async fn api_learning_feedback(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<LearningFeedbackRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Write)
+        .await?
+        .actor;
+    if !matches!(body.verdict.as_str(), "passed" | "failed") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "verdict must be `passed` or `failed`".into(),
+        ));
+    }
+    if body.run_id.is_empty() || body.run_id.len() > 128 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "run_id must be between 1 and 128 bytes".into(),
+        ));
+    }
+    if body
+        .evidence
+        .as_ref()
+        .is_some_and(|evidence| evidence.len() > 16 * 1024)
+    {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "evidence must not exceed 16384 bytes".into(),
+        ));
+    }
+    if body.scope.as_ref().is_some_and(|scope| scope.len() > 256) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "scope must not exceed 256 bytes".into(),
+        ));
+    }
+    if body.feedback_id.as_ref().is_some_and(|id| {
+        id.is_empty()
+            || id.len() > 64
+            || !id
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    }) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "feedback_id must be 1-64 ASCII letters, digits, `-`, or `_`".into(),
+        ));
+    }
+    if let Some(valid_until) = body.valid_until.as_deref() {
+        let parsed = chrono::DateTime::parse_from_rfc3339(valid_until).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "valid_until must be an RFC3339 timestamp".to_string(),
+            )
+        })?;
+        if parsed <= chrono::Utc::now() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "valid_until must be in the future".into(),
+            ));
+        }
+    }
+    let confidence = body.confidence.unwrap_or(1.0);
+    if !(0.0..=1.0).contains(&confidence) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "confidence must be between 0 and 1".into(),
+        ));
+    }
+    let session_key = normalize_session_key(body.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let run_id = body.run_id.clone();
+    let belongs = call_blocking(state.app_state.db.clone(), move |db| {
+        db.experience_run_belongs_to_chat(&run_id, chat_id)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !belongs {
+        return Err((StatusCode::NOT_FOUND, "experience run not found".into()));
+    }
+    let run_id = body.run_id.clone();
+    let verdict = body.verdict.clone();
+    let evidence = body.evidence.clone();
+    let scope = body.scope.clone();
+    let feedback_id = body
+        .feedback_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let verifier_name = format!("user_feedback:{actor}:{feedback_id}");
+    let valid_until = body.valid_until.clone();
+    let feedback_actor = actor.clone();
+    let envelope_id = format!("feedback:{run_id}:{feedback_actor}:{feedback_id}");
+    let response_feedback_id = feedback_id.clone();
+    call_blocking(state.app_state.db.clone(), move |db| {
+        db.ingest_outcome_envelope(&microclaw_storage::db::OutcomeEnvelopeV1 {
+            envelope_id,
+            run_id,
+            source_kind: "human".into(),
+            source_name: verifier_name,
+            verdict,
+            confidence,
+            evidence,
+            scope,
+            valid_until,
+            payload: json!({"origin": "web_feedback"}),
+            feedback: Some(microclaw_storage::db::ExperienceFeedbackInput {
+                feedback_id: feedback_id.clone(),
+                actor: feedback_actor,
+            }),
+        })
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "record_feedback",
+        Some(&body.run_id),
+        "ok",
+        body.evidence.as_deref(),
+    )
+    .await;
+    Ok(Json(json!({
+        "ok": true,
+        "run_id": body.run_id,
+        "feedback_id": response_feedback_id,
+        "verdict": body.verdict,
+    })))
+}
+
+async fn api_learning_experiences(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Query(query): Query<LearningExperienceQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    require_scope(&state, &headers, AuthScope::Read).await?;
+    let search = query.query.trim();
+    if search.is_empty() || search.len() > 500 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "query must be between 1 and 500 bytes".into(),
+        ));
+    }
+    if query
+        .environment
+        .as_ref()
+        .is_some_and(|environment| environment.len() > 500)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "environment must not exceed 500 bytes".into(),
+        ));
+    }
+    let session_key = normalize_session_key(query.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let search = search.to_string();
+    let environment = query.environment.clone();
+    let limit = query.limit.unwrap_or(10).clamp(1, 20);
+    let experiences = call_blocking(state.app_state.db.clone(), move |db| {
+        db.search_verified_experiences(chat_id, &search, environment.as_deref(), limit)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({
+        "ok": true,
+        "session_key": session_key,
+        "chat_id": chat_id,
+        "experiences": experiences,
+    })))
+}
+
+async fn api_learning_run_detail(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Path(run_id): Path<String>,
+    Query(query): Query<LearningRunDetailQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    require_scope(&state, &headers, AuthScope::Read).await?;
+    if run_id.is_empty() || run_id.len() > 128 {
+        return Err((StatusCode::BAD_REQUEST, "invalid run_id".into()));
+    }
+    let session_key = normalize_session_key(query.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let detail = call_blocking(state.app_state.db.clone(), move |db| {
+        let detail = db.get_experience_run_detail(&run_id)?;
+        Ok(detail.filter(|detail| detail.run.chat_id == chat_id))
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, "experience run not found".into()))?;
+    Ok(Json(json!({
+        "ok": true,
+        "session_key": session_key,
+        "detail": detail
+    })))
+}
+
+async fn api_learning_policy(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    require_scope(&state, &headers, AuthScope::Read).await?;
+    let policy = call_blocking(state.app_state.db.clone(), |db| {
+        db.get_skill_governance_policy()
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({"ok": true, "policy": policy})))
+}
+
+async fn api_update_learning_policy(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(policy): Json<microclaw_storage::db::SkillGovernancePolicy>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Admin)
+        .await?
+        .actor;
+    let saved = policy.clone();
+    call_blocking(state.app_state.db.clone(), move |db| {
+        db.update_skill_governance_policy(&saved)
+    })
+    .await
+    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "update_governance_policy",
+        None,
+        "ok",
+        None,
+    )
+    .await;
+    Ok(Json(json!({"ok": true, "policy": policy})))
+}
+
 async fn api_memory_observability(
     headers: HeaderMap,
     State(state): State<WebState>,
@@ -2050,6 +2353,20 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/audit", get(api_audit_logs))
         .route("/api/history", get(sessions::api_history))
         .route("/api/usage", get(api_usage))
+        .route(
+            "/api/learning_observability",
+            get(api_learning_observability),
+        )
+        .route("/api/learning/feedback", post(api_learning_feedback))
+        .route("/api/learning/experiences", get(api_learning_experiences))
+        .route(
+            "/api/learning/experiences/:run_id",
+            get(api_learning_run_detail),
+        )
+        .route(
+            "/api/learning/policy",
+            get(api_learning_policy).put(api_update_learning_policy),
+        )
         .route("/api/memory_observability", get(api_memory_observability))
         .route("/api/metrics", get(metrics::api_metrics))
         .route("/api/metrics/summary", get(metrics::api_metrics_summary))
@@ -3164,6 +3481,207 @@ mod tests {
         let mem = v.get("memory_observability").and_then(|x| x.as_object());
         assert!(mem.is_some());
         assert!(mem.unwrap().contains_key("total"));
+    }
+
+    #[tokio::test]
+    async fn test_learning_observability_and_human_feedback() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        let db = web_state.app_state.db.clone();
+        call_blocking(db, |d| {
+            d.upsert_chat(123, Some("main"), "web")?;
+            d.upsert_goal_state(
+                "goal-web",
+                123,
+                "verify learning",
+                "active",
+                None,
+                None,
+                None,
+            )?;
+            d.start_experience_run(
+                "run-web",
+                Some("goal-web"),
+                123,
+                "web",
+                "interactive",
+                "verify learning",
+                None,
+            )?;
+            d.finish_experience_run("run-web", "completed", Some("done"), 10)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let app = build_router(web_state);
+        let feedback = Request::builder()
+            .method("POST")
+            .uri("/api/learning/feedback")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "session_key": "main",
+                    "run_id": "run-web",
+                    "verdict": "passed",
+                    "evidence": "user confirmed"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let feedback_response = app.clone().oneshot(feedback).await.unwrap();
+        assert_eq!(feedback_response.status(), StatusCode::OK);
+
+        let second_feedback = Request::builder()
+            .method("POST")
+            .uri("/api/learning/feedback")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "session_key": "main",
+                    "run_id": "run-web",
+                    "verdict": "failed",
+                    "confidence": 0.1,
+                    "feedback_id": "secondary-review",
+                    "evidence": "low confidence concern"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(second_feedback).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/learning_observability?session_key=main")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["active_goal"]["objective"].as_str(),
+            Some("verify learning")
+        );
+        assert_eq!(
+            value["experience_summary"]["verified_runs"].as_i64(),
+            Some(1)
+        );
+        assert_eq!(value["recent_runs"][0]["run_id"].as_str(), Some("run-web"));
+        assert_eq!(
+            value["governance_policy"]["trial_min_outcomes"].as_i64(),
+            Some(3)
+        );
+
+        let experience_request = Request::builder()
+            .method("GET")
+            .uri("/api/learning/experiences?session_key=main&query=verify")
+            .body(Body::empty())
+            .unwrap();
+        let experience_response = app.clone().oneshot(experience_request).await.unwrap();
+        assert_eq!(experience_response.status(), StatusCode::OK);
+        let experience_body = axum::body::to_bytes(experience_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let experience_value: serde_json::Value = serde_json::from_slice(&experience_body).unwrap();
+        assert_eq!(
+            experience_value["experiences"][0]["run_id"].as_str(),
+            Some("run-web")
+        );
+
+        let detail_request = Request::builder()
+            .method("GET")
+            .uri("/api/learning/experiences/run-web?session_key=main")
+            .body(Body::empty())
+            .unwrap();
+        let detail_response = app.clone().oneshot(detail_request).await.unwrap();
+        assert_eq!(detail_response.status(), StatusCode::OK);
+        let detail_body = axum::body::to_bytes(detail_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let detail_value: serde_json::Value = serde_json::from_slice(&detail_body).unwrap();
+        assert_eq!(
+            detail_value["detail"]["feedback"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            detail_value["detail"]["outcomes"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            detail_value["detail"]["outcomes"][0]["schema_version"].as_i64(),
+            Some(1)
+        );
+
+        let policy_request = Request::builder()
+            .method("GET")
+            .uri("/api/learning/policy")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(policy_request).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        let update_policy = Request::builder()
+            .method("PUT")
+            .uri("/api/learning/policy")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "candidate_failures_to_degrade": 3,
+                    "trial_min_outcomes": 4,
+                    "trial_promote_rate": 0.85,
+                    "trial_degrade_rate": 0.4,
+                    "trusted_min_outcomes": 6,
+                    "trusted_degrade_rate": 0.55
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let update_response = app.clone().oneshot(update_policy).await.unwrap();
+        assert_eq!(update_response.status(), StatusCode::OK);
+        let updated_policy_request = Request::builder()
+            .method("GET")
+            .uri("/api/learning/policy")
+            .body(Body::empty())
+            .unwrap();
+        let updated_policy_response = app.clone().oneshot(updated_policy_request).await.unwrap();
+        let updated_policy_body =
+            axum::body::to_bytes(updated_policy_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+        let updated_policy_value: serde_json::Value =
+            serde_json::from_slice(&updated_policy_body).unwrap();
+        assert_eq!(
+            updated_policy_value["policy"]["trial_min_outcomes"].as_i64(),
+            Some(4)
+        );
+
+        let invalid_policy = Request::builder()
+            .method("PUT")
+            .uri("/api/learning/policy")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "candidate_failures_to_degrade": 0,
+                    "trial_min_outcomes": 4,
+                    "trial_promote_rate": 1.2,
+                    "trial_degrade_rate": 0.4,
+                    "trusted_min_outcomes": 6,
+                    "trusted_degrade_rate": 0.55
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(invalid_policy).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[tokio::test]

@@ -78,6 +78,7 @@ pub fn build_help_response() -> String {
         "Memory & usage",
         "  /user [clear]        View or clear your USER.md profile",
         "  /usage               Token usage report for this chat",
+        "  /learning [run_id]   Show experiences used and outcome evidence for a run",
         "  /rewind [id]         List or restore conversation checkpoints",
         "",
         "Diagnostics (admin only)",
@@ -88,6 +89,104 @@ pub fn build_help_response() -> String {
         "Tip: in groups, mention me first (e.g. @bot /status).",
     ]
     .join("\n")
+}
+
+async fn handle_learning_command(state: &AppState, chat_id: i64, args: &str) -> String {
+    let requested = args.trim().to_string();
+    if requested.len() > 128 {
+        return "Usage: /learning [run_id]".into();
+    }
+    let detail = call_blocking(state.db.clone(), move |db| {
+        let run_id = if requested.is_empty() {
+            db.latest_experience_run_id(chat_id)?
+        } else {
+            Some(requested)
+        };
+        let Some(run_id) = run_id else {
+            return Ok(None);
+        };
+        Ok(db
+            .get_experience_run_detail(&run_id)?
+            .filter(|detail| detail.run.chat_id == chat_id))
+    })
+    .await;
+    let detail = match detail {
+        Ok(Some(detail)) => detail,
+        Ok(None) => return "No matching learning run in this chat.".into(),
+        Err(error) => return format!("Failed to load learning run: {error}"),
+    };
+    format_learning_run_detail(&detail)
+}
+
+fn format_learning_run_detail(detail: &microclaw_storage::db::ExperienceRunDetail) -> String {
+    let mut lines = vec![
+        format!("Learning run {}", detail.run.run_id),
+        format!(
+            "status={} kind={} duration_ms={} tokens={} tool_calls={} tool_errors={}",
+            detail.run.status,
+            detail.run.run_kind,
+            detail.run.duration_ms.unwrap_or_default(),
+            detail.run.input_tokens + detail.run.output_tokens,
+            detail.run.tool_calls,
+            detail.run.tool_errors
+        ),
+        format!("objective: {}", detail.run.objective),
+        format!(
+            "result: {}",
+            detail.run.result_summary.as_deref().unwrap_or("(none)")
+        ),
+        "".into(),
+        format!("Experiences used ({})", detail.retrieved_experiences.len()),
+    ];
+    if detail.retrieved_experiences.is_empty() {
+        lines.push("  (none)".into());
+    } else {
+        for retrieval in &detail.retrieved_experiences {
+            lines.push(format!(
+                "  #{} {} score={:.3} objective={} result={} reason={}",
+                retrieval.rank,
+                retrieval.source_run_id,
+                retrieval.relevance_score,
+                retrieval.source_objective,
+                retrieval
+                    .source_result_summary
+                    .as_deref()
+                    .unwrap_or("(none)"),
+                retrieval.selection_reason
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!("Outcome evidence ({})", detail.outcomes.len()));
+    if detail.outcomes.is_empty() {
+        lines.push("  (none)".into());
+    } else {
+        for outcome in &detail.outcomes {
+            let evidence = outcome.evidence.as_deref().unwrap_or("(none)");
+            let end = microclaw_core::text::floor_char_boundary(evidence, evidence.len().min(500));
+            lines.push(format!(
+                "  [{}:{}] {} confidence={:.2}: {}",
+                outcome.source_kind,
+                outcome.source_name,
+                outcome.verdict,
+                outcome.confidence,
+                &evidence[..end]
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!("Skills used ({})", detail.activated_skills.len()));
+    for skill in &detail.activated_skills {
+        lines.push(format!(
+            "  {} v{}",
+            skill.skill_name,
+            skill
+                .skill_version
+                .map(|version| version.to_string())
+                .unwrap_or_else(|| "?".into())
+        ));
+    }
+    lines.join("\n")
 }
 
 /// `/learn` — user-triggered skill distillation (the Hermes `/learn`
@@ -435,6 +534,11 @@ pub async fn handle_chat_command(
             Err(e) => format!("Failed to query usage statistics: {e}"),
         };
         return Some(text);
+    }
+
+    if trimmed == "/learning" || trimmed.starts_with("/learning ") {
+        let args = trimmed.strip_prefix("/learning").unwrap_or_default();
+        return Some(handle_learning_command(state, chat_id, args).await);
     }
 
     if trimmed == "/status" {
@@ -1798,7 +1902,10 @@ channels:
 
 #[cfg(test)]
 mod slash_command_tests {
-    use super::{build_help_response, build_log_response, format_learn_reply, is_slash_command};
+    use super::{
+        build_help_response, build_log_response, format_learn_reply, format_learning_run_detail,
+        is_slash_command,
+    };
     use crate::config::Config;
 
     #[test]
@@ -1880,12 +1987,71 @@ mod slash_command_tests {
             "/learn",
             "/user",
             "/usage",
+            "/learning",
             "/rewind",
             "/log",
             "/help",
         ] {
             assert!(help.contains(cmd), "help missing {cmd}");
         }
+    }
+
+    #[test]
+    fn learning_detail_cli_shows_used_experience_and_evidence() {
+        let dir = std::env::temp_dir().join(format!("mc_learning_cli_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = microclaw_storage::db::Database::new(dir.to_str().unwrap()).unwrap();
+        for (run_id, objective) in [
+            ("cli-source", "deploy the service"),
+            ("cli-query", "deploy it again"),
+        ] {
+            db.start_experience_run(run_id, None, 44, "web", "interactive", objective, None)
+                .unwrap();
+        }
+        db.finish_experience_run("cli-source", "completed", Some("healthy"), 10)
+            .unwrap();
+        db.record_verifier_result(
+            "cli-source",
+            "deterministic",
+            "health_check",
+            "passed",
+            1.0,
+            Some("HTTP 200"),
+            None,
+            None,
+        )
+        .unwrap();
+        db.record_experience_retrievals(
+            "cli-query",
+            &[(
+                "cli-source".into(),
+                "strong_verified; environment_match=true".into(),
+                1.25,
+            )],
+        )
+        .unwrap();
+        db.record_verifier_result(
+            "cli-query",
+            "runtime",
+            "agent_loop_completion",
+            "passed",
+            0.55,
+            Some("finished"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let detail = db.get_experience_run_detail("cli-query").unwrap().unwrap();
+        let output = format_learning_run_detail(&detail);
+        assert!(output.contains("Experiences used (1)"));
+        assert!(output.contains("objective=deploy the service"));
+        assert!(output.contains("result=healthy"));
+        assert!(output.contains("Outcome evidence (1)"));
+        assert!(output.contains("agent_loop_completion"));
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

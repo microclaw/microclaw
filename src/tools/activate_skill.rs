@@ -70,10 +70,58 @@ impl Tool for ActivateSkillTool {
 
         match self.skill_manager.load_skill_checked(skill_name) {
             Ok((meta, body)) => {
+                let mut lifecycle_state = None;
                 if let Some(db) = &self.db {
+                    let version = meta
+                        .version
+                        .as_deref()
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .unwrap_or(1);
+                    if db.get_skill_lifecycle(&meta.name).ok().flatten().is_none() {
+                        let skill_file = meta.dir_path.join("SKILL.md");
+                        if let Ok(content) = std::fs::read_to_string(&skill_file) {
+                            if let Err(e) =
+                                db.register_skill_version(&meta.name, version, &content, &meta.source)
+                            {
+                                warn!(skill = %meta.name, "Failed to register skill version: {e}");
+                            }
+                        }
+                    }
+                    lifecycle_state = db
+                        .get_skill_lifecycle(&meta.name)
+                        .ok()
+                        .flatten()
+                        .map(|lifecycle| lifecycle.state);
+                    if lifecycle_state
+                        .as_deref()
+                        .is_some_and(|state| matches!(state, "degraded" | "archived"))
+                    {
+                        return ToolResult::error(format!(
+                            "Skill '{}' is {} and cannot be activated. Roll it back or publish a corrected version first.",
+                            meta.name,
+                            lifecycle_state.as_deref().unwrap_or("unavailable")
+                        ));
+                    }
                     let chat_id = auth_context_from_input(&input)
                         .map(|a| a.caller_chat_id)
                         .unwrap_or(0);
+                    match db.evaluate_skill_applicability(&meta.name, chat_id) {
+                        Ok(applicability) if !applicability.allowed => {
+                            return ToolResult::error(format!(
+                                "Skill '{}' is contraindicated for the current environment: {} \
+                                 ({} verified outcomes, {:.0}% pass rate). Publish a corrected \
+                                 version or use a different skill.",
+                                meta.name,
+                                applicability.reason,
+                                applicability.matching_outcomes,
+                                applicability.success_rate.unwrap_or(0.0) * 100.0
+                            ));
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!(skill = %meta.name, "Failed to evaluate skill applicability: {e}");
+                        }
+                    }
                     if let Err(e) = db.log_skill_activation(&meta.name, chat_id) {
                         warn!(skill = %meta.name, "Failed to log skill activation: {e}");
                     }
@@ -87,6 +135,14 @@ impl Tool for ActivateSkillTool {
                 }
                 if let Some(updated_at) = &meta.updated_at {
                     result.push_str(&format!("Updated at: {}\n", updated_at));
+                }
+                if let Some(state) = lifecycle_state {
+                    result.push_str(&format!("Learning lifecycle: {state}\n"));
+                    if matches!(state.as_str(), "candidate" | "trial") {
+                        result.push_str(
+                            "Evaluation note: this skill is still under verified trial; validate the task outcome carefully.\n",
+                        );
+                    }
                 }
                 if !meta.platforms.is_empty() {
                     result.push_str(&format!("Platforms: {}\n", meta.platforms.join(", ")));
