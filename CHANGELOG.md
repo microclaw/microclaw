@@ -8,6 +8,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Comparative reflection and governed skill evolution.** Comparable
+  success/failure runs now produce versioned, counterexample-bearing learning
+  claims and immutable candidate skill patches. Paired shadow observations
+  gate promotion using risk-adjusted utility, cost, and regression thresholds;
+  promoted candidates automatically roll back to the previous trusted version
+  on verified regression. Web and CLI Learning Journals expose evidence,
+  impact scope, evaluation state, and undo actions.
 - **Failure-aware retrieval and skill recovery.** Verified failures and active
   task-scoped skill contraindications are excluded from prompt injection while
   their rejection reasons remain visible in the Learning Journal. Structured

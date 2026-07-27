@@ -78,7 +78,7 @@ pub fn build_help_response() -> String {
         "Memory & usage",
         "  /user [clear]        View or clear your USER.md profile",
         "  /usage               Token usage report for this chat",
-        "  /learning [run_id]   Show experiences used and outcome evidence for a run",
+        "  /learning [run_id|journal] Show run evidence or the self-learning journal",
         "  /rewind [id]         List or restore conversation checkpoints",
         "",
         "Diagnostics (admin only)",
@@ -94,7 +94,49 @@ pub fn build_help_response() -> String {
 async fn handle_learning_command(state: &AppState, chat_id: i64, args: &str) -> String {
     let requested = args.trim().to_string();
     if requested.len() > 128 {
-        return "Usage: /learning [run_id]".into();
+        return "Usage: /learning [run_id|journal]".into();
+    }
+    if requested.eq_ignore_ascii_case("journal") {
+        return match call_blocking(state.db.clone(), move |db| {
+            Ok((
+                db.get_learning_claims(Some(chat_id), 20)?,
+                db.get_skill_candidates(Some(chat_id), 20)?,
+                db.get_shadow_evaluations(Some(chat_id))?,
+                db.get_learning_journal(Some(chat_id), 30)?,
+            ))
+        })
+        .await
+        {
+            Ok((claims, candidates, evaluations, events)) => {
+                let mut lines = vec![
+                    "Learning Journal".to_string(),
+                    format!(
+                        "claims={} candidates={} shadow_evaluations={} events={}",
+                        claims.len(),
+                        candidates.len(),
+                        evaluations.len(),
+                        events.len()
+                    ),
+                ];
+                for event in events {
+                    lines.push(format!(
+                        "  [{}] {} {}:{} — {}{}",
+                        event.created_at,
+                        event.event_type,
+                        event.entity_type,
+                        event.entity_id,
+                        event.summary,
+                        event
+                            .undo_action
+                            .as_deref()
+                            .map(|action| format!(" (undo={action})"))
+                            .unwrap_or_default()
+                    ));
+                }
+                lines.join("\n")
+            }
+            Err(error) => format!("Failed to load Learning Journal: {error}"),
+        };
     }
     let detail = call_blocking(state.db.clone(), move |db| {
         let run_id = if requested.is_empty() {

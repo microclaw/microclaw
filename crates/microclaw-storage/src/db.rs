@@ -401,6 +401,85 @@ pub struct SkillFailurePattern {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExperienceComparison {
+    pub comparison_id: String,
+    pub chat_id: i64,
+    pub skill_name: String,
+    pub skill_version: i64,
+    pub task_type: String,
+    pub task_family: String,
+    pub environment_fingerprint: Option<String>,
+    pub success_run_id: String,
+    pub failure_run_id: String,
+    pub minimal_difference: String,
+    pub counterexample: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningClaim {
+    pub claim_id: String,
+    pub comparison_id: String,
+    pub skill_name: String,
+    pub base_version: i64,
+    pub claim_version: i64,
+    pub statement: String,
+    pub applicability: serde_json::Value,
+    pub confidence: f64,
+    pub evidence: serde_json::Value,
+    pub counterexamples: serde_json::Value,
+    pub status: String,
+    pub supersedes_claim_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillCandidate {
+    pub candidate_id: String,
+    pub claim_id: String,
+    pub skill_name: String,
+    pub base_version: i64,
+    pub candidate_version: i64,
+    pub content: String,
+    pub content_hash: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ShadowEvaluation {
+    pub evaluation_id: String,
+    pub candidate_id: String,
+    pub sample_count: i64,
+    pub baseline_passed: i64,
+    pub candidate_passed: i64,
+    pub baseline_utility_lower_bound: f64,
+    pub candidate_utility_lower_bound: f64,
+    pub baseline_cost_usd: f64,
+    pub candidate_cost_usd: f64,
+    pub baseline_duration_ms: i64,
+    pub candidate_duration_ms: i64,
+    pub regression_count: i64,
+    pub verdict: String,
+    pub reason: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningJournalEvent {
+    pub id: i64,
+    pub event_type: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub summary: String,
+    pub evidence: serde_json::Value,
+    pub undo_action: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SkillGovernancePolicy {
@@ -415,6 +494,10 @@ pub struct SkillGovernancePolicy {
     pub failure_pattern_min_failures: i64,
     pub failure_pattern_cooldown_hours: i64,
     pub failure_pattern_recovery_successes: i64,
+    pub shadow_min_samples: i64,
+    pub shadow_promote_utility_margin: f64,
+    pub shadow_max_cost_ratio: f64,
+    pub shadow_max_regressions: i64,
 }
 
 impl Default for SkillGovernancePolicy {
@@ -431,6 +514,10 @@ impl Default for SkillGovernancePolicy {
             failure_pattern_min_failures: 2,
             failure_pattern_cooldown_hours: 24,
             failure_pattern_recovery_successes: 2,
+            shadow_min_samples: 3,
+            shadow_promote_utility_margin: 0.05,
+            shadow_max_cost_ratio: 1.2,
+            shadow_max_regressions: 0,
         }
     }
 }
@@ -526,7 +613,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 39;
+const SCHEMA_VERSION_CURRENT: i64 = 40;
 
 pub fn wilson_lower_bound(passed: i64, total: i64, z: f64) -> f64 {
     if total <= 0 || passed < 0 || passed > total || !z.is_finite() || z < 0.0 {
@@ -2312,6 +2399,157 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         set_schema_version(conn, 39)?;
         version = 39;
     }
+    if version < 40 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS experience_comparisons (
+                comparison_id TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                skill_name TEXT NOT NULL,
+                skill_version INTEGER NOT NULL,
+                task_type TEXT NOT NULL,
+                task_family TEXT NOT NULL,
+                environment_fingerprint TEXT,
+                success_run_id TEXT NOT NULL,
+                failure_run_id TEXT NOT NULL,
+                minimal_difference TEXT NOT NULL,
+                counterexample TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(chat_id, skill_name, skill_version, task_family,
+                       environment_fingerprint, success_run_id, failure_run_id),
+                FOREIGN KEY(success_run_id) REFERENCES experience_runs(run_id),
+                FOREIGN KEY(failure_run_id) REFERENCES experience_runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_experience_comparisons_skill
+                ON experience_comparisons(skill_name, skill_version, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS learning_claims (
+                claim_id TEXT PRIMARY KEY,
+                comparison_id TEXT NOT NULL,
+                skill_name TEXT NOT NULL,
+                base_version INTEGER NOT NULL,
+                claim_version INTEGER NOT NULL,
+                statement TEXT NOT NULL,
+                applicability_json TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                evidence_json TEXT NOT NULL,
+                counterexamples_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'candidate',
+                supersedes_claim_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(skill_name, claim_version),
+                FOREIGN KEY(comparison_id) REFERENCES experience_comparisons(comparison_id),
+                FOREIGN KEY(supersedes_claim_id) REFERENCES learning_claims(claim_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_claims_skill_status
+                ON learning_claims(skill_name, status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS skill_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                claim_id TEXT NOT NULL UNIQUE,
+                skill_name TEXT NOT NULL,
+                base_version INTEGER NOT NULL,
+                candidate_version INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'candidate',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(skill_name, candidate_version),
+                FOREIGN KEY(claim_id) REFERENCES learning_claims(claim_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_candidates_status
+                ON skill_candidates(status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS shadow_observations (
+                candidate_id TEXT NOT NULL,
+                pair_key TEXT NOT NULL,
+                arm TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                cost_usd REAL NOT NULL DEFAULT 0,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                evidence TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(candidate_id, pair_key, arm),
+                FOREIGN KEY(candidate_id) REFERENCES skill_candidates(candidate_id),
+                FOREIGN KEY(run_id) REFERENCES experience_runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_shadow_observations_candidate
+                ON shadow_observations(candidate_id, pair_key, arm);
+
+            CREATE TABLE IF NOT EXISTS shadow_evaluations (
+                evaluation_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL UNIQUE,
+                sample_count INTEGER NOT NULL,
+                baseline_passed INTEGER NOT NULL,
+                candidate_passed INTEGER NOT NULL,
+                baseline_utility_lower_bound REAL NOT NULL,
+                candidate_utility_lower_bound REAL NOT NULL,
+                baseline_cost_usd REAL NOT NULL,
+                candidate_cost_usd REAL NOT NULL,
+                baseline_duration_ms INTEGER NOT NULL,
+                candidate_duration_ms INTEGER NOT NULL,
+                regression_count INTEGER NOT NULL,
+                verdict TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(candidate_id) REFERENCES skill_candidates(candidate_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS learning_journal_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                undo_action TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_journal_created
+                ON learning_journal_events(created_at DESC);",
+        )?;
+        for (column, definition) in [
+            ("shadow_min_samples", "INTEGER NOT NULL DEFAULT 3"),
+            (
+                "shadow_promote_utility_margin",
+                "REAL NOT NULL DEFAULT 0.05",
+            ),
+            ("shadow_max_cost_ratio", "REAL NOT NULL DEFAULT 1.2"),
+            ("shadow_max_regressions", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            if !table_has_column(conn, "skill_governance_policy", column)? {
+                conn.execute(
+                    &format!(
+                        "ALTER TABLE skill_governance_policy ADD COLUMN {column} {definition}"
+                    ),
+                    [],
+                )?;
+            }
+        }
+        let tx = conn.unchecked_transaction()?;
+        let run_ids = {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT run_id FROM skill_outcomes
+                 WHERE attribution_confidence>=0.999
+                   AND verifier_type IN (
+                     'deterministic','environmental','human','rule_based'
+                   )
+                 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for run_id in run_ids {
+            refresh_comparative_reflections_for_run(&tx, &run_id)?;
+        }
+        tx.commit()?;
+        set_schema_version(conn, 40)?;
+        version = 40;
+    }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
     }
@@ -2478,6 +2716,12 @@ fn validate_skill_governance_policy(policy: &SkillGovernancePolicy) -> Result<()
         || policy.failure_pattern_min_failures < 1
         || policy.failure_pattern_cooldown_hours < 1
         || policy.failure_pattern_recovery_successes < 1
+        || policy.shadow_min_samples < 1
+        || !policy.shadow_promote_utility_margin.is_finite()
+        || !(0.0..=1.0).contains(&policy.shadow_promote_utility_margin)
+        || !policy.shadow_max_cost_ratio.is_finite()
+        || policy.shadow_max_cost_ratio < 1.0
+        || policy.shadow_max_regressions < 0
         || policy.trial_degrade_rate >= policy.trial_promote_rate
     {
         return Err(MicroClawError::ToolExecution(
@@ -2847,42 +3091,98 @@ fn sync_skill_failure_patterns_for_run(
                             |row| row.get::<_, i64>(0),
                         )?
                     } {
-                        let current: Option<String> = tx
+                        let current: Option<(String, Option<i64>)> = tx
                             .query_row(
-                                "SELECT state FROM skill_lifecycle
+                                "SELECT state, previous_trusted_version FROM skill_lifecycle
                                  WHERE skill_name=?1 AND active_version=?2",
                                 params![skill_name, skill_version],
-                                |row| row.get(0),
+                                |row| Ok((row.get(0)?, row.get(1)?)),
                             )
                             .optional()?;
                         if current
-                            .as_deref()
-                            .is_some_and(|state| state != "degraded" && state != "archived")
+                            .as_ref()
+                            .is_some_and(|(state, _)| state != "degraded" && state != "archived")
                         {
-                            let from_state = current.unwrap_or_default();
+                            let (from_state, previous_trusted) =
+                                current.unwrap_or_else(|| (String::new(), None));
                             let reason = format!(
                                 "active failure pattern: task_family={task_family}, error_category={category}"
                             );
-                            tx.execute(
-                                "UPDATE skill_lifecycle SET state='degraded',
-                                 previous_trusted_version=CASE WHEN state='trusted'
-                                    THEN active_version ELSE previous_trusted_version END,
-                                 state_reason=?3, updated_at=?4
-                                 WHERE skill_name=?1 AND active_version=?2",
-                                params![skill_name, skill_version, reason, now.to_rfc3339()],
-                            )?;
-                            tx.execute(
-                                "INSERT INTO skill_lifecycle_events(
-                                    skill_name, from_state, to_state, version, reason, created_at
-                                 ) VALUES (?1,?2,'degraded',?3,?4,?5)",
-                                params![
-                                    skill_name,
-                                    from_state,
-                                    skill_version,
-                                    reason,
-                                    now.to_rfc3339()
-                                ],
-                            )?;
+                            if from_state == "trusted" && previous_trusted.is_some() {
+                                let restored = previous_trusted.unwrap_or_default();
+                                let rollback_reason = format!(
+                                    "automatic rollback from v{skill_version} to v{restored}: {reason}"
+                                );
+                                tx.execute(
+                                    "UPDATE skill_lifecycle SET state='trusted',
+                                     active_version=?2, previous_trusted_version=NULL,
+                                     state_reason=?3, updated_at=?4 WHERE skill_name=?1",
+                                    params![
+                                        skill_name,
+                                        restored,
+                                        rollback_reason,
+                                        now.to_rfc3339()
+                                    ],
+                                )?;
+                                tx.execute(
+                                    "UPDATE skill_candidates
+                                     SET status='rolled_back', updated_at=?3
+                                     WHERE skill_name=?1 AND candidate_version=?2
+                                       AND status='promoted'",
+                                    params![skill_name, skill_version, now.to_rfc3339()],
+                                )?;
+                                tx.execute(
+                                    "INSERT INTO skill_lifecycle_events(
+                                        skill_name, from_state, to_state, version,
+                                        reason, created_at
+                                     ) VALUES (?1,'trusted','trusted',?2,?3,?4)",
+                                    params![
+                                        skill_name,
+                                        restored,
+                                        rollback_reason,
+                                        now.to_rfc3339()
+                                    ],
+                                )?;
+                                tx.execute(
+                                    "INSERT INTO learning_journal_events(
+                                        event_type, entity_type, entity_id, summary,
+                                        evidence_json, created_at
+                                     ) VALUES ('automatic_rollback','skill',?1,?2,?3,?4)",
+                                    params![
+                                        skill_name,
+                                        rollback_reason,
+                                        serde_json::json!({
+                                            "failed_version": skill_version,
+                                            "restored_version": restored,
+                                            "trigger": reason
+                                        })
+                                        .to_string(),
+                                        now.to_rfc3339()
+                                    ],
+                                )?;
+                            } else {
+                                tx.execute(
+                                    "UPDATE skill_lifecycle SET state='degraded',
+                                     previous_trusted_version=CASE WHEN state='trusted'
+                                        THEN active_version ELSE previous_trusted_version END,
+                                     state_reason=?3, updated_at=?4
+                                     WHERE skill_name=?1 AND active_version=?2",
+                                    params![skill_name, skill_version, reason, now.to_rfc3339()],
+                                )?;
+                                tx.execute(
+                                    "INSERT INTO skill_lifecycle_events(
+                                        skill_name, from_state, to_state, version,
+                                        reason, created_at
+                                     ) VALUES (?1,?2,'degraded',?3,?4,?5)",
+                                    params![
+                                        skill_name,
+                                        from_state,
+                                        skill_version,
+                                        reason,
+                                        now.to_rfc3339()
+                                    ],
+                                )?;
+                            }
                         }
                     }
                 }
@@ -2953,6 +3253,506 @@ fn sync_skill_failure_patterns_for_run(
     Ok(())
 }
 
+fn map_shadow_evaluation(row: &rusqlite::Row<'_>) -> rusqlite::Result<ShadowEvaluation> {
+    Ok(ShadowEvaluation {
+        evaluation_id: row.get(0)?,
+        candidate_id: row.get(1)?,
+        sample_count: row.get(2)?,
+        baseline_passed: row.get(3)?,
+        candidate_passed: row.get(4)?,
+        baseline_utility_lower_bound: row.get(5)?,
+        candidate_utility_lower_bound: row.get(6)?,
+        baseline_cost_usd: row.get(7)?,
+        candidate_cost_usd: row.get(8)?,
+        baseline_duration_ms: row.get(9)?,
+        candidate_duration_ms: row.get(10)?,
+        regression_count: row.get(11)?,
+        verdict: row.get(12)?,
+        reason: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
+}
+
+fn recompute_shadow_evaluation(
+    tx: &Transaction<'_>,
+    candidate_id: &str,
+) -> Result<ShadowEvaluation, MicroClawError> {
+    let (
+        samples,
+        baseline_passed,
+        candidate_passed,
+        baseline_cost,
+        candidate_cost,
+        baseline_duration,
+        candidate_duration,
+        regressions,
+    ): (i64, i64, i64, f64, f64, i64, i64, i64) = tx.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(CASE WHEN b.verdict='passed' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN c.verdict='passed' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(b.cost_usd),0), COALESCE(SUM(c.cost_usd),0),
+                COALESCE(SUM(b.duration_ms),0), COALESCE(SUM(c.duration_ms),0),
+                COALESCE(SUM(CASE WHEN b.verdict='passed'
+                                      AND c.verdict='failed' THEN 1 ELSE 0 END),0)
+         FROM shadow_observations b
+         JOIN shadow_observations c
+           ON c.candidate_id=b.candidate_id AND c.pair_key=b.pair_key
+          AND c.arm='candidate'
+         WHERE b.candidate_id=?1 AND b.arm='baseline'",
+        params![candidate_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ))
+        },
+    )?;
+    let policy = tx.query_row(
+        "SELECT shadow_min_samples, shadow_promote_utility_margin,
+                shadow_max_cost_ratio, shadow_max_regressions,
+                utility_confidence_z
+         FROM skill_governance_policy WHERE singleton_id=1",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        },
+    )?;
+    let baseline_utility = wilson_lower_bound(baseline_passed, samples, policy.4);
+    let candidate_utility = wilson_lower_bound(candidate_passed, samples, policy.4);
+    let cost_ratio = if baseline_cost <= f64::EPSILON {
+        if candidate_cost <= f64::EPSILON {
+            1.0
+        } else {
+            f64::INFINITY
+        }
+    } else {
+        candidate_cost / baseline_cost
+    };
+    let (verdict, reason) = if samples < policy.0 {
+        (
+            "pending",
+            format!("need {} paired samples; have {samples}", policy.0),
+        )
+    } else if regressions > policy.3 {
+        (
+            "failed",
+            format!("regressions {regressions} exceed {}", policy.3),
+        )
+    } else if candidate_utility + f64::EPSILON < baseline_utility + policy.1 {
+        (
+            "failed",
+            format!(
+                "candidate utility floor {candidate_utility:.3} does not exceed baseline {baseline_utility:.3} by {:.3}",
+                policy.1
+            ),
+        )
+    } else if cost_ratio > policy.2 {
+        (
+            "failed",
+            format!(
+                "candidate cost ratio {cost_ratio:.3} exceeds {:.3}",
+                policy.2
+            ),
+        )
+    } else {
+        (
+            "passed",
+            format!(
+                "paired shadow gate passed: utility {:.3}→{:.3}, cost ratio {:.3}, regressions {regressions}",
+                baseline_utility, candidate_utility, cost_ratio
+            ),
+        )
+    };
+    use sha2::{Digest, Sha256};
+    let evaluation_id = to_hex(&Sha256::digest(candidate_id.as_bytes()));
+    let previous: Option<String> = tx
+        .query_row(
+            "SELECT verdict FROM shadow_evaluations WHERE candidate_id=?1",
+            params![candidate_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    tx.execute(
+        "INSERT INTO shadow_evaluations(
+            evaluation_id, candidate_id, sample_count, baseline_passed,
+            candidate_passed, baseline_utility_lower_bound,
+            candidate_utility_lower_bound, baseline_cost_usd,
+            candidate_cost_usd, baseline_duration_ms, candidate_duration_ms,
+            regression_count, verdict, reason, updated_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+         ON CONFLICT(candidate_id) DO UPDATE SET
+            sample_count=excluded.sample_count,
+            baseline_passed=excluded.baseline_passed,
+            candidate_passed=excluded.candidate_passed,
+            baseline_utility_lower_bound=excluded.baseline_utility_lower_bound,
+            candidate_utility_lower_bound=excluded.candidate_utility_lower_bound,
+            baseline_cost_usd=excluded.baseline_cost_usd,
+            candidate_cost_usd=excluded.candidate_cost_usd,
+            baseline_duration_ms=excluded.baseline_duration_ms,
+            candidate_duration_ms=excluded.candidate_duration_ms,
+            regression_count=excluded.regression_count,
+            verdict=excluded.verdict, reason=excluded.reason,
+            updated_at=excluded.updated_at",
+        params![
+            evaluation_id,
+            candidate_id,
+            samples,
+            baseline_passed,
+            candidate_passed,
+            baseline_utility,
+            candidate_utility,
+            baseline_cost,
+            candidate_cost,
+            baseline_duration,
+            candidate_duration,
+            regressions,
+            verdict,
+            reason,
+            now
+        ],
+    )?;
+    tx.execute(
+        "UPDATE skill_candidates SET status=?2, updated_at=?3
+         WHERE candidate_id=?1 AND status<>'promoted'",
+        params![
+            candidate_id,
+            match verdict {
+                "passed" => "shadow_passed",
+                "failed" => "shadow_failed",
+                _ => "shadow",
+            },
+            now
+        ],
+    )?;
+    if previous.as_deref() != Some(verdict) {
+        tx.execute(
+            "INSERT INTO learning_journal_events(
+                event_type, entity_type, entity_id, summary, evidence_json,
+                undo_action, created_at
+             ) VALUES ('shadow_evaluated','skill_candidate',?1,?2,?3,
+                       CASE WHEN ?4='passed' THEN 'archive_candidate'
+                            ELSE NULL END,?5)",
+            params![
+                candidate_id,
+                reason,
+                serde_json::json!({
+                    "sample_count": samples,
+                    "baseline_utility_lower_bound": baseline_utility,
+                    "candidate_utility_lower_bound": candidate_utility,
+                    "cost_ratio": cost_ratio,
+                    "regression_count": regressions
+                })
+                .to_string(),
+                verdict,
+                now
+            ],
+        )?;
+    }
+    tx.query_row(
+        "SELECT evaluation_id, candidate_id, sample_count,
+                baseline_passed, candidate_passed,
+                baseline_utility_lower_bound, candidate_utility_lower_bound,
+                baseline_cost_usd, candidate_cost_usd,
+                baseline_duration_ms, candidate_duration_ms,
+                regression_count, verdict, reason, updated_at
+         FROM shadow_evaluations WHERE candidate_id=?1",
+        params![candidate_id],
+        map_shadow_evaluation,
+    )
+    .map_err(Into::into)
+}
+
+type ComparativeCurrentRun = (
+    String,
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    i64,
+    i64,
+    i64,
+    Option<f64>,
+);
+
+type ComparativePeerRun = (
+    String,
+    Option<String>,
+    i64,
+    i64,
+    i64,
+    Option<f64>,
+    Option<String>,
+);
+
+fn refresh_comparative_reflections_for_run(
+    tx: &Transaction<'_>,
+    run_id: &str,
+) -> Result<(), MicroClawError> {
+    let current: Option<ComparativeCurrentRun> = tx
+        .query_row(
+            "SELECT o.skill_name, o.skill_version, r.chat_id, o.verdict, r.task_type,
+                    r.task_family, r.environment_fingerprint, r.result_summary,
+                    r.duration_ms, r.tool_calls, r.tool_errors,
+                    r.estimated_cost_usd
+             FROM skill_outcomes o
+             JOIN experience_runs r ON r.run_id=o.run_id
+             WHERE o.run_id=?1 AND o.attribution_confidence>=0.999
+               AND o.verifier_type IN (
+                 'deterministic','environmental','human','rule_based'
+               )
+             LIMIT 1",
+            params![run_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get::<_, Option<i64>>(8)?.unwrap_or_default(),
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        skill_name,
+        skill_version,
+        chat_id,
+        verdict,
+        task_type,
+        task_family,
+        environment,
+        result_summary,
+        duration_ms,
+        tool_calls,
+        tool_errors,
+        cost,
+    )) = current
+    else {
+        return Ok(());
+    };
+    let opposite = if verdict == "passed" {
+        "failed"
+    } else if verdict == "failed" {
+        "passed"
+    } else {
+        return Ok(());
+    };
+    let peer: Option<ComparativePeerRun> = tx
+        .query_row(
+            "SELECT o.run_id, r.result_summary, COALESCE(r.duration_ms,0),
+                    r.tool_calls, r.tool_errors, r.estimated_cost_usd, o.evidence
+             FROM skill_outcomes o
+             JOIN experience_runs r ON r.run_id=o.run_id
+             WHERE o.skill_name=?1 AND o.skill_version=?2 AND o.verdict=?3
+               AND r.task_family=?4
+               AND (r.environment_fingerprint IS ?5 OR r.environment_fingerprint=?5)
+               AND o.attribution_confidence>=0.999
+               AND o.verifier_type IN (
+                 'deterministic','environmental','human','rule_based'
+               )
+               AND o.run_id<>?6
+               AND r.chat_id=?7
+             ORDER BY o.updated_at DESC LIMIT 1",
+            params![
+                skill_name,
+                skill_version,
+                opposite,
+                task_family,
+                environment,
+                run_id,
+                chat_id
+            ],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        peer_run_id,
+        peer_summary,
+        peer_duration,
+        peer_tool_calls,
+        peer_tool_errors,
+        peer_cost,
+        peer_evidence,
+    )) = peer
+    else {
+        return Ok(());
+    };
+    let (success_run_id, failure_run_id, success_profile, failure_profile, counterexample) =
+        if verdict == "passed" {
+            (
+                run_id.to_string(),
+                peer_run_id,
+                (
+                    duration_ms,
+                    tool_calls,
+                    tool_errors,
+                    cost.unwrap_or_default(),
+                ),
+                (
+                    peer_duration,
+                    peer_tool_calls,
+                    peer_tool_errors,
+                    peer_cost.unwrap_or_default(),
+                ),
+                peer_evidence.or(peer_summary).unwrap_or_default(),
+            )
+        } else {
+            (
+                peer_run_id,
+                run_id.to_string(),
+                (
+                    peer_duration,
+                    peer_tool_calls,
+                    peer_tool_errors,
+                    peer_cost.unwrap_or_default(),
+                ),
+                (
+                    duration_ms,
+                    tool_calls,
+                    tool_errors,
+                    cost.unwrap_or_default(),
+                ),
+                result_summary.unwrap_or_default(),
+            )
+        };
+    use sha2::{Digest, Sha256};
+    let canonical = format!(
+        "{chat_id}\n{skill_name}\n{skill_version}\n{task_family}\n{}\n{success_run_id}\n{failure_run_id}",
+        environment.as_deref().unwrap_or("")
+    );
+    let comparison_id = to_hex(&Sha256::digest(canonical.as_bytes()));
+    let minimal_difference = format!(
+        "success vs failure: tool_errors {}→{}, tool_calls {}→{}, duration_ms {}→{}, cost_usd {:.6}→{:.6}",
+        failure_profile.2,
+        success_profile.2,
+        failure_profile.1,
+        success_profile.1,
+        failure_profile.0,
+        success_profile.0,
+        failure_profile.3,
+        success_profile.3
+    );
+    let now = chrono::Utc::now().to_rfc3339();
+    let inserted = tx.execute(
+        "INSERT OR IGNORE INTO experience_comparisons(
+            comparison_id, chat_id, skill_name, skill_version, task_type, task_family,
+            environment_fingerprint, success_run_id, failure_run_id,
+            minimal_difference, counterexample, created_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        params![
+            comparison_id,
+            chat_id,
+            skill_name,
+            skill_version,
+            task_type,
+            task_family,
+            environment,
+            success_run_id,
+            failure_run_id,
+            minimal_difference,
+            counterexample,
+            now
+        ],
+    )?;
+    if inserted == 0 {
+        return Ok(());
+    }
+    let claim_version: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(claim_version),0)+1 FROM learning_claims
+         WHERE skill_name=?1",
+        params![skill_name],
+        |row| row.get(0),
+    )?;
+    let supersedes: Option<String> = tx
+        .query_row(
+            "SELECT c.claim_id FROM learning_claims c
+             JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+             WHERE c.skill_name=?1 AND x.chat_id=?2
+             ORDER BY c.claim_version DESC LIMIT 1",
+            params![skill_name, chat_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let claim_id = uuid::Uuid::new_v4().to_string();
+    let statement = format!(
+        "For task_family={task_family}, prefer the successful execution profile ({minimal_difference}); treat the linked failing run as a counterexample."
+    );
+    let applicability = serde_json::json!({
+        "task_type": task_type,
+        "task_family": task_family,
+        "environment_fingerprint": environment,
+        "skill_version": skill_version
+    });
+    let evidence = serde_json::json!({
+        "success_run_id": success_run_id,
+        "failure_run_id": failure_run_id,
+        "minimal_difference": minimal_difference
+    });
+    tx.execute(
+        "INSERT INTO learning_claims(
+            claim_id, comparison_id, skill_name, base_version, claim_version,
+            statement, applicability_json, confidence, evidence_json,
+            counterexamples_json, status, supersedes_claim_id,
+            created_at, updated_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,0.6,?8,?9,'candidate',?10,?11,?11)",
+        params![
+            claim_id,
+            comparison_id,
+            skill_name,
+            skill_version,
+            claim_version,
+            statement,
+            applicability.to_string(),
+            evidence.to_string(),
+            serde_json::json!([counterexample]).to_string(),
+            supersedes,
+            now
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO learning_journal_events(
+            event_type, entity_type, entity_id, summary, evidence_json,
+            undo_action, created_at
+         ) VALUES ('claim_distilled','learning_claim',?1,?2,?3,
+                   'archive_claim',?4)",
+        params![claim_id, statement, evidence.to_string(), now],
+    )?;
+    Ok(())
+}
+
 fn refresh_expired_skill_outcomes(tx: &Transaction<'_>) -> Result<(), MicroClawError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mut stmt = tx.prepare(
@@ -3000,6 +3800,122 @@ fn erase_chat_learning(tx: &Transaction<'_>, chat_id: i64) -> Result<usize, Micr
     drop(stmt);
 
     let mut affected = 0usize;
+    let promoted_from_chat = {
+        let mut stmt = tx.prepare(
+            "SELECT DISTINCT k.skill_name, k.candidate_version, k.base_version
+             FROM skill_candidates k
+             JOIN learning_claims c ON c.claim_id=k.claim_id
+             JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+             JOIN experience_runs s ON s.run_id=x.success_run_id
+             JOIN experience_runs f ON f.run_id=x.failure_run_id
+             WHERE k.status='promoted' AND (s.chat_id=?1 OR f.chat_id=?1)",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for (skill_name, candidate_version, base_version) in promoted_from_chat {
+        tx.execute(
+            "UPDATE skill_lifecycle SET state='trusted', active_version=?2,
+             previous_trusted_version=NULL,
+             state_reason='comparative evidence erased; restored base version',
+             updated_at=?3 WHERE skill_name=?1 AND active_version=?4",
+            params![
+                skill_name,
+                base_version,
+                chrono::Utc::now().to_rfc3339(),
+                candidate_version
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM skill_versions WHERE skill_name=?1 AND version=?2
+             AND source='comparative-reflection'",
+            params![skill_name, candidate_version],
+        )?;
+    }
+    affected += tx.execute(
+        "DELETE FROM learning_journal_events WHERE
+           (entity_type='learning_claim' AND entity_id IN (
+             SELECT c.claim_id FROM learning_claims c
+             JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+             JOIN experience_runs s ON s.run_id=x.success_run_id
+             JOIN experience_runs f ON f.run_id=x.failure_run_id
+             WHERE s.chat_id=?1 OR f.chat_id=?1
+           )) OR
+           (entity_type='skill_candidate' AND entity_id IN (
+             SELECT k.candidate_id FROM skill_candidates k
+             JOIN learning_claims c ON c.claim_id=k.claim_id
+             JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+             JOIN experience_runs s ON s.run_id=x.success_run_id
+             JOIN experience_runs f ON f.run_id=x.failure_run_id
+             WHERE s.chat_id=?1 OR f.chat_id=?1
+           ))",
+        params![chat_id],
+    )?;
+    affected += tx.execute(
+        "DELETE FROM learning_journal_events
+         WHERE entity_type='skill' AND entity_id IN (
+           SELECT DISTINCT o.skill_name FROM skill_outcomes o
+           JOIN experience_runs r ON r.run_id=o.run_id WHERE r.chat_id=?1
+         )",
+        params![chat_id],
+    )?;
+    affected += tx.execute(
+        "DELETE FROM shadow_observations WHERE
+           run_id IN (SELECT run_id FROM experience_runs WHERE chat_id=?1)
+           OR candidate_id IN (
+             SELECT k.candidate_id FROM skill_candidates k
+             JOIN learning_claims c ON c.claim_id=k.claim_id
+             JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+             JOIN experience_runs s ON s.run_id=x.success_run_id
+             JOIN experience_runs f ON f.run_id=x.failure_run_id
+             WHERE s.chat_id=?1 OR f.chat_id=?1
+           )",
+        params![chat_id],
+    )?;
+    affected += tx.execute(
+        "DELETE FROM shadow_evaluations WHERE candidate_id IN (
+           SELECT k.candidate_id FROM skill_candidates k
+           JOIN learning_claims c ON c.claim_id=k.claim_id
+           JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+           JOIN experience_runs s ON s.run_id=x.success_run_id
+           JOIN experience_runs f ON f.run_id=x.failure_run_id
+           WHERE s.chat_id=?1 OR f.chat_id=?1
+         )",
+        params![chat_id],
+    )?;
+    affected += tx.execute(
+        "DELETE FROM skill_candidates WHERE claim_id IN (
+           SELECT c.claim_id FROM learning_claims c
+           JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+           JOIN experience_runs s ON s.run_id=x.success_run_id
+           JOIN experience_runs f ON f.run_id=x.failure_run_id
+           WHERE s.chat_id=?1 OR f.chat_id=?1
+         )",
+        params![chat_id],
+    )?;
+    affected += tx.execute(
+        "DELETE FROM learning_claims WHERE comparison_id IN (
+           SELECT x.comparison_id FROM experience_comparisons x
+           JOIN experience_runs s ON s.run_id=x.success_run_id
+           JOIN experience_runs f ON f.run_id=x.failure_run_id
+           WHERE s.chat_id=?1 OR f.chat_id=?1
+         )",
+        params![chat_id],
+    )?;
+    affected += tx.execute(
+        "DELETE FROM experience_comparisons WHERE
+           success_run_id IN (SELECT run_id FROM experience_runs WHERE chat_id=?1)
+           OR failure_run_id IN (SELECT run_id FROM experience_runs WHERE chat_id=?1)",
+        params![chat_id],
+    )?;
     affected += tx.execute(
         "DELETE FROM skill_failure_pattern_evidence
          WHERE run_id IN (SELECT run_id FROM experience_runs WHERE chat_id=?1)",
@@ -3129,7 +4045,9 @@ fn evaluate_skill_lifecycle(
                 trusted_degrade_rate, utility_confidence_z,
                 trial_promote_utility_lower_bound,
                 failure_pattern_min_failures, failure_pattern_cooldown_hours,
-                failure_pattern_recovery_successes
+                failure_pattern_recovery_successes, shadow_min_samples,
+                shadow_promote_utility_margin, shadow_max_cost_ratio,
+                shadow_max_regressions
          FROM skill_governance_policy WHERE singleton_id=1",
         [],
         |row| {
@@ -3145,6 +4063,10 @@ fn evaluate_skill_lifecycle(
                 failure_pattern_min_failures: row.get(8)?,
                 failure_pattern_cooldown_hours: row.get(9)?,
                 failure_pattern_recovery_successes: row.get(10)?,
+                shadow_min_samples: row.get(11)?,
+                shadow_promote_utility_margin: row.get(12)?,
+                shadow_max_cost_ratio: row.get(13)?,
+                shadow_max_regressions: row.get(14)?,
             })
         },
     )?;
@@ -3184,6 +4106,65 @@ fn evaluate_skill_lifecycle(
         return Ok(false);
     };
     let now = chrono::Utc::now().to_rfc3339();
+    if current == "trusted" && next == "degraded" {
+        let rollback_version: Option<i64> = tx
+            .query_row(
+                "SELECT previous_trusted_version FROM skill_lifecycle
+                 WHERE skill_name=?1 AND active_version=?2",
+                params![skill_name, version],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(rollback_version) = rollback_version {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM skill_versions
+                 WHERE skill_name=?1 AND version=?2",
+                params![skill_name, rollback_version],
+                |row| row.get(0),
+            )?;
+            if exists > 0 {
+                let rollback_reason =
+                    format!("automatic rollback from v{version} to v{rollback_version}: {reason}");
+                tx.execute(
+                    "UPDATE skill_lifecycle SET state='trusted', active_version=?2,
+                     previous_trusted_version=NULL, updated_at=?3, state_reason=?4
+                     WHERE skill_name=?1",
+                    params![skill_name, rollback_version, now, rollback_reason],
+                )?;
+                tx.execute(
+                    "INSERT INTO skill_lifecycle_events(
+                        skill_name, from_state, to_state, version, reason, created_at
+                     ) VALUES (?1,'trusted','trusted',?2,?3,?4)",
+                    params![skill_name, rollback_version, rollback_reason, now],
+                )?;
+                tx.execute(
+                    "UPDATE skill_candidates SET status='rolled_back', updated_at=?3
+                     WHERE skill_name=?1 AND candidate_version=?2
+                       AND status='promoted'",
+                    params![skill_name, version, now],
+                )?;
+                tx.execute(
+                    "INSERT INTO learning_journal_events(
+                        event_type, entity_type, entity_id, summary,
+                        evidence_json, undo_action, created_at
+                     ) VALUES ('automatic_rollback','skill',?1,?2,?3,NULL,?4)",
+                    params![
+                        skill_name,
+                        rollback_reason,
+                        serde_json::json!({
+                            "failed_version": version,
+                            "restored_version": rollback_version,
+                            "trigger": reason
+                        })
+                        .to_string(),
+                        now
+                    ],
+                )?;
+                return Ok(true);
+            }
+        }
+    }
     let previous_trusted = (current == "trusted").then_some(version);
     tx.execute(
         "UPDATE skill_lifecycle
@@ -5845,6 +6826,7 @@ impl Database {
         }
         sync_skill_outcomes_for_run(&tx, &envelope.run_id)?;
         sync_skill_failure_patterns_for_run(&tx, &envelope.run_id)?;
+        refresh_comparative_reflections_for_run(&tx, &envelope.run_id)?;
         tx.commit()?;
         Ok(())
     }
@@ -6233,6 +7215,28 @@ impl Database {
              ) VALUES (?1, ?2, 'trusted', ?3, ?4, ?5)",
             params![skill_name, from_state, target, reason, now],
         )?;
+        tx.execute(
+            "UPDATE skill_candidates SET status='rolled_back', updated_at=?3
+             WHERE skill_name=?1 AND candidate_version=?2 AND status='promoted'",
+            params![skill_name, active_version, now],
+        )?;
+        tx.execute(
+            "INSERT INTO learning_journal_events(
+                event_type, entity_type, entity_id, summary, evidence_json,
+                undo_action, created_at
+             ) VALUES ('operator_rollback','skill',?1,?2,?3,NULL,?4)",
+            params![
+                skill_name,
+                format!("rolled back {skill_name} from v{active_version} to v{target}: {reason}"),
+                serde_json::json!({
+                    "from_version": active_version,
+                    "to_version": target,
+                    "reason": reason
+                })
+                .to_string(),
+                now
+            ],
+        )?;
         tx.commit()?;
         Ok(Some((target, content)))
     }
@@ -6428,6 +7432,556 @@ impl Database {
         Ok(changed > 0)
     }
 
+    pub fn get_experience_comparisons(
+        &self,
+        chat_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<ExperienceComparison>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT comparison_id, chat_id, skill_name, skill_version, task_type,
+                    task_family, environment_fingerprint, success_run_id,
+                    failure_run_id, minimal_difference, counterexample, created_at
+             FROM experience_comparisons
+             WHERE (?1 IS NULL OR chat_id=?1)
+             ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id, limit.clamp(1, 200) as i64], |row| {
+                Ok(ExperienceComparison {
+                    comparison_id: row.get(0)?,
+                    chat_id: row.get(1)?,
+                    skill_name: row.get(2)?,
+                    skill_version: row.get(3)?,
+                    task_type: row.get(4)?,
+                    task_family: row.get(5)?,
+                    environment_fingerprint: row.get(6)?,
+                    success_run_id: row.get(7)?,
+                    failure_run_id: row.get(8)?,
+                    minimal_difference: row.get(9)?,
+                    counterexample: row.get(10)?,
+                    created_at: row.get(11)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_learning_claims(
+        &self,
+        chat_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<LearningClaim>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT c.claim_id, c.comparison_id, c.skill_name, c.base_version,
+                    c.claim_version, c.statement, c.applicability_json, c.confidence,
+                    c.evidence_json, c.counterexamples_json, c.status,
+                    c.supersedes_claim_id, c.created_at, c.updated_at
+             FROM learning_claims c
+             JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+             WHERE (?1 IS NULL OR x.chat_id=?1)
+             ORDER BY c.updated_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id, limit.clamp(1, 200) as i64], |row| {
+                let applicability: String = row.get(6)?;
+                let evidence: String = row.get(8)?;
+                let counterexamples: String = row.get(9)?;
+                Ok(LearningClaim {
+                    claim_id: row.get(0)?,
+                    comparison_id: row.get(1)?,
+                    skill_name: row.get(2)?,
+                    base_version: row.get(3)?,
+                    claim_version: row.get(4)?,
+                    statement: row.get(5)?,
+                    applicability: serde_json::from_str(&applicability)
+                        .unwrap_or(serde_json::Value::Null),
+                    confidence: row.get(7)?,
+                    evidence: serde_json::from_str(&evidence).unwrap_or(serde_json::Value::Null),
+                    counterexamples: serde_json::from_str(&counterexamples)
+                        .unwrap_or(serde_json::Value::Null),
+                    status: row.get(10)?,
+                    supersedes_claim_id: row.get(11)?,
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_skill_candidates(
+        &self,
+        chat_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<SkillCandidate>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT k.candidate_id, k.claim_id, k.skill_name, k.base_version,
+                    k.candidate_version, k.content, k.content_hash, k.status,
+                    k.created_at, k.updated_at
+             FROM skill_candidates k
+             JOIN learning_claims c ON c.claim_id=k.claim_id
+             JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+             WHERE (?1 IS NULL OR x.chat_id=?1)
+             ORDER BY k.updated_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id, limit.clamp(1, 200) as i64], |row| {
+                Ok(SkillCandidate {
+                    candidate_id: row.get(0)?,
+                    claim_id: row.get(1)?,
+                    skill_name: row.get(2)?,
+                    base_version: row.get(3)?,
+                    candidate_version: row.get(4)?,
+                    content: row.get(5)?,
+                    content_hash: row.get(6)?,
+                    status: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn create_skill_candidate_from_claim(
+        &self,
+        claim_id: &str,
+        chat_id: i64,
+    ) -> Result<SkillCandidate, MicroClawError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let claim: Option<(String, i64, String, String)> = tx
+            .query_row(
+                "SELECT c.skill_name, c.base_version, c.statement, c.status
+                 FROM learning_claims c
+                 JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+                 WHERE c.claim_id=?1 AND x.chat_id=?2",
+                params![claim_id, chat_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((skill_name, base_version, statement, claim_status)) = claim else {
+            return Err(MicroClawError::ToolExecution(
+                "learning claim not found".into(),
+            ));
+        };
+        if claim_status == "archived" {
+            return Err(MicroClawError::ToolExecution(
+                "archived claim cannot create a candidate".into(),
+            ));
+        }
+        if let Some(existing) = tx
+            .query_row(
+                "SELECT candidate_id FROM skill_candidates WHERE claim_id=?1",
+                params![claim_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            drop(tx);
+            drop(conn);
+            return self
+                .get_skill_candidates(Some(chat_id), 200)?
+                .into_iter()
+                .find(|candidate| candidate.candidate_id == existing)
+                .ok_or_else(|| {
+                    MicroClawError::ToolExecution("candidate projection missing".into())
+                });
+        }
+        let base_content: String = tx.query_row(
+            "SELECT content FROM skill_versions
+             WHERE skill_name=?1 AND version=?2",
+            params![skill_name, base_version],
+            |row| row.get(0),
+        )?;
+        let candidate_version: i64 = tx.query_row(
+            "SELECT MAX(version)+1 FROM (
+               SELECT version FROM skill_versions WHERE skill_name=?1
+               UNION ALL
+               SELECT candidate_version AS version FROM skill_candidates
+               WHERE skill_name=?1
+             )",
+            params![skill_name],
+            |row| row.get::<_, Option<i64>>(0).map(|value| value.unwrap_or(1)),
+        )?;
+        let content = format!(
+            "{base_content}\n\n## Learned guardrail (candidate v{candidate_version})\n\n- {statement}\n"
+        );
+        use sha2::{Digest, Sha256};
+        let content_hash = to_hex(&Sha256::digest(content.as_bytes()));
+        let candidate_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO skill_candidates(
+                candidate_id, claim_id, skill_name, base_version,
+                candidate_version, content, content_hash, status,
+                created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,'candidate',?8,?8)",
+            params![
+                candidate_id,
+                claim_id,
+                skill_name,
+                base_version,
+                candidate_version,
+                content,
+                content_hash,
+                now
+            ],
+        )?;
+        tx.execute(
+            "UPDATE learning_claims SET status='trial', updated_at=?2
+             WHERE claim_id=?1",
+            params![claim_id, now],
+        )?;
+        tx.execute(
+            "INSERT INTO learning_journal_events(
+                event_type, entity_type, entity_id, summary, evidence_json,
+                undo_action, created_at
+             ) VALUES ('candidate_created','skill_candidate',?1,?2,?3,
+                       'archive_candidate',?4)",
+            params![
+                candidate_id,
+                format!("{skill_name} candidate v{candidate_version} created from claim"),
+                serde_json::json!({
+                    "claim_id": claim_id,
+                    "base_version": base_version,
+                    "content_hash": content_hash
+                })
+                .to_string(),
+                now
+            ],
+        )?;
+        tx.commit()?;
+        drop(conn);
+        self.get_skill_candidates(Some(chat_id), 200)?
+            .into_iter()
+            .find(|candidate| candidate.candidate_id == candidate_id)
+            .ok_or_else(|| MicroClawError::ToolExecution("candidate projection missing".into()))
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub fn record_shadow_observation(
+        &self,
+        candidate_id: &str,
+        chat_id: i64,
+        pair_key: &str,
+        arm: &str,
+        run_id: &str,
+        verdict: &str,
+        cost_usd: f64,
+        duration_ms: i64,
+        evidence: Option<&str>,
+    ) -> Result<ShadowEvaluation, MicroClawError> {
+        if !matches!(arm, "baseline" | "candidate")
+            || !matches!(verdict, "passed" | "failed")
+            || pair_key.trim().is_empty()
+            || pair_key.len() > 128
+            || !cost_usd.is_finite()
+            || cost_usd < 0.0
+            || duration_ms < 0
+        {
+            return Err(MicroClawError::ToolExecution(
+                "invalid shadow observation".into(),
+            ));
+        }
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM skill_candidates c
+             JOIN learning_claims l ON l.claim_id=c.claim_id
+             JOIN experience_comparisons x ON x.comparison_id=l.comparison_id
+             JOIN experience_runs r ON r.run_id=?2
+             JOIN verifier_results v ON v.run_id=r.run_id
+             WHERE c.candidate_id=?1
+               AND c.status NOT IN ('archived','promoted')
+               AND x.chat_id=?5
+               AND r.task_family=json_extract(l.applicability_json,'$.task_family')
+               AND (
+                 json_extract(l.applicability_json,'$.environment_fingerprint') IS NULL
+                 OR r.environment_fingerprint=
+                    json_extract(l.applicability_json,'$.environment_fingerprint')
+               )
+               AND v.verdict=?3
+               AND v.verifier_type IN (
+                 'deterministic','environmental','human','rule_based'
+               )
+               AND (v.valid_until IS NULL OR v.valid_until>?4)",
+            params![
+                candidate_id,
+                run_id,
+                verdict,
+                chrono::Utc::now().to_rfc3339(),
+                chat_id
+            ],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Err(MicroClawError::ToolExecution(
+                "candidate or strongly verified comparable run not eligible for shadow evaluation"
+                    .into(),
+            ));
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO shadow_observations(
+                candidate_id, pair_key, arm, run_id, verdict, cost_usd,
+                duration_ms, evidence, created_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(candidate_id,pair_key,arm) DO UPDATE SET
+                run_id=excluded.run_id, verdict=excluded.verdict,
+                cost_usd=excluded.cost_usd, duration_ms=excluded.duration_ms,
+                evidence=excluded.evidence, created_at=excluded.created_at",
+            params![
+                candidate_id,
+                pair_key,
+                arm,
+                run_id,
+                verdict,
+                cost_usd,
+                duration_ms,
+                evidence,
+                now
+            ],
+        )?;
+        let evaluation = recompute_shadow_evaluation(&tx, candidate_id)?;
+        tx.commit()?;
+        Ok(evaluation)
+    }
+
+    pub fn get_shadow_evaluations(
+        &self,
+        chat_id: Option<i64>,
+    ) -> Result<Vec<ShadowEvaluation>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT e.evaluation_id, e.candidate_id, e.sample_count,
+                    e.baseline_passed, e.candidate_passed,
+                    e.baseline_utility_lower_bound, e.candidate_utility_lower_bound,
+                    e.baseline_cost_usd, e.candidate_cost_usd,
+                    e.baseline_duration_ms, e.candidate_duration_ms,
+                    e.regression_count, e.verdict, e.reason, e.updated_at
+             FROM shadow_evaluations e
+             JOIN skill_candidates k ON k.candidate_id=e.candidate_id
+             JOIN learning_claims c ON c.claim_id=k.claim_id
+             JOIN experience_comparisons x ON x.comparison_id=c.comparison_id
+             WHERE (?1 IS NULL OR x.chat_id=?1)
+             ORDER BY e.updated_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id], map_shadow_evaluation)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn promote_shadow_candidate(
+        &self,
+        candidate_id: &str,
+        chat_id: i64,
+    ) -> Result<(String, i64), MicroClawError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let candidate: Option<(String, i64, i64, String, String, String)> = tx
+            .query_row(
+                "SELECT c.skill_name, c.base_version, c.candidate_version,
+                        c.content, c.content_hash, e.verdict
+                 FROM skill_candidates c
+                 JOIN shadow_evaluations e ON e.candidate_id=c.candidate_id
+                 JOIN learning_claims l ON l.claim_id=c.claim_id
+                 JOIN experience_comparisons x ON x.comparison_id=l.comparison_id
+                 WHERE c.candidate_id=?1 AND c.status='shadow_passed'
+                   AND x.chat_id=?2",
+                params![candidate_id, chat_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((skill_name, base_version, candidate_version, content, hash, verdict)) = candidate
+        else {
+            return Err(MicroClawError::ToolExecution(
+                "candidate has not passed shadow evaluation".into(),
+            ));
+        };
+        if verdict != "passed" {
+            return Err(MicroClawError::ToolExecution(
+                "shadow evaluation gate did not pass".into(),
+            ));
+        }
+        let lifecycle: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT state, active_version FROM skill_lifecycle WHERE skill_name=?1",
+                params![skill_name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if lifecycle.as_ref().map(|item| item.1) != Some(base_version) {
+            return Err(MicroClawError::ToolExecution(
+                "candidate base version is no longer active; regenerate and re-evaluate".into(),
+            ));
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        tx.execute(
+            "INSERT INTO skill_versions(
+                skill_name, version, content, content_hash, source, created_at
+             ) VALUES (?1,?2,?3,?4,'comparative-reflection',?5)",
+            params![skill_name, candidate_version, content, hash, now],
+        )?;
+        tx.execute(
+            "UPDATE skill_lifecycle SET state='trusted', active_version=?2,
+                 previous_trusted_version=?3, source='comparative-reflection',
+                 state_reason='shadow evaluation passed', updated_at=?4
+             WHERE skill_name=?1",
+            params![skill_name, candidate_version, base_version, now],
+        )?;
+        tx.execute(
+            "UPDATE skill_candidates SET status='promoted', updated_at=?2
+             WHERE candidate_id=?1",
+            params![candidate_id, now],
+        )?;
+        tx.execute(
+            "UPDATE learning_claims SET status='trusted', updated_at=?2
+             WHERE claim_id=(SELECT claim_id FROM skill_candidates
+                              WHERE candidate_id=?1)",
+            params![candidate_id, now],
+        )?;
+        tx.execute(
+            "INSERT INTO skill_lifecycle_events(
+                skill_name, from_state, to_state, version, reason, created_at
+             ) VALUES (?1,?2,'trusted',?3,'shadow evaluation passed',?4)",
+            params![
+                skill_name,
+                lifecycle
+                    .map(|item| item.0)
+                    .unwrap_or_else(|| "candidate".into()),
+                candidate_version,
+                now
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO learning_journal_events(
+                event_type, entity_type, entity_id, summary, evidence_json,
+                undo_action, created_at
+             ) VALUES ('candidate_promoted','skill_candidate',?1,?2,?3,
+                       'rollback_skill',?4)",
+            params![
+                candidate_id,
+                format!("{skill_name} promoted from v{base_version} to v{candidate_version}"),
+                serde_json::json!({
+                    "skill_name": skill_name,
+                    "from_version": base_version,
+                    "to_version": candidate_version
+                })
+                .to_string(),
+                now
+            ],
+        )?;
+        tx.commit()?;
+        Ok((skill_name, candidate_version))
+    }
+
+    pub fn archive_learning_entity(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        chat_id: i64,
+    ) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let changed = match entity_type {
+            "learning_claim" => conn.execute(
+                "UPDATE learning_claims SET status='archived', updated_at=?2
+                 WHERE claim_id=?1 AND status NOT IN ('trusted','archived')
+                   AND comparison_id IN (
+                     SELECT comparison_id FROM experience_comparisons
+                     WHERE chat_id=?3
+                   )",
+                params![entity_id, now, chat_id],
+            )?,
+            "skill_candidate" => conn.execute(
+                "UPDATE skill_candidates SET status='archived', updated_at=?2
+                 WHERE candidate_id=?1 AND status NOT IN ('promoted','archived')
+                   AND claim_id IN (
+                     SELECT c.claim_id FROM learning_claims c
+                     JOIN experience_comparisons x
+                       ON x.comparison_id=c.comparison_id
+                     WHERE x.chat_id=?3
+                   )",
+                params![entity_id, now, chat_id],
+            )?,
+            _ => {
+                return Err(MicroClawError::ToolExecution(
+                    "unsupported learning entity type".into(),
+                ));
+            }
+        };
+        if changed > 0 {
+            conn.execute(
+                "INSERT INTO learning_journal_events(
+                    event_type, entity_type, entity_id, summary,
+                    evidence_json, created_at
+                 ) VALUES ('entity_archived',?1,?2,?3,?4,?5)",
+                params![
+                    entity_type,
+                    entity_id,
+                    format!("archived {entity_type} {entity_id}"),
+                    serde_json::json!({"chat_id": chat_id}).to_string(),
+                    now
+                ],
+            )?;
+        }
+        Ok(changed > 0)
+    }
+
+    pub fn get_learning_journal(
+        &self,
+        chat_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<LearningJournalEvent>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, event_type, entity_type, entity_id, summary,
+                    evidence_json, undo_action, created_at
+             FROM learning_journal_events j
+             WHERE ?1 IS NULL OR EXISTS(
+               SELECT 1 FROM experience_comparisons x
+               LEFT JOIN learning_claims c ON c.comparison_id=x.comparison_id
+               LEFT JOIN skill_candidates k ON k.claim_id=c.claim_id
+               WHERE x.chat_id=?1 AND (
+                 (j.entity_type='learning_claim' AND j.entity_id=c.claim_id)
+                 OR (j.entity_type='skill_candidate' AND j.entity_id=k.candidate_id)
+                 OR (j.entity_type='skill' AND j.entity_id=x.skill_name)
+               )
+             )
+             ORDER BY j.created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id, limit.clamp(1, 500) as i64], |row| {
+                let evidence: String = row.get(5)?;
+                Ok(LearningJournalEvent {
+                    id: row.get(0)?,
+                    event_type: row.get(1)?,
+                    entity_type: row.get(2)?,
+                    entity_id: row.get(3)?,
+                    summary: row.get(4)?,
+                    evidence: serde_json::from_str(&evidence).unwrap_or(serde_json::Value::Null),
+                    undo_action: row.get(6)?,
+                    created_at: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn get_skill_governance_policy(&self) -> Result<SkillGovernancePolicy, MicroClawError> {
         let conn = self.lock_conn();
         conn.query_row(
@@ -6436,7 +7990,9 @@ impl Database {
                     trusted_degrade_rate, utility_confidence_z,
                     trial_promote_utility_lower_bound,
                     failure_pattern_min_failures, failure_pattern_cooldown_hours,
-                    failure_pattern_recovery_successes
+                    failure_pattern_recovery_successes, shadow_min_samples,
+                    shadow_promote_utility_margin, shadow_max_cost_ratio,
+                    shadow_max_regressions
              FROM skill_governance_policy WHERE singleton_id=1",
             [],
             |row| {
@@ -6452,6 +8008,10 @@ impl Database {
                     failure_pattern_min_failures: row.get(8)?,
                     failure_pattern_cooldown_hours: row.get(9)?,
                     failure_pattern_recovery_successes: row.get(10)?,
+                    shadow_min_samples: row.get(11)?,
+                    shadow_promote_utility_margin: row.get(12)?,
+                    shadow_max_cost_ratio: row.get(13)?,
+                    shadow_max_regressions: row.get(14)?,
                 })
             },
         )
@@ -6475,7 +8035,11 @@ impl Database {
                  failure_pattern_min_failures=?9,
                  failure_pattern_cooldown_hours=?10,
                  failure_pattern_recovery_successes=?11,
-                 updated_at=?12
+                 shadow_min_samples=?12,
+                 shadow_promote_utility_margin=?13,
+                 shadow_max_cost_ratio=?14,
+                 shadow_max_regressions=?15,
+                 updated_at=?16
              WHERE singleton_id=1",
             params![
                 policy.candidate_failures_to_degrade,
@@ -6489,6 +8053,10 @@ impl Database {
                 policy.failure_pattern_min_failures,
                 policy.failure_pattern_cooldown_hours,
                 policy.failure_pattern_recovery_successes,
+                policy.shadow_min_samples,
+                policy.shadow_promote_utility_margin,
+                policy.shadow_max_cost_ratio,
+                policy.shadow_max_regressions,
                 chrono::Utc::now().to_rfc3339()
             ],
         )?;
@@ -13482,6 +15050,261 @@ mod tests {
     }
 
     #[test]
+    fn comparative_reflection_shadow_promotion_and_automatic_rollback() {
+        let (db, dir) = test_db();
+        db.register_skill_version("reflective-deploy", 1, "deploy safely", "built-in")
+            .unwrap();
+        for (run_id, verdict, summary, errors) in [
+            ("reflection-failure", "failed", "health timeout", 1),
+            ("reflection-success", "passed", "healthy deployment", 0),
+        ] {
+            db.start_experience_run(
+                run_id,
+                None,
+                92,
+                "web",
+                "interactive",
+                "deploy service",
+                Some("os=linux"),
+            )
+            .unwrap();
+            db.log_skill_activation("reflective-deploy", 92).unwrap();
+            db.update_experience_metrics(run_id, 10, 5, 1, 2, errors, Some(1.0))
+                .unwrap();
+            db.finish_experience_run(run_id, "completed", Some(summary), 100)
+                .unwrap();
+            db.record_verifier_result(
+                run_id,
+                "deterministic",
+                "health",
+                verdict,
+                1.0,
+                Some(summary),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        let comparisons = db.get_experience_comparisons(Some(92), 10).unwrap();
+        assert_eq!(comparisons.len(), 1);
+        assert_eq!(comparisons[0].task_family, "deployment");
+        assert_eq!(comparisons[0].success_run_id, "reflection-success");
+        assert_eq!(comparisons[0].failure_run_id, "reflection-failure");
+        assert!(comparisons[0].minimal_difference.contains("tool_errors"));
+
+        let claims = db.get_learning_claims(Some(92), 10).unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].status, "candidate");
+        assert_eq!(claims[0].evidence["success_run_id"], "reflection-success");
+        assert!(claims[0].counterexamples.is_array());
+
+        let candidate = db
+            .create_skill_candidate_from_claim(&claims[0].claim_id, 92)
+            .unwrap();
+        assert_eq!(candidate.base_version, 1);
+        assert_eq!(candidate.candidate_version, 2);
+        assert!(candidate.content.contains("Learned guardrail"));
+        assert_eq!(
+            db.get_skill_lifecycle("reflective-deploy")
+                .unwrap()
+                .unwrap()
+                .active_version,
+            1,
+            "candidate creation and shadow evaluation must not activate it"
+        );
+
+        let mut evaluation = None;
+        for index in 0..3 {
+            let pair = format!("pair-{index}");
+            db.record_shadow_observation(
+                &candidate.candidate_id,
+                92,
+                &pair,
+                "baseline",
+                "reflection-success",
+                "passed",
+                1.0,
+                100,
+                Some("baseline passed"),
+            )
+            .unwrap();
+            evaluation = Some(
+                db.record_shadow_observation(
+                    &candidate.candidate_id,
+                    92,
+                    &pair,
+                    "candidate",
+                    "reflection-failure",
+                    "failed",
+                    0.8,
+                    80,
+                    Some("candidate regressed"),
+                )
+                .unwrap(),
+            );
+        }
+        assert_eq!(evaluation.as_ref().unwrap().verdict, "failed");
+        assert_eq!(evaluation.as_ref().unwrap().regression_count, 3);
+
+        for index in 0..3 {
+            let pair = format!("pair-{index}");
+            db.record_shadow_observation(
+                &candidate.candidate_id,
+                92,
+                &pair,
+                "baseline",
+                "reflection-failure",
+                "failed",
+                1.0,
+                100,
+                Some("baseline failed"),
+            )
+            .unwrap();
+            evaluation = Some(
+                db.record_shadow_observation(
+                    &candidate.candidate_id,
+                    92,
+                    &pair,
+                    "candidate",
+                    "reflection-success",
+                    "passed",
+                    0.8,
+                    80,
+                    Some("candidate passed"),
+                )
+                .unwrap(),
+            );
+        }
+        let evaluation = evaluation.unwrap();
+        assert_eq!(evaluation.sample_count, 3);
+        assert_eq!(evaluation.verdict, "passed");
+        assert!(evaluation.candidate_utility_lower_bound > 0.4);
+        assert_eq!(
+            db.get_skill_lifecycle("reflective-deploy")
+                .unwrap()
+                .unwrap()
+                .active_version,
+            1,
+            "shadow pass still requires an explicit governed promotion"
+        );
+
+        let promoted = db
+            .promote_shadow_candidate(&candidate.candidate_id, 92)
+            .unwrap();
+        assert_eq!(promoted, ("reflective-deploy".to_string(), 2));
+        assert_eq!(
+            db.get_skill_lifecycle("reflective-deploy")
+                .unwrap()
+                .unwrap()
+                .active_version,
+            2
+        );
+
+        for index in 0..2 {
+            let run_id = format!("promoted-regression-{index}");
+            db.start_experience_run(
+                &run_id,
+                None,
+                92,
+                "web",
+                "interactive",
+                "deploy service",
+                Some("os=linux"),
+            )
+            .unwrap();
+            db.log_skill_activation("reflective-deploy", 92).unwrap();
+            db.record_verifier_result(
+                &run_id,
+                "deterministic",
+                "health",
+                "failed",
+                1.0,
+                Some("new regression"),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+        let lifecycle = db
+            .get_skill_lifecycle("reflective-deploy")
+            .unwrap()
+            .unwrap();
+        assert_eq!(lifecycle.active_version, 1);
+        assert_eq!(lifecycle.state, "trusted");
+        assert!(lifecycle
+            .state_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("automatic rollback"));
+        let journal = db.get_learning_journal(Some(92), 50).unwrap();
+        assert!(journal
+            .iter()
+            .any(|event| event.event_type == "claim_distilled"));
+        assert!(journal
+            .iter()
+            .any(|event| event.event_type == "candidate_promoted"));
+        assert!(journal
+            .iter()
+            .any(|event| event.event_type == "automatic_rollback"));
+        assert!(db.clear_chat_memory(92).unwrap());
+        assert!(db
+            .get_experience_comparisons(Some(92), 10)
+            .unwrap()
+            .is_empty());
+        assert!(db.get_learning_claims(Some(92), 10).unwrap().is_empty());
+        assert!(db.get_skill_candidates(Some(92), 10).unwrap().is_empty());
+        assert!(db.get_shadow_evaluations(Some(92)).unwrap().is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn comparative_reflection_never_pairs_or_exposes_across_chats() {
+        let (db, dir) = test_db();
+        db.register_skill_version("scoped-reflection", 1, "base", "built-in")
+            .unwrap();
+        for (run_id, chat_id, verdict) in [
+            ("scoped-failure", 201, "failed"),
+            ("scoped-success", 202, "passed"),
+        ] {
+            db.start_experience_run(
+                run_id,
+                None,
+                chat_id,
+                "web",
+                "interactive",
+                "deploy service",
+                Some("os=linux"),
+            )
+            .unwrap();
+            db.log_skill_activation("scoped-reflection", chat_id)
+                .unwrap();
+            db.record_verifier_result(
+                run_id,
+                "deterministic",
+                "health",
+                verdict,
+                1.0,
+                Some(verdict),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+        assert!(db
+            .get_experience_comparisons(Some(201), 10)
+            .unwrap()
+            .is_empty());
+        assert!(db
+            .get_experience_comparisons(Some(202), 10)
+            .unwrap()
+            .is_empty());
+        assert!(db.get_learning_claims(Some(201), 10).unwrap().is_empty());
+        assert!(db.get_learning_claims(Some(202), 10).unwrap().is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
     fn learning_substrate_recovers_interrupted_runs_without_penalizing_skill() {
         let (db, dir) = test_db();
         db.register_skill_version("restart-safe", 1, "instructions", "agent-created")
@@ -13703,6 +15526,10 @@ mod tests {
         assert_eq!(defaults.failure_pattern_min_failures, 2);
         assert_eq!(defaults.failure_pattern_cooldown_hours, 24);
         assert_eq!(defaults.failure_pattern_recovery_successes, 2);
+        assert_eq!(defaults.shadow_min_samples, 3);
+        assert_eq!(defaults.shadow_promote_utility_margin, 0.05);
+        assert_eq!(defaults.shadow_max_cost_ratio, 1.2);
+        assert_eq!(defaults.shadow_max_regressions, 0);
 
         let mut invalid = defaults.clone();
         invalid.trial_degrade_rate = invalid.trial_promote_rate;
@@ -13717,6 +15544,11 @@ mod tests {
         assert!(db
             .update_skill_governance_policy(&invalid_cooldown)
             .is_err());
+        let mut invalid_shadow_cost = defaults.clone();
+        invalid_shadow_cost.shadow_max_cost_ratio = 0.9;
+        assert!(db
+            .update_skill_governance_policy(&invalid_shadow_cost)
+            .is_err());
 
         let mut updated = defaults;
         updated.candidate_failures_to_degrade = 3;
@@ -13727,6 +15559,10 @@ mod tests {
         updated.failure_pattern_min_failures = 3;
         updated.failure_pattern_cooldown_hours = 12;
         updated.failure_pattern_recovery_successes = 1;
+        updated.shadow_min_samples = 4;
+        updated.shadow_promote_utility_margin = 0.1;
+        updated.shadow_max_cost_ratio = 1.5;
+        updated.shadow_max_regressions = 1;
         db.update_skill_governance_policy(&updated).unwrap();
         let saved = db.get_skill_governance_policy().unwrap();
         assert_eq!(saved.candidate_failures_to_degrade, 3);
@@ -13735,6 +15571,10 @@ mod tests {
         assert_eq!(saved.failure_pattern_min_failures, 3);
         assert_eq!(saved.failure_pattern_cooldown_hours, 12);
         assert_eq!(saved.failure_pattern_recovery_successes, 1);
+        assert_eq!(saved.shadow_min_samples, 4);
+        assert_eq!(saved.shadow_promote_utility_margin, 0.1);
+        assert_eq!(saved.shadow_max_cost_ratio, 1.5);
+        assert_eq!(saved.shadow_max_regressions, 1);
         cleanup(&dir);
     }
 
@@ -13993,7 +15833,7 @@ mod tests {
                 .unwrap();
             assert_eq!(patterns, 1);
             assert_eq!(rejections, 1);
-            assert_eq!(get_schema_version(&conn).unwrap(), 39);
+            assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION_CURRENT);
         }
         let backfilled = db
             .get_skill_failure_patterns(Some("legacy-failure"))
@@ -14002,6 +15842,79 @@ mod tests {
         assert_eq!(backfilled[0].failure_count, 2);
         assert_eq!(backfilled[0].error_category, "network");
         assert_eq!(backfilled[0].state, "active");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn migration_40_creates_comparative_reflection_and_shadow_schema() {
+        let (db, dir) = test_db();
+        db.register_skill_version("legacy-reflection", 1, "deploy", "built-in")
+            .unwrap();
+        for (run_id, verdict) in [("legacy-p2-fail", "failed"), ("legacy-p2-pass", "passed")] {
+            db.start_experience_run(
+                run_id,
+                None,
+                82,
+                "web",
+                "interactive",
+                "deploy service",
+                Some("os=linux"),
+            )
+            .unwrap();
+            db.log_skill_activation("legacy-reflection", 82).unwrap();
+            db.record_verifier_result(
+                run_id,
+                "deterministic",
+                "health",
+                verdict,
+                1.0,
+                Some(verdict),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+        {
+            let conn = db.lock_conn();
+            conn.execute_batch(
+                "DROP TABLE shadow_observations;
+                 DROP TABLE shadow_evaluations;
+                 DROP TABLE skill_candidates;
+                 DROP TABLE learning_journal_events;
+                 DROP TABLE learning_claims;
+                 DROP TABLE experience_comparisons;",
+            )
+            .unwrap();
+            set_schema_version(&conn, 39).unwrap();
+            apply_schema_migrations(&conn).unwrap();
+        }
+        let conn = db.lock_conn();
+        for table in [
+            "experience_comparisons",
+            "learning_claims",
+            "skill_candidates",
+            "shadow_observations",
+            "shadow_evaluations",
+            "learning_journal_events",
+        ] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type='table' AND name=?1",
+                    params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "missing migration table {table}");
+        }
+        assert!(table_has_column(&conn, "skill_governance_policy", "shadow_min_samples").unwrap());
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION_CURRENT);
+        drop(conn);
+        assert_eq!(
+            db.get_experience_comparisons(Some(82), 10).unwrap().len(),
+            1
+        );
+        assert_eq!(db.get_learning_claims(Some(82), 10).unwrap().len(), 1);
         cleanup(&dir);
     }
 

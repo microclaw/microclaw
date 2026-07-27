@@ -99,6 +99,14 @@ contraindication. A new version starts with fresh outcome attribution.
   and degradation thresholds with an audit event.
 - `POST /api/learning/recovery_trial` starts a cooldown-complete recovery trial
   for a named skill and emits an audit event.
+- `POST /api/learning/candidates` creates an isolated candidate from a claim.
+- `POST /api/learning/shadow_observations` records one baseline or candidate
+  arm and recomputes the paired evaluation.
+- `POST /api/learning/candidates/promote` is admin-scoped and promotes only a
+  candidate whose persisted shadow verdict passed.
+- `POST /api/learning/archive` archives an untrusted claim or candidate.
+- `POST /api/learning/rollback` is admin-scoped and restores a recorded skill
+  version.
 - `skill_manage` registers new versions and supports `rollback` with an optional
   `target_version`.
 
@@ -168,3 +176,37 @@ After cooldown, an operator can start a recovery trial from the Web Learning
 panel. Matching verified successes move the pattern through `trial` to
 `resolved`. Thresholds and cooldown duration are governance policy fields, and
 evidence counting is idempotent per run.
+
+## Comparative reflection and governed evolution
+
+Schema v40 adds a traceable P2 pipeline:
+
+1. `experience_comparisons` deterministically pairs strongly attributed
+   success and failure outcomes at the same skill version, task family, and
+   environment within the same chat. It records the smallest observable metric
+   difference and the failing run as a counterexample.
+2. `learning_claims` stores versioned statements, applicability, confidence,
+   source run ids, counterexamples, and supersession. Claims are candidates,
+   never executable instructions.
+3. `skill_candidates` stores an immutable patch derived from a claim and its
+   exact base version. Creation does not modify `skill_versions` or activate
+   the candidate.
+4. `shadow_observations` requires paired baseline/candidate arms.
+   `shadow_evaluations` compares Wilson utility floors, cost, latency, and
+   baseline-pass/candidate-fail regressions. Each observation must reference a
+   strongly verified run in the claim's chat, task family, and environment;
+   incomplete pairs do not count.
+5. An admin may promote only a `shadow_passed` candidate whose base version is
+   still active. Promotion records the previous trusted version. Subsequent
+   verified regression or an active failure pattern automatically restores
+   that version.
+
+`learning_journal_events` records claim distillation, candidate creation,
+shadow decisions, promotion, and automatic rollback. Web controls can archive
+untrusted claims/candidates, promote a passing candidate, or explicitly roll
+back; `/learning journal` provides the same audit trail in chat/CLI.
+
+Default shadow gates require three paired samples, a candidate Wilson utility
+floor at least `0.05` above baseline, candidate cost no more than `1.2x`
+baseline, and zero regressions. These values are part of the existing
+governance policy and remain API-configurable.

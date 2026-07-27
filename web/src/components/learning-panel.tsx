@@ -61,6 +61,69 @@ type ObservabilityResponse = {
   recent_runs: Run[]
   skill_task_utilities: SkillUtility[]
   skill_failure_patterns: FailurePattern[]
+  comparisons: Comparison[]
+  learning_claims: LearningClaim[]
+  skill_candidates: SkillCandidate[]
+  shadow_evaluations: ShadowEvaluation[]
+  learning_journal: JournalEvent[]
+}
+
+type Comparison = {
+  comparison_id: string
+  skill_name: string
+  skill_version: number
+  task_family: string
+  success_run_id: string
+  failure_run_id: string
+  minimal_difference: string
+  counterexample: string
+}
+
+type LearningClaim = {
+  claim_id: string
+  comparison_id: string
+  skill_name: string
+  base_version: number
+  claim_version: number
+  statement: string
+  applicability: { task_family?: string; environment_fingerprint?: string | null }
+  confidence: number
+  counterexamples: unknown[]
+  status: string
+}
+
+type SkillCandidate = {
+  candidate_id: string
+  claim_id: string
+  skill_name: string
+  base_version: number
+  candidate_version: number
+  content_hash: string
+  status: string
+}
+
+type ShadowEvaluation = {
+  candidate_id: string
+  sample_count: number
+  baseline_utility_lower_bound: number
+  candidate_utility_lower_bound: number
+  regression_count: number
+  baseline_cost_usd: number
+  candidate_cost_usd: number
+  baseline_duration_ms: number
+  candidate_duration_ms: number
+  verdict: string
+  reason: string
+}
+
+type JournalEvent = {
+  id: number
+  event_type: string
+  entity_type: string
+  entity_id: string
+  summary: string
+  undo_action?: string | null
+  created_at: string
 }
 
 type FailurePattern = {
@@ -94,6 +157,11 @@ export function LearningPanel({ sessionKey }: { sessionKey: string }) {
   const [runs, setRuns] = useState<Run[]>([])
   const [utilities, setUtilities] = useState<SkillUtility[]>([])
   const [failurePatterns, setFailurePatterns] = useState<FailurePattern[]>([])
+  const [comparisons, setComparisons] = useState<Comparison[]>([])
+  const [claims, setClaims] = useState<LearningClaim[]>([])
+  const [candidates, setCandidates] = useState<SkillCandidate[]>([])
+  const [evaluations, setEvaluations] = useState<ShadowEvaluation[]>([])
+  const [journal, setJournal] = useState<JournalEvent[]>([])
   const [detail, setDetail] = useState<Detail | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -120,6 +188,11 @@ export function LearningPanel({ sessionKey }: { sessionKey: string }) {
       setRuns(result.recent_runs)
       setUtilities(result.skill_task_utilities)
       setFailurePatterns(result.skill_failure_patterns)
+      setComparisons(result.comparisons)
+      setClaims(result.learning_claims)
+      setCandidates(result.skill_candidates)
+      setEvaluations(result.shadow_evaluations)
+      setJournal(result.learning_journal)
       if (result.recent_runs.length > 0) {
         await loadDetail(result.recent_runs[0].run_id)
       } else {
@@ -138,6 +211,19 @@ export function LearningPanel({ sessionKey }: { sessionKey: string }) {
       await api('/api/learning/recovery_trial', {
         method: 'POST',
         body: JSON.stringify({ skill_name: skillName }),
+      })
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const learningAction = async (path: string, body: Record<string, unknown>) => {
+    setError('')
+    try {
+      await api(path, {
+        method: 'POST',
+        body: JSON.stringify({ ...body, session_key: sessionKey }),
       })
       await load()
     } catch (e) {
@@ -215,6 +301,167 @@ export function LearningPanel({ sessionKey }: { sessionKey: string }) {
                     Start recovery trial
                   </Button>
                 )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(comparisons.length > 0 || claims.length > 0) && (
+        <div className="rounded-md border border-blue-500/20 p-3">
+          <Text as="div" size="2" weight="bold">Comparative reflection</Text>
+          <Text as="div" size="1" color="gray">
+            Success/failure pairs are distilled into versioned claims; counterexamples remain attached.
+          </Text>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {claims.slice(0, 12).map((claim) => {
+              const comparison = comparisons.find((item) => item.comparison_id === claim.comparison_id)
+              return (
+                <div key={claim.claim_id} className="rounded-md bg-black/20 p-2">
+                  <Flex align="center" gap="2" wrap="wrap">
+                    <Text size="1" weight="bold">{claim.skill_name} claim v{claim.claim_version}</Text>
+                    <Badge size="1" color="blue">{claim.status}</Badge>
+                    <Badge size="1" color="purple">{claim.applicability.task_family || 'general'}</Badge>
+                    <Badge size="1" color="gray">{claim.confidence.toFixed(2)}</Badge>
+                  </Flex>
+                  <Text as="div" size="1" className="mt-1">{claim.statement}</Text>
+                  {comparison && (
+                    <>
+                      <Text as="div" size="1" color="gray" className="mt-1">
+                        Evidence: success {comparison.success_run_id} vs failure {comparison.failure_run_id}
+                      </Text>
+                      <Text as="div" size="1" color="gray">
+                        Minimal difference: {comparison.minimal_difference}
+                      </Text>
+                      <Text as="div" size="1" color="red">
+                        Counterexample: {comparison.counterexample || '(no evidence text)'}
+                      </Text>
+                    </>
+                  )}
+                  <Flex gap="2" className="mt-2">
+                    {claim.status === 'candidate' && (
+                      <Button
+                        size="1"
+                        variant="soft"
+                        onClick={() => void learningAction('/api/learning/candidates', { claim_id: claim.claim_id })}
+                      >
+                        Create candidate
+                      </Button>
+                    )}
+                    {!['trusted', 'archived'].includes(claim.status) && (
+                      <Button
+                        size="1"
+                        color="gray"
+                        variant="soft"
+                        onClick={() => void learningAction('/api/learning/archive', {
+                          entity_type: 'learning_claim',
+                          entity_id: claim.claim_id,
+                        })}
+                      >
+                        Archive claim
+                      </Button>
+                    )}
+                  </Flex>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {candidates.length > 0 && (
+        <div className="rounded-md border border-purple-500/20 p-3">
+          <Text as="div" size="2" weight="bold">Candidate skills and shadow evaluation</Text>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {candidates.slice(0, 12).map((candidate) => {
+              const evaluation = evaluations.find((item) => item.candidate_id === candidate.candidate_id)
+              return (
+                <div key={candidate.candidate_id} className="rounded-md bg-black/20 p-2">
+                  <Flex align="center" gap="2" wrap="wrap">
+                    <Text size="1" weight="bold">
+                      {candidate.skill_name} v{candidate.base_version} → v{candidate.candidate_version}
+                    </Text>
+                    <Badge size="1" color={candidate.status === 'promoted' ? 'green' : 'purple'}>
+                      {candidate.status}
+                    </Badge>
+                  </Flex>
+                  <Text as="div" size="1" color="gray" className="font-mono">
+                    {candidate.content_hash.slice(0, 16)}
+                  </Text>
+                  {evaluation && (
+                    <>
+                      <Text as="div" size="1" color="gray" className="mt-1">
+                        shadow n={evaluation.sample_count} · utility{' '}
+                        {(evaluation.baseline_utility_lower_bound * 100).toFixed(0)}% →{' '}
+                        {(evaluation.candidate_utility_lower_bound * 100).toFixed(0)}% · regressions{' '}
+                        {evaluation.regression_count}
+                      </Text>
+                      <Text as="div" size="1" color="gray">
+                        cost ${evaluation.baseline_cost_usd.toFixed(4)} → ${evaluation.candidate_cost_usd.toFixed(4)}
+                        {' '}· latency {evaluation.baseline_duration_ms}ms → {evaluation.candidate_duration_ms}ms
+                      </Text>
+                      <Text as="div" size="1">{evaluation.reason}</Text>
+                    </>
+                  )}
+                  <Flex gap="2" className="mt-2">
+                    {candidate.status === 'shadow_passed' && (
+                      <Button
+                        size="1"
+                        color="green"
+                        variant="soft"
+                        onClick={() => void learningAction('/api/learning/candidates/promote', {
+                          candidate_id: candidate.candidate_id,
+                        })}
+                      >
+                        Promote
+                      </Button>
+                    )}
+                    {!['promoted', 'archived', 'rolled_back'].includes(candidate.status) && (
+                      <Button
+                        size="1"
+                        color="gray"
+                        variant="soft"
+                        onClick={() => void learningAction('/api/learning/archive', {
+                          entity_type: 'skill_candidate',
+                          entity_id: candidate.candidate_id,
+                        })}
+                      >
+                        Archive
+                      </Button>
+                    )}
+                    {candidate.status === 'promoted' && (
+                      <Button
+                        size="1"
+                        color="red"
+                        variant="soft"
+                        onClick={() => void learningAction('/api/learning/rollback', {
+                          skill_name: candidate.skill_name,
+                          target_version: candidate.base_version,
+                        })}
+                      >
+                        Roll back
+                      </Button>
+                    )}
+                  </Flex>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {journal.length > 0 && (
+        <div className="rounded-md border border-white/10 p-3">
+          <Text as="div" size="2" weight="bold">Learning Journal</Text>
+          <div className="mt-2 flex max-h-64 flex-col gap-2 overflow-auto">
+            {journal.slice(0, 30).map((event) => (
+              <div key={event.id} className="rounded-md bg-black/20 p-2">
+                <Flex align="center" gap="2" wrap="wrap">
+                  <Badge size="1" color="gray">{event.event_type}</Badge>
+                  <Text size="1" color="gray">{event.created_at}</Text>
+                  {event.undo_action && <Badge size="1" color="orange">undo: {event.undo_action}</Badge>}
+                </Flex>
+                <Text as="div" size="1">{event.summary}</Text>
               </div>
             ))}
           </div>

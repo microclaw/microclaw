@@ -527,6 +527,12 @@ Failure-aware retrieval excludes verified failed runs and active task-scoped
 skill contraindications from prompt injection. The Learning Journal records
 why candidates were rejected and supports cooldown-based recovery trials whose
 verified successes can resolve the contraindication.
+Comparative reflection pairs successful and failed runs at the same task and
+environment grain, distills versioned claims with counterexamples, and creates
+isolated candidate skill versions. Candidates remain inactive until paired
+shadow evidence passes configurable utility, cost, and regression gates.
+Promoted candidates retain their prior trusted version for automatic or
+operator rollback, with every decision recorded in the Learning Journal.
 The `/usage` report and `GET /api/learning_observability` expose this history;
 the Web settings **Learning** panel provides a per-run evidence browser;
 `/learning [run_id]` shows a single run's used experiences and outcome evidence;

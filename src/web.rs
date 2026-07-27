@@ -842,6 +842,46 @@ struct LearningRecoveryRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct LearningCandidateRequest {
+    session_key: Option<String>,
+    claim_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LearningShadowObservationRequest {
+    session_key: Option<String>,
+    candidate_id: String,
+    pair_key: String,
+    arm: String,
+    run_id: String,
+    verdict: String,
+    #[serde(default)]
+    cost_usd: f64,
+    #[serde(default)]
+    duration_ms: i64,
+    evidence: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LearningCandidateActionRequest {
+    session_key: Option<String>,
+    candidate_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LearningArchiveRequest {
+    session_key: Option<String>,
+    entity_type: String,
+    entity_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LearningRollbackRequest {
+    skill_name: String,
+    target_version: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct MemoryObservabilityQuery {
     session_key: Option<String>,
     scope: Option<String>, // chat | global
@@ -1528,20 +1568,37 @@ async fn api_learning_observability(
 
     let session_key = normalize_session_key(query.session_key.as_deref());
     let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
-    let (goal, experience_summary, recent_runs, skills, task_utilities, failure_patterns, policy) =
-        call_blocking(state.app_state.db.clone(), move |db| {
-            Ok((
-                db.get_active_goal_state(chat_id)?,
-                db.get_experience_summary(Some(chat_id))?,
-                db.get_recent_experience_runs(Some(chat_id), 50)?,
-                db.get_skill_learning_summaries()?,
-                db.get_skill_task_utility_summaries(None)?,
-                db.get_skill_failure_patterns(None)?,
-                db.get_skill_governance_policy()?,
-            ))
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (
+        goal,
+        experience_summary,
+        recent_runs,
+        skills,
+        task_utilities,
+        failure_patterns,
+        comparisons,
+        claims,
+        candidates,
+        shadow_evaluations,
+        journal,
+        policy,
+    ) = call_blocking(state.app_state.db.clone(), move |db| {
+        Ok((
+            db.get_active_goal_state(chat_id)?,
+            db.get_experience_summary(Some(chat_id))?,
+            db.get_recent_experience_runs(Some(chat_id), 50)?,
+            db.get_skill_learning_summaries()?,
+            db.get_skill_task_utility_summaries(None)?,
+            db.get_skill_failure_patterns(None)?,
+            db.get_experience_comparisons(Some(chat_id), 100)?,
+            db.get_learning_claims(Some(chat_id), 100)?,
+            db.get_skill_candidates(Some(chat_id), 100)?,
+            db.get_shadow_evaluations(Some(chat_id))?,
+            db.get_learning_journal(Some(chat_id), 200)?,
+            db.get_skill_governance_policy()?,
+        ))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(json!({
         "ok": true,
@@ -1553,6 +1610,11 @@ async fn api_learning_observability(
         "skills": skills,
         "skill_task_utilities": task_utilities,
         "skill_failure_patterns": failure_patterns,
+        "comparisons": comparisons,
+        "learning_claims": claims,
+        "skill_candidates": candidates,
+        "shadow_evaluations": shadow_evaluations,
+        "learning_journal": journal,
         "governance_policy": policy,
     })))
 }
@@ -1760,6 +1822,186 @@ async fn api_learning_recovery_trial(
     Ok(Json(
         json!({"ok": true, "changed": changed, "skill_name": skill_name}),
     ))
+}
+
+async fn api_learning_create_candidate(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<LearningCandidateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Write)
+        .await?
+        .actor;
+    let session_key = normalize_session_key(body.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let claim_id = body.claim_id.clone();
+    let candidate = call_blocking(state.app_state.db.clone(), move |db| {
+        db.create_skill_candidate_from_claim(&claim_id, chat_id)
+    })
+    .await
+    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "create_candidate",
+        Some(&candidate.candidate_id),
+        "ok",
+        Some(&body.claim_id),
+    )
+    .await;
+    Ok(Json(json!({"ok": true, "candidate": candidate})))
+}
+
+async fn api_learning_shadow_observation(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<LearningShadowObservationRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Write)
+        .await?
+        .actor;
+    let session_key = normalize_session_key(body.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let input = body;
+    let candidate_id = input.candidate_id.clone();
+    let audit_candidate_id = candidate_id.clone();
+    let evaluation = call_blocking(state.app_state.db.clone(), move |db| {
+        db.record_shadow_observation(
+            &candidate_id,
+            chat_id,
+            &input.pair_key,
+            &input.arm,
+            &input.run_id,
+            &input.verdict,
+            input.cost_usd,
+            input.duration_ms,
+            input.evidence.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "record_shadow_observation",
+        Some(&audit_candidate_id),
+        "ok",
+        Some(&evaluation.reason),
+    )
+    .await;
+    Ok(Json(json!({"ok": true, "evaluation": evaluation})))
+}
+
+async fn api_learning_promote_candidate(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<LearningCandidateActionRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Admin)
+        .await?
+        .actor;
+    let session_key = normalize_session_key(body.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let candidate_id = body.candidate_id.clone();
+    let promoted = call_blocking(state.app_state.db.clone(), move |db| {
+        db.promote_shadow_candidate(&candidate_id, chat_id)
+    })
+    .await
+    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "promote_candidate",
+        Some(&body.candidate_id),
+        "ok",
+        Some(&format!("{} v{}", promoted.0, promoted.1)),
+    )
+    .await;
+    Ok(Json(json!({
+        "ok": true,
+        "skill_name": promoted.0,
+        "version": promoted.1
+    })))
+}
+
+async fn api_learning_archive_entity(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<LearningArchiveRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Write)
+        .await?
+        .actor;
+    let session_key = normalize_session_key(body.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let entity_type = body.entity_type.clone();
+    let entity_id = body.entity_id.clone();
+    let changed = call_blocking(state.app_state.db.clone(), move |db| {
+        db.archive_learning_entity(&entity_type, &entity_id, chat_id)
+    })
+    .await
+    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "archive_learning_entity",
+        Some(&body.entity_id),
+        if changed { "ok" } else { "unchanged" },
+        Some(&body.entity_type),
+    )
+    .await;
+    Ok(Json(json!({"ok": true, "changed": changed})))
+}
+
+async fn api_learning_rollback_skill(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<LearningRollbackRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Admin)
+        .await?
+        .actor;
+    let skill_name = body.skill_name.clone();
+    let target_version = body.target_version;
+    let rolled_back = call_blocking(state.app_state.db.clone(), move |db| {
+        db.rollback_skill(
+            &skill_name,
+            target_version,
+            "operator rollback via Learning Journal",
+        )
+    })
+    .await
+    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?
+    .ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "no rollback version available".into(),
+        )
+    })?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "rollback_skill",
+        Some(&body.skill_name),
+        "ok",
+        Some(&format!("restored v{}", rolled_back.0)),
+    )
+    .await;
+    Ok(Json(json!({
+        "ok": true,
+        "skill_name": body.skill_name,
+        "version": rolled_back.0
+    })))
 }
 
 async fn api_learning_run_detail(
@@ -2402,6 +2644,20 @@ fn build_router(web_state: WebState) -> Router {
             "/api/learning/recovery_trial",
             post(api_learning_recovery_trial),
         )
+        .route(
+            "/api/learning/candidates",
+            post(api_learning_create_candidate),
+        )
+        .route(
+            "/api/learning/shadow_observations",
+            post(api_learning_shadow_observation),
+        )
+        .route(
+            "/api/learning/candidates/promote",
+            post(api_learning_promote_candidate),
+        )
+        .route("/api/learning/archive", post(api_learning_archive_entity))
+        .route("/api/learning/rollback", post(api_learning_rollback_skill))
         .route("/api/learning/experiences", get(api_learning_experiences))
         .route(
             "/api/learning/experiences/:run_id",
@@ -3634,6 +3890,11 @@ mod tests {
         );
         assert!(value["skill_task_utilities"].is_array());
         assert!(value["skill_failure_patterns"].is_array());
+        assert!(value["comparisons"].is_array());
+        assert!(value["learning_claims"].is_array());
+        assert!(value["skill_candidates"].is_array());
+        assert!(value["shadow_evaluations"].is_array());
+        assert!(value["learning_journal"].is_array());
 
         let experience_request = Request::builder()
             .method("GET")
@@ -3740,6 +4001,118 @@ mod tests {
             app.oneshot(invalid_policy).await.unwrap().status(),
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[tokio::test]
+    async fn test_comparative_learning_candidate_shadow_and_promotion_api() {
+        let web_state = test_web_state(Box::new(DummyLlm), WebLimits::default());
+        let db = web_state.app_state.db.clone();
+        call_blocking(db.clone(), |d| {
+            d.upsert_chat(123, Some("main"), "web")?;
+            d.register_skill_version("web-reflect", 1, "base", "built-in")?;
+            for (run_id, verdict) in [("web-failure", "failed"), ("web-success", "passed")] {
+                d.start_experience_run(
+                    run_id,
+                    None,
+                    123,
+                    "web",
+                    "interactive",
+                    "deploy service",
+                    Some("os=linux"),
+                )?;
+                d.log_skill_activation("web-reflect", 123)?;
+                d.finish_experience_run(run_id, "completed", Some(verdict), 10)?;
+                d.record_verifier_result(
+                    run_id,
+                    "deterministic",
+                    "health",
+                    verdict,
+                    1.0,
+                    Some(verdict),
+                    None,
+                    None,
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let app = build_router(web_state);
+        let observation = Request::builder()
+            .method("GET")
+            .uri("/api/learning_observability?session_key=main")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(observation).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let claim_id = value["learning_claims"][0]["claim_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let create = Request::builder()
+            .method("POST")
+            .uri("/api/learning/candidates")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"claim_id": claim_id}).to_string()))
+            .unwrap();
+        let created = app.clone().oneshot(create).await.unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let created_body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created_value: serde_json::Value = serde_json::from_slice(&created_body).unwrap();
+        let candidate_id = created_value["candidate"]["candidate_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for index in 0..3 {
+            for (arm, run_id, verdict, cost) in [
+                ("baseline", "web-failure", "failed", 1.0),
+                ("candidate", "web-success", "passed", 0.8),
+            ] {
+                let request = Request::builder()
+                    .method("POST")
+                    .uri("/api/learning/shadow_observations")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "candidate_id": candidate_id,
+                            "pair_key": format!("web-pair-{index}"),
+                            "arm": arm,
+                            "run_id": run_id,
+                            "verdict": verdict,
+                            "cost_usd": cost,
+                            "duration_ms": 10
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap();
+                assert_eq!(
+                    app.clone().oneshot(request).await.unwrap().status(),
+                    StatusCode::OK
+                );
+            }
+        }
+        let promote = Request::builder()
+            .method("POST")
+            .uri("/api/learning/candidates/promote")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"candidate_id": candidate_id}).to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(promote).await.unwrap().status(),
+            StatusCode::OK
+        );
+        let lifecycle = call_blocking(db, |d| d.get_skill_lifecycle("web-reflect"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lifecycle.active_version, 2);
     }
 
     #[tokio::test]
