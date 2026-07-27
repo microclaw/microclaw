@@ -163,6 +163,24 @@ fn format_learning_run_detail(detail: &microclaw_storage::db::ExperienceRunDetai
         }
     }
     lines.push(String::new());
+    lines.push(format!(
+        "Experiences rejected ({})",
+        detail.rejected_experiences.len()
+    ));
+    if detail.rejected_experiences.is_empty() {
+        lines.push("  (none)".into());
+    } else {
+        for rejection in &detail.rejected_experiences {
+            lines.push(format!(
+                "  {} score={:.3} objective={} reason={}",
+                rejection.source_run_id,
+                rejection.relevance_score,
+                rejection.source_objective,
+                rejection.rejection_reason
+            ));
+        }
+    }
+    lines.push(String::new());
     lines.push(format!("Outcome evidence ({})", detail.outcomes.len()));
     if detail.outcomes.is_empty() {
         lines.push("  (none)".into());

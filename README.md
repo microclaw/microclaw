@@ -523,6 +523,10 @@ confidence lower bound; trial promotion requires both the configured raw pass
 rate and the risk-adjusted utility threshold. Retrieval ranks verified history
 using task compatibility and utility in addition to lexical and environment
 matching.
+Failure-aware retrieval excludes verified failed runs and active task-scoped
+skill contraindications from prompt injection. The Learning Journal records
+why candidates were rejected and supports cooldown-based recovery trials whose
+verified successes can resolve the contraindication.
 The `/usage` report and `GET /api/learning_observability` expose this history;
 the Web settings **Learning** panel provides a per-run evidence browser;
 `/learning [run_id]` shows a single run's used experiences and outcome evidence;

@@ -84,7 +84,8 @@ contraindication. A new version starts with fresh outcome attribution.
   injected into it, activated skills, and complete outcome evidence. With no
   id it displays the latest run in the current chat.
 - `GET /api/learning_observability?session_key=...` returns the active goal,
-  aggregate run counts, recent runs, and skill lifecycle summaries.
+  aggregate run counts, recent runs, skill lifecycle summaries, and structured
+  failure patterns.
 - `POST /api/learning/feedback` accepts `session_key`, `run_id`, `verdict`,
   optional `evidence`, `confidence`, `scope`, `feedback_id`, and `valid_until`.
   The run must belong to the selected chat.
@@ -96,6 +97,8 @@ contraindication. A new version starts with fresh outcome attribution.
 - `GET /api/learning/policy` exposes the current thresholds.
 - `PUT /api/learning/policy` is admin-scoped and updates validated promotion
   and degradation thresholds with an audit event.
+- `POST /api/learning/recovery_trial` starts a cooldown-complete recovery trial
+  for a named skill and emits an audit event.
 - `skill_manage` registers new versions and supports `rollback` with an optional
   `target_version`.
 
@@ -144,3 +147,24 @@ match, task type/family compatibility, capability overlap, and the
 risk-adjusted utility lower bound. Applicability contraindications are scoped
 to the current task family and environment rather than treating a skill as
 universally bad after a context-specific failure.
+
+## Failure-aware retrieval and recovery
+
+P1-B projects verified failures into version-scoped
+`skill_failure_patterns`, stratified by task type/family, environment
+fingerprint, tool, and normalized error category. One failure is observed;
+repeated failures activate a contraindication, degrade the affected skill
+version, and begin a configurable cooldown. Schema v39 backfills active,
+unexpired historical failures so an upgrade does not discard learned
+contraindications.
+
+Retrieval never injects a verified failed run. A previously successful run is
+also withheld when one of its activated skills has an active contraindication
+for the current task and environment. Accepted and rejected candidates are
+both persisted, allowing the Learning Journal and `/learning` to explain what
+was used and why relevant history was rejected.
+
+After cooldown, an operator can start a recovery trial from the Web Learning
+panel. Matching verified successes move the pattern through `trial` to
+`resolved`. Thresholds and cooldown duration are governance policy fields, and
+evidence counting is idempotent per run.

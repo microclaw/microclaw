@@ -837,6 +837,11 @@ struct LearningRunDetailQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct LearningRecoveryRequest {
+    skill_name: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct MemoryObservabilityQuery {
     session_key: Option<String>,
     scope: Option<String>, // chat | global
@@ -1523,7 +1528,7 @@ async fn api_learning_observability(
 
     let session_key = normalize_session_key(query.session_key.as_deref());
     let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
-    let (goal, experience_summary, recent_runs, skills, task_utilities, policy) =
+    let (goal, experience_summary, recent_runs, skills, task_utilities, failure_patterns, policy) =
         call_blocking(state.app_state.db.clone(), move |db| {
             Ok((
                 db.get_active_goal_state(chat_id)?,
@@ -1531,6 +1536,7 @@ async fn api_learning_observability(
                 db.get_recent_experience_runs(Some(chat_id), 50)?,
                 db.get_skill_learning_summaries()?,
                 db.get_skill_task_utility_summaries(None)?,
+                db.get_skill_failure_patterns(None)?,
                 db.get_skill_governance_policy()?,
             ))
         })
@@ -1546,6 +1552,7 @@ async fn api_learning_observability(
         "recent_runs": recent_runs,
         "skills": skills,
         "skill_task_utilities": task_utilities,
+        "skill_failure_patterns": failure_patterns,
         "governance_policy": policy,
     })))
 }
@@ -1722,6 +1729,37 @@ async fn api_learning_experiences(
         "chat_id": chat_id,
         "experiences": experiences,
     })))
+}
+
+async fn api_learning_recovery_trial(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<LearningRecoveryRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Write)
+        .await?
+        .actor;
+    let skill_name = body.skill_name.trim().to_string();
+    let changed = call_blocking(state.app_state.db.clone(), {
+        let skill_name = skill_name.clone();
+        move |db| db.begin_skill_recovery_trial(&skill_name)
+    })
+    .await
+    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "begin_recovery_trial",
+        Some(&skill_name),
+        if changed { "ok" } else { "not_ready" },
+        None,
+    )
+    .await;
+    Ok(Json(
+        json!({"ok": true, "changed": changed, "skill_name": skill_name}),
+    ))
 }
 
 async fn api_learning_run_detail(
@@ -2360,6 +2398,10 @@ fn build_router(web_state: WebState) -> Router {
             get(api_learning_observability),
         )
         .route("/api/learning/feedback", post(api_learning_feedback))
+        .route(
+            "/api/learning/recovery_trial",
+            post(api_learning_recovery_trial),
+        )
         .route("/api/learning/experiences", get(api_learning_experiences))
         .route(
             "/api/learning/experiences/:run_id",
@@ -3586,7 +3628,12 @@ mod tests {
             value["governance_policy"]["utility_confidence_z"].as_f64(),
             Some(1.96)
         );
+        assert_eq!(
+            value["governance_policy"]["failure_pattern_min_failures"].as_i64(),
+            Some(2)
+        );
         assert!(value["skill_task_utilities"].is_array());
+        assert!(value["skill_failure_patterns"].is_array());
 
         let experience_request = Request::builder()
             .method("GET")

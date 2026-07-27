@@ -1238,7 +1238,7 @@ async fn process_with_agent_logic(
     })
     .await
     .unwrap_or_default();
-    let safe_experiences = verified_experiences
+    let safe_candidates = verified_experiences
         .into_iter()
         .filter(|experience| {
             microclaw_core::injection_scan::scan_for_injection(&experience.objective).is_ok()
@@ -1250,6 +1250,9 @@ async fn process_with_agent_logic(
                     .is_ok()
         })
         .collect::<Vec<_>>();
+    let (rejected_experiences, safe_experiences): (Vec<_>, Vec<_>) = safe_candidates
+        .into_iter()
+        .partition(|experience| experience.rejection_reason.is_some());
     if let Ok(querying_run_id) = EXPERIENCE_RUN_ID.try_with(Clone::clone) {
         let retrievals = safe_experiences
             .iter()
@@ -1278,6 +1281,26 @@ async fn process_with_agent_logic(
         .await
         {
             warn!("failed to persist experience retrieval selections: {error}");
+        }
+        let querying_run_id = EXPERIENCE_RUN_ID.try_with(Clone::clone).unwrap_or_default();
+        let rejections = rejected_experiences
+            .iter()
+            .filter_map(|experience| {
+                experience.rejection_reason.as_ref().map(|reason| {
+                    (
+                        experience.run_id.clone(),
+                        reason.clone(),
+                        experience.relevance_score,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        if let Err(error) = call_blocking(state.db.clone(), move |db| {
+            db.record_experience_rejections(&querying_run_id, &rejections)
+        })
+        .await
+        {
+            warn!("failed to persist experience retrieval rejections: {error}");
         }
     }
     if !safe_experiences.is_empty() {

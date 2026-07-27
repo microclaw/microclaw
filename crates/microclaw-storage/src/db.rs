@@ -332,7 +332,17 @@ pub struct ExperienceRunDetail {
     pub outcomes: Vec<OutcomeEnvelopeRecord>,
     pub feedback: Vec<ExperienceFeedbackRecord>,
     pub retrieved_experiences: Vec<ExperienceRetrievalRecord>,
+    pub rejected_experiences: Vec<ExperienceRejectionRecord>,
     pub activated_skills: Vec<SkillActivationRecord>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExperienceRejectionRecord {
+    pub source_run_id: String,
+    pub rejection_reason: String,
+    pub relevance_score: f64,
+    pub rejected_at: String,
+    pub source_objective: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -373,6 +383,24 @@ pub struct SkillTaskUtilitySummary {
     pub utility_lower_bound: f64,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillFailurePattern {
+    pub pattern_id: String,
+    pub skill_name: String,
+    pub skill_version: i64,
+    pub task_type: String,
+    pub task_family: String,
+    pub environment_fingerprint: Option<String>,
+    pub tool_name: Option<String>,
+    pub error_category: String,
+    pub failure_count: i64,
+    pub recovery_successes: i64,
+    pub state: String,
+    pub cooldown_until: Option<String>,
+    pub last_evidence: Option<String>,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SkillGovernancePolicy {
@@ -384,6 +412,9 @@ pub struct SkillGovernancePolicy {
     pub trusted_degrade_rate: f64,
     pub utility_confidence_z: f64,
     pub trial_promote_utility_lower_bound: f64,
+    pub failure_pattern_min_failures: i64,
+    pub failure_pattern_cooldown_hours: i64,
+    pub failure_pattern_recovery_successes: i64,
 }
 
 impl Default for SkillGovernancePolicy {
@@ -397,6 +428,9 @@ impl Default for SkillGovernancePolicy {
             trusted_degrade_rate: 0.6,
             utility_confidence_z: 1.96,
             trial_promote_utility_lower_bound: 0.4,
+            failure_pattern_min_failures: 2,
+            failure_pattern_cooldown_hours: 24,
+            failure_pattern_recovery_successes: 2,
         }
     }
 }
@@ -433,6 +467,7 @@ pub struct VerifiedExperienceMatch {
     pub relevance_score: f64,
     pub utility_lower_bound: f64,
     pub task_signature: TaskSignatureV1,
+    pub rejection_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -491,7 +526,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 38;
+const SCHEMA_VERSION_CURRENT: i64 = 39;
 
 pub fn wilson_lower_bound(passed: i64, total: i64, z: f64) -> f64 {
     if total <= 0 || passed < 0 || passed > total || !z.is_finite() || z < 0.0 {
@@ -2087,6 +2122,196 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         set_schema_version(conn, 38)?;
         version = 38;
     }
+    if version < 39 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS skill_failure_patterns (
+                pattern_id TEXT PRIMARY KEY,
+                skill_name TEXT NOT NULL,
+                skill_version INTEGER NOT NULL,
+                task_type TEXT NOT NULL,
+                task_family TEXT NOT NULL,
+                environment_fingerprint TEXT,
+                tool_name TEXT,
+                error_category TEXT NOT NULL,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                recovery_successes INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'observed',
+                cooldown_until TEXT,
+                last_evidence TEXT,
+                first_seen_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(skill_name, skill_version, task_family,
+                       environment_fingerprint, tool_name, error_category)
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_failure_patterns_lookup
+                ON skill_failure_patterns(
+                    skill_name, skill_version, task_family, state, updated_at DESC
+                );
+            CREATE TABLE IF NOT EXISTS skill_failure_pattern_evidence (
+                pattern_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(pattern_id, run_id),
+                FOREIGN KEY(pattern_id) REFERENCES skill_failure_patterns(pattern_id),
+                FOREIGN KEY(run_id) REFERENCES experience_runs(run_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS experience_retrieval_rejections (
+                querying_run_id TEXT NOT NULL,
+                source_run_id TEXT NOT NULL,
+                rejection_reason TEXT NOT NULL,
+                relevance_score REAL NOT NULL,
+                rejected_at TEXT NOT NULL,
+                PRIMARY KEY(querying_run_id, source_run_id),
+                FOREIGN KEY(querying_run_id) REFERENCES experience_runs(run_id),
+                FOREIGN KEY(source_run_id) REFERENCES experience_runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_experience_rejection_query
+                ON experience_retrieval_rejections(querying_run_id, rejected_at ASC);",
+        )?;
+        for (column, definition) in [
+            ("failure_pattern_min_failures", "INTEGER NOT NULL DEFAULT 2"),
+            (
+                "failure_pattern_cooldown_hours",
+                "INTEGER NOT NULL DEFAULT 24",
+            ),
+            (
+                "failure_pattern_recovery_successes",
+                "INTEGER NOT NULL DEFAULT 2",
+            ),
+        ] {
+            if !table_has_column(conn, "skill_governance_policy", column)? {
+                conn.execute(
+                    &format!(
+                        "ALTER TABLE skill_governance_policy ADD COLUMN {column} {definition}"
+                    ),
+                    [],
+                )?;
+            }
+        }
+        let policy = SkillGovernancePolicy::default();
+        let historical = {
+            let mut stmt = conn.prepare(
+                "SELECT o.skill_name, o.skill_version, o.run_id,
+                        r.task_type, r.task_family, r.environment_fingerprint,
+                        json_extract(e.payload_json, '$.tool_name'),
+                        COALESCE(e.evidence, o.evidence)
+                 FROM skill_outcomes o
+                 JOIN experience_runs r ON r.run_id=o.run_id
+                 LEFT JOIN outcome_envelopes e ON e.run_id=o.run_id
+                    AND e.verdict='failed' AND e.scope='tool_result'
+                 WHERE o.verdict='failed'
+                   AND o.attribution_confidence >= 0.999
+                   AND o.verifier_type IN (
+                     'deterministic','environmental','human','rule_based'
+                   )
+                   AND (o.valid_until IS NULL OR o.valid_until>?1)
+                 ORDER BY o.created_at ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![chrono::Utc::now().to_rfc3339()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let now = chrono::Utc::now();
+        let cooldown_until =
+            (now + chrono::Duration::hours(policy.failure_pattern_cooldown_hours)).to_rfc3339();
+        for (
+            skill_name,
+            skill_version,
+            run_id,
+            task_type,
+            task_family,
+            environment,
+            tool_name,
+            evidence,
+        ) in historical
+        {
+            let category = classify_failure_category(evidence.as_deref());
+            let canonical = format!(
+                "{skill_name}\n{skill_version}\n{task_family}\n{}\n{}\n{category}",
+                environment.as_deref().unwrap_or(""),
+                tool_name.as_deref().unwrap_or("")
+            );
+            use sha2::{Digest, Sha256};
+            let pattern_id = to_hex(&Sha256::digest(canonical.as_bytes()));
+            conn.execute(
+                "INSERT INTO skill_failure_patterns(
+                    pattern_id, skill_name, skill_version, task_type, task_family,
+                    environment_fingerprint, tool_name, error_category,
+                    failure_count, recovery_successes, state, cooldown_until,
+                    last_evidence, first_seen_at, updated_at
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,0,'observed',NULL,?9,?10,?10)
+                 ON CONFLICT(pattern_id) DO UPDATE SET
+                    last_evidence=excluded.last_evidence,
+                    updated_at=excluded.updated_at",
+                params![
+                    pattern_id,
+                    skill_name,
+                    skill_version,
+                    task_type,
+                    task_family,
+                    environment,
+                    tool_name,
+                    category,
+                    evidence,
+                    now.to_rfc3339()
+                ],
+            )?;
+            if conn.execute(
+                "INSERT OR IGNORE INTO skill_failure_pattern_evidence(
+                    pattern_id, run_id, verdict, created_at
+                 ) VALUES (?1,?2,'failed',?3)",
+                params![pattern_id, run_id, now.to_rfc3339()],
+            )? > 0
+            {
+                conn.execute(
+                    "UPDATE skill_failure_patterns
+                     SET failure_count=failure_count+1,
+                         state=CASE WHEN failure_count+1>=?2
+                                    THEN 'active' ELSE 'observed' END,
+                         cooldown_until=CASE WHEN failure_count+1>=?2
+                                    THEN ?3 ELSE NULL END,
+                         updated_at=?4 WHERE pattern_id=?1",
+                    params![
+                        pattern_id,
+                        policy.failure_pattern_min_failures,
+                        cooldown_until,
+                        now.to_rfc3339()
+                    ],
+                )?;
+            }
+        }
+        conn.execute(
+            "UPDATE skill_lifecycle
+             SET previous_trusted_version=CASE WHEN state='trusted'
+                    THEN active_version ELSE previous_trusted_version END,
+                 state='degraded',
+                 state_reason='historical active failure pattern backfilled',
+                 updated_at=?1
+             WHERE state NOT IN ('degraded','archived') AND EXISTS(
+               SELECT 1 FROM skill_failure_patterns p
+               WHERE p.skill_name=skill_lifecycle.skill_name
+                 AND p.skill_version=skill_lifecycle.active_version
+                 AND p.state='active'
+             )",
+            params![now.to_rfc3339()],
+        )?;
+        set_schema_version(conn, 39)?;
+        version = 39;
+    }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
     }
@@ -2250,6 +2475,9 @@ fn validate_skill_governance_policy(policy: &SkillGovernancePolicy) -> Result<()
         || !(0.0..=1.0).contains(&policy.trial_promote_utility_lower_bound)
         || !policy.utility_confidence_z.is_finite()
         || !(0.0..=5.0).contains(&policy.utility_confidence_z)
+        || policy.failure_pattern_min_failures < 1
+        || policy.failure_pattern_cooldown_hours < 1
+        || policy.failure_pattern_recovery_successes < 1
         || policy.trial_degrade_rate >= policy.trial_promote_rate
     {
         return Err(MicroClawError::ToolExecution(
@@ -2422,6 +2650,309 @@ fn sync_skill_outcomes_for_run(tx: &Transaction<'_>, run_id: &str) -> Result<(),
     Ok(())
 }
 
+fn classify_failure_category(evidence: Option<&str>) -> &'static str {
+    let value = evidence.unwrap_or("").to_ascii_lowercase();
+    if value.contains("timeout") || value.contains("timed out") {
+        "timeout"
+    } else if value.contains("permission")
+        || value.contains("denied")
+        || value.contains("forbidden")
+    {
+        "permission"
+    } else if value.contains("not found") || value.contains("missing") {
+        "dependency"
+    } else if value.contains("network") || value.contains("connect") || value.contains("dns") {
+        "network"
+    } else if value.contains("invalid") || value.contains("parse") || value.contains("syntax") {
+        "invalid_input"
+    } else if value.contains("cancel") {
+        "cancelled"
+    } else {
+        "execution"
+    }
+}
+
+fn sync_skill_failure_patterns_for_run(
+    tx: &Transaction<'_>,
+    run_id: &str,
+) -> Result<(), MicroClawError> {
+    // Re-project this run idempotently. This is also required when human
+    // feedback changes or verifier evidence expires.
+    let prior_patterns = {
+        let mut stmt =
+            tx.prepare("SELECT pattern_id FROM skill_failure_pattern_evidence WHERE run_id=?1")?;
+        let rows = stmt
+            .query_map(params![run_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    tx.execute(
+        "DELETE FROM skill_failure_pattern_evidence WHERE run_id=?1",
+        params![run_id],
+    )?;
+    for pattern_id in prior_patterns {
+        let (failures, recoveries): (i64, i64) = tx.query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN verdict='failed' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN verdict='passed' THEN 1 ELSE 0 END),0)
+             FROM skill_failure_pattern_evidence WHERE pattern_id=?1",
+            params![pattern_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if failures == 0 {
+            tx.execute(
+                "DELETE FROM skill_failure_patterns WHERE pattern_id=?1",
+                params![pattern_id],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE skill_failure_patterns
+                 SET failure_count=?2, recovery_successes=?3,
+                     state=CASE WHEN ?2 < (
+                       SELECT failure_pattern_min_failures
+                       FROM skill_governance_policy WHERE singleton_id=1
+                     ) THEN 'observed' ELSE state END,
+                     cooldown_until=CASE WHEN ?2 < (
+                       SELECT failure_pattern_min_failures
+                       FROM skill_governance_policy WHERE singleton_id=1
+                     ) THEN NULL ELSE cooldown_until END,
+                     updated_at=?4
+                 WHERE pattern_id=?1",
+                params![
+                    pattern_id,
+                    failures,
+                    recoveries,
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )?;
+        }
+    }
+    let context: Option<(String, String, Option<String>)> = tx
+        .query_row(
+            "SELECT task_type, task_family, environment_fingerprint
+             FROM experience_runs WHERE run_id=?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((task_type, task_family, environment)) = context else {
+        return Ok(());
+    };
+    let policy: (i64, i64, i64) = tx.query_row(
+        "SELECT failure_pattern_min_failures, failure_pattern_cooldown_hours,
+                failure_pattern_recovery_successes
+         FROM skill_governance_policy WHERE singleton_id=1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let skills = {
+        let mut stmt = tx.prepare(
+            "SELECT skill_name, skill_version, verdict, evidence
+             FROM skill_outcomes
+             WHERE run_id=?1 AND attribution_confidence >= 0.999
+               AND verifier_type IN ('deterministic','environmental','human','rule_based')",
+        )?;
+        let rows = stmt
+            .query_map(params![run_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let failed_tools = {
+        let mut stmt = tx.prepare(
+            "SELECT json_extract(payload_json, '$.tool_name'), evidence
+             FROM outcome_envelopes
+             WHERE run_id=?1 AND verdict='failed' AND scope='tool_result'",
+        )?;
+        let rows = stmt
+            .query_map(params![run_id], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let now = chrono::Utc::now();
+    for (skill_name, skill_version, verdict, skill_evidence) in skills {
+        if verdict == "failed" {
+            let evidence_items = if failed_tools.is_empty() {
+                vec![(None, skill_evidence.clone())]
+            } else {
+                failed_tools.clone()
+            };
+            for (tool_name, evidence) in evidence_items {
+                let category = classify_failure_category(evidence.as_deref());
+                let canonical = format!(
+                    "{skill_name}\n{skill_version}\n{task_family}\n{}\n{}\n{category}",
+                    environment.as_deref().unwrap_or(""),
+                    tool_name.as_deref().unwrap_or("")
+                );
+                use sha2::{Digest, Sha256};
+                let pattern_id = to_hex(&Sha256::digest(canonical.as_bytes()));
+                let cooldown_until = (now + chrono::Duration::hours(policy.1)).to_rfc3339();
+                tx.execute(
+                    "INSERT INTO skill_failure_patterns(
+                        pattern_id, skill_name, skill_version, task_type, task_family,
+                        environment_fingerprint, tool_name, error_category,
+                        failure_count, recovery_successes, state, cooldown_until,
+                        last_evidence, first_seen_at, updated_at
+                     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,0,'observed',NULL,?9,?10,?10)
+                     ON CONFLICT(pattern_id) DO UPDATE SET
+                        last_evidence=excluded.last_evidence,
+                        updated_at=excluded.updated_at",
+                    params![
+                        pattern_id,
+                        skill_name,
+                        skill_version,
+                        task_type,
+                        task_family,
+                        environment,
+                        tool_name,
+                        category,
+                        evidence,
+                        now.to_rfc3339()
+                    ],
+                )?;
+                let inserted = tx.execute(
+                    "INSERT OR IGNORE INTO skill_failure_pattern_evidence(
+                        pattern_id, run_id, verdict, created_at
+                     ) VALUES (?1,?2,'failed',?3)",
+                    params![pattern_id, run_id, now.to_rfc3339()],
+                )?;
+                if inserted > 0 {
+                    tx.execute(
+                        "UPDATE skill_failure_patterns
+                         SET failure_count=failure_count+1,
+                             recovery_successes=0,
+                             state=CASE WHEN failure_count+1 >= ?2
+                                        THEN 'active' ELSE 'observed' END,
+                             cooldown_until=CASE WHEN failure_count+1 >= ?2
+                                        THEN ?3 ELSE cooldown_until END,
+                             updated_at=?4 WHERE pattern_id=?1",
+                        params![pattern_id, policy.0, cooldown_until, now.to_rfc3339()],
+                    )?;
+                    if policy.0 <= {
+                        tx.query_row(
+                            "SELECT failure_count FROM skill_failure_patterns
+                             WHERE pattern_id=?1",
+                            params![pattern_id],
+                            |row| row.get::<_, i64>(0),
+                        )?
+                    } {
+                        let current: Option<String> = tx
+                            .query_row(
+                                "SELECT state FROM skill_lifecycle
+                                 WHERE skill_name=?1 AND active_version=?2",
+                                params![skill_name, skill_version],
+                                |row| row.get(0),
+                            )
+                            .optional()?;
+                        if current
+                            .as_deref()
+                            .is_some_and(|state| state != "degraded" && state != "archived")
+                        {
+                            let from_state = current.unwrap_or_default();
+                            let reason = format!(
+                                "active failure pattern: task_family={task_family}, error_category={category}"
+                            );
+                            tx.execute(
+                                "UPDATE skill_lifecycle SET state='degraded',
+                                 previous_trusted_version=CASE WHEN state='trusted'
+                                    THEN active_version ELSE previous_trusted_version END,
+                                 state_reason=?3, updated_at=?4
+                                 WHERE skill_name=?1 AND active_version=?2",
+                                params![skill_name, skill_version, reason, now.to_rfc3339()],
+                            )?;
+                            tx.execute(
+                                "INSERT INTO skill_lifecycle_events(
+                                    skill_name, from_state, to_state, version, reason, created_at
+                                 ) VALUES (?1,?2,'degraded',?3,?4,?5)",
+                                params![
+                                    skill_name,
+                                    from_state,
+                                    skill_version,
+                                    reason,
+                                    now.to_rfc3339()
+                                ],
+                            )?;
+                        }
+                    }
+                }
+            }
+        } else if verdict == "passed" {
+            let patterns = {
+                let mut stmt = tx.prepare(
+                    "SELECT pattern_id FROM skill_failure_patterns
+                     WHERE skill_name=?1 AND skill_version=?2 AND task_family=?3
+                       AND (environment_fingerprint IS NULL OR environment_fingerprint=?4)
+                       AND state IN ('active','cooldown','trial')",
+                )?;
+                let rows = stmt
+                    .query_map(
+                        params![skill_name, skill_version, task_family, environment],
+                        |row| row.get::<_, String>(0),
+                    )?
+                    .collect::<Result<Vec<_>, _>>()?;
+                rows
+            };
+            for pattern_id in patterns {
+                let inserted = tx.execute(
+                    "INSERT OR IGNORE INTO skill_failure_pattern_evidence(
+                        pattern_id, run_id, verdict, created_at
+                     ) VALUES (?1,?2,'passed',?3)",
+                    params![pattern_id, run_id, now.to_rfc3339()],
+                )?;
+                if inserted > 0 {
+                    tx.execute(
+                        "UPDATE skill_failure_patterns
+                         SET recovery_successes=recovery_successes+1,
+                             state=CASE
+                               WHEN recovery_successes+1 >= ?2 THEN 'resolved'
+                               WHEN cooldown_until <= ?3 THEN 'trial'
+                               ELSE 'cooldown' END,
+                             updated_at=?3 WHERE pattern_id=?1",
+                        params![pattern_id, policy.2, now.to_rfc3339()],
+                    )?;
+                }
+            }
+            let unresolved: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM skill_failure_patterns
+                 WHERE skill_name=?1 AND skill_version=?2
+                   AND state IN ('active','cooldown','trial')",
+                params![skill_name, skill_version],
+                |row| row.get(0),
+            )?;
+            if unresolved == 0 {
+                let changed = tx.execute(
+                    "UPDATE skill_lifecycle SET state='trial',
+                     state_reason='failure patterns resolved; recovery trial started',
+                     updated_at=?3
+                     WHERE skill_name=?1 AND active_version=?2 AND state='degraded'",
+                    params![skill_name, skill_version, now.to_rfc3339()],
+                )?;
+                if changed > 0 {
+                    tx.execute(
+                        "INSERT INTO skill_lifecycle_events(
+                            skill_name, from_state, to_state, version, reason, created_at
+                         ) VALUES (?1,'degraded','trial',?2,
+                            'failure patterns resolved; recovery trial started',?3)",
+                        params![skill_name, skill_version, now.to_rfc3339()],
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn refresh_expired_skill_outcomes(tx: &Transaction<'_>) -> Result<(), MicroClawError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mut stmt = tx.prepare(
@@ -2440,6 +2971,7 @@ fn refresh_expired_skill_outcomes(tx: &Transaction<'_>) -> Result<(), MicroClawE
     drop(stmt);
     for (run_id, _, _) in &expired {
         sync_skill_outcomes_for_run(tx, run_id)?;
+        sync_skill_failure_patterns_for_run(tx, run_id)?;
     }
     let mut affected = expired
         .into_iter()
@@ -2468,6 +3000,11 @@ fn erase_chat_learning(tx: &Transaction<'_>, chat_id: i64) -> Result<usize, Micr
     drop(stmt);
 
     let mut affected = 0usize;
+    affected += tx.execute(
+        "DELETE FROM skill_failure_pattern_evidence
+         WHERE run_id IN (SELECT run_id FROM experience_runs WHERE chat_id=?1)",
+        params![chat_id],
+    )?;
     affected += tx.execute(
         "DELETE FROM skill_outcomes
          WHERE run_id IN (SELECT run_id FROM experience_runs WHERE chat_id=?1)",
@@ -2498,6 +3035,15 @@ fn erase_chat_learning(tx: &Transaction<'_>, chat_id: i64) -> Result<usize, Micr
         params![chat_id],
     )?;
     affected += tx.execute(
+        "DELETE FROM experience_retrieval_rejections
+         WHERE querying_run_id IN (
+             SELECT run_id FROM experience_runs WHERE chat_id=?1
+         ) OR source_run_id IN (
+             SELECT run_id FROM experience_runs WHERE chat_id=?1
+         )",
+        params![chat_id],
+    )?;
+    affected += tx.execute(
         "DELETE FROM skill_activation_logs
          WHERE chat_id=?1 OR experience_run_id IN (
              SELECT run_id FROM experience_runs WHERE chat_id=?1
@@ -2510,6 +3056,32 @@ fn erase_chat_learning(tx: &Transaction<'_>, chat_id: i64) -> Result<usize, Micr
     )?;
     affected += tx.execute("DELETE FROM goal_states WHERE chat_id=?1", params![chat_id])?;
     for (skill_name, version) in affected_skills {
+        tx.execute(
+            "DELETE FROM skill_failure_pattern_evidence
+             WHERE pattern_id IN (
+               SELECT pattern_id FROM skill_failure_patterns
+               WHERE skill_name=?1 AND skill_version=?2
+             )",
+            params![skill_name, version],
+        )?;
+        tx.execute(
+            "DELETE FROM skill_failure_patterns
+             WHERE skill_name=?1 AND skill_version=?2",
+            params![skill_name, version],
+        )?;
+        let remaining = {
+            let mut stmt = tx.prepare(
+                "SELECT run_id FROM skill_outcomes
+                 WHERE skill_name=?1 AND skill_version=?2 ORDER BY created_at ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![skill_name, version], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for run_id in remaining {
+            sync_skill_failure_patterns_for_run(tx, &run_id)?;
+        }
         recompute_skill_lifecycle(tx, &skill_name, version, "chat learning evidence erased")?;
     }
     Ok(affected)
@@ -2555,7 +3127,9 @@ fn evaluate_skill_lifecycle(
         "SELECT candidate_failures_to_degrade, trial_min_outcomes,
                 trial_promote_rate, trial_degrade_rate, trusted_min_outcomes,
                 trusted_degrade_rate, utility_confidence_z,
-                trial_promote_utility_lower_bound
+                trial_promote_utility_lower_bound,
+                failure_pattern_min_failures, failure_pattern_cooldown_hours,
+                failure_pattern_recovery_successes
          FROM skill_governance_policy WHERE singleton_id=1",
         [],
         |row| {
@@ -2568,6 +3142,9 @@ fn evaluate_skill_lifecycle(
                 trusted_degrade_rate: row.get(5)?,
                 utility_confidence_z: row.get(6)?,
                 trial_promote_utility_lower_bound: row.get(7)?,
+                failure_pattern_min_failures: row.get(8)?,
+                failure_pattern_cooldown_hours: row.get(9)?,
+                failure_pattern_recovery_successes: row.get(10)?,
             })
         },
     )?;
@@ -4613,6 +5190,48 @@ impl Database {
         Ok(())
     }
 
+    pub fn record_experience_rejections(
+        &self,
+        querying_run_id: &str,
+        rejections: &[(String, String, f64)],
+    ) -> Result<(), MicroClawError> {
+        if rejections.len() > 50
+            || rejections.iter().any(|(run_id, reason, score)| {
+                run_id.trim().is_empty()
+                    || reason.trim().is_empty()
+                    || reason.len() > 1024
+                    || !score.is_finite()
+            })
+        {
+            return Err(MicroClawError::ToolExecution(
+                "invalid experience rejection log".into(),
+            ));
+        }
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM experience_retrieval_rejections WHERE querying_run_id=?1",
+            params![querying_run_id],
+        )?;
+        let now = chrono::Utc::now().to_rfc3339();
+        for (source_run_id, reason, score) in rejections {
+            tx.execute(
+                "INSERT INTO experience_retrieval_rejections(
+                    querying_run_id, source_run_id, rejection_reason,
+                    relevance_score, rejected_at
+                 ) SELECT ?1,?2,?3,?4,?5
+                   WHERE EXISTS(
+                     SELECT 1 FROM experience_runs q JOIN experience_runs s
+                     ON q.chat_id=s.chat_id
+                     WHERE q.run_id=?1 AND s.run_id=?2 AND q.run_id<>s.run_id
+                   )",
+                params![querying_run_id, source_run_id, reason, score, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn get_experience_run_detail(
         &self,
         run_id: &str,
@@ -4737,6 +5356,25 @@ impl Database {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
+        let mut rejection_stmt = conn.prepare(
+            "SELECT x.source_run_id, x.rejection_reason, x.relevance_score,
+                    x.rejected_at, r.objective
+             FROM experience_retrieval_rejections x
+             JOIN experience_runs r ON r.run_id=x.source_run_id
+             WHERE x.querying_run_id=?1 ORDER BY x.rejected_at ASC",
+        )?;
+        let rejected_experiences = rejection_stmt
+            .query_map(params![run_id], |row| {
+                Ok(ExperienceRejectionRecord {
+                    source_run_id: row.get(0)?,
+                    rejection_reason: row.get(1)?,
+                    relevance_score: row.get(2)?,
+                    rejected_at: row.get(3)?,
+                    source_objective: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
         let mut skill_stmt = conn.prepare(
             "SELECT skill_name, skill_version, activated_at
              FROM skill_activation_logs
@@ -4757,6 +5395,7 @@ impl Database {
             outcomes,
             feedback,
             retrieved_experiences,
+            rejected_experiences,
             activated_skills,
         }))
     }
@@ -4992,6 +5631,31 @@ impl Database {
                         .len()
                         .max(query_signature.capability_tags.len()) as f64
             };
+            let rejection_reason = if verdict == "failed" {
+                Some(format!(
+                    "not injected: prior run has verified failure ({verifier_type})"
+                ))
+            } else {
+                conn.query_row(
+                    "SELECT 'not injected: skill ' || p.skill_name ||
+                            ' is contraindicated for ' || p.task_family ||
+                            ' (' || p.error_category || ', failures=' ||
+                            p.failure_count || ')'
+                     FROM skill_failure_patterns p
+                     JOIN skill_activation_logs a
+                       ON a.skill_name=p.skill_name
+                      AND COALESCE(a.skill_version, p.skill_version)=p.skill_version
+                     WHERE a.experience_run_id=?1
+                       AND p.task_family=?2
+                       AND (p.environment_fingerprint IS NULL
+                            OR p.environment_fingerprint=?3)
+                       AND p.state IN ('active','cooldown')
+                     ORDER BY p.failure_count DESC LIMIT 1",
+                    params![run_id, query_signature.task_family, environment_fingerprint],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+            };
             matches.push(VerifiedExperienceMatch {
                 run_id,
                 objective,
@@ -5015,6 +5679,7 @@ impl Database {
                     capability_tags,
                     signature_hash,
                 },
+                rejection_reason,
             });
         }
         let mut utility_samples = std::collections::HashMap::<String, (i64, i64)>::new();
@@ -5179,6 +5844,7 @@ impl Database {
             )?;
         }
         sync_skill_outcomes_for_run(&tx, &envelope.run_id)?;
+        sync_skill_failure_patterns_for_run(&tx, &envelope.run_id)?;
         tx.commit()?;
         Ok(())
     }
@@ -5433,7 +6099,22 @@ impl Database {
         let success_rate = (total > 0).then_some(passed as f64 / total as f64);
         let utility_lower_bound =
             (total > 0).then_some(wilson_lower_bound(passed, total, utility_confidence_z));
-        let allowed = total < 2 || success_rate.unwrap_or(0.0) >= 0.5;
+        let active_pattern: Option<(String, Option<String>, i64, Option<String>)> = tx
+            .query_row(
+                "SELECT error_category, tool_name, failure_count, cooldown_until
+                 FROM skill_failure_patterns p
+                 JOIN skill_lifecycle l ON l.skill_name=p.skill_name
+                    AND l.active_version=p.skill_version
+                 WHERE p.skill_name=?1 AND p.task_family=?2
+                   AND (p.environment_fingerprint IS NULL
+                        OR p.environment_fingerprint=?3)
+                   AND p.state IN ('active','cooldown')
+                 ORDER BY p.failure_count DESC, p.updated_at DESC LIMIT 1",
+                params![skill_name, task_family, environment],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let allowed = active_pattern.is_none() && (total < 2 || success_rate.unwrap_or(0.0) >= 0.5);
         let result = SkillApplicability {
             environment_fingerprint: environment,
             task_type: Some(task_type),
@@ -5444,7 +6125,13 @@ impl Database {
             success_rate,
             utility_lower_bound,
             allowed,
-            reason: if allowed {
+            reason: if let Some((category, tool, count, cooldown)) = active_pattern {
+                format!(
+                    "learned contraindication: {count} {category} failure(s), tool={}, cooldown_until={}",
+                    tool.as_deref().unwrap_or("any"),
+                    cooldown.as_deref().unwrap_or("unknown")
+                )
+            } else if allowed {
                 "no learned contraindication for this task family and environment".into()
             } else {
                 "verified outcomes show repeated failure for this task family and environment"
@@ -5658,13 +6345,98 @@ impl Database {
         Ok(rows)
     }
 
+    pub fn get_skill_failure_patterns(
+        &self,
+        skill_name: Option<&str>,
+    ) -> Result<Vec<SkillFailurePattern>, MicroClawError> {
+        let conn = self.lock_conn();
+        let sql = "SELECT pattern_id, skill_name, skill_version, task_type,
+                          task_family, environment_fingerprint, tool_name,
+                          error_category, failure_count, recovery_successes,
+                          state, cooldown_until, last_evidence, updated_at
+                   FROM skill_failure_patterns
+                   WHERE (?1 IS NULL OR skill_name=?1)
+                   ORDER BY CASE state WHEN 'active' THEN 0 WHEN 'cooldown' THEN 1
+                                      WHEN 'trial' THEN 2 ELSE 3 END,
+                            failure_count DESC, updated_at DESC";
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt
+            .query_map(params![skill_name], |row| {
+                Ok(SkillFailurePattern {
+                    pattern_id: row.get(0)?,
+                    skill_name: row.get(1)?,
+                    skill_version: row.get(2)?,
+                    task_type: row.get(3)?,
+                    task_family: row.get(4)?,
+                    environment_fingerprint: row.get(5)?,
+                    tool_name: row.get(6)?,
+                    error_category: row.get(7)?,
+                    failure_count: row.get(8)?,
+                    recovery_successes: row.get(9)?,
+                    state: row.get(10)?,
+                    cooldown_until: row.get(11)?,
+                    last_evidence: row.get(12)?,
+                    updated_at: row.get(13)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn begin_skill_recovery_trial(&self, skill_name: &str) -> Result<bool, MicroClawError> {
+        if skill_name.trim().is_empty() || skill_name.len() > 256 {
+            return Err(MicroClawError::ToolExecution(
+                "invalid skill name for recovery trial".into(),
+            ));
+        }
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let changed = tx.execute(
+            "UPDATE skill_failure_patterns SET state='trial', updated_at=?2
+             WHERE skill_name=?1 AND state IN ('active','cooldown')
+               AND cooldown_until IS NOT NULL AND cooldown_until<=?2",
+            params![skill_name, now],
+        )?;
+        if changed > 0 {
+            let lifecycle: Option<(String, i64)> = tx
+                .query_row(
+                    "SELECT state, active_version FROM skill_lifecycle WHERE skill_name=?1",
+                    params![skill_name],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((state, version)) = lifecycle {
+                if state == "degraded" {
+                    tx.execute(
+                        "UPDATE skill_lifecycle SET state='trial',
+                         state_reason='cooldown elapsed; recovery trial explicitly started',
+                         updated_at=?2 WHERE skill_name=?1",
+                        params![skill_name, now],
+                    )?;
+                    tx.execute(
+                        "INSERT INTO skill_lifecycle_events(
+                            skill_name, from_state, to_state, version, reason, created_at
+                         ) VALUES (?1,'degraded','trial',?2,
+                           'cooldown elapsed; recovery trial explicitly started',?3)",
+                        params![skill_name, version, now],
+                    )?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(changed > 0)
+    }
+
     pub fn get_skill_governance_policy(&self) -> Result<SkillGovernancePolicy, MicroClawError> {
         let conn = self.lock_conn();
         conn.query_row(
             "SELECT candidate_failures_to_degrade, trial_min_outcomes,
                 trial_promote_rate, trial_degrade_rate, trusted_min_outcomes,
                     trusted_degrade_rate, utility_confidence_z,
-                    trial_promote_utility_lower_bound
+                    trial_promote_utility_lower_bound,
+                    failure_pattern_min_failures, failure_pattern_cooldown_hours,
+                    failure_pattern_recovery_successes
              FROM skill_governance_policy WHERE singleton_id=1",
             [],
             |row| {
@@ -5677,6 +6449,9 @@ impl Database {
                     trusted_degrade_rate: row.get(5)?,
                     utility_confidence_z: row.get(6)?,
                     trial_promote_utility_lower_bound: row.get(7)?,
+                    failure_pattern_min_failures: row.get(8)?,
+                    failure_pattern_cooldown_hours: row.get(9)?,
+                    failure_pattern_recovery_successes: row.get(10)?,
                 })
             },
         )
@@ -5697,7 +6472,10 @@ impl Database {
                  trusted_min_outcomes=?5, trusted_degrade_rate=?6,
                  utility_confidence_z=?7,
                  trial_promote_utility_lower_bound=?8,
-                 updated_at=?9
+                 failure_pattern_min_failures=?9,
+                 failure_pattern_cooldown_hours=?10,
+                 failure_pattern_recovery_successes=?11,
+                 updated_at=?12
              WHERE singleton_id=1",
             params![
                 policy.candidate_failures_to_degrade,
@@ -5708,7 +6486,30 @@ impl Database {
                 policy.trusted_degrade_rate,
                 policy.utility_confidence_z,
                 policy.trial_promote_utility_lower_bound,
+                policy.failure_pattern_min_failures,
+                policy.failure_pattern_cooldown_hours,
+                policy.failure_pattern_recovery_successes,
                 chrono::Utc::now().to_rfc3339()
+            ],
+        )?;
+        let now = chrono::Utc::now();
+        let cooldown_until =
+            (now + chrono::Duration::hours(policy.failure_pattern_cooldown_hours)).to_rfc3339();
+        tx.execute(
+            "UPDATE skill_failure_patterns
+             SET state=CASE
+                   WHEN failure_count < ?1 THEN 'observed'
+                   WHEN state='observed' THEN 'active'
+                   ELSE state END,
+                 cooldown_until=CASE
+                   WHEN failure_count < ?1 THEN NULL
+                   WHEN state='observed' THEN ?2
+                   ELSE cooldown_until END,
+                 updated_at=?3",
+            params![
+                policy.failure_pattern_min_failures,
+                cooldown_until,
+                now.to_rfc3339()
             ],
         )?;
         let mut stmt = tx.prepare(
@@ -12523,6 +13324,164 @@ mod tests {
     }
 
     #[test]
+    fn learning_failure_patterns_block_retrieval_and_recover_after_cooldown() {
+        let (db, dir) = test_db();
+        db.register_skill_version("deploy-safe", 1, "deploy", "built-in")
+            .unwrap();
+        for index in 1..=2 {
+            let run_id = format!("deploy-timeout-{index}");
+            db.start_experience_run(
+                &run_id,
+                None,
+                91,
+                "web",
+                "interactive",
+                "deploy service",
+                Some("os=linux"),
+            )
+            .unwrap();
+            db.log_skill_activation("deploy-safe", 91).unwrap();
+            db.ingest_outcome_envelope(&OutcomeEnvelopeV1 {
+                envelope_id: format!("tool:{index}"),
+                run_id: run_id.clone(),
+                source_kind: "runtime".into(),
+                source_name: "tool_result:bash".into(),
+                verdict: "failed".into(),
+                confidence: 1.0,
+                evidence: Some("command timed out".into()),
+                scope: Some("tool_result".into()),
+                valid_until: None,
+                payload: serde_json::json!({"tool_name": "bash"}),
+                feedback: None,
+            })
+            .unwrap();
+            db.record_verifier_result(
+                &run_id,
+                "deterministic",
+                "health",
+                "failed",
+                1.0,
+                Some("deployment health failed"),
+                None,
+                None,
+            )
+            .unwrap();
+            db.finish_experience_run(&run_id, "failed", Some("timeout"), 10)
+                .unwrap();
+        }
+
+        let patterns = db.get_skill_failure_patterns(Some("deploy-safe")).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].task_family, "deployment");
+        assert_eq!(patterns[0].tool_name.as_deref(), Some("bash"));
+        assert_eq!(patterns[0].error_category, "timeout");
+        assert_eq!(patterns[0].failure_count, 2);
+        assert_eq!(patterns[0].state, "active");
+        assert_eq!(
+            db.get_skill_lifecycle("deploy-safe")
+                .unwrap()
+                .unwrap()
+                .state,
+            "degraded"
+        );
+
+        let matches = db
+            .search_verified_experiences(91, "deploy service", Some("os=linux"), 10)
+            .unwrap();
+        assert!(matches.iter().all(|item| item.rejection_reason.is_some()));
+
+        db.start_experience_run(
+            "querying-run",
+            None,
+            91,
+            "web",
+            "interactive",
+            "deploy service",
+            Some("os=linux"),
+        )
+        .unwrap();
+        let rejected = matches
+            .iter()
+            .map(|item| {
+                (
+                    item.run_id.clone(),
+                    item.rejection_reason.clone().unwrap(),
+                    item.relevance_score,
+                )
+            })
+            .collect::<Vec<_>>();
+        db.record_experience_rejections("querying-run", &rejected)
+            .unwrap();
+        let detail = db
+            .get_experience_run_detail("querying-run")
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.rejected_experiences.len(), 2);
+        assert!(detail.retrieved_experiences.is_empty());
+        db.finish_experience_run("querying-run", "completed", None, 1)
+            .unwrap();
+
+        {
+            let conn = db.lock_conn();
+            conn.execute(
+                "UPDATE skill_failure_patterns
+                 SET cooldown_until='2000-01-01T00:00:00+00:00'
+                 WHERE skill_name='deploy-safe'",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(db.begin_skill_recovery_trial("deploy-safe").unwrap());
+        assert_eq!(
+            db.get_skill_lifecycle("deploy-safe")
+                .unwrap()
+                .unwrap()
+                .state,
+            "trial"
+        );
+        for index in 1..=2 {
+            let run_id = format!("deploy-recovery-{index}");
+            db.start_experience_run(
+                &run_id,
+                None,
+                91,
+                "web",
+                "interactive",
+                "deploy service",
+                Some("os=linux"),
+            )
+            .unwrap();
+            db.log_skill_activation("deploy-safe", 91).unwrap();
+            db.record_verifier_result(
+                &run_id,
+                "deterministic",
+                "health",
+                "passed",
+                1.0,
+                Some("healthy"),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+        let pattern = db
+            .get_skill_failure_patterns(Some("deploy-safe"))
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(pattern.state, "resolved");
+        assert_eq!(pattern.recovery_successes, 2);
+        assert_eq!(
+            db.get_skill_lifecycle("deploy-safe")
+                .unwrap()
+                .unwrap()
+                .state,
+            "trial"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
     fn learning_substrate_recovers_interrupted_runs_without_penalizing_skill() {
         let (db, dir) = test_db();
         db.register_skill_version("restart-safe", 1, "instructions", "agent-created")
@@ -12741,6 +13700,9 @@ mod tests {
         assert_eq!(defaults.trial_min_outcomes, 3);
         assert_eq!(defaults.utility_confidence_z, 1.96);
         assert_eq!(defaults.trial_promote_utility_lower_bound, 0.4);
+        assert_eq!(defaults.failure_pattern_min_failures, 2);
+        assert_eq!(defaults.failure_pattern_cooldown_hours, 24);
+        assert_eq!(defaults.failure_pattern_recovery_successes, 2);
 
         let mut invalid = defaults.clone();
         invalid.trial_degrade_rate = invalid.trial_promote_rate;
@@ -12750,6 +13712,11 @@ mod tests {
         assert!(db
             .update_skill_governance_policy(&invalid_confidence)
             .is_err());
+        let mut invalid_cooldown = defaults.clone();
+        invalid_cooldown.failure_pattern_cooldown_hours = 0;
+        assert!(db
+            .update_skill_governance_policy(&invalid_cooldown)
+            .is_err());
 
         let mut updated = defaults;
         updated.candidate_failures_to_degrade = 3;
@@ -12757,11 +13724,17 @@ mod tests {
         updated.trusted_min_outcomes = 6;
         updated.utility_confidence_z = 1.645;
         updated.trial_promote_utility_lower_bound = 0.3;
+        updated.failure_pattern_min_failures = 3;
+        updated.failure_pattern_cooldown_hours = 12;
+        updated.failure_pattern_recovery_successes = 1;
         db.update_skill_governance_policy(&updated).unwrap();
         let saved = db.get_skill_governance_policy().unwrap();
         assert_eq!(saved.candidate_failures_to_degrade, 3);
         assert_eq!(saved.utility_confidence_z, 1.645);
         assert_eq!(saved.trial_promote_utility_lower_bound, 0.3);
+        assert_eq!(saved.failure_pattern_min_failures, 3);
+        assert_eq!(saved.failure_pattern_cooldown_hours, 12);
+        assert_eq!(saved.failure_pattern_recovery_successes, 1);
         cleanup(&dir);
     }
 
@@ -12959,6 +13932,76 @@ mod tests {
             get_schema_version(&conn).unwrap()
         };
         assert_eq!(version, SCHEMA_VERSION_CURRENT);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn migration_39_creates_failure_patterns_and_rejection_audit() {
+        let (db, dir) = test_db();
+        db.register_skill_version("legacy-failure", 1, "deploy", "built-in")
+            .unwrap();
+        for index in 0..2 {
+            let run_id = format!("legacy-failure-{index}");
+            db.start_experience_run(
+                &run_id,
+                None,
+                81,
+                "web",
+                "interactive",
+                "deploy service",
+                Some("os=linux"),
+            )
+            .unwrap();
+            db.log_skill_activation("legacy-failure", 81).unwrap();
+            db.record_verifier_result(
+                &run_id,
+                "deterministic",
+                "health",
+                "failed",
+                1.0,
+                Some("network connect failed"),
+                None,
+                None,
+            )
+            .unwrap();
+        }
+        {
+            let conn = db.lock_conn();
+            conn.execute_batch(
+                "DROP TABLE skill_failure_pattern_evidence;
+                 DROP TABLE skill_failure_patterns;
+                 DROP TABLE experience_retrieval_rejections;",
+            )
+            .unwrap();
+            set_schema_version(&conn, 38).unwrap();
+            apply_schema_migrations(&conn).unwrap();
+            let patterns: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type='table' AND name='skill_failure_patterns'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let rejections: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type='table' AND name='experience_retrieval_rejections'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(patterns, 1);
+            assert_eq!(rejections, 1);
+            assert_eq!(get_schema_version(&conn).unwrap(), 39);
+        }
+        let backfilled = db
+            .get_skill_failure_patterns(Some("legacy-failure"))
+            .unwrap();
+        assert_eq!(backfilled.len(), 1);
+        assert_eq!(backfilled[0].failure_count, 2);
+        assert_eq!(backfilled[0].error_category, "network");
+        assert_eq!(backfilled[0].state, "active");
         cleanup(&dir);
     }
 
