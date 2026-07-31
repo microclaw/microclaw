@@ -449,6 +449,12 @@ Web 设置中的 **Learning** 面板提供按运行查看的证据浏览器；
 用于读取或由管理员修改生命周期阈值。
 数据模型和晋级规则见[长周期学习](docs/long-horizon-learning.md)。
 
+**Learning Foundry（学习工坊）**在经验学习之上增加主动、由用户指定方向的成长能力。
+每个学习方向包含目标、来源白名单、cron、时区及单次预算。后台研究只读运行；独立
+curator 最多产生一个带来源与验证计划的候选 Skill，候选默认不激活，只有管理员明确
+晋级后才会进入技能库；此路径不能覆盖已有 Skill。详见
+[Learning Foundry](docs/learning-foundry.md)。
+
 ```
 <data_dir>/skills/
     pdf/

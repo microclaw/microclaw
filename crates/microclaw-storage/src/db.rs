@@ -613,7 +613,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 41;
+const SCHEMA_VERSION_CURRENT: i64 = 42;
 
 pub fn wilson_lower_bound(passed: i64, total: i64, z: f64) -> f64 {
     if total <= 0 || passed < 0 || passed > total || !z.is_finite() || z < 0.0 {
@@ -735,6 +735,81 @@ pub struct ScheduledTask {
     pub max_runs: Option<i64>,
     /// Retire as `completed` once the next firing would pass this instant.
     pub not_after: Option<String>,
+}
+
+/// A durable, user-directed background learning programme.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningTrack {
+    pub track_id: String,
+    pub chat_id: i64,
+    pub name: String,
+    pub objective: String,
+    pub directions: serde_json::Value,
+    pub allowed_sources: serde_json::Value,
+    pub schedule: String,
+    pub timezone: String,
+    pub token_budget: i64,
+    pub max_sources: i64,
+    pub promotion_mode: String,
+    pub status: String,
+    pub next_run: String,
+    pub last_run: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningEpoch {
+    pub epoch_id: String,
+    pub track_id: String,
+    pub experience_run_id: Option<String>,
+    pub status: String,
+    pub report: Option<String>,
+    pub candidate_id: Option<String>,
+    pub error: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+/// An inert skill proposal produced by a learning epoch. It is never part of
+/// prompt discovery until an operator explicitly promotes it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningTrackCandidate {
+    pub candidate_id: String,
+    pub epoch_id: String,
+    pub skill_name: String,
+    pub description: String,
+    pub instructions: String,
+    pub sources: serde_json::Value,
+    pub tests: serde_json::Value,
+    pub risk: String,
+    pub content_hash: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+fn map_learning_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<LearningTrack> {
+    let directions: String = row.get(4)?;
+    let allowed_sources: String = row.get(5)?;
+    Ok(LearningTrack {
+        track_id: row.get(0)?,
+        chat_id: row.get(1)?,
+        name: row.get(2)?,
+        objective: row.get(3)?,
+        directions: serde_json::from_str(&directions).unwrap_or_default(),
+        allowed_sources: serde_json::from_str(&allowed_sources).unwrap_or_default(),
+        schedule: row.get(6)?,
+        timezone: row.get(7)?,
+        token_budget: row.get(8)?,
+        max_sources: row.get(9)?,
+        promotion_mode: row.get(10)?,
+        status: row.get(11)?,
+        next_run: row.get(12)?,
+        last_run: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
 }
 
 /// An interactive turn that was in flight when the previous process died.
@@ -2561,6 +2636,66 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         ensure_scheduled_tasks_schema(conn)?;
         set_schema_version(conn, 41)?;
         version = 41;
+    }
+    if version < 42 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS learning_tracks (
+                track_id TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                objective TEXT NOT NULL,
+                directions_json TEXT NOT NULL DEFAULT '[]',
+                allowed_sources_json TEXT NOT NULL DEFAULT '[]',
+                schedule TEXT NOT NULL,
+                timezone TEXT NOT NULL,
+                token_budget INTEGER NOT NULL DEFAULT 80000,
+                max_sources INTEGER NOT NULL DEFAULT 20,
+                promotion_mode TEXT NOT NULL DEFAULT 'propose',
+                status TEXT NOT NULL DEFAULT 'active',
+                next_run TEXT NOT NULL,
+                last_run TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(chat_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_tracks_due
+                ON learning_tracks(status, next_run);
+
+            CREATE TABLE IF NOT EXISTS learning_epochs (
+                epoch_id TEXT PRIMARY KEY,
+                track_id TEXT NOT NULL,
+                experience_run_id TEXT,
+                status TEXT NOT NULL DEFAULT 'running',
+                report TEXT,
+                candidate_id TEXT,
+                error TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(track_id) REFERENCES learning_tracks(track_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_epochs_track
+                ON learning_epochs(track_id, started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS learning_track_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                epoch_id TEXT NOT NULL UNIQUE,
+                skill_name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                instructions TEXT NOT NULL,
+                sources_json TEXT NOT NULL DEFAULT '[]',
+                tests_json TEXT NOT NULL DEFAULT '[]',
+                risk TEXT NOT NULL DEFAULT 'low',
+                content_hash TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(epoch_id) REFERENCES learning_epochs(epoch_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_track_candidates_status
+                ON learning_track_candidates(status, updated_at DESC);",
+        )?;
+        set_schema_version(conn, 42)?;
+        version = 42;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -4935,6 +5070,349 @@ impl Database {
             "",
             next_run,
         )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub fn create_learning_track(
+        &self,
+        chat_id: i64,
+        name: &str,
+        objective: &str,
+        directions: &serde_json::Value,
+        allowed_sources: &serde_json::Value,
+        schedule: &str,
+        timezone: &str,
+        token_budget: i64,
+        max_sources: i64,
+        promotion_mode: &str,
+        next_run: &str,
+    ) -> Result<String, MicroClawError> {
+        if name.trim().is_empty()
+            || name.len() > 96
+            || objective.trim().is_empty()
+            || objective.len() > 8_000
+            || schedule.trim().is_empty()
+            || !matches!(promotion_mode, "propose" | "manual")
+            || !(1_000..=2_000_000).contains(&token_budget)
+            || !(1..=100).contains(&max_sources)
+        {
+            return Err(MicroClawError::ToolExecution(
+                "invalid learning track configuration".into(),
+            ));
+        }
+        let track_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.lock_conn();
+        conn.execute(
+            "INSERT INTO learning_tracks(
+                track_id, chat_id, name, objective, directions_json,
+                allowed_sources_json, schedule, timezone, token_budget,
+                max_sources, promotion_mode, status, next_run, created_at,
+                updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'active',?12,?13,?13)",
+            params![
+                track_id,
+                chat_id,
+                name.trim(),
+                objective.trim(),
+                directions.to_string(),
+                allowed_sources.to_string(),
+                schedule,
+                timezone,
+                token_budget,
+                max_sources,
+                promotion_mode,
+                next_run,
+                now
+            ],
+        )?;
+        Ok(track_id)
+    }
+
+    pub fn list_learning_tracks(
+        &self,
+        chat_id: Option<i64>,
+    ) -> Result<Vec<LearningTrack>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT track_id, chat_id, name, objective, directions_json,
+                    allowed_sources_json, schedule, timezone, token_budget,
+                    max_sources, promotion_mode, status, next_run, last_run,
+                    created_at, updated_at
+             FROM learning_tracks
+             WHERE (?1 IS NULL OR chat_id=?1)
+             ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id], map_learning_track)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn learning_track_belongs_to_chat(
+        &self,
+        track_id: &str,
+        chat_id: i64,
+    ) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM learning_tracks WHERE track_id=?1 AND chat_id=?2",
+            params![track_id, chat_id],
+            |row| row.get(0),
+        )?;
+        Ok(count == 1)
+    }
+
+    pub fn update_learning_track_status(
+        &self,
+        track_id: &str,
+        status: &str,
+        next_run: Option<&str>,
+    ) -> Result<bool, MicroClawError> {
+        if !matches!(status, "active" | "paused" | "archived") {
+            return Err(MicroClawError::ToolExecution(
+                "invalid learning track status".into(),
+            ));
+        }
+        let conn = self.lock_conn();
+        let changed = conn.execute(
+            "UPDATE learning_tracks SET status=?2,
+                 next_run=COALESCE(?3,next_run), updated_at=?4
+             WHERE track_id=?1",
+            params![track_id, status, next_run, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Atomically moves due tracks into the future before returning them.
+    /// This provides at-most-once claiming per process tick; crashed epochs
+    /// remain visible and the next scheduled epoch can proceed normally.
+    pub fn claim_due_learning_tracks(
+        &self,
+        now: &str,
+        next_runs: &[(String, String)],
+    ) -> Result<Vec<LearningTrack>, MicroClawError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let mut claimed = Vec::new();
+        for (track_id, next_run) in next_runs {
+            let changed = tx.execute(
+                "UPDATE learning_tracks SET next_run=?3, last_run=?2,
+                     updated_at=?2
+                 WHERE track_id=?1 AND status='active' AND next_run<=?2",
+                params![track_id, now, next_run],
+            )?;
+            if changed == 1 {
+                claimed.push(tx.query_row(
+                    "SELECT track_id, chat_id, name, objective, directions_json,
+                            allowed_sources_json, schedule, timezone, token_budget,
+                            max_sources, promotion_mode, status, next_run, last_run,
+                            created_at, updated_at
+                     FROM learning_tracks WHERE track_id=?1",
+                    params![track_id],
+                    map_learning_track,
+                )?);
+            }
+        }
+        tx.commit()?;
+        Ok(claimed)
+    }
+
+    pub fn start_learning_epoch(
+        &self,
+        track_id: &str,
+        experience_run_id: &str,
+    ) -> Result<String, MicroClawError> {
+        let epoch_id = uuid::Uuid::new_v4().to_string();
+        let conn = self.lock_conn();
+        conn.execute(
+            "INSERT INTO learning_epochs(
+                epoch_id, track_id, experience_run_id, status, started_at
+             ) VALUES (?1,?2,?3,'running',?4)",
+            params![
+                epoch_id,
+                track_id,
+                experience_run_id,
+                chrono::Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(epoch_id)
+    }
+
+    pub fn finish_learning_epoch(
+        &self,
+        epoch_id: &str,
+        status: &str,
+        report: Option<&str>,
+        candidate_id: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<(), MicroClawError> {
+        if !matches!(status, "completed" | "failed" | "no_candidate") {
+            return Err(MicroClawError::ToolExecution(
+                "invalid learning epoch status".into(),
+            ));
+        }
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE learning_epochs SET status=?2, report=?3,
+                 candidate_id=?4, error=?5, finished_at=?6
+             WHERE epoch_id=?1",
+            params![
+                epoch_id,
+                status,
+                report,
+                candidate_id,
+                error,
+                chrono::Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub fn create_learning_track_candidate(
+        &self,
+        epoch_id: &str,
+        skill_name: &str,
+        description: &str,
+        instructions: &str,
+        sources: &serde_json::Value,
+        tests: &serde_json::Value,
+        risk: &str,
+    ) -> Result<String, MicroClawError> {
+        if skill_name.trim().is_empty()
+            || description.trim().is_empty()
+            || instructions.trim().is_empty()
+            || !matches!(risk, "low" | "medium" | "high")
+        {
+            return Err(MicroClawError::ToolExecution(
+                "invalid learning candidate".into(),
+            ));
+        }
+        use sha2::{Digest, Sha256};
+        let content_hash = to_hex(&Sha256::digest(instructions.as_bytes()));
+        let candidate_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.lock_conn();
+        conn.execute(
+            "INSERT INTO learning_track_candidates(
+                candidate_id, epoch_id, skill_name, description, instructions,
+                sources_json, tests_json, risk, content_hash, status,
+                created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending',?10,?10)",
+            params![
+                candidate_id,
+                epoch_id,
+                skill_name,
+                description,
+                instructions,
+                sources.to_string(),
+                tests.to_string(),
+                risk,
+                content_hash,
+                now
+            ],
+        )?;
+        Ok(candidate_id)
+    }
+
+    pub fn list_learning_epochs(
+        &self,
+        chat_id: i64,
+        limit: usize,
+    ) -> Result<Vec<LearningEpoch>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT e.epoch_id, e.track_id, e.experience_run_id, e.status,
+                    e.report, e.candidate_id, e.error, e.started_at, e.finished_at
+             FROM learning_epochs e
+             JOIN learning_tracks t ON t.track_id=e.track_id
+             WHERE t.chat_id=?1 ORDER BY e.started_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id, limit.clamp(1, 200) as i64], |row| {
+                Ok(LearningEpoch {
+                    epoch_id: row.get(0)?,
+                    track_id: row.get(1)?,
+                    experience_run_id: row.get(2)?,
+                    status: row.get(3)?,
+                    report: row.get(4)?,
+                    candidate_id: row.get(5)?,
+                    error: row.get(6)?,
+                    started_at: row.get(7)?,
+                    finished_at: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn list_learning_track_candidates(
+        &self,
+        chat_id: i64,
+        limit: usize,
+    ) -> Result<Vec<LearningTrackCandidate>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT c.candidate_id, c.epoch_id, c.skill_name, c.description,
+                    c.instructions, c.sources_json, c.tests_json, c.risk,
+                    c.content_hash, c.status, c.created_at, c.updated_at
+             FROM learning_track_candidates c
+             JOIN learning_epochs e ON e.epoch_id=c.epoch_id
+             JOIN learning_tracks t ON t.track_id=e.track_id
+             WHERE t.chat_id=?1 ORDER BY c.updated_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id, limit.clamp(1, 200) as i64], |row| {
+                let sources: String = row.get(5)?;
+                let tests: String = row.get(6)?;
+                Ok(LearningTrackCandidate {
+                    candidate_id: row.get(0)?,
+                    epoch_id: row.get(1)?,
+                    skill_name: row.get(2)?,
+                    description: row.get(3)?,
+                    instructions: row.get(4)?,
+                    sources: serde_json::from_str(&sources).unwrap_or_default(),
+                    tests: serde_json::from_str(&tests).unwrap_or_default(),
+                    risk: row.get(7)?,
+                    content_hash: row.get(8)?,
+                    status: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_learning_track_candidate(
+        &self,
+        candidate_id: &str,
+        chat_id: i64,
+    ) -> Result<Option<LearningTrackCandidate>, MicroClawError> {
+        Ok(self
+            .list_learning_track_candidates(chat_id, 200)?
+            .into_iter()
+            .find(|candidate| candidate.candidate_id == candidate_id))
+    }
+
+    pub fn update_learning_track_candidate_status(
+        &self,
+        candidate_id: &str,
+        status: &str,
+    ) -> Result<bool, MicroClawError> {
+        if !matches!(status, "pending" | "promoted" | "rejected") {
+            return Err(MicroClawError::ToolExecution(
+                "invalid learning candidate status".into(),
+            ));
+        }
+        let conn = self.lock_conn();
+        let changed = conn.execute(
+            "UPDATE learning_track_candidates SET status=?2, updated_at=?3
+             WHERE candidate_id=?1",
+            params![candidate_id, status, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(changed == 1)
     }
 
     pub fn create_scheduled_task_with_timezone(
@@ -16120,6 +16598,70 @@ mod tests {
             .run;
         assert_eq!(run.task_signature.task_family, "debugging");
         assert!(!run.task_signature.signature_hash.is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn learning_tracks_are_scoped_claimed_and_candidate_gated() {
+        let (db, dir) = test_db();
+        let track_id = db
+            .create_learning_track(
+                77,
+                "rust-reliability",
+                "Learn repeatable Rust runtime reliability procedures",
+                &serde_json::json!(["recovery", "verification"]),
+                &serde_json::json!(["doc.rust-lang.org"]),
+                "0 0 3 * * *",
+                "UTC",
+                80_000,
+                10,
+                "propose",
+                "2026-01-01T00:00:00Z",
+            )
+            .unwrap();
+        assert!(db.learning_track_belongs_to_chat(&track_id, 77).unwrap());
+        assert!(!db.learning_track_belongs_to_chat(&track_id, 78).unwrap());
+        let claimed = db
+            .claim_due_learning_tracks(
+                "2026-01-02T00:00:00Z",
+                &[(track_id.clone(), "2026-01-03T00:00:00Z".into())],
+            )
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(db
+            .claim_due_learning_tracks(
+                "2026-01-02T00:00:00Z",
+                &[(track_id.clone(), "2026-01-03T00:00:00Z".into())],
+            )
+            .unwrap()
+            .is_empty());
+
+        let epoch_id = db.start_learning_epoch(&track_id, "experience-77").unwrap();
+        let candidate_id = db
+            .create_learning_track_candidate(
+                &epoch_id,
+                "rust-recovery",
+                "Use when diagnosing recoverable Rust runtime failures",
+                "# Procedure\n\n1. Reproduce.\n2. Verify.",
+                &serde_json::json!([{"url": "https://doc.rust-lang.org"}]),
+                &serde_json::json!([{"name": "replay", "expected": "passes"}]),
+                "low",
+            )
+            .unwrap();
+        db.finish_learning_epoch(
+            &epoch_id,
+            "completed",
+            Some("source-backed report"),
+            Some(&candidate_id),
+            None,
+        )
+        .unwrap();
+        let candidates = db.list_learning_track_candidates(77, 10).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].status, "pending");
+        assert!(db
+            .update_learning_track_candidate_status(&candidate_id, "promoted")
+            .unwrap());
         cleanup(&dir);
     }
 }

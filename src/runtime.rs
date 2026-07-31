@@ -530,6 +530,7 @@ pub async fn run(
     crate::scheduler::spawn_heartbeat(state.clone());
     crate::scheduler::spawn_memory_consolidation(state.clone());
     crate::scheduler::spawn_interjection(state.clone());
+    crate::learning_foundry::spawn_learning_foundry(state.clone());
     {
         let review_state = state.clone();
         spawn_guarded("skill_review_worker".to_string(), async move {

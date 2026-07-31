@@ -16,6 +16,7 @@ pub mod glob;
 pub mod grep;
 pub mod insights;
 pub mod knowledge_graph;
+pub mod learning_tracks;
 pub mod mcp;
 pub mod memory;
 pub mod osv_check;
@@ -106,6 +107,7 @@ impl ToolRegistry {
                 | "subagents_send"
                 | "subagents_orchestrate"
                 | "session_search"
+                | "learning_tracks"
         )
     }
 
@@ -260,6 +262,10 @@ impl ToolRegistry {
             Box::new(schedule::ReplayTaskDlqTool::new(
                 channel_registry.clone(),
                 db.clone(),
+            )),
+            Box::new(learning_tracks::LearningTracksTool::new(
+                db.clone(),
+                config.timezone.clone(),
             )),
             Box::new(export_chat::ExportChatTool::new(
                 db.clone(),
@@ -590,6 +596,28 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
+        if auth.principal == "learning_foundry"
+            && !matches!(
+                name,
+                "web_search"
+                    | "web_fetch"
+                    | "deep_research"
+                    | "read_memory"
+                    | "session_search"
+                    | "read_file"
+                    | "grep"
+                    | "glob"
+                    | "time_math"
+                    | "get_current_time"
+                    | "compare_time"
+                    | "calculate"
+            )
+        {
+            return ToolResult::error(format!(
+                "Tool `{name}` is not available to the read-only Learning Foundry principal"
+            ))
+            .with_error_type("learning_foundry_read_only");
+        }
         // Operator-set tool policy. Enforced here — the single choke point —
         // so main-loop calls, sub-agent loops, and any future caller are all
         // covered; a denied tool cannot be reached by delegation. Decisions
@@ -942,6 +970,44 @@ mod tests {
             "warn mode must still execute: {}",
             result.content
         );
+    }
+
+    #[tokio::test]
+    async fn learning_foundry_principal_is_read_only_at_choke_point() {
+        let registry = ToolRegistry {
+            config: crate::config::Config::test_defaults(),
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            audit_db: None,
+            tools: vec![
+                Box::new(DummyTool {
+                    tool_name: "write_file".into(),
+                }),
+                Box::new(DummyTool {
+                    tool_name: "web_search".into(),
+                }),
+            ],
+        };
+        let auth = ToolAuthContext {
+            caller_channel: "learning_foundry".into(),
+            caller_chat_id: -7,
+            principal: "learning_foundry".into(),
+            control_chat_ids: vec![],
+            env_files: vec![],
+        };
+        let write = registry
+            .execute_with_auth("write_file", json!({}), &auth)
+            .await;
+        assert!(write.is_error);
+        assert_eq!(
+            write.error_type.as_deref(),
+            Some("learning_foundry_read_only")
+        );
+        let search = registry
+            .execute_with_auth("web_search", json!({}), &auth)
+            .await;
+        assert!(!search.is_error);
     }
 
     #[tokio::test]

@@ -1433,7 +1433,33 @@ async fn process_with_agent_logic(
         );
     }
 
-    let tool_defs = state.tools.definitions().to_vec();
+    let learning_foundry_mode = context.caller_channel == "learning_foundry";
+    let tool_defs = if learning_foundry_mode {
+        state
+            .tools
+            .definitions()
+            .into_iter()
+            .filter(|definition| {
+                matches!(
+                    definition.name.as_str(),
+                    "web_search"
+                        | "web_fetch"
+                        | "deep_research"
+                        | "read_memory"
+                        | "session_search"
+                        | "read_file"
+                        | "grep"
+                        | "glob"
+                        | "time_math"
+                        | "get_current_time"
+                        | "compare_time"
+                        | "calculate"
+                )
+            })
+            .collect()
+    } else {
+        state.tools.definitions().to_vec()
+    };
     let mut skill_env_files: Vec<String> = {
         let db = state.db.clone();
         call_blocking(db, move |db| db.load_session_skill_envs(chat_id))
@@ -1444,7 +1470,11 @@ async fn process_with_agent_logic(
     let mut tool_auth = ToolAuthContext {
         caller_channel: context.caller_channel.to_string(),
         caller_chat_id: chat_id,
-        principal: "main".to_string(),
+        principal: if learning_foundry_mode {
+            "learning_foundry".to_string()
+        } else {
+            "main".to_string()
+        },
         control_chat_ids: state.config.control_chat_ids.clone(),
         env_files: skill_env_files.clone(),
     };

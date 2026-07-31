@@ -869,6 +869,12 @@ struct LearningCandidateActionRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct LearningTrackCandidateActionRequest {
+    session_key: Option<String>,
+    candidate_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct LearningArchiveRequest {
     session_key: Option<String>,
     entity_type: String,
@@ -1581,6 +1587,9 @@ async fn api_learning_observability(
         shadow_evaluations,
         journal,
         policy,
+        learning_tracks,
+        learning_epochs,
+        learning_track_candidates,
     ) = call_blocking(state.app_state.db.clone(), move |db| {
         Ok((
             db.get_active_goal_state(chat_id)?,
@@ -1595,6 +1604,9 @@ async fn api_learning_observability(
             db.get_shadow_evaluations(Some(chat_id))?,
             db.get_learning_journal(Some(chat_id), 200)?,
             db.get_skill_governance_policy()?,
+            db.list_learning_tracks(Some(chat_id))?,
+            db.list_learning_epochs(chat_id, 100)?,
+            db.list_learning_track_candidates(chat_id, 100)?,
         ))
     })
     .await
@@ -1616,6 +1628,44 @@ async fn api_learning_observability(
         "shadow_evaluations": shadow_evaluations,
         "learning_journal": journal,
         "governance_policy": policy,
+        "learning_tracks": learning_tracks,
+        "learning_epochs": learning_epochs,
+        "learning_track_candidates": learning_track_candidates,
+    })))
+}
+
+async fn api_learning_promote_track_candidate(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<LearningTrackCandidateActionRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    metrics_http_inc(&state).await;
+    let actor = require_scope(&state, &headers, AuthScope::Admin)
+        .await?
+        .actor;
+    let session_key = normalize_session_key(body.session_key.as_deref());
+    let chat_id = resolve_chat_id_for_session_key_read(&state, &session_key).await?;
+    let skill_name = crate::learning_foundry::promote_learning_candidate(
+        &state.app_state,
+        chat_id,
+        &body.candidate_id,
+    )
+    .await
+    .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+    audit_log(
+        &state,
+        "learning",
+        &actor,
+        "promote_learning_track_candidate",
+        Some(&body.candidate_id),
+        "ok",
+        Some(&skill_name),
+    )
+    .await;
+    Ok(Json(json!({
+        "ok": true,
+        "candidate_id": body.candidate_id,
+        "skill_name": skill_name
     })))
 }
 
@@ -2655,6 +2705,10 @@ fn build_router(web_state: WebState) -> Router {
         .route(
             "/api/learning/candidates/promote",
             post(api_learning_promote_candidate),
+        )
+        .route(
+            "/api/learning/tracks/candidates/promote",
+            post(api_learning_promote_track_candidate),
         )
         .route("/api/learning/archive", post(api_learning_archive_entity))
         .route("/api/learning/rollback", post(api_learning_rollback_skill))

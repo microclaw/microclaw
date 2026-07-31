@@ -543,6 +543,14 @@ while `GET/PUT /api/learning/policy` reads or admin-updates lifecycle
 thresholds. See [Long-horizon learning](docs/long-horizon-learning.md) for the
 data model and promotion policy.
 
+**Learning Foundry** adds proactive, user-directed growth on top of this
+experience loop. A learning track has an objective, source allowlist, cron
+schedule, timezone, and per-epoch budgets. Background research is read-only;
+a separate curator may create one source-backed, test-bearing candidate, which
+stays inert until an administrator explicitly promotes it. Existing skills
+cannot be overwritten through this path. See
+[Learning Foundry](docs/learning-foundry.md).
+
 ```
 <data_dir>/skills/
     pdf/

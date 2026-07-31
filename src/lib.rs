@@ -18,6 +18,7 @@ pub mod eval;
 pub mod gateway;
 pub mod hooks;
 pub mod http_client;
+pub mod learning_foundry;
 pub mod llm;
 pub mod mcp;
 pub mod memory_backend;
