@@ -613,7 +613,7 @@ pub struct AuditLogRecord {
 pub type SessionMetaRow = (String, String, Option<String>, Option<i64>);
 pub type SessionTreeRow = (i64, Option<String>, Option<i64>, String);
 
-const SCHEMA_VERSION_CURRENT: i64 = 42;
+const SCHEMA_VERSION_CURRENT: i64 = 43;
 
 pub fn wilson_lower_bound(passed: i64, total: i64, z: f64) -> f64 {
     if total <= 0 || passed < 0 || passed > total || !z.is_finite() || z < 0.0 {
@@ -787,6 +787,39 @@ pub struct LearningTrackCandidate {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningCandidateEvaluation {
+    pub evaluation_id: String,
+    pub candidate_id: String,
+    pub status: String,
+    pub sample_count: i64,
+    pub baseline_passed: i64,
+    pub candidate_passed: i64,
+    pub regression_count: i64,
+    pub baseline_tokens: i64,
+    pub candidate_tokens: i64,
+    pub baseline_duration_ms: i64,
+    pub candidate_duration_ms: i64,
+    pub reason: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningCandidateTrial {
+    pub trial_id: String,
+    pub evaluation_id: String,
+    pub test_name: String,
+    pub baseline_passed: bool,
+    pub candidate_passed: bool,
+    pub baseline_tokens: i64,
+    pub candidate_tokens: i64,
+    pub baseline_duration_ms: i64,
+    pub candidate_duration_ms: i64,
+    pub evidence: serde_json::Value,
+    pub created_at: String,
 }
 
 fn map_learning_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<LearningTrack> {
@@ -2696,6 +2729,48 @@ fn apply_schema_migrations(conn: &Connection) -> Result<(), MicroClawError> {
         )?;
         set_schema_version(conn, 42)?;
         version = 42;
+    }
+    if version < 43 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS learning_candidate_evaluations (
+                evaluation_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'running',
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                baseline_passed INTEGER NOT NULL DEFAULT 0,
+                candidate_passed INTEGER NOT NULL DEFAULT 0,
+                regression_count INTEGER NOT NULL DEFAULT 0,
+                baseline_tokens INTEGER NOT NULL DEFAULT 0,
+                candidate_tokens INTEGER NOT NULL DEFAULT 0,
+                baseline_duration_ms INTEGER NOT NULL DEFAULT 0,
+                candidate_duration_ms INTEGER NOT NULL DEFAULT 0,
+                reason TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(candidate_id) REFERENCES learning_track_candidates(candidate_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_candidate_evaluations_status
+                ON learning_candidate_evaluations(status, started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS learning_candidate_trials (
+                trial_id TEXT PRIMARY KEY,
+                evaluation_id TEXT NOT NULL,
+                test_name TEXT NOT NULL,
+                baseline_passed INTEGER NOT NULL,
+                candidate_passed INTEGER NOT NULL,
+                baseline_tokens INTEGER NOT NULL DEFAULT 0,
+                candidate_tokens INTEGER NOT NULL DEFAULT 0,
+                baseline_duration_ms INTEGER NOT NULL DEFAULT 0,
+                candidate_duration_ms INTEGER NOT NULL DEFAULT 0,
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(evaluation_id) REFERENCES learning_candidate_evaluations(evaluation_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_learning_candidate_trials_evaluation
+                ON learning_candidate_trials(evaluation_id, created_at);",
+        )?;
+        set_schema_version(conn, 43)?;
+        version = 43;
     }
     if version != SCHEMA_VERSION_CURRENT {
         set_schema_version(conn, SCHEMA_VERSION_CURRENT)?;
@@ -5401,7 +5476,15 @@ impl Database {
         candidate_id: &str,
         status: &str,
     ) -> Result<bool, MicroClawError> {
-        if !matches!(status, "pending" | "promoted" | "rejected") {
+        if !matches!(
+            status,
+            "pending"
+                | "evaluating"
+                | "evaluation_passed"
+                | "evaluation_failed"
+                | "promoted"
+                | "rejected"
+        ) {
             return Err(MicroClawError::ToolExecution(
                 "invalid learning candidate status".into(),
             ));
@@ -5413,6 +5496,243 @@ impl Database {
             params![candidate_id, status, chrono::Utc::now().to_rfc3339()],
         )?;
         Ok(changed == 1)
+    }
+
+    pub fn start_learning_candidate_evaluation(
+        &self,
+        candidate_id: &str,
+    ) -> Result<String, MicroClawError> {
+        let evaluation_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE learning_track_candidates SET status='evaluating', updated_at=?2
+             WHERE candidate_id=?1 AND status IN ('pending','evaluation_failed')",
+            params![candidate_id, now],
+        )?;
+        if changed != 1 {
+            return Err(MicroClawError::ToolExecution(
+                "learning candidate is not eligible for evaluation".into(),
+            ));
+        }
+        tx.execute(
+            "DELETE FROM learning_candidate_trials WHERE evaluation_id IN
+             (SELECT evaluation_id FROM learning_candidate_evaluations WHERE candidate_id=?1)",
+            params![candidate_id],
+        )?;
+        tx.execute(
+            "DELETE FROM learning_candidate_evaluations WHERE candidate_id=?1",
+            params![candidate_id],
+        )?;
+        tx.execute(
+            "INSERT INTO learning_candidate_evaluations(
+                evaluation_id,candidate_id,status,started_at
+             ) VALUES (?1,?2,'running',?3)",
+            params![evaluation_id, candidate_id, now],
+        )?;
+        tx.commit()?;
+        Ok(evaluation_id)
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub fn record_learning_candidate_trial(
+        &self,
+        evaluation_id: &str,
+        test_name: &str,
+        baseline_passed: bool,
+        candidate_passed: bool,
+        baseline_tokens: i64,
+        candidate_tokens: i64,
+        baseline_duration_ms: i64,
+        candidate_duration_ms: i64,
+        evidence: &serde_json::Value,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "INSERT INTO learning_candidate_trials(
+                trial_id,evaluation_id,test_name,baseline_passed,candidate_passed,
+                baseline_tokens,candidate_tokens,baseline_duration_ms,
+                candidate_duration_ms,evidence_json,created_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                evaluation_id,
+                test_name,
+                baseline_passed as i64,
+                candidate_passed as i64,
+                baseline_tokens.max(0),
+                candidate_tokens.max(0),
+                baseline_duration_ms.max(0),
+                candidate_duration_ms.max(0),
+                evidence.to_string(),
+                chrono::Utc::now().to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_learning_candidate_evaluation(
+        &self,
+        evaluation_id: &str,
+        passed: bool,
+        reason: &str,
+    ) -> Result<LearningCandidateEvaluation, MicroClawError> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        let totals: (i64, i64, i64, i64, i64, i64) = tx.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(baseline_passed),0),
+                    COALESCE(SUM(candidate_passed),0),
+                    COALESCE(SUM(CASE WHEN baseline_passed=1 AND candidate_passed=0 THEN 1 ELSE 0 END),0),
+                    COALESCE(SUM(baseline_tokens),0), COALESCE(SUM(candidate_tokens),0)
+             FROM learning_candidate_trials WHERE evaluation_id=?1",
+            params![evaluation_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        )?;
+        let durations: (i64, i64) = tx.query_row(
+            "SELECT COALESCE(SUM(baseline_duration_ms),0),COALESCE(SUM(candidate_duration_ms),0)
+             FROM learning_candidate_trials WHERE evaluation_id=?1",
+            params![evaluation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let status = if passed { "passed" } else { "failed" };
+        let now = chrono::Utc::now().to_rfc3339();
+        tx.execute(
+            "UPDATE learning_candidate_evaluations SET status=?2,sample_count=?3,
+                baseline_passed=?4,candidate_passed=?5,regression_count=?6,
+                baseline_tokens=?7,candidate_tokens=?8,baseline_duration_ms=?9,
+                candidate_duration_ms=?10,reason=?11,finished_at=?12
+             WHERE evaluation_id=?1 AND status='running'",
+            params![
+                evaluation_id,
+                status,
+                totals.0,
+                totals.1,
+                totals.2,
+                totals.3,
+                totals.4,
+                totals.5,
+                durations.0,
+                durations.1,
+                reason,
+                now
+            ],
+        )?;
+        tx.execute(
+            "UPDATE learning_track_candidates SET status=?2,updated_at=?3
+             WHERE candidate_id=(SELECT candidate_id FROM learning_candidate_evaluations WHERE evaluation_id=?1)",
+            params![evaluation_id, if passed { "evaluation_passed" } else { "evaluation_failed" }, now],
+        )?;
+        tx.commit()?;
+        drop(conn);
+        self.get_learning_candidate_evaluation_by_id(evaluation_id)?
+            .ok_or_else(|| MicroClawError::ToolExecution("evaluation disappeared".into()))
+    }
+
+    fn get_learning_candidate_evaluation_by_id(
+        &self,
+        evaluation_id: &str,
+    ) -> Result<Option<LearningCandidateEvaluation>, MicroClawError> {
+        let conn = self.lock_conn();
+        conn.query_row(
+            "SELECT evaluation_id,candidate_id,status,sample_count,baseline_passed,
+                    candidate_passed,regression_count,baseline_tokens,candidate_tokens,
+                    baseline_duration_ms,candidate_duration_ms,reason,started_at,finished_at
+             FROM learning_candidate_evaluations WHERE evaluation_id=?1",
+            params![evaluation_id],
+            |row| {
+                Ok(LearningCandidateEvaluation {
+                    evaluation_id: row.get(0)?,
+                    candidate_id: row.get(1)?,
+                    status: row.get(2)?,
+                    sample_count: row.get(3)?,
+                    baseline_passed: row.get(4)?,
+                    candidate_passed: row.get(5)?,
+                    regression_count: row.get(6)?,
+                    baseline_tokens: row.get(7)?,
+                    candidate_tokens: row.get(8)?,
+                    baseline_duration_ms: row.get(9)?,
+                    candidate_duration_ms: row.get(10)?,
+                    reason: row.get(11)?,
+                    started_at: row.get(12)?,
+                    finished_at: row.get(13)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn list_learning_candidate_evaluations(
+        &self,
+        chat_id: i64,
+        limit: usize,
+    ) -> Result<Vec<LearningCandidateEvaluation>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT v.evaluation_id,v.candidate_id,v.status,v.sample_count,
+                    v.baseline_passed,v.candidate_passed,v.regression_count,
+                    v.baseline_tokens,v.candidate_tokens,v.baseline_duration_ms,
+                    v.candidate_duration_ms,v.reason,v.started_at,v.finished_at
+             FROM learning_candidate_evaluations v
+             JOIN learning_track_candidates c ON c.candidate_id=v.candidate_id
+             JOIN learning_epochs e ON e.epoch_id=c.epoch_id
+             JOIN learning_tracks t ON t.track_id=e.track_id
+             WHERE t.chat_id=?1 ORDER BY v.started_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![chat_id, limit.clamp(1, 200) as i64], |row| {
+                Ok(LearningCandidateEvaluation {
+                    evaluation_id: row.get(0)?,
+                    candidate_id: row.get(1)?,
+                    status: row.get(2)?,
+                    sample_count: row.get(3)?,
+                    baseline_passed: row.get(4)?,
+                    candidate_passed: row.get(5)?,
+                    regression_count: row.get(6)?,
+                    baseline_tokens: row.get(7)?,
+                    candidate_tokens: row.get(8)?,
+                    baseline_duration_ms: row.get(9)?,
+                    candidate_duration_ms: row.get(10)?,
+                    reason: row.get(11)?,
+                    started_at: row.get(12)?,
+                    finished_at: row.get(13)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn list_learning_candidate_trials(
+        &self,
+        evaluation_id: &str,
+    ) -> Result<Vec<LearningCandidateTrial>, MicroClawError> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT trial_id,evaluation_id,test_name,baseline_passed,candidate_passed,
+                    baseline_tokens,candidate_tokens,baseline_duration_ms,
+                    candidate_duration_ms,evidence_json,created_at
+             FROM learning_candidate_trials WHERE evaluation_id=?1 ORDER BY created_at",
+        )?;
+        let rows = stmt
+            .query_map(params![evaluation_id], |row| {
+                let evidence: String = row.get(9)?;
+                Ok(LearningCandidateTrial {
+                    trial_id: row.get(0)?,
+                    evaluation_id: row.get(1)?,
+                    test_name: row.get(2)?,
+                    baseline_passed: row.get::<_, i64>(3)? != 0,
+                    candidate_passed: row.get::<_, i64>(4)? != 0,
+                    baseline_tokens: row.get(5)?,
+                    candidate_tokens: row.get(6)?,
+                    baseline_duration_ms: row.get(7)?,
+                    candidate_duration_ms: row.get(8)?,
+                    evidence: serde_json::from_str(&evidence).unwrap_or_default(),
+                    created_at: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn create_scheduled_task_with_timezone(
@@ -16659,6 +16979,46 @@ mod tests {
         let candidates = db.list_learning_track_candidates(77, 10).unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].status, "pending");
+
+        let evaluation_id = db
+            .start_learning_candidate_evaluation(&candidate_id)
+            .unwrap();
+        for index in 0..3 {
+            db.record_learning_candidate_trial(
+                &evaluation_id,
+                &format!("scenario-{index}"),
+                index == 0,
+                true,
+                100,
+                90,
+                10,
+                9,
+                &serde_json::json!({"judge_reason": "candidate meets criterion"}),
+            )
+            .unwrap();
+        }
+        let evaluation = db
+            .finish_learning_candidate_evaluation(
+                &evaluation_id,
+                true,
+                "candidate improves baseline without regressions",
+            )
+            .unwrap();
+        assert_eq!(evaluation.status, "passed");
+        assert_eq!(evaluation.sample_count, 3);
+        assert_eq!(evaluation.baseline_passed, 1);
+        assert_eq!(evaluation.candidate_passed, 3);
+        assert_eq!(evaluation.regression_count, 0);
+        assert_eq!(
+            db.list_learning_candidate_trials(&evaluation_id)
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            db.list_learning_track_candidates(77, 10).unwrap()[0].status,
+            "evaluation_passed"
+        );
         assert!(db
             .update_learning_track_candidate_status(&candidate_id, "promoted")
             .unwrap());

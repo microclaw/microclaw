@@ -13,6 +13,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   test-bearing skill candidates. Candidates remain inert until an
   administrator explicitly promotes them; existing skills continue to require
   comparative reflection and shadow evidence for changes.
+- **Learning Foundry evaluator.** New candidates run paired no-tool
+  baseline/candidate scenarios, persist token use, latency, evidence and
+  regressions, and fail closed unless evaluation improves on baseline before
+  manual promotion.
 
 ## 0.3.3 - 2026-07-30
 
