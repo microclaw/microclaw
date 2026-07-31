@@ -6,6 +6,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.3.4 - 2026-07-31
+
 ### Added
 
 - **Learning Foundry.** Durable user-directed learning tracks run bounded,

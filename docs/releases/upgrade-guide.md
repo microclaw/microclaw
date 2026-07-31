@@ -15,6 +15,15 @@ Use this guide for rolling upgrades that may include schema/auth/hooks/session/m
 
 On first start, schema migrations are applied automatically.
 
+### v0.3.4
+
+Upgrading to v0.3.4 advances the SQLite schema to v43. The migration adds
+Learning Foundry tracks, epochs, immutable skill candidates, paired candidate
+evaluations, and per-scenario trial records. Existing chats, memories, skills,
+and scheduler records are preserved; no configuration changes or manual SQL
+steps are required. Back up `microclaw.db` before first startup because older
+binaries do not reverse these forward-applied tables.
+
 - Review pending migration files and compatibility assumptions before rollout.
 - No manual SQL steps are required in normal upgrades.
 - For rollback, restore the DB backup instead of manually reversing SQL.
