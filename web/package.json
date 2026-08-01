@@ -11,8 +11,8 @@
     "dev": "vite"
   },
   "dependencies": {
-    "@assistant-ui/react": "^0.14.23",
-    "@assistant-ui/react-markdown": "^0.14.4",
+    "@assistant-ui/react": "^0.14.27",
+    "@assistant-ui/react-markdown": "^0.14.6",
     "@assistant-ui/react-ui": "^0.2.1",
     "@radix-ui/themes": "^3.2.1",
     "class-variance-authority": "^0.7.1",
