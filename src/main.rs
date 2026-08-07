@@ -38,6 +38,7 @@ const EXAMPLES: &str = concat!(
     "  microclaw skill audit           Audit local skills (duplicates, stale, thin)\n",
     "  microclaw audit verify          Verify the tamper-evident audit log\n",
     "  microclaw eval <file|dir>       Evaluate recorded session trajectories\n",
+    "  microclaw canary <model>        Probe a candidate model before switching config\n",
     "\n",
     "Run 'microclaw <command> --help' for command-specific options.",
 );
@@ -97,6 +98,8 @@ enum MainCommand {
     ConfigCmd(ConfigCheckCommand),
     /// Evaluate recorded session trajectories (CI gate; no LLM call)
     Eval(EvalCommand),
+    /// Probe a candidate model with live calls before switching `model:`
+    Canary(CanaryCommand),
     /// Inspect and verify the tamper-evident audit log
     Audit(AuditCommand),
     /// Re-embed active memories (requires `sqlite-vec` feature)
@@ -143,6 +146,22 @@ struct EvalCommand {
     /// Treat tool errors in the trajectory as a failure
     #[arg(long)]
     strict_tool_errors: bool,
+    /// Emit a JSON report instead of human-readable text
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+#[command(after_help = "\x1b[1mExamples:\x1b[22m\n  \
+    microclaw canary claude-sonnet-5            Probe a candidate before switching model:\n  \
+    microclaw canary gpt-5.6 --json             Machine-readable probe report\n  \
+    microclaw canary gpt-5.6 --skip-baseline    Probe only the candidate")]
+struct CanaryCommand {
+    /// Candidate model id to probe (uses the configured provider/credentials)
+    model: String,
+    /// Skip probing the currently configured model as a baseline
+    #[arg(long)]
+    skip_baseline: bool,
     /// Emit a JSON report instead of human-readable text
     #[arg(long)]
     json: bool,
@@ -781,6 +800,17 @@ async fn main() -> anyhow::Result<()> {
         Some(MainCommand::Weixin(weixin)) => {
             handle_weixin_cli(weixin.action).await?;
             return Ok(());
+        }
+        Some(MainCommand::Canary(canary_args)) => {
+            let config = Config::load()?;
+            let code = microclaw::canary::run_canary(
+                &config,
+                &canary_args.model,
+                canary_args.skip_baseline,
+                canary_args.json,
+            )
+            .await;
+            std::process::exit(code);
         }
         Some(MainCommand::Eval(eval_args)) => {
             let thresholds = eval::EvalThresholds {

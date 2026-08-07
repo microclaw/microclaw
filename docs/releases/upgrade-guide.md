@@ -42,6 +42,14 @@ Changes to be aware of when upgrading from any v0.3.x:
   `alerts` sections.
 - Every release now attaches `reliability-scorecard-<tag>.{json,md}` to its
   GitHub release assets.
+- High-risk approval prompts are numbered option cards with an
+  "always allow in this chat" option (standing grants, managed via
+  `/approvals`); web clients get a structured `approval_required` stream
+  event. See [secure-runtime](../security/secure-runtime.md#3b-structured-high-risk-approvals).
+- New `microclaw canary <model>` probes a candidate model (responds +
+  tool-calling) before you switch `model:` in config.
+- MCP servers and A2A peers accept a `trust` tier
+  (trusted/limited/sandboxed); omitted = `limited` = historical behavior.
 
 **Post-upgrade validation additions:**
 
