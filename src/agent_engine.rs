@@ -101,6 +101,18 @@ pub enum AgentEvent {
     MidTurnInjection {
         count: usize,
     },
+    /// Emitted when a high-risk tool call pauses the turn waiting for
+    /// operator approval. Carries the structured option card so richer
+    /// clients (web) can render buttons instead of parsing the text.
+    ApprovalRequired {
+        approval_id: String,
+        tool: String,
+        preview: Option<String>,
+        /// Ordered option labels: approve once / always allow / deny.
+        options: Vec<String>,
+        /// Optional advisory verdict from the aux-model risk reviewer.
+        advisory: Option<String>,
+    },
 }
 
 #[async_trait]
@@ -693,11 +705,30 @@ fn strip_xml_like_tags(input: &str) -> String {
     out
 }
 
-fn is_explicit_user_approval(text: &str) -> bool {
+/// Outcome of parsing a user reply against a pending approval option card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalReply {
+    ApproveOnce,
+    /// Approve and record a standing per-chat allowance for the tool.
+    ApproveAlways,
+    /// Explicit denial or an unrelated instruction (both leave the tool
+    /// unexecuted, matching the historical behavior).
+    DenyOrOther,
+}
+
+pub(crate) fn parse_approval_reply(text: &str) -> ApprovalReply {
     let cleaned = strip_xml_like_tags(text);
     let normalized = cleaned.trim().to_ascii_lowercase();
     if normalized.is_empty() {
-        return false;
+        return ApprovalReply::DenyOrOther;
+    }
+
+    // Bare option numbers from the structured card.
+    match normalized.as_str() {
+        "1" => return ApprovalReply::ApproveOnce,
+        "2" => return ApprovalReply::ApproveAlways,
+        "3" => return ApprovalReply::DenyOrOther,
+        _ => {}
     }
 
     let deny_markers = [
@@ -714,11 +745,13 @@ fn is_explicit_user_approval(text: &str) -> bool {
         "不要",
         "取消",
         "停止",
+        "拒绝",
     ];
     if deny_markers.iter().any(|m| normalized.contains(m)) {
-        return false;
+        return ApprovalReply::DenyOrOther;
     }
 
+    let always_markers = ["always", "总是", "始终"];
     let approval_markers = [
         "approve",
         "approved",
@@ -732,7 +765,92 @@ fn is_explicit_user_approval(text: &str) -> bool {
         "可以执行",
         "执行吧",
     ];
-    approval_markers.iter().any(|m| normalized.contains(m))
+    let approves = approval_markers.iter().any(|m| normalized.contains(m));
+    let always = always_markers.iter().any(|m| normalized.contains(m));
+    if always && (approves || normalized.chars().count() <= 12) {
+        // "always", "always allow bash", "总是允许" — short/approving
+        // always-phrases record a standing allowance; a long unrelated
+        // sentence that merely contains "always" does not.
+        ApprovalReply::ApproveAlways
+    } else if approves {
+        ApprovalReply::ApproveOnce
+    } else {
+        ApprovalReply::DenyOrOther
+    }
+}
+
+fn is_explicit_user_approval(text: &str) -> bool {
+    !matches!(parse_approval_reply(text), ApprovalReply::DenyOrOther)
+}
+
+const APPROVAL_REVIEWER_SYSTEM_PROMPT: &str = "You are a security reviewer annotating a \
+high-risk tool call that is waiting for human approval. Reply with exactly one line, at most \
+140 characters: a verdict word (SAFE, CAUTION, or DANGEROUS) followed by a short reason. You \
+cannot approve or deny anything; a human decides.";
+
+/// Opt-in aux-model advisory on a pending high-risk approval. Returns
+/// `None` unless `aux_models.approval_reviewer` is set (no fallback to the
+/// main model — enabling the reviewer is an explicit operator choice) or
+/// when the review call fails; failures never block the approval prompt.
+async fn review_high_risk_action(
+    state: &AppState,
+    tool_name: &str,
+    preview: Option<&str>,
+) -> Option<String> {
+    let model = state
+        .config
+        .aux_models
+        .approval_reviewer
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())?
+        .to_string();
+    let provider = crate::llm::create_provider(&state.config);
+    let request = format!(
+        "Tool: {tool_name}\nProposed action:\n{}",
+        preview.unwrap_or("(no preview available)")
+    );
+    let messages = vec![Message {
+        role: "user".to_string(),
+        content: MessageContent::Text(request),
+    }];
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        provider.send_message_with_model(
+            APPROVAL_REVIEWER_SYSTEM_PROMPT,
+            messages,
+            None,
+            Some(&model),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(response)) => {
+            let text: String = response
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ResponseContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let line = text.lines().next().unwrap_or("").trim();
+            if line.is_empty() {
+                None
+            } else {
+                Some(line.chars().take(200).collect())
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("approval reviewer call failed (advisory skipped): {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("approval reviewer timed out (advisory skipped)");
+            None
+        }
+    }
 }
 
 pub(crate) fn is_slash_command_text(text: &str) -> bool {
@@ -1054,9 +1172,12 @@ async fn process_with_agent_logic(
             );
             crate::alerts::note_budget_refusal();
             return Ok(format!(
-                "{TOKEN_BUDGET_REFUSAL_PREFIX} for this chat ({used} of {budget} tokens in the \
-                 last 24h). I'll be available again once usage rolls out of the window. \
-                 An operator can raise `token_budget.daily_per_chat` in the config."
+                "{TOKEN_BUDGET_REFUSAL_PREFIX}{}",
+                crate::messages::budget_refusal_body(
+                    state.config.user_message_language,
+                    used,
+                    budget
+                )
             ));
         }
     }
@@ -1189,7 +1310,37 @@ async fn process_with_agent_logic(
 
     metrics.input_text = latest_user_text_for_approval.clone();
 
+    let approval_reply = parse_approval_reply(&latest_user_text_for_approval);
     let explicit_user_approval = is_explicit_user_approval(&latest_user_text_for_approval);
+    if approval_reply == ApprovalReply::ApproveAlways {
+        // "Always allow" replies convert the pending approval (recorded when
+        // the previous turn paused) into a standing per-chat allowance,
+        // consulted at the registry choke point and sealed into the audit
+        // chain. Advisory failures here must not block the approval itself.
+        let pending_key = format!("pending_approval_tool:{chat_id}");
+        if let Ok(Some(tool)) = call_blocking(state.db.clone(), {
+            let pending_key = pending_key.clone();
+            move |db| db.get_runtime_meta(&pending_key)
+        })
+        .await
+        {
+            let grant_key = format!("approved_tool:{chat_id}:{tool}");
+            let _ = call_blocking(state.db.clone(), move |db| {
+                db.set_runtime_meta(&grant_key, &chrono::Utc::now().to_rfc3339())?;
+                db.delete_runtime_meta(&pending_key)?;
+                db.log_audit_event(
+                    "approval",
+                    &format!("chat:{chat_id}"),
+                    "standing_grant",
+                    Some(&tool),
+                    "recorded",
+                    Some("operator replied 'always allow' to an approval prompt"),
+                )?;
+                Ok::<_, microclaw_core::error::MicroClawError>(())
+            })
+            .await;
+        }
+    }
 
     // Build system prompt
     let file_memory = state
@@ -2356,15 +2507,37 @@ async fn process_with_agent_logic(
                 let tool_name = batch_ctx
                     .waiting_approval_tool
                     .unwrap_or_else(|| "this tool".to_string());
-                let preview_block = batch_ctx
-                    .waiting_approval_preview
-                    .as_deref()
-                    .map(|p| format!("\n\n```\n{p}\n```"))
-                    .unwrap_or_default();
-                let text = format!(
-                    "High-risk tool '{tool_name}' is waiting for your confirmation.{preview_block}\n\nReply with \"批准\" or \"approve\" to continue, or send any other instruction to deny."
+                // Remember which tool is pending so an "always allow" reply
+                // next turn can be converted into a standing grant.
+                {
+                    let pending_key = format!("pending_approval_tool:{chat_id}");
+                    let tool = tool_name.clone();
+                    let _ = call_blocking(state.db.clone(), move |db| {
+                        db.set_runtime_meta(&pending_key, &tool)
+                    })
+                    .await;
+                }
+                let advisory =
+                    review_high_risk_action(state, &tool_name, batch_ctx.waiting_approval_preview.as_deref())
+                        .await;
+                let text = crate::messages::approval_prompt(
+                    state.config.user_message_language,
+                    &tool_name,
+                    batch_ctx.waiting_approval_preview.as_deref(),
+                    advisory.as_deref(),
                 );
                 if let Some(tx) = event_tx {
+                    let _ = tx.send(AgentEvent::ApprovalRequired {
+                        approval_id: uuid::Uuid::new_v4().to_string(),
+                        tool: tool_name.clone(),
+                        preview: batch_ctx.waiting_approval_preview.clone(),
+                        options: vec![
+                            "Approve once".to_string(),
+                            format!("Always allow '{tool_name}' in this chat"),
+                            "Deny".to_string(),
+                        ],
+                        advisory: advisory.clone(),
+                    });
                     let _ = tx.send(AgentEvent::FinalResponse { text: text.clone() });
                 }
                 return Ok(text);
@@ -4933,6 +5106,36 @@ mod tests {
         assert!(!super::is_explicit_user_approval(
             "not approve this command"
         ));
+    }
+
+    #[test]
+    fn test_parse_approval_reply_option_card() {
+        use super::{parse_approval_reply, ApprovalReply};
+        // Bare option numbers from the structured card.
+        assert_eq!(parse_approval_reply("1"), ApprovalReply::ApproveOnce);
+        assert_eq!(parse_approval_reply("2"), ApprovalReply::ApproveAlways);
+        assert_eq!(parse_approval_reply("3"), ApprovalReply::DenyOrOther);
+        // Always-phrases record a standing allowance.
+        assert_eq!(parse_approval_reply("always"), ApprovalReply::ApproveAlways);
+        assert_eq!(
+            parse_approval_reply("总是允许"),
+            ApprovalReply::ApproveAlways
+        );
+        assert_eq!(
+            parse_approval_reply("approve, always allow this"),
+            ApprovalReply::ApproveAlways
+        );
+        // Ordinary approvals stay one-shot.
+        assert_eq!(parse_approval_reply("approve"), ApprovalReply::ApproveOnce);
+        assert_eq!(parse_approval_reply("批准"), ApprovalReply::ApproveOnce);
+        // A long unrelated sentence containing "always" is not an approval.
+        assert_eq!(
+            parse_approval_reply("I always wondered how weather forecasts work, tell me"),
+            ApprovalReply::DenyOrOther
+        );
+        // Denials, including the new numbered form.
+        assert_eq!(parse_approval_reply("拒绝"), ApprovalReply::DenyOrOther);
+        assert_eq!(parse_approval_reply("deny"), ApprovalReply::DenyOrOther);
     }
 
     #[test]

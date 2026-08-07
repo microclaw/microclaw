@@ -11971,6 +11971,40 @@ impl Database {
         Ok(())
     }
 
+    /// List runtime keys sharing a prefix (sorted by key).
+    pub fn list_runtime_meta_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, String)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let pattern = format!("{}%", prefix.replace('%', "\\%").replace('_', "\\_"));
+        let mut stmt = conn.prepare(
+            "SELECT key, value FROM db_meta WHERE key LIKE ?1 ESCAPE '\\' ORDER BY key",
+        )?;
+        let rows = stmt
+            .query_map([&pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Delete a single runtime key; returns whether a row was removed.
+    pub fn delete_runtime_meta(&self, key: &str) -> Result<bool, MicroClawError> {
+        let conn = self.lock_conn();
+        let n = conn.execute("DELETE FROM db_meta WHERE key = ?1", [key])?;
+        Ok(n > 0)
+    }
+
+    /// Delete every runtime key sharing a prefix; returns removed count.
+    pub fn delete_runtime_meta_prefix(&self, prefix: &str) -> Result<usize, MicroClawError> {
+        let conn = self.lock_conn();
+        let pattern = format!("{}%", prefix.replace('%', "\\%").replace('_', "\\_"));
+        let n = conn.execute(
+            "DELETE FROM db_meta WHERE key LIKE ?1 ESCAPE '\\'",
+            [&pattern],
+        )?;
+        Ok(n)
+    }
+
     /// Count audit-chain events of one kind recorded at or after `since`.
     pub fn count_audit_events_since(
         &self,

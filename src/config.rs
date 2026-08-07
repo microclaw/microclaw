@@ -970,6 +970,13 @@ pub struct AuxModels {
     /// `media.vision.model` when set; falls back to it when unset or empty.
     #[serde(default)]
     pub vision: Option<String>,
+    /// Model that writes a short advisory verdict on high-risk tool
+    /// approval prompts. Unlike the other slots this does NOT fall back to
+    /// the main model: unset means the reviewer is off (the default), so
+    /// enabling it is an explicit operator choice. Advisory only — it never
+    /// approves or denies anything itself.
+    #[serde(default)]
+    pub approval_reviewer: Option<String>,
 }
 
 impl AuxModels {
@@ -1226,6 +1233,18 @@ impl Default for AlertsConfig {
             restart_storm_threshold: default_alerts_restart_storm_threshold(),
         }
     }
+}
+
+/// Language for user-facing runtime messages (refusals, approval prompts,
+/// recovery notices). `en` preserves historical output; approval reply
+/// keywords are recognized in both languages regardless.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UserMessageLanguage {
+    #[default]
+    En,
+    Zh,
+    Bilingual,
 }
 
 fn default_trust_report_interval_days() -> u64 {
@@ -1571,6 +1590,9 @@ pub struct Config {
     pub alerts: AlertsConfig,
     #[serde(default)]
     pub trust_report: TrustReportConfig,
+    /// Language for user-facing refusals/approval prompts/notices.
+    #[serde(default)]
+    pub user_message_language: UserMessageLanguage,
     #[serde(default)]
     pub sleep_time: SleepTimeConfig,
     #[serde(default)]
@@ -2310,6 +2332,7 @@ impl Config {
             token_budget: TokenBudgetConfig::default(),
             alerts: AlertsConfig::default(),
             trust_report: TrustReportConfig::default(),
+            user_message_language: UserMessageLanguage::default(),
             sleep_time: SleepTimeConfig::default(),
             interjection: InterjectionConfig::default(),
             a2a: A2AConfig::default(),

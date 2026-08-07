@@ -81,6 +81,9 @@ pub fn build_help_response() -> String {
         "  /learning [run_id|journal] Show run evidence or the self-learning journal",
         "  /rewind [id]         List or restore conversation checkpoints",
         "",
+        "Safety",
+        "  /approvals [clear]   List or revoke standing high-risk tool approvals for this chat",
+        "",
         "Diagnostics (admin only)",
         "  /log [N] [keyword]   Tail last N log lines (default 100, max 300); filter by keyword",
         "",
@@ -619,6 +622,54 @@ pub async fn handle_chat_command(
             )
             .await,
         );
+    }
+
+    if trimmed == "/approvals" || trimmed == "/approvals clear" {
+        let prefix = format!("approved_tool:{chat_id}:");
+        if trimmed == "/approvals clear" {
+            let removed = call_blocking(state.db.clone(), {
+                let prefix = prefix.clone();
+                move |db| {
+                    let removed = db.delete_runtime_meta_prefix(&prefix)?;
+                    if removed > 0 {
+                        db.log_audit_event(
+                            "approval",
+                            &format!("chat:{chat_id}"),
+                            "standing_grants_cleared",
+                            None,
+                            "removed",
+                            Some(&format!("{removed} grant(s)")),
+                        )?;
+                    }
+                    Ok::<_, microclaw_core::error::MicroClawError>(removed)
+                }
+            })
+            .await;
+            return Some(match removed {
+                Ok(0) => "No standing tool approvals to clear for this chat.".to_string(),
+                Ok(n) => format!("Cleared {n} standing tool approval(s) for this chat."),
+                Err(e) => format!("Failed to clear standing approvals: {e}"),
+            });
+        }
+        let grants =
+            call_blocking(state.db.clone(), move |db| db.list_runtime_meta_prefix(&prefix)).await;
+        return Some(match grants {
+            Ok(rows) if rows.is_empty() => {
+                "No standing tool approvals for this chat. Reply \"2\" or \"always\" to an \
+                 approval prompt to add one."
+                    .to_string()
+            }
+            Ok(rows) => {
+                let mut out = String::from("Standing tool approvals for this chat:\n");
+                for (key, since) in rows {
+                    let tool = key.rsplit(':').next().unwrap_or(&key);
+                    out.push_str(&format!("- {tool} (since {since})\n"));
+                }
+                out.push_str("Revoke them all with /approvals clear.");
+                out
+            }
+            Err(e) => format!("Failed to list standing approvals: {e}"),
+        });
     }
 
     if trimmed == "/log"

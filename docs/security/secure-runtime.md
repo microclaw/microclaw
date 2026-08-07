@@ -116,6 +116,33 @@ The allowlist is an escape hatch. Prefer mediated host APIs and secret
 references for future TypeScript plugins so the child process never receives
 unrelated credentials.
 
+## 3b. Structured high-risk approvals
+
+When a high-risk tool call pauses for confirmation (web and control chats, or
+any chat hitting the bash dangerous-pattern / sandboxed-peer gates), the
+prompt is a numbered option card:
+
+1. **Approve once** — reply `1` / `approve` / `批准` (the historical flow).
+2. **Always allow this tool in this chat** — reply `2` / `always` / `总是`.
+   Records a standing per-chat allowance, sealed into the audit chain and
+   consulted at the registry choke point. It satisfies only the confirmation
+   gate: tool policy, egress policy, and in-tool gates (e.g. bash dangerous
+   patterns) still run. List or revoke with `/approvals` and
+   `/approvals clear`.
+3. **Deny** — reply `3` / `deny`, or send any other instruction.
+
+Web clients additionally receive a structured `approval_required` stream
+event (approval id, tool, preview, options) so they can render buttons
+instead of parsing text. Prompt language follows `user_message_language`
+(en / zh / bilingual); reply keywords are recognized in both languages
+regardless.
+
+Optionally, `aux_models.approval_reviewer` names a model that annotates each
+approval prompt with a one-line advisory verdict (SAFE / CAUTION / DANGEROUS
++ reason). It is off unless set — there is deliberately no fallback to the
+main model — and it is advisory only: it never approves, denies, or alters
+the gate.
+
 ## 4. Operator visibility
 
 - `microclaw doctor` reports whether scoped grants and egress policy are

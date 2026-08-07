@@ -32,6 +32,15 @@ max_tool_iterations: 100
 #   reflector: claude-haiku-4-5    # cheaper model for the background memory reflector
 #   title: claude-haiku-4-5        # cheaper model for short session-title generation
 #   vision: claude-haiku-4-5       # model for image description (overrides media.vision.model)
+#   approval_reviewer: ""          # OPT-IN: model that writes a short advisory verdict on
+#                                  # high-risk approval prompts; unset/empty = off (no
+#                                  # fallback to the main model). Advisory only — a human
+#                                  # still decides.
+
+# Language for user-facing runtime messages (approval prompts, budget refusals):
+# en (default, historical output), zh, or bilingual. Approval reply keywords
+# ("approve"/"批准"/"always"/"总是"/option numbers) are recognized regardless.
+# user_message_language: en
 # Inject pending messages into the active agent loop between iterations (mid-turn injection)
 enable_mid_turn_injection: true
 # On non-web channels (Telegram, Discord, Slack, Feishu, Matrix, WeChat),

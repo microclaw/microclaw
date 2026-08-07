@@ -756,7 +756,27 @@ impl ToolRegistry {
             return ToolResult::error(msg).with_error_type("execution_policy_blocked");
         }
         if self.config.high_risk_tool_user_confirmation_required {
-            if let Some(blocked) =
+            // A standing per-chat allowance (operator replied "always allow"
+            // to a previous approval prompt) satisfies the gate. It never
+            // bypasses tool_policy, egress policy, or in-tool gates like the
+            // bash dangerous-pattern check, which still run.
+            let standing = if let Some(db) = self.audit_db.clone() {
+                let key = format!("approved_tool:{}:{}", auth.caller_chat_id, name);
+                microclaw_storage::db::call_blocking(db, move |db| db.get_runtime_meta(&key))
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+            } else {
+                false
+            };
+            if standing {
+                tracing::info!(
+                    tool = name,
+                    chat_id = auth.caller_chat_id,
+                    "High-risk tool allowed by standing per-chat approval"
+                );
+            } else if let Some(blocked) =
                 require_high_risk_approval_with_risk(name, effective_risk, auth, &input)
             {
                 return blocked;

@@ -188,6 +188,29 @@ async fn start_stream_run_internal(
                         }
                         AgentEvent::ToolWaveStart { .. } => {}
                         AgentEvent::ToolWaveComplete { .. } => {}
+                        AgentEvent::ApprovalRequired {
+                            approval_id,
+                            tool,
+                            preview,
+                            options,
+                            advisory,
+                        } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "approval_required",
+                                    json!({
+                                        "approval_id": approval_id,
+                                        "tool": tool,
+                                        "preview": preview,
+                                        "options": options,
+                                        "advisory": advisory,
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                         AgentEvent::FinalResponse { .. } => {}
                         // Cancelled is handled below after send_and_store_response_with_events.
                         AgentEvent::Cancelled { .. } => {}

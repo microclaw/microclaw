@@ -56,6 +56,7 @@ fn minimal_config() -> Config {
         token_budget: microclaw::config::TokenBudgetConfig::default(),
         alerts: microclaw::config::AlertsConfig::default(),
         trust_report: microclaw::config::TrustReportConfig::default(),
+        user_message_language: microclaw::config::UserMessageLanguage::default(),
         sleep_time: microclaw::config::SleepTimeConfig::default(),
         interjection: microclaw::config::InterjectionConfig::default(),
         a2a: microclaw::config::A2AConfig::default(),
