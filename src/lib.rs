@@ -40,6 +40,7 @@ pub mod skill_review;
 pub mod skills;
 pub mod subdirectory_hints;
 pub mod supervision;
+pub mod trust_report;
 pub mod title_generator;
 pub mod tls;
 pub mod tool_executor;

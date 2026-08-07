@@ -1228,6 +1228,34 @@ impl Default for AlertsConfig {
     }
 }
 
+fn default_trust_report_interval_days() -> u64 {
+    7
+}
+
+/// Opt-in periodic "trust report": a digest of what the agent actually did
+/// — task runs, contract verdicts, token spend, guardrail interventions,
+/// delivery/recovery health — delivered to every control chat. OFF by
+/// default. Built entirely from data MicroClaw already records (usage
+/// ledger, contract events, tamper-evident audit chain), so enabling it
+/// costs no extra LLM calls.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TrustReportConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Days between reports. Default: 7.
+    #[serde(default = "default_trust_report_interval_days")]
+    pub interval_days: u64,
+}
+
+impl Default for TrustReportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_days: default_trust_report_interval_days(),
+        }
+    }
+}
+
 fn default_heartbeat_interval_mins() -> u64 {
     30
 }
@@ -1523,6 +1551,8 @@ pub struct Config {
     pub token_budget: TokenBudgetConfig,
     #[serde(default)]
     pub alerts: AlertsConfig,
+    #[serde(default)]
+    pub trust_report: TrustReportConfig,
     #[serde(default)]
     pub sleep_time: SleepTimeConfig,
     #[serde(default)]
@@ -2261,6 +2291,7 @@ impl Config {
             heartbeat: HeartbeatConfig::default(),
             token_budget: TokenBudgetConfig::default(),
             alerts: AlertsConfig::default(),
+            trust_report: TrustReportConfig::default(),
             sleep_time: SleepTimeConfig::default(),
             interjection: InterjectionConfig::default(),
             a2a: A2AConfig::default(),

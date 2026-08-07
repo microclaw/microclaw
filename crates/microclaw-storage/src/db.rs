@@ -11948,6 +11948,44 @@ impl Database {
         Ok(count)
     }
 
+    /// Read a runtime key from the `db_meta` KV table (also used for
+    /// schema_version/embedding_dim). Namespaced keys recommended.
+    pub fn get_runtime_meta(&self, key: &str) -> Result<Option<String>, MicroClawError> {
+        let conn = self.lock_conn();
+        let value = conn
+            .query_row("SELECT value FROM db_meta WHERE key = ?1", [key], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        Ok(value)
+    }
+
+    /// Upsert a runtime key in the `db_meta` KV table.
+    pub fn set_runtime_meta(&self, key: &str, value: &str) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "INSERT INTO db_meta(key, value) VALUES(?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Count audit-chain events of one kind recorded at or after `since`.
+    pub fn count_audit_events_since(
+        &self,
+        kind: &str,
+        since: &str,
+    ) -> Result<i64, MicroClawError> {
+        let conn = self.lock_conn();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM audit_logs WHERE kind = ?1 AND created_at >= ?2",
+            [kind, since],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
     /// Exact depth of the scheduled-task dead-letter queue (unlike
     /// `list_scheduled_task_dlq`, this is not clamped by a LIMIT).
     pub fn count_scheduled_task_dlq(

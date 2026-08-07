@@ -408,6 +408,14 @@ web_session_idle_ttl_seconds: 300
 #   cooldown_secs: 900             # min seconds between same-class alerts
 #   restart_storm_threshold: 5     # restarts within one poll that count as a storm
 
+# Periodic trust report: a digest of what the agent actually did — task runs,
+# contract verdicts, token spend, guardrail interventions, delivery/recovery
+# health — delivered to every control chat. Built entirely from data MicroClaw
+# already records; no extra LLM calls. OFF by default.
+# trust_report:
+#   enabled: false
+#   interval_days: 7               # days between reports
+
 # "Sleep-time" memory consolidation: when a chat is idle, run a deterministic
 # (no-LLM) background pass that archives near-duplicate memories so the store stops
 # accumulating redundancy between reflector runs. PROFILE memories are never touched,
