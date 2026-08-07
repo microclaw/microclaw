@@ -522,6 +522,7 @@ pub async fn run(
         });
     }
     crate::outbox::spawn_outbox_flush(state.clone());
+    crate::alerts::spawn_alerts(state.clone());
     crate::scheduler::spawn_scheduler(state.clone());
     crate::scheduler::spawn_dlq_replay(state.clone());
     crate::scheduler::spawn_reflector(state.clone());

@@ -1,14 +1,14 @@
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error, warn};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -325,6 +325,46 @@ const BREAKER_COOLDOWN_SECS: u64 = 30;
 /// during which calls skip the primary and go straight to the fallback; after
 /// the cooldown a single primary probe is allowed through (closing the breaker
 /// on success, reopening on failure).
+/// Process-wide provider failover stats, aggregated across every
+/// `ResilientProvider` instance (main + aux slots). Powers `/status`,
+/// the governance snapshot, and the "provider down" alert class.
+static FAILOVER_TOTAL: AtomicU64 = AtomicU64::new(0);
+static FAILURES_CONSECUTIVE: AtomicU64 = AtomicU64::new(0);
+static BREAKER_OPEN_UNTIL_EPOCH_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_FAILURE_EPOCH_MS: AtomicU64 = AtomicU64::new(0);
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderFailoverSnapshot {
+    /// Calls that were served by the fallback model since process start.
+    pub total_fallbacks: u64,
+    /// Provider failures since the last success (any provider instance).
+    pub consecutive_failures: u64,
+    /// True while any circuit breaker is within its open window.
+    pub breaker_open: bool,
+    pub last_failure_epoch_ms: Option<u64>,
+}
+
+pub fn provider_failover_snapshot() -> ProviderFailoverSnapshot {
+    let last = LAST_FAILURE_EPOCH_MS.load(Ordering::Relaxed);
+    ProviderFailoverSnapshot {
+        total_fallbacks: FAILOVER_TOTAL.load(Ordering::Relaxed),
+        consecutive_failures: FAILURES_CONSECUTIVE.load(Ordering::Relaxed),
+        breaker_open: BREAKER_OPEN_UNTIL_EPOCH_MS.load(Ordering::Relaxed) > epoch_ms(),
+        last_failure_epoch_ms: if last == 0 { None } else { Some(last) },
+    }
+}
+
+fn note_fallback_used() {
+    FAILOVER_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 struct CircuitBreaker {
     failures: AtomicU32,
     open_until: Mutex<Option<Instant>>,
@@ -354,14 +394,20 @@ impl CircuitBreaker {
         if let Ok(mut guard) = self.open_until.lock() {
             *guard = None;
         }
+        FAILURES_CONSECUTIVE.store(0, Ordering::Relaxed);
+        BREAKER_OPEN_UNTIL_EPOCH_MS.store(0, Ordering::Relaxed);
     }
 
     fn record_failure(&self, now: Instant) {
         let n = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
+        FAILURES_CONSECUTIVE.fetch_add(1, Ordering::Relaxed);
+        LAST_FAILURE_EPOCH_MS.store(epoch_ms(), Ordering::Relaxed);
         if n >= self.threshold {
             if let Ok(mut guard) = self.open_until.lock() {
                 *guard = Some(now + self.cooldown);
             }
+            BREAKER_OPEN_UNTIL_EPOCH_MS
+                .store(epoch_ms() + self.cooldown.as_millis() as u64, Ordering::Relaxed);
         }
     }
 }
@@ -403,6 +449,7 @@ impl ResilientProvider {
                 "LLM circuit breaker open; routing to fallback model {}",
                 self.fallback_model
             );
+            note_fallback_used();
             return self
                 .inner
                 .send_message_with_model(system, messages, tools, Some(&self.fallback_model))
@@ -425,6 +472,7 @@ impl ResilientProvider {
                         "primary LLM call failed ({e}); retrying with fallback model {}",
                         self.fallback_model
                     );
+                    note_fallback_used();
                     match self
                         .inner
                         .send_message_with_model(
@@ -462,6 +510,7 @@ impl ResilientProvider {
                 "LLM circuit breaker open; streaming via fallback model {}",
                 self.fallback_model
             );
+            note_fallback_used();
             return self
                 .inner
                 .send_message_stream_with_model(

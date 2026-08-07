@@ -64,6 +64,21 @@ type Governance = {
   delivery?: {
     outbox_pending: number
   }
+  contracts?: {
+    verified_24h: number
+    failed_24h: number
+  }
+  provider_health?: {
+    total_fallbacks: number
+    consecutive_failures: number
+    breaker_open: boolean
+  }
+  alerts?: {
+    enabled: boolean
+    webhook_configured: boolean
+    interval_secs: number
+    cooldown_secs: number
+  }
   durable_runs?: {
     active: {
       run_id?: string | null
@@ -500,6 +515,34 @@ export function GovernancePanel() {
               </Badge>
               <Badge size="1" color={(gov.delivery?.outbox_pending ?? 0) > 0 ? 'orange' : 'gray'}>
                 reply outbox: {gov.delivery?.outbox_pending ?? 0}
+              </Badge>
+              <Badge size="1" color="green">
+                contracts verified: {gov.contracts?.verified_24h ?? 0}
+              </Badge>
+              <Badge size="1" color={(gov.contracts?.failed_24h ?? 0) > 0 ? 'red' : 'gray'}>
+                contracts failed: {gov.contracts?.failed_24h ?? 0}
+              </Badge>
+            </Flex>
+          </ConfigFieldCard>
+
+          <ConfigFieldCard
+            label="Provider health & alerts"
+            description="LLM fallback/circuit-breaker state since process start, and whether the operational webhook alert loop is armed."
+          >
+            <Flex align="center" gap="2" className="mt-2" wrap="wrap">
+              <Badge size="1" color={gov.provider_health?.breaker_open ? 'red' : 'green'}>
+                {gov.provider_health?.breaker_open ? 'circuit breaker OPEN' : 'provider healthy'}
+              </Badge>
+              <Badge size="1" color={(gov.provider_health?.total_fallbacks ?? 0) > 0 ? 'orange' : 'gray'}>
+                fallbacks: {gov.provider_health?.total_fallbacks ?? 0}
+              </Badge>
+              <Badge size="1" color={(gov.provider_health?.consecutive_failures ?? 0) > 0 ? 'orange' : 'gray'}>
+                consecutive failures: {gov.provider_health?.consecutive_failures ?? 0}
+              </Badge>
+              <Badge size="1" color={gov.alerts?.enabled && gov.alerts?.webhook_configured ? 'green' : 'gray'}>
+                {gov.alerts?.enabled && gov.alerts?.webhook_configured
+                  ? `webhook alerts every ${gov.alerts.interval_secs}s`
+                  : 'webhook alerts off'}
               </Badge>
             </Flex>
           </ConfigFieldCard>

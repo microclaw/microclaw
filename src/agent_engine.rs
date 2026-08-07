@@ -1052,6 +1052,7 @@ async fn process_with_agent_logic(
                 chat_id,
                 used, budget, "Token budget exhausted; refusing turn"
             );
+            crate::alerts::note_budget_refusal();
             return Ok(format!(
                 "{TOKEN_BUDGET_REFUSAL_PREFIX} for this chat ({used} of {budget} tokens in the \
                  last 24h). I'll be available again once usage rolls out of the window. \

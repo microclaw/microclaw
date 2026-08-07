@@ -50,34 +50,45 @@ pub async fn api_governance(
         .collect();
 
     let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
-    let (runs_24h, contract_tasks, dlq_pending, outbox_pending, active_turns, recoveries) =
-        call_blocking(state.app_state.db.clone(), move |db| {
-            let (total, success) = db.get_task_run_summary_since(Some(&since))?;
-            let contract_tasks = db
-                .list_scheduled_tasks(None, 1000)?
-                .into_iter()
-                .filter(|t| {
-                    t.exit_criteria
-                        .as_deref()
-                        .map(|s| !s.trim().is_empty())
-                        .unwrap_or(false)
-                })
-                .count();
-            let dlq_pending = db.list_scheduled_task_dlq(None, None, false, 100)?.len();
-            let outbox_pending = db.count_outbox_pending()?;
-            let active_turns = db.list_active_turns()?;
-            let recoveries = db.list_audit_logs(Some("turn_recovery"), 20)?;
-            Ok::<_, microclaw_core::error::MicroClawError>((
-                (total, success),
-                contract_tasks,
-                dlq_pending,
-                outbox_pending,
-                active_turns,
-                recoveries,
-            ))
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (
+        runs_24h,
+        contract_tasks,
+        dlq_pending,
+        outbox_pending,
+        active_turns,
+        recoveries,
+        contract_verdicts_24h,
+    ) = call_blocking(state.app_state.db.clone(), move |db| {
+        let (total, success) = db.get_task_run_summary_since(Some(&since))?;
+        let contract_tasks = db
+            .list_scheduled_tasks(None, 1000)?
+            .into_iter()
+            .filter(|t| {
+                t.exit_criteria
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+            })
+            .count();
+        let dlq_pending = db.count_scheduled_task_dlq(false)?;
+        let outbox_pending = db.count_outbox_pending()?;
+        let active_turns = db.list_active_turns()?;
+        let recoveries = db.list_audit_logs(Some("turn_recovery"), 20)?;
+        let contract_verdicts_24h = db.contract_verdict_counts_since(&since)?;
+        Ok::<_, microclaw_core::error::MicroClawError>((
+            (total, success),
+            contract_tasks,
+            dlq_pending,
+            outbox_pending,
+            active_turns,
+            recoveries,
+            contract_verdicts_24h,
+        ))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let provider = crate::llm::provider_failover_snapshot();
 
     Ok(Json(json!({
         "ok": true,
@@ -120,6 +131,21 @@ pub async fn api_governance(
             "success_24h": runs_24h.1,
             "with_contract": contract_tasks,
             "dlq_pending": dlq_pending,
+        },
+        "contracts": {
+            "verified_24h": contract_verdicts_24h.0,
+            "failed_24h": contract_verdicts_24h.1,
+        },
+        "provider_health": {
+            "total_fallbacks": provider.total_fallbacks,
+            "consecutive_failures": provider.consecutive_failures,
+            "breaker_open": provider.breaker_open,
+        },
+        "alerts": {
+            "enabled": config.alerts.enabled,
+            "webhook_configured": !config.alerts.webhook_url.trim().is_empty(),
+            "interval_secs": config.alerts.interval_secs,
+            "cooldown_secs": config.alerts.cooldown_secs,
         },
         "delivery": {
             "outbox_pending": outbox_pending,

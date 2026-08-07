@@ -793,8 +793,72 @@ pub async fn build_status_response(
         Err(error) => format!("Durable runtime: unavailable ({error})"),
     };
 
+    let since_24h = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+    let health_line = match call_blocking(db.clone(), {
+        let since = since_24h.clone();
+        move |db| {
+            let dlq = db.count_scheduled_task_dlq(false)?;
+            let contracts = db.contract_verdict_counts_since(&since)?;
+            Ok::<_, microclaw_core::error::MicroClawError>((dlq, contracts))
+        }
+    })
+    .await
+    {
+        Ok((dlq, (verified, failed))) => {
+            let contracts = if verified + failed == 0 {
+                "Contracts (24h): none".to_string()
+            } else {
+                format!("Contracts (24h): verified={verified} failed={failed}")
+            };
+            format!("Scheduler DLQ: {dlq} unreplayed\n{contracts}")
+        }
+        Err(e) => format!("Scheduler DLQ: unavailable ({e})"),
+    };
+
+    let budget_line = {
+        let budget = config.token_budget.daily_per_chat;
+        if budget > 0 {
+            match call_blocking(db.clone(), move |db| {
+                db.get_llm_usage_summary_since(Some(chat_id), Some(&since_24h))
+            })
+            .await
+            {
+                Ok(usage) => format!(
+                    "Token budget: {} of {budget} used in the last 24h",
+                    usage.total_tokens
+                ),
+                Err(e) => format!("Token budget: unavailable ({e})"),
+            }
+        } else {
+            "Token budget: off".to_string()
+        }
+    };
+
+    let provider_snapshot = crate::llm::provider_failover_snapshot();
+    let provider_line = format!(
+        "Provider health: fallbacks={} consecutive_failures={}{}",
+        provider_snapshot.total_fallbacks,
+        provider_snapshot.consecutive_failures,
+        if provider_snapshot.breaker_open {
+            " (circuit breaker OPEN)"
+        } else {
+            ""
+        }
+    );
+
+    let restarts = crate::supervision::restart_counts();
+    let restart_line = if restarts.is_empty() {
+        "Loop restarts: none".to_string()
+    } else {
+        let parts: Vec<String> = restarts
+            .iter()
+            .map(|(name, count)| format!("{name}={count}"))
+            .collect();
+        format!("Loop restarts: {}", parts.join(" "))
+    };
+
     format!(
-        "Status\nChannel: {caller_channel}\nProvider: {provider}\nModel: {model}\n{session_line}\n{task_line}\n{runtime_line}"
+        "Status\nChannel: {caller_channel}\nProvider: {provider}\nModel: {model}\n{session_line}\n{task_line}\n{runtime_line}\n{health_line}\n{budget_line}\n{provider_line}\n{restart_line}"
     )
 }
 

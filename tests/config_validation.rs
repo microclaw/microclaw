@@ -54,6 +54,7 @@ fn minimal_config() -> Config {
         idle_checkin: microclaw::config::IdleCheckinConfig::default(),
         heartbeat: microclaw::config::HeartbeatConfig::default(),
         token_budget: microclaw::config::TokenBudgetConfig::default(),
+        alerts: microclaw::config::AlertsConfig::default(),
         sleep_time: microclaw::config::SleepTimeConfig::default(),
         interjection: microclaw::config::InterjectionConfig::default(),
         a2a: microclaw::config::A2AConfig::default(),

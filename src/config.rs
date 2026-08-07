@@ -1180,6 +1180,54 @@ impl TokenBudgetConfig {
     }
 }
 
+fn default_alerts_interval_secs() -> u64 {
+    60
+}
+fn default_alerts_cooldown_secs() -> u64 {
+    900
+}
+fn default_alerts_restart_storm_threshold() -> u64 {
+    5
+}
+
+/// Opt-in operational webhook alerts. When enabled, a supervised loop
+/// polls runtime health every `interval_secs` and POSTs a JSON alert to
+/// `webhook_url` when a condition trips: scheduler DLQ growth, provider
+/// down (circuit breaker open / repeated failures), token-budget
+/// exhaustion, or a supervised-loop restart storm. OFF by default; the
+/// webhook URL participates in the configured-endpoint egress policy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlertsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Webhook that receives alert POSTs (JSON body: class, message,
+    /// generated_at).
+    #[serde(default)]
+    pub webhook_url: String,
+    /// Seconds between health polls. Default: 60 (min 10).
+    #[serde(default = "default_alerts_interval_secs")]
+    pub interval_secs: u64,
+    /// Minimum seconds between two alerts of the same class. Default: 900.
+    #[serde(default = "default_alerts_cooldown_secs")]
+    pub cooldown_secs: u64,
+    /// Supervised-loop restarts within one poll interval that count as a
+    /// storm. Default: 5.
+    #[serde(default = "default_alerts_restart_storm_threshold")]
+    pub restart_storm_threshold: u64,
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            webhook_url: String::new(),
+            interval_secs: default_alerts_interval_secs(),
+            cooldown_secs: default_alerts_cooldown_secs(),
+            restart_storm_threshold: default_alerts_restart_storm_threshold(),
+        }
+    }
+}
+
 fn default_heartbeat_interval_mins() -> u64 {
     30
 }
@@ -1473,6 +1521,8 @@ pub struct Config {
     pub heartbeat: HeartbeatConfig,
     #[serde(default)]
     pub token_budget: TokenBudgetConfig,
+    #[serde(default)]
+    pub alerts: AlertsConfig,
     #[serde(default)]
     pub sleep_time: SleepTimeConfig,
     #[serde(default)]
@@ -2210,6 +2260,7 @@ impl Config {
             idle_checkin: IdleCheckinConfig::default(),
             heartbeat: HeartbeatConfig::default(),
             token_budget: TokenBudgetConfig::default(),
+            alerts: AlertsConfig::default(),
             sleep_time: SleepTimeConfig::default(),
             interjection: InterjectionConfig::default(),
             a2a: A2AConfig::default(),
@@ -3005,6 +3056,9 @@ Use operator password + API keys for Web auth."
             }
             if self.clawhub.agent_tools_enabled {
                 add(Some(&self.clawhub.registry));
+            }
+            if self.alerts.enabled {
+                add(Some(&self.alerts.webhook_url));
             }
         }
 

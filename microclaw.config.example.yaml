@@ -395,6 +395,19 @@ web_session_idle_ttl_seconds: 300
 #   daily_per_chat: 0
 #   exempt_control_chats: true
 
+# Operational webhook alerts: a supervised loop polls runtime health and POSTs
+# a JSON alert ({class, message, generated_at}) to webhook_url when a condition
+# trips: scheduler DLQ growth, provider down (circuit breaker open / repeated
+# failures), token-budget exhaustion, or a supervised-loop restart storm.
+# OFF by default. The webhook URL participates in the configured-endpoint
+# egress policy, and each delivery attempt is recorded in the audit chain.
+# alerts:
+#   enabled: false
+#   webhook_url: ""                # e.g. https://hooks.example.com/microclaw
+#   interval_secs: 60              # seconds between health polls (min 10)
+#   cooldown_secs: 900             # min seconds between same-class alerts
+#   restart_storm_threshold: 5     # restarts within one poll that count as a storm
+
 # "Sleep-time" memory consolidation: when a chat is idle, run a deterministic
 # (no-LLM) background pass that archives near-duplicate memories so the store stops
 # accumulating redundancy between reflector runs. PROFILE memories are never touched,
