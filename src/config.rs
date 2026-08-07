@@ -387,6 +387,21 @@ fn default_true() -> bool {
     true
 }
 
+/// Load-time verification policy for ClawHub-managed skill trees.
+///
+/// `block` (default) makes a skill whose on-disk tree no longer matches the
+/// lockfile hash unavailable until it is reinstalled; `warn` only logs;
+/// `off` disables the check. Entries installed before tree hashing existed
+/// (no recorded hash) always warn instead of blocking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClawHubVerifyMode {
+    Off,
+    Warn,
+    #[default]
+    Block,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClawHubConfig {
     /// ClawHub registry URL
@@ -401,6 +416,9 @@ pub struct ClawHubConfig {
     /// Skip security warnings for ClawHub installs
     #[serde(default, rename = "clawhub_skip_security_warnings")]
     pub skip_security_warnings: bool,
+    /// Verify installed skill trees against the lockfile whenever skills load
+    #[serde(default, rename = "clawhub_verify_on_load")]
+    pub verify_on_load: ClawHubVerifyMode,
 }
 
 impl Default for ClawHubConfig {
@@ -410,6 +428,7 @@ impl Default for ClawHubConfig {
             token: None,
             agent_tools_enabled: default_true(),
             skip_security_warnings: false,
+            verify_on_load: ClawHubVerifyMode::default(),
         }
     }
 }
@@ -2299,6 +2318,16 @@ impl Config {
 
     pub fn clawhub_lockfile_path(&self) -> PathBuf {
         self.data_root_dir().join("clawhub.lock.json")
+    }
+
+    /// Lockfile path plus block flag for load-time skill verification,
+    /// or `None` when `clawhub_verify_on_load: off`.
+    pub fn clawhub_load_verification(&self) -> Option<(PathBuf, bool)> {
+        match self.clawhub.verify_on_load {
+            ClawHubVerifyMode::Off => None,
+            ClawHubVerifyMode::Warn => Some((self.clawhub_lockfile_path(), false)),
+            ClawHubVerifyMode::Block => Some((self.clawhub_lockfile_path(), true)),
+        }
     }
 
     pub fn config_path_for_setup() -> PathBuf {

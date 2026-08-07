@@ -303,6 +303,7 @@ impl ToolRegistry {
                     &skills_data_dir,
                     &config.data_dir,
                 )
+                .with_config_verification(config)
                 .with_db(db.clone()),
             ),
             Box::new(
@@ -473,6 +474,7 @@ impl ToolRegistry {
                     &skills_data_dir,
                     &config.data_dir,
                 )
+                .with_config_verification(config)
                 .with_db(db.clone()),
             ),
             Box::new(structured_memory::StructuredMemorySearchTool::new(

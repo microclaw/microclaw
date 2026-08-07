@@ -36,6 +36,13 @@ impl ActivateSkillTool {
         self.db = Some(db);
         self
     }
+
+    /// Apply the configured ClawHub load-time verification policy so
+    /// tampered managed skills cannot be activated.
+    pub fn with_config_verification(mut self, config: &crate::config::Config) -> Self {
+        self.skill_manager = self.skill_manager.with_config_verification(config);
+        self
+    }
 }
 
 #[async_trait]

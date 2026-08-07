@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone)]
 pub struct SkillMetadata {
@@ -124,6 +124,16 @@ struct SkillCompatibility {
 pub struct SkillManager {
     skills_dir: PathBuf,
     state_file: Option<PathBuf>,
+    /// ClawHub lockfile whose tree hashes are verified whenever skills
+    /// load; `None` disables load-time verification (tests, standalone).
+    clawhub_lock: Option<PathBuf>,
+    /// When true a hash mismatch makes the skill unavailable; when false
+    /// it only logs.
+    clawhub_block: bool,
+    /// Memoized dir-slug -> unavailable-reason verdicts, so the skill
+    /// trees are hashed once per process instead of on every catalog
+    /// build. Invalidated by `reload()`.
+    clawhub_verdicts: Mutex<Option<HashMap<String, String>>>,
 }
 
 const MAX_SKILLS_CATALOG_ITEMS: usize = 40;
@@ -138,26 +148,47 @@ const SKILLS_STATE_FILENAME: &str = "skills_state.json";
 const MAX_INLINED_SKILL_BODY_CHARS: usize = 1500;
 
 impl SkillManager {
-    pub fn from_skills_dir(skills_dir: &str) -> Self {
+    fn base(skills_dir: PathBuf, state_file: Option<PathBuf>) -> Self {
         SkillManager {
-            skills_dir: PathBuf::from(skills_dir),
-            state_file: None,
+            skills_dir,
+            state_file,
+            clawhub_lock: None,
+            clawhub_block: true,
+            clawhub_verdicts: Mutex::new(None),
         }
     }
 
+    pub fn from_skills_dir(skills_dir: &str) -> Self {
+        Self::base(PathBuf::from(skills_dir), None)
+    }
+
     pub fn from_skills_and_runtime(skills_dir: &str, runtime_dir: &str) -> Self {
-        SkillManager {
-            skills_dir: PathBuf::from(skills_dir),
-            state_file: Some(PathBuf::from(runtime_dir).join(SKILLS_STATE_FILENAME)),
-        }
+        Self::base(
+            PathBuf::from(skills_dir),
+            Some(PathBuf::from(runtime_dir).join(SKILLS_STATE_FILENAME)),
+        )
     }
 
     #[allow(dead_code)]
     pub fn new(data_dir: &str) -> Self {
-        let skills_dir = PathBuf::from(data_dir).join("skills");
-        SkillManager {
-            skills_dir,
-            state_file: None,
+        Self::base(PathBuf::from(data_dir).join("skills"), None)
+    }
+
+    /// Enable load-time verification of ClawHub-managed skill trees
+    /// against `lockfile`. With `block` true (config `clawhub_verify_on_load:
+    /// block`, the default) a mismatching skill becomes unavailable; with
+    /// `block` false it only logs.
+    pub fn with_clawhub_verification(mut self, lockfile: PathBuf, block: bool) -> Self {
+        self.clawhub_lock = Some(lockfile);
+        self.clawhub_block = block;
+        self
+    }
+
+    /// Apply the configured ClawHub load-time verification policy.
+    pub fn with_config_verification(self, config: &crate::config::Config) -> Self {
+        match config.clawhub_load_verification() {
+            Some((lockfile, block)) => self.with_clawhub_verification(lockfile, block),
+            None => self,
         }
     }
 
@@ -177,7 +208,83 @@ impl SkillManager {
 
     /// Reload skills from disk (live reload)
     pub fn reload(&self) -> Vec<SkillMetadata> {
+        match self.clawhub_verdicts.lock() {
+            Ok(mut cache) => *cache = None,
+            Err(poisoned) => *poisoned.into_inner() = None,
+        }
         self.discover_skills()
+    }
+
+    /// Verify ClawHub-managed skill trees against the lockfile, memoized
+    /// until `reload()`. Returns dir-slug -> reason for skills that must
+    /// be treated as unavailable. Warn-only outcomes (unpinned entries,
+    /// warn mode, lockfile entries whose directory is gone) are logged at
+    /// compute time and produce no map entry.
+    fn clawhub_unavailable_reasons(&self) -> HashMap<String, String> {
+        let Some(lock_path) = &self.clawhub_lock else {
+            return HashMap::new();
+        };
+        let mut cache = match self.clawhub_verdicts.lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(map) = cache.as_ref() {
+            return map.clone();
+        }
+        let mut reasons = HashMap::new();
+        let lock = match microclaw_clawhub::lockfile::read_lockfile(lock_path) {
+            Ok(lock) => lock,
+            Err(e) => {
+                // An unreadable lockfile means integrity can no longer be
+                // proven for any managed skill; log loudly but do not
+                // brick unmanaged/local skills.
+                tracing::error!("ClawHub lockfile {} is unreadable: {e}", lock_path.display());
+                *cache = Some(reasons.clone());
+                return reasons;
+            }
+        };
+        use microclaw_clawhub::install::TreeVerification;
+        for (slug, entry) in &lock.skills {
+            match microclaw_clawhub::install::verify_tree(entry, &self.skills_dir) {
+                TreeVerification::Ok => {}
+                TreeVerification::Unpinned => {
+                    tracing::warn!(
+                        "ClawHub skill '{slug}' has no recorded tree hash (installed before \
+                         pinning); reinstall to pin"
+                    );
+                }
+                TreeVerification::Missing => {
+                    tracing::warn!(
+                        "ClawHub skill '{slug}' is in the lockfile but its installed directory \
+                         is missing or unreadable"
+                    );
+                }
+                TreeVerification::Modified { expected, actual } => {
+                    if self.clawhub_block {
+                        tracing::error!(
+                            "ClawHub skill '{slug}' tree MODIFIED since install (expected \
+                             {expected}, actual {actual}); the skill is unavailable until \
+                             reinstalled"
+                        );
+                        reasons.insert(
+                            slug.clone(),
+                            "Installed files no longer match the ClawHub lockfile hash. Run \
+                             `microclaw skill verify` for details and reinstall the skill to \
+                             restore integrity."
+                                .to_string(),
+                        );
+                    } else {
+                        tracing::warn!(
+                            "ClawHub skill '{slug}' tree MODIFIED since install (expected \
+                             {expected}, actual {actual}); clawhub_verify_on_load is 'warn' so \
+                             the skill remains available"
+                        );
+                    }
+                }
+            }
+        }
+        *cache = Some(reasons.clone());
+        reasons
     }
 
     fn discover_skills_internal(&self, include_unavailable: bool) -> Vec<SkillMetadata> {
@@ -190,6 +297,7 @@ impl SkillManager {
     fn discover_skill_statuses(&self) -> Vec<SkillAvailability> {
         let mut statuses = Vec::new();
         let state = self.read_state_file();
+        let clawhub_blocked = self.clawhub_unavailable_reasons();
         let entries = match std::fs::read_dir(&self.skills_dir) {
             Ok(e) => e,
             Err(_) => return statuses,
@@ -212,6 +320,17 @@ impl SkillManager {
                             meta,
                             available: false,
                             reason: Some("Skill is disabled for this runtime.".to_string()),
+                        });
+                        continue;
+                    }
+                    // The lockfile is keyed by install slug == directory
+                    // name, which may differ from the frontmatter name.
+                    let dir_slug = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+                    if let Some(reason) = clawhub_blocked.get(dir_slug) {
+                        statuses.push(SkillAvailability {
+                            meta,
+                            available: false,
+                            reason: Some(reason.clone()),
                         });
                         continue;
                     }
@@ -1101,6 +1220,106 @@ ok
             "---\nname: {name}\ndescription: {description}\nsource: agent-created\n---\n{body}\n"
         );
         std::fs::write(dir.join("SKILL.md"), content).unwrap();
+    }
+
+    fn write_lock_entry(lock_path: &std::path::Path, slug: &str, tree_hash: Option<String>) {
+        let mut skills = std::collections::HashMap::new();
+        skills.insert(
+            slug.to_string(),
+            microclaw_clawhub::types::LockEntry {
+                slug: slug.to_string(),
+                installed_version: "1.0.0".into(),
+                installed_at: "2026-08-07T00:00:00Z".into(),
+                content_hash: "sha256:unused".into(),
+                tree_hash,
+                local_path: slug.to_string(),
+            },
+        );
+        let lock = microclaw_clawhub::types::LockFile { version: 1, skills };
+        microclaw_clawhub::lockfile::write_lockfile(lock_path, &lock).unwrap();
+    }
+
+    #[test]
+    fn clawhub_tampered_skill_blocks_at_load_after_reload() {
+        let dir = std::env::temp_dir().join(format!(
+            "microclaw_clawhub_verify_block_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_skill(&dir, "managed", "managed skill", "ok");
+        write_skill(&dir, "local", "local skill", "ok");
+        let tree =
+            microclaw_clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
+        let lock_path = dir.join("clawhub.lock.json");
+        write_lock_entry(&lock_path, "managed", Some(tree));
+
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap())
+            .with_clawhub_verification(lock_path.clone(), true);
+        assert!(sm.discover_skills().iter().any(|s| s.name == "managed"));
+
+        std::fs::write(
+            dir.join("managed").join("SKILL.md"),
+            "---\nname: managed\ndescription: mutated\n---\npayload\n",
+        )
+        .unwrap();
+        // The verdict is memoized until an explicit reload, so discovery
+        // stays cheap between reloads.
+        assert!(sm.discover_skills().iter().any(|s| s.name == "managed"));
+
+        sm.reload();
+        let statuses = sm.discover_skills_with_status(true);
+        let managed = statuses.iter().find(|s| s.meta.name == "managed").unwrap();
+        assert!(!managed.available);
+        assert!(managed
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("lockfile hash"));
+        assert!(sm.load_skill_checked("managed").is_err());
+        // Unmanaged skills are untouched.
+        assert!(sm.discover_skills().iter().any(|s| s.name == "local"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clawhub_warn_mode_keeps_tampered_skill_available() {
+        let dir = std::env::temp_dir().join(format!(
+            "microclaw_clawhub_verify_warn_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_skill(&dir, "managed", "managed skill", "ok");
+        let tree =
+            microclaw_clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
+        let lock_path = dir.join("clawhub.lock.json");
+        write_lock_entry(&lock_path, "managed", Some(tree));
+
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap())
+            .with_clawhub_verification(lock_path, false);
+        std::fs::write(
+            dir.join("managed").join("SKILL.md"),
+            "---\nname: managed\ndescription: mutated\n---\npayload\n",
+        )
+        .unwrap();
+        assert!(sm.discover_skills().iter().any(|s| s.name == "managed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clawhub_unpinned_entry_stays_available() {
+        let dir = std::env::temp_dir().join(format!(
+            "microclaw_clawhub_verify_unpinned_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_skill(&dir, "managed", "managed skill", "ok");
+        let lock_path = dir.join("clawhub.lock.json");
+        write_lock_entry(&lock_path, "managed", None);
+
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap())
+            .with_clawhub_verification(lock_path, true);
+        assert!(sm.discover_skills().iter().any(|s| s.name == "managed"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

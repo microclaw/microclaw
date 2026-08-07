@@ -854,7 +854,8 @@ async fn main() -> anyhow::Result<()> {
     info!("Memory manager initialized");
 
     let skill_manager =
-        skills::SkillManager::from_skills_and_runtime(&skills_data_dir, &runtime_data_dir);
+        skills::SkillManager::from_skills_and_runtime(&skills_data_dir, &runtime_data_dir)
+            .with_config_verification(&config);
     let discovered = skill_manager.discover_skills();
     info!(
         "Skill manager initialized ({} skills discovered)",

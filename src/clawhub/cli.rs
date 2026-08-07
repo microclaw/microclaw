@@ -171,7 +171,8 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             let manager = SkillManager::from_skills_and_runtime(
                 &config.skills_data_dir(),
                 &config.runtime_data_dir(),
-            );
+            )
+            .with_config_verification(config);
             if all {
                 println!("{}", manager.list_skills_formatted_all());
             } else {
