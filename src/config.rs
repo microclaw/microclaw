@@ -1356,6 +1356,21 @@ impl Default for InterjectionConfig {
     }
 }
 
+/// Named per-peer trust tier for outbound A2A sends. `limited` (default)
+/// keeps the historical behavior; `sandboxed` treats a send to this peer
+/// as high-risk — on web/control chats it requires the explicit approval
+/// flow before the message leaves. `trusted` is currently equivalent to
+/// `limited` and reserved for future capability widening; tiers never
+/// lower existing guardrails.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum A2ATrust {
+    Trusted,
+    #[default]
+    Limited,
+    Sandboxed,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct A2APeerConfig {
     #[serde(default = "default_true")]
@@ -1368,6 +1383,9 @@ pub struct A2APeerConfig {
     pub description: Option<String>,
     #[serde(default)]
     pub default_session_key: Option<String>,
+    /// Trust tier for sends to this peer. Default: limited.
+    #[serde(default)]
+    pub trust: A2ATrust,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -5088,6 +5106,7 @@ subagents:
                 bearer_token: Some(" token ".into()),
                 description: Some(" executes ".into()),
                 default_session_key: Some(" team/work ".into()),
+                trust: Default::default(),
             },
         );
 

@@ -118,6 +118,17 @@ pub enum PolicyDecision {
 /// Evaluate `tool_name` against the configured policy. Pure — callers handle
 /// audit logging and short-circuiting.
 pub fn evaluate_tool_policy(cfg: &ToolPolicyConfig, tool_name: &str) -> PolicyDecision {
+    evaluate_tool_policy_with_risk(cfg, tool_name, tool_risk(tool_name))
+}
+
+/// Like [`evaluate_tool_policy`] but with the tool's effective risk supplied
+/// by the caller — used when a registration-time override (e.g. an MCP
+/// server trust tier) replaces the name-derived risk.
+pub fn evaluate_tool_policy_with_risk(
+    cfg: &ToolPolicyConfig,
+    tool_name: &str,
+    risk: microclaw_tools::runtime::ToolRisk,
+) -> PolicyDecision {
     if cfg.mode == ToolPolicyMode::Off {
         return PolicyDecision::Allow;
     }
@@ -128,14 +139,11 @@ pub fn evaluate_tool_policy(cfg: &ToolPolicyConfig, tool_name: &str) -> PolicyDe
         Some(format!("tool `{tool_name}` is in tool_policy.deny_tools"))
     } else {
         match cfg.max_risk {
-            Some(max_risk) if tool_risk(tool_name) > max_risk => {
-                let risk = tool_risk(tool_name);
-                Some(format!(
-                    "tool `{tool_name}` risk `{}` exceeds tool_policy.max_risk `{}`",
-                    risk.as_str(),
-                    max_risk.as_str()
-                ))
-            }
+            Some(max_risk) if risk > max_risk => Some(format!(
+                "tool `{tool_name}` risk `{}` exceeds tool_policy.max_risk `{}`",
+                risk.as_str(),
+                max_risk.as_str()
+            )),
             _ => None,
         }
     };
@@ -158,7 +166,19 @@ pub fn evaluate_tool_policy_for_auth(
     tool_name: &str,
     auth: &microclaw_tools::runtime::ToolAuthContext,
 ) -> PolicyDecision {
-    let global = evaluate_tool_policy(cfg, tool_name);
+    evaluate_tool_policy_for_auth_with_risk(cfg, tool_name, auth, tool_risk(tool_name))
+}
+
+/// Like [`evaluate_tool_policy_for_auth`] but with the tool's effective risk
+/// supplied by the caller (registration-time overrides such as MCP server
+/// trust tiers).
+pub fn evaluate_tool_policy_for_auth_with_risk(
+    cfg: &ToolPolicyConfig,
+    tool_name: &str,
+    auth: &microclaw_tools::runtime::ToolAuthContext,
+    risk: microclaw_tools::runtime::ToolRisk,
+) -> PolicyDecision {
+    let global = evaluate_tool_policy_with_risk(cfg, tool_name, risk);
     if matches!(global, PolicyDecision::Block(_))
         || cfg.grants_mode == ToolPolicyMode::Off
         || (cfg.control_chat_bypass && auth.is_control_chat())
@@ -184,13 +204,13 @@ pub fn evaluate_tool_policy_for_auth(
             "tool `{tool_name}` is denied for principal `{}`",
             auth.principal
         ))
-    } else if matching.iter().any(|rule| {
-        rule.max_risk
-            .is_some_and(|max_risk| tool_risk(tool_name) > max_risk)
-    }) {
+    } else if matching
+        .iter()
+        .any(|rule| rule.max_risk.is_some_and(|max_risk| risk > max_risk))
+    {
         Some(format!(
             "tool `{tool_name}` risk `{}` exceeds a matching capability grant",
-            tool_risk(tool_name).as_str()
+            risk.as_str()
         ))
     } else if !matching
         .iter()
@@ -394,6 +414,30 @@ mod tests {
         assert!(matches!(
             evaluate_tool_policy(&c, "mcp_fs_delete_file"),
             PolicyDecision::Block(_)
+        ));
+    }
+
+    #[test]
+    fn policy_with_risk_override_replaces_name_derived_risk() {
+        // Server trust tiers pass an explicit risk that replaces the
+        // name-derived Medium for MCP tools in both directions.
+        let mut c = cfg(ToolPolicyMode::Block);
+        c.max_risk = Some(ToolRisk::Medium);
+        // Uniform default: allowed at medium.
+        assert!(matches!(
+            evaluate_tool_policy(&c, "mcp_fs_delete_file"),
+            PolicyDecision::Allow
+        ));
+        // Sandboxed server → High: blocked at medium.
+        assert!(matches!(
+            evaluate_tool_policy_with_risk(&c, "mcp_fs_delete_file", ToolRisk::High),
+            PolicyDecision::Block(_)
+        ));
+        // Trusted server → Low: allowed even at max_risk=low.
+        c.max_risk = Some(ToolRisk::Low);
+        assert!(matches!(
+            evaluate_tool_policy_with_risk(&c, "mcp_fs_delete_file", ToolRisk::Low),
+            PolicyDecision::Allow
         ));
     }
 

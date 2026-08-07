@@ -74,7 +74,7 @@ pub use microclaw_tools::runtime::{
     schema_object, tool_execution_policy, tool_risk, validate_execution_policy, Tool,
     ToolAuthContext, ToolResult, ToolRisk,
 };
-use microclaw_tools::runtime::{inject_auth_context, require_high_risk_approval};
+use microclaw_tools::runtime::{inject_auth_context, require_high_risk_approval_with_risk};
 use microclaw_tools::sandbox::{ExtraMount, SandboxMode, SandboxRouter};
 
 pub struct ToolRegistry {
@@ -86,6 +86,10 @@ pub struct ToolRegistry {
     /// For sealing tool-policy decisions into the audit chain. `None` only in
     /// unit tests; both real constructors set it.
     audit_db: Option<Arc<Database>>,
+    /// Registration-time risk overrides (e.g. MCP server trust tiers).
+    /// Consulted before the name-derived `tool_risk` at the policy and
+    /// approval choke points.
+    risk_overrides: std::collections::HashMap<String, ToolRisk>,
 }
 
 impl ToolRegistry {
@@ -388,6 +392,7 @@ impl ToolRegistry {
             sandbox_runtime_available: sandbox_router.runtime_available(),
             cached_static_definitions: OnceLock::new(),
             audit_db,
+            risk_overrides: std::collections::HashMap::new(),
         }
     }
 
@@ -532,6 +537,7 @@ impl ToolRegistry {
             sandbox_runtime_available: sandbox_router.runtime_available(),
             cached_static_definitions: OnceLock::new(),
             audit_db,
+            risk_overrides: std::collections::HashMap::new(),
         }
     }
 
@@ -554,6 +560,23 @@ impl ToolRegistry {
         // Invalidate cache when a new tool is added
         self.cached_static_definitions = OnceLock::new();
         self.tools.push(tool);
+    }
+
+    /// Register a tool with an explicit effective risk that replaces the
+    /// name-derived `tool_risk` at the policy/approval choke points. Used
+    /// for MCP tools whose server carries a trust tier.
+    pub fn add_tool_with_risk(&mut self, tool: Box<dyn Tool>, risk: ToolRisk) {
+        self.risk_overrides.insert(tool.name().to_string(), risk);
+        self.add_tool(tool);
+    }
+
+    /// Effective risk of a tool: registration-time override first, then the
+    /// shared name-derived mapping.
+    pub fn effective_tool_risk(&self, name: &str) -> ToolRisk {
+        self.risk_overrides
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| tool_risk(name))
     }
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {
@@ -625,10 +648,12 @@ impl ToolRegistry {
         // covered; a denied tool cannot be reached by delegation. Decisions
         // are sealed into the audit chain fire-and-forget (the DB write
         // itself preserves chain order).
-        match crate::tool_guardrails::evaluate_tool_policy_for_auth(
+        let effective_risk = self.effective_tool_risk(name);
+        match crate::tool_guardrails::evaluate_tool_policy_for_auth_with_risk(
             &self.config.tool_policy,
             name,
             auth,
+            effective_risk,
         ) {
             crate::tool_guardrails::PolicyDecision::Allow => {}
             decision => {
@@ -731,14 +756,16 @@ impl ToolRegistry {
             return ToolResult::error(msg).with_error_type("execution_policy_blocked");
         }
         if self.config.high_risk_tool_user_confirmation_required {
-            if let Some(blocked) = require_high_risk_approval(name, auth, &input) {
+            if let Some(blocked) =
+                require_high_risk_approval_with_risk(name, effective_risk, auth, &input)
+            {
                 return blocked;
             }
         }
 
         tracing::debug!(
             tool = name,
-            risk = tool_risk(name).as_str(),
+            risk = effective_risk.as_str(),
             execution_policy = tool_execution_policy(name).as_str(),
             sandbox_mode = ?self.sandbox_mode,
             sandbox_runtime_available = self.sandbox_runtime_available,
@@ -936,6 +963,7 @@ mod tests {
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -962,6 +990,7 @@ mod tests {
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -982,6 +1011,7 @@ mod tests {
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![
                 Box::new(DummyTool {
                     tool_name: "write_file".into(),
@@ -1020,6 +1050,7 @@ mod tests {
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1059,6 +1090,7 @@ mod tests {
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1096,6 +1128,7 @@ mod tests {
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1124,6 +1157,7 @@ mod tests {
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1149,6 +1183,7 @@ mod tests {
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(DummyTool {
                 tool_name: "write_file".into(),
             })],
@@ -1205,6 +1240,7 @@ tools:
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
         };
         let auth = ToolAuthContext {
             caller_channel: "web".into(),
@@ -1234,6 +1270,7 @@ tools:
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "write_memory".into(),
             })],
@@ -1266,6 +1303,7 @@ tools:
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "write_memory".into(),
             })],
@@ -1298,6 +1336,7 @@ tools:
             sandbox_runtime_available: false,
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "send_message".into(),
             })],

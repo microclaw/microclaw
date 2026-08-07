@@ -395,8 +395,8 @@ pub fn resolve_tool_working_dir(
     resolved
 }
 
-fn requires_high_risk_approval(name: &str, auth: &ToolAuthContext) -> bool {
-    tool_risk(name) == ToolRisk::High && (auth.caller_channel == "web" || auth.is_control_chat())
+fn requires_high_risk_approval(risk: ToolRisk, auth: &ToolAuthContext) -> bool {
+    risk == ToolRisk::High && (auth.caller_channel == "web" || auth.is_control_chat())
 }
 
 const HIGH_RISK_APPROVED_KEY: &str = "__microclaw_high_risk_approved";
@@ -406,7 +406,19 @@ pub fn require_high_risk_approval(
     auth: &ToolAuthContext,
     input: &serde_json::Value,
 ) -> Option<ToolResult> {
-    if !requires_high_risk_approval(name, auth) {
+    require_high_risk_approval_with_risk(name, tool_risk(name), auth, input)
+}
+
+/// Like [`require_high_risk_approval`] but with the tool's effective risk
+/// supplied by the caller — used when a registration-time override (e.g. an
+/// MCP server trust tier) replaces the name-derived risk.
+pub fn require_high_risk_approval_with_risk(
+    name: &str,
+    risk: ToolRisk,
+    auth: &ToolAuthContext,
+    input: &serde_json::Value,
+) -> Option<ToolResult> {
+    if !requires_high_risk_approval(risk, auth) {
         return None;
     }
 
@@ -426,7 +438,7 @@ pub fn require_high_risk_approval(
         Some(
             ToolResult::error(format!(
                 "Approval required for high-risk tool '{name}' (risk: {}). Add `{HIGH_RISK_APPROVED_KEY}: true` only after explicit operator approval.",
-                tool_risk(name).as_str(),
+                risk.as_str(),
             ))
             .with_error_type("approval_required"),
         )

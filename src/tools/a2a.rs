@@ -10,6 +10,10 @@ use crate::config::Config;
 use crate::http_client::default_llm_user_agent;
 use microclaw_core::llm_types::ToolDefinition;
 
+/// Approval marker injected by the executor's retry path after explicit
+/// operator approval; must match the shared high-risk marker key.
+const A2A_HIGH_RISK_APPROVED_KEY: &str = "__microclaw_high_risk_approved";
+
 pub struct A2AListPeersTool {
     config: Config,
 }
@@ -149,6 +153,24 @@ impl Tool for A2ASendTool {
         if !peer.enabled {
             return ToolResult::error(format!("A2A peer `{peer_name}` is disabled"));
         }
+        if peer.trust == crate::config::A2ATrust::Sandboxed {
+            // A sandboxed peer makes this specific send high-risk regardless
+            // of which chat invoked it (same shape as the bash
+            // dangerous-pattern gate): the executor sees `approval_required`
+            // and pauses for explicit operator approval before anything
+            // leaves for the peer.
+            let already_approved = input
+                .get(A2A_HIGH_RISK_APPROVED_KEY)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !already_approved {
+                return ToolResult::error(format!(
+                    "Approval required: A2A peer `{peer_name}` has trust tier `sandboxed`. \
+                     Operator must explicitly approve before this message is sent."
+                ))
+                .with_error_type("approval_required");
+            }
+        }
         let Some(base_url) = normalize_base_url(&peer.base_url) else {
             return ToolResult::error(format!("A2A peer `{peer_name}` has invalid base_url"));
         };
@@ -244,12 +266,39 @@ mod tests {
                 bearer_token: Some("secret".into()),
                 description: Some("plans".into()),
                 default_session_key: Some("a2a:planner".into()),
+                trust: Default::default(),
             },
         );
         let tool = A2AListPeersTool::new(&cfg);
         let result = tool.execute(json!({})).await;
         assert!(!result.is_error);
         assert!(result.content.contains("\"peer\": \"planner\""));
+    }
+
+    #[tokio::test]
+    async fn test_a2a_send_to_sandboxed_peer_requires_approval() {
+        let mut cfg = Config::test_defaults();
+        cfg.a2a.enabled = true;
+        cfg.a2a.peers.insert(
+            "risky".into(),
+            crate::config::A2APeerConfig {
+                enabled: true,
+                base_url: "https://risky.example.com".into(),
+                bearer_token: None,
+                description: None,
+                default_session_key: None,
+                trust: crate::config::A2ATrust::Sandboxed,
+            },
+        );
+        let tool = A2ASendTool::new(&cfg);
+        let result = tool
+            .execute(json!({"peer": "risky", "message": "do work"}))
+            .await;
+        assert!(result.is_error);
+        assert_eq!(result.error_type.as_deref(), Some("approval_required"));
+        // No network request was attempted: the gate fires before the URL
+        // is even normalized.
+        assert!(result.content.contains("sandboxed"));
     }
 
     #[tokio::test]
@@ -296,6 +345,7 @@ mod tests {
                 bearer_token: Some("secret".into()),
                 description: None,
                 default_session_key: None,
+                trust: Default::default(),
             },
         );
         let tool = A2ASendTool::new(&cfg);

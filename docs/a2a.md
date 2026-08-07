@@ -28,7 +28,14 @@ a2a:
       bearer_token: shared-a2a-token
       description: Executes implementation tasks
       default_session_key: a2a:worker
+      trust: limited            # trusted | limited (default) | sandboxed
 ```
+
+Per-peer `trust` tiers govern outbound sends: `sandboxed` treats every
+`a2a_send` to that peer as high-risk — the agent pauses for explicit operator
+approval before the message leaves. `limited` (the default) is the historical
+behavior; `trusted` is currently equivalent and reserved for future
+capability widening. Tiers never lower existing guardrails.
 
 ## Usage
 

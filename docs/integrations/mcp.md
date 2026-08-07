@@ -56,6 +56,31 @@ Minimal example:
 
 Run `microclaw doctor` after editing MCP configuration. It checks configured command dependencies. Startup logs report whether each server connected and which protocol was negotiated.
 
+## Trust tiers
+
+Each server can carry a named trust tier that maps onto tool-policy risk for
+every tool it exposes:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {"command": "npx", "args": ["..."], "trust": "trusted"},
+    "marketplace-thing": {"command": "npx", "args": ["..."], "trust": "sandboxed"}
+  }
+}
+```
+
+- `trusted` → tools rate **low** risk (pass a `max_risk: low` policy).
+- `limited` (default) → **medium**, the historical uniform rating for all MCP
+  tools; omitting the field changes nothing.
+- `sandboxed` → **high**: a `max_risk: medium` policy blocks the server's
+  tools, and calls from web/control chats require the explicit high-risk
+  approval flow before running.
+
+Tiers feed the same policy and approval choke points as built-in tools; they
+can raise scrutiny for a server you don't fully trust, and lower the *rating*
+for one you do — they never bypass deny lists or grants.
+
 ## Security model
 
 An MCP server is executable code or a remote capability boundary. Before enabling one:
@@ -63,7 +88,8 @@ An MCP server is executable code or a remote capability boundary. Before enablin
 1. Review the package, command, arguments, environment variables, and network destination.
 2. Grant the smallest filesystem and network scope it needs.
 3. Avoid forwarding broad credential environments.
-4. Apply shared tool grants and egress policy where appropriate.
+4. Apply shared tool grants and egress policy where appropriate — and set a
+   `trust` tier (above) for any server you wouldn't hand a shell.
 5. Prefer pinned package versions in production rather than `latest`.
 
 See the [execution model](../security/execution-model.md) and [secure runtime](../security/secure-runtime.md).

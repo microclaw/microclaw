@@ -41,10 +41,28 @@ fn resolve_request_timeout_secs(
         .max(1)
 }
 
+/// Named per-server trust tier, mapped onto tool-policy risk when the
+/// server's tools are registered: `trusted` → low, `limited` → medium
+/// (the historical default for every MCP tool), `sandboxed` → high (so a
+/// `max_risk: medium` policy blocks it and web/control-chat calls require
+/// explicit approval). A tier can only match or raise the historical
+/// risk, never grant new capability by itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTrust {
+    Trusted,
+    #[default]
+    Limited,
+    Sandboxed,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerConfig {
     #[serde(default = "default_transport")]
     pub transport: String,
+    /// Trust tier for every tool this server exposes. Default: limited.
+    #[serde(default)]
+    pub trust: McpTrust,
     #[serde(default, alias = "protocolVersion")]
     pub protocol_version: Option<String>,
     #[serde(default)]
@@ -205,6 +223,7 @@ impl McpPeer {
 
 pub struct McpServer {
     name: String,
+    trust: McpTrust,
     peer: McpPeer,
     request_timeout: Duration,
     max_retries: u32,
@@ -306,6 +325,7 @@ impl McpServer {
 
         let server = McpServer {
             name: name.to_string(),
+            trust: config.trust,
             peer,
             request_timeout,
             max_retries,
@@ -323,6 +343,10 @@ impl McpServer {
         let _ = server.refresh_tools_cache(true).await?;
 
         Ok(server)
+    }
+
+    pub fn trust(&self) -> McpTrust {
+        self.trust
     }
 
     fn is_cache_fresh(&self) -> bool {
@@ -800,6 +824,24 @@ mod tests {
         assert!(server.max_concurrent_requests.is_none());
         assert!(server.queue_wait_ms.is_none());
         assert!(server.rate_limit_per_minute.is_none());
+        // Historical behavior preserved: no trust field → limited.
+        assert_eq!(server.trust, McpTrust::Limited);
+    }
+
+    #[test]
+    fn test_mcp_trust_tier_parses() {
+        let json = r#"{
+      "mcpServers": {
+        "safe": {"command": "a", "trust": "trusted"},
+        "risky": {"command": "b", "trust": "sandboxed"}
+      }
+    }"#;
+        let cfg: McpConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.mcp_servers.get("safe").unwrap().trust, McpTrust::Trusted);
+        assert_eq!(
+            cfg.mcp_servers.get("risky").unwrap().trust,
+            McpTrust::Sandboxed
+        );
     }
 
     #[test]
