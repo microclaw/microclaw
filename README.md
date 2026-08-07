@@ -82,7 +82,7 @@ For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service 
 | A write-capable tool is interrupted | Recovery stops at uncertain side effects and asks for verification instead of blindly replaying the call | Recovery audit events |
 | A channel is unavailable | Task completion and message delivery remain separate, so the result can stay queued for retry | Task history and delivery diagnostics |
 
-Read the [durable coworker guide](docs/operations/durable-coworker.md) and [reliability proof report](docs/reports/reliability-differentiation-2026-07.md) for the concrete recovery model.
+Read the [durable coworker guide](docs/operations/durable-coworker.md) and [reliability proof report](docs/reports/reliability-differentiation-2026-07.md) for the concrete recovery model. Every release publishes a machine-readable [reliability scorecard](docs/reports/reliability/README.md) as a release asset — reproduce it locally with `scripts/ci/reliability_scorecard.sh`.
 
 ## How it works
 

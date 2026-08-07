@@ -121,6 +121,15 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: scripts/ci/stability_smoke.sh
+        env:
+          RELIABILITY_SCORECARD_DIR: target/reliability-scorecard/latest
+      - name: Upload reliability scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-scorecard
+          path: target/reliability-scorecard/latest
+          if-no-files-found: ignore
 
   build:
     name: Build (Release)

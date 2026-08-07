@@ -329,10 +329,52 @@ jobs:
           cache-from: type=gha,scope=release-container
           cache-to: type=gha,mode=max,scope=release-container
 
+  reliability-scorecard:
+    name: Reliability Scorecard
+    runs-on: ubuntu-latest
+    needs: verify-ci
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run reliability proof pack
+        run: scripts/ci/reliability_scorecard.sh --output-dir target/reliability-scorecard/release
+
+      - name: Stamp release filenames
+        shell: bash
+        run: |
+          mkdir -p scorecard-assets
+          cp target/reliability-scorecard/release/scorecard.json \
+            "scorecard-assets/reliability-scorecard-${RELEASE_TAG}.json"
+          cp target/reliability-scorecard/release/scorecard.md \
+            "scorecard-assets/reliability-scorecard-${RELEASE_TAG}.md"
+
+      - name: Upload scorecard artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-scorecard
+          path: scorecard-assets
+
   publish-assets:
     name: Upload to GitHub Release
     runs-on: ubuntu-latest
-    needs: build-assets
+    needs: [build-assets, reliability-scorecard]
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
