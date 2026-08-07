@@ -18,6 +18,7 @@ This directory tracks RFCs for the MicroClaw feature-completion program.
 - `0004-metrics-naming.md`
 - `0005-subagents-runtime-v1.md`
 - `0006-typescript-plugin-host.md`
+- `0007-plugin-host-runtime-decision.md`
 
 ## Status Lifecycle
 
