@@ -6,6 +6,52 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Added
+
+- **Reliability scorecard publication.** Every release attaches
+  `reliability-scorecard-<tag>.{json,md}` (the proof-pack results generated
+  from the tagged source) to its GitHub release assets; CI uploads the same
+  scorecard per push, and a docs page covers scope, schema, and one-script
+  reproduction.
+- **ClawHub load-time integrity verification.** Managed skills are
+  re-verified against their lockfile tree hash whenever skills load.
+  `clawhub_verify_on_load` (default `block`) hides tampered skills and fails
+  activation with an actionable message; unpinned pre-hash installs warn
+  instead of blocking.
+- **Consolidated status surface.** `/status` and the web governance
+  snapshot/panel report scheduler DLQ depth, 24h contract verdicts,
+  token-budget usage, provider failover/circuit-breaker health, and
+  supervised-loop restart counters.
+- **Opt-in webhook alerts.** A supervised loop POSTs JSON alerts on DLQ
+  growth, provider down, budget exhaustion, and restart storms — baseline
+  first poll, per-class cooldowns, egress-governed webhook, audit-chained
+  deliveries. Off by default.
+- **Opt-in periodic trust report.** A digest of task runs, contract
+  verdicts, token spend, guardrail audit events, and reliability health
+  delivered to control chats on a restart-surviving cadence. No LLM calls;
+  off by default.
+- **Structured approvals.** High-risk approval prompts are numbered option
+  cards (approve once / always allow in this chat / deny) with en/zh
+  keywords; "always" records an audit-chained standing per-chat grant
+  managed via the new `/approvals` command, and web clients receive a
+  structured `approval_required` stream event. An opt-in
+  `aux_models.approval_reviewer` annotates prompts with an advisory verdict
+  and never decides.
+- **MCP/A2A trust tiers.** Per-server (`trust: trusted|limited|sandboxed`
+  in `mcp.json`) and per-peer (`a2a.peers.<name>.trust`) tiers map onto
+  tool-policy risk; omitted = `limited` = historical behavior, `sandboxed`
+  requires explicit approval.
+- **Model-swap canary.** `microclaw canary <model>` probes a candidate
+  model (response + tool-calling) through the exact configured provider
+  path before an operator switches `model:`.
+- **User message language.** `user_message_language` (`en` default / `zh` /
+  `bilingual`) selects the language of approval prompts and token-budget
+  refusals via a new message catalog.
+- Plugin-host runtime decision recorded as RFC 0007 (hold RFC 0006's
+  supervised Node host; reserve wasmtime for a future compute-skill
+  surface), plus an OWASP agentic top-10 self-assessment and a published
+  tokens-per-task benchmark method with extraction script.
+
 ### Changed
 
 - Reworked the root README files into concise project entry points, moved
