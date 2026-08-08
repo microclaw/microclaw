@@ -4,10 +4,14 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
-## Unreleased
+## 0.4.0 - 2026-08-07
 
 ### Added
 
+- **Web approval option cards.** The web chat renders a paused high-risk
+  approval as clickable option buttons (approve once / always allow / deny)
+  driven by the structured `approval_required` stream event; clicking sends
+  the same numbered reply the text contract defines.
 - **Reliability scorecard publication.** Every release attaches
   `reliability-scorecard-<tag>.{json,md}` (the proof-pack results generated
   from the tagged source) to its GitHub release assets; CI uploads the same

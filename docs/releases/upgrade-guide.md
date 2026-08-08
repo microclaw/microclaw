@@ -15,9 +15,9 @@ Use this guide for rolling upgrades that may include schema/auth/hooks/session/m
 
 On first start, schema migrations are applied automatically.
 
-### v0.4.0 (in progress)
+### v0.4.0
 
-No schema migration beyond v0.3.x is required by the v0.4.0 work so far.
+No schema migration beyond v0.3.x is required by v0.4.0.
 Changes to be aware of when upgrading from any v0.3.x:
 
 **New config sections (all backward-compatible):**

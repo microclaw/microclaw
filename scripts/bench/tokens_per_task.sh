@@ -27,7 +27,6 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$db" ]] || { usage; exit 2; }
 [[ -f "$db" ]] || { echo "Database not found: $db" >&2; exit 1; }
-command -v sqlite3 >/dev/null || { echo "sqlite3 is required" >&2; exit 1; }
 
 query="SELECT chat_id,
        COUNT(*) AS calls,
@@ -39,9 +38,28 @@ query="SELECT chat_id,
  GROUP BY chat_id
  ORDER BY chat_id;"
 
-if [[ "$json" -eq 1 ]]; then
-  sqlite3 -json "$db" "$query"
+if command -v sqlite3 >/dev/null; then
+  if [[ "$json" -eq 1 ]]; then
+    sqlite3 -json "$db" "$query"
+  else
+    echo "chat_id|calls|input_tokens|output_tokens|total_tokens"
+    sqlite3 "$db" "$query"
+  fi
+elif command -v python3 >/dev/null; then
+  # MicroClaw bundles SQLite, so hosts often lack the sqlite3 CLI; the
+  # python3 stdlib driver reads the same file.
+  DB="$db" QUERY="$query" JSON="$json" python3 - <<'PY'
+import json as j, os, sqlite3
+rows = sqlite3.connect(os.environ["DB"]).execute(os.environ["QUERY"].rstrip(";")).fetchall()
+cols = ["chat_id", "calls", "input_tokens", "output_tokens", "total_tokens"]
+if os.environ["JSON"] == "1":
+    print(j.dumps([dict(zip(cols, r)) for r in rows], indent=2))
+else:
+    print("|".join(cols))
+    for r in rows:
+        print("|".join(str(v) for v in r))
+PY
 else
-  echo "chat_id|calls|input_tokens|output_tokens|total_tokens"
-  sqlite3 "$db" "$query"
+  echo "sqlite3 or python3 is required" >&2
+  exit 1
 fi

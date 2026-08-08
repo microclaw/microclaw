@@ -6,6 +6,7 @@ import {
   MessagePrimitive,
   useMessage,
   useLocalRuntime,
+  useThreadRuntime,
   type ChatModelAdapter,
   type ChatModelRunOptions,
   type ChatModelRunResult,
@@ -1228,13 +1229,53 @@ function CustomUserMessage() {
   )
 }
 
+type PendingApproval = {
+  approvalId: string
+  tool: string
+  preview: string | null
+  options: string[]
+  advisory: string | null
+}
+
+// Option-card buttons for a paused high-risk approval. Clicking sends the
+// bare option number ("1"/"2"/"3") through the normal composer path — the
+// backend recognizes numbered replies, so the button bar is sugar over the
+// same contract as typing.
+function ApprovalBar({ approval }: { approval: PendingApproval }) {
+  const threadRuntime = useThreadRuntime()
+  const labels = approval.options.length > 0
+    ? approval.options
+    : ['Approve once', `Always allow '${approval.tool}' in this chat`, 'Deny']
+  return (
+    <div className="border-t px-3 py-2" data-testid="approval-bar">
+      <div className="mb-2 text-xs opacity-80">
+        High-risk tool <code>{approval.tool}</code> is waiting for approval.
+        {approval.advisory ? <span> Reviewer: {approval.advisory}</span> : null}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {labels.map((label, i) => (
+          <button
+            key={label}
+            type="button"
+            className="rounded border px-3 py-1 text-sm hover:opacity-80"
+            onClick={() => threadRuntime.append(String(i + 1))}
+          >
+            {i + 1}. {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 type ThreadPaneProps = {
   adapter: ChatModelAdapter
   initialMessages: ThreadMessageLike[]
   runtimeKey: string
+  pendingApproval?: PendingApproval | null
 }
 
-function ThreadPane({ adapter, initialMessages, runtimeKey }: ThreadPaneProps) {
+function ThreadPane({ adapter, initialMessages, runtimeKey, pendingApproval }: ThreadPaneProps) {
   const MarkdownText = makeMarkdownText({
     preprocess: (text) => extractThinkSegments(text).visibleText,
     remarkPlugins: [remarkGfm, remarkBreaks],
@@ -1246,6 +1287,7 @@ function ThreadPane({ adapter, initialMessages, runtimeKey }: ThreadPaneProps) {
 
   return (
     <AssistantRuntimeProvider key={runtimeKey} runtime={runtime}>
+      {pendingApproval ? <ApprovalBar approval={pendingApproval} /> : null}
       <div className="aui-root h-full min-h-0">
         <Thread
           assistantMessage={{
@@ -1541,6 +1583,7 @@ function App() {
   const [runtimeNonce, setRuntimeNonce] = useState<number>(0)
   const [error, setError] = useState<string>('')
   const [statusText, setStatusText] = useState<string>('Idle')
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null)
   const [replayNotice, setReplayNotice] = useState<string>('')
   const [sending, setSending] = useState<boolean>(false)
   const [configOpen, setConfigOpen] = useState<boolean>(false)
@@ -1900,6 +1943,8 @@ function App() {
         setStatusText('Sending...')
         setReplayNotice('')
         setError('')
+        // Any outgoing message answers (or supersedes) a pending approval.
+        setPendingApproval(null)
 
         try {
           if (selectedSessionReadOnly) {
@@ -1982,6 +2027,21 @@ function App() {
             if (event.event === 'status') {
               const message = typeof data.message === 'string' ? data.message : ''
               if (message) setStatusText(message)
+              continue
+            }
+
+            if (event.event === 'approval_required') {
+              const tool = typeof data.tool === 'string' ? data.tool : 'tool'
+              setPendingApproval({
+                approvalId: typeof data.approval_id === 'string' ? data.approval_id : '',
+                tool,
+                preview: typeof data.preview === 'string' ? data.preview : null,
+                options: Array.isArray(data.options)
+                  ? data.options.filter((o): o is string => typeof o === 'string')
+                  : [],
+                advisory: typeof data.advisory === 'string' ? data.advisory : null,
+              })
+              setStatusText(`approval required: ${tool}`)
               continue
             }
 
@@ -3357,7 +3417,7 @@ function App() {
               </div>
 
               <div className="min-h-0 flex-1 px-1 pb-1">
-                <ThreadPane key={runtimeKey} adapter={adapter} initialMessages={historySeed} runtimeKey={runtimeKey} />
+                <ThreadPane key={runtimeKey} adapter={adapter} initialMessages={historySeed} runtimeKey={runtimeKey} pendingApproval={pendingApproval} />
               </div>
             </div>
           </main>
