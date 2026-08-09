@@ -953,6 +953,8 @@ struct UpdateConfigRequest {
     sandbox_credential_env_allowlist: Option<Vec<String>>,
     token_budget: Option<crate::config::TokenBudgetConfig>,
     heartbeat: Option<crate::config::HeartbeatConfig>,
+    alerts: Option<crate::config::AlertsConfig>,
+    trust_report: Option<crate::config::TrustReportConfig>,
 
     show_thinking: Option<bool>,
     web_enabled: Option<bool>,

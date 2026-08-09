@@ -21,25 +21,12 @@ use microclaw_storage::db::call_blocking;
 /// useful. Operators can still inspect the audit/session state.
 const RESUME_MAX_AGE_HOURS: i64 = 24;
 
-fn interruption_notice(progress: Option<&str>, tool_summary: Option<&str>) -> String {
-    let base = "⚠️ I restarted while a tool operation was in progress. I did not replay it \
-                because the external side effect may already have happened.";
-    let mut notice = base.to_string();
-    if let Some(summary) = tool_summary.filter(|value| !value.trim().is_empty()) {
-        notice.push_str("\n\nOperation at the uncertain boundary: ");
-        notice.push_str(summary);
-        notice.push('.');
-    }
-    if let Some(progress) = progress.filter(|value| !value.trim().is_empty()) {
-        notice.push_str("\nLast durable progress: ");
-        notice.push_str(progress);
-        notice.push('.');
-    }
-    notice.push_str(
-        "\n\nPlease verify the external state, then tell me to continue. This run was stopped \
-         deliberately to avoid duplicating a write, message, command, or other side effect.",
-    );
-    notice
+fn interruption_notice(
+    lang: crate::config::UserMessageLanguage,
+    progress: Option<&str>,
+    tool_summary: Option<&str>,
+) -> String {
+    crate::messages::interruption_notice(lang, progress, tool_summary)
 }
 
 fn valid_checkpoint_session(json: &str) -> bool {
@@ -192,8 +179,11 @@ pub async fn run_startup_recovery(state: Arc<AppState>) {
             }
         }
 
-        let notice =
-            interruption_notice(turn.progress_text.as_deref(), turn.tool_summary.as_deref());
+        let notice = interruption_notice(
+            state.config.user_message_language,
+            turn.progress_text.as_deref(),
+            turn.tool_summary.as_deref(),
+        );
         match deliver_and_store_bot_message(
             state.channel_registry.as_ref(),
             state.db.clone(),
@@ -255,18 +245,31 @@ mod tests {
 
     #[test]
     fn notice_includes_progress_and_uncertain_tool() {
-        let plain = interruption_notice(None, None);
+        use crate::config::UserMessageLanguage;
+        let plain = interruption_notice(UserMessageLanguage::En, None, None);
         assert!(plain.contains("restarted"));
         assert!(!plain.contains("Last durable progress"));
-        assert_eq!(interruption_notice(Some("   "), None), plain);
+        assert_eq!(
+            interruption_notice(UserMessageLanguage::En, Some("   "), None),
+            plain
+        );
 
         let with = interruption_notice(
+            UserMessageLanguage::En,
             Some("step 4: web_search, execute_command"),
             Some("send_message(medium)"),
         );
         assert!(with.contains("step 4: web_search, execute_command"));
         assert!(with.starts_with("⚠️ I restarted while a tool operation was in progress."));
         assert!(with.contains("send_message(medium)"));
+
+        let zh = interruption_notice(
+            UserMessageLanguage::Zh,
+            Some("step 4"),
+            Some("send_message(medium)"),
+        );
+        assert!(zh.contains("不确定边界上的操作"));
+        assert!(zh.contains("send_message(medium)"));
     }
 
     #[test]

@@ -58,6 +58,8 @@ pub async fn api_governance(
         active_turns,
         recoveries,
         contract_verdicts_24h,
+        standing_approvals,
+        trust_report_last_sent,
     ) = call_blocking(state.app_state.db.clone(), move |db| {
         let (total, success) = db.get_task_run_summary_since(Some(&since))?;
         let contract_tasks = db
@@ -75,6 +77,8 @@ pub async fn api_governance(
         let active_turns = db.list_active_turns()?;
         let recoveries = db.list_audit_logs(Some("turn_recovery"), 20)?;
         let contract_verdicts_24h = db.contract_verdict_counts_since(&since)?;
+        let standing_approvals = db.list_runtime_meta_prefix("approved_tool:")?.len();
+        let trust_report_last_sent = db.get_runtime_meta("trust_report_last_sent_at")?;
         Ok::<_, microclaw_core::error::MicroClawError>((
             (total, success),
             contract_tasks,
@@ -83,6 +87,8 @@ pub async fn api_governance(
             active_turns,
             recoveries,
             contract_verdicts_24h,
+            standing_approvals,
+            trust_report_last_sent,
         ))
     })
     .await
@@ -146,6 +152,15 @@ pub async fn api_governance(
             "webhook_configured": !config.alerts.webhook_url.trim().is_empty(),
             "interval_secs": config.alerts.interval_secs,
             "cooldown_secs": config.alerts.cooldown_secs,
+            "restart_storm_threshold": config.alerts.restart_storm_threshold,
+        },
+        "trust_report": {
+            "enabled": config.trust_report.enabled,
+            "interval_days": config.trust_report.interval_days,
+            "last_sent_at": trust_report_last_sent,
+        },
+        "approvals": {
+            "standing_grants": standing_approvals,
         },
         "delivery": {
             "outbox_pending": outbox_pending,

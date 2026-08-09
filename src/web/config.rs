@@ -920,6 +920,19 @@ pub(super) async fn api_update_config(
     if let Some(v) = body.heartbeat {
         cfg.heartbeat = v;
     }
+    if let Some(mut v) = body.alerts {
+        // Blank webhook_url means "keep the stored value" — the governance
+        // snapshot deliberately never echoes the URL back (it may embed a
+        // token), so the panel cannot round-trip it. Clearing the URL is a
+        // config-file operation.
+        if v.webhook_url.trim().is_empty() {
+            v.webhook_url = cfg.alerts.webhook_url.clone();
+        }
+        cfg.alerts = v;
+    }
+    if let Some(v) = body.trust_report {
+        cfg.trust_report = v;
+    }
 
     if let Some(v) = body.show_thinking {
         cfg.show_thinking = v;

@@ -183,3 +183,37 @@ pub async fn run_canary(
         1
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn probe(responds: bool, tool_calls: bool, error: Option<&str>) -> ModelProbe {
+        ModelProbe {
+            model: "test-model".into(),
+            responds,
+            tool_calls,
+            latency_ms: 1234,
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn passed_requires_both_probes() {
+        assert!(probe(true, true, None).passed());
+        assert!(!probe(true, false, None).passed());
+        assert!(!probe(false, false, Some("boom")).passed());
+    }
+
+    #[test]
+    fn render_shows_verdict_and_error() {
+        let ok = render(&probe(true, true, None), "candidate");
+        assert!(ok.starts_with("PASS candidate test-model"));
+        assert!(ok.contains("responds: yes, tool calls: yes"));
+
+        let bad = render(&probe(true, false, Some("model refused tools")), "candidate");
+        assert!(bad.starts_with("FAIL"));
+        assert!(bad.contains("tool calls: NO"));
+        assert!(bad.contains("error: model refused tools"));
+    }
+}

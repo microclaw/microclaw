@@ -49,6 +49,7 @@ These pages are generated from source. Do not hand-edit them.
 
 - [Execution model](security/execution-model.md)
 - [Secure runtime](security/secure-runtime.md)
+- [OWASP agentic self-assessment](security/owasp-agentic-self-assessment-2026-08.md)
 - [Web UI and ClawHub audit](security/audit-2026-07-web-ui-clawhub.md)
 - [Vulnerability reporting](../SECURITY.md)
 
@@ -61,6 +62,9 @@ These pages are generated from source. Do not hand-edit them.
 ## Releases and operations
 
 - [Operations runbook](operations/runbook.md)
+- [Status surface and webhook alerts](operations/status-and-alerts.md)
+- [Reliability scorecard](reports/reliability/README.md)
+- [Tokens-per-task benchmark method](reports/benchmarks/tokens-per-task.md)
 - [Windows service](operations/windows-service.md)
 - [Release policy](releases/release-policy.md)
 - [Release checklist](releases/pr-release-checklist.md)

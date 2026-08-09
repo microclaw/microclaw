@@ -78,6 +78,15 @@ type Governance = {
     webhook_configured: boolean
     interval_secs: number
     cooldown_secs: number
+    restart_storm_threshold?: number
+  }
+  trust_report?: {
+    enabled: boolean
+    interval_days: number
+    last_sent_at?: string | null
+  }
+  approvals?: {
+    standing_grants: number
   }
   durable_runs?: {
     active: {
@@ -135,6 +144,13 @@ export function GovernancePanel() {
   const [hbEnabled, setHbEnabled] = useState(false)
   const [hbInterval, setHbInterval] = useState('30')
   const [hbMaxChars, setHbMaxChars] = useState('8000')
+  const [alertsEnabled, setAlertsEnabled] = useState(false)
+  const [alertsWebhookUrl, setAlertsWebhookUrl] = useState('')
+  const [alertsInterval, setAlertsInterval] = useState('60')
+  const [alertsCooldown, setAlertsCooldown] = useState('900')
+  const [alertsStorm, setAlertsStorm] = useState('5')
+  const [trustReportEnabled, setTrustReportEnabled] = useState(false)
+  const [trustReportInterval, setTrustReportInterval] = useState('7')
 
   const load = async () => {
     setError('')
@@ -158,6 +174,19 @@ export function GovernancePanel() {
       setHbEnabled(g.heartbeat.enabled)
       setHbInterval(String(g.heartbeat.interval_mins))
       setHbMaxChars(String(g.heartbeat.max_chars))
+      if (g.alerts) {
+        setAlertsEnabled(g.alerts.enabled)
+        setAlertsWebhookUrl('')
+        setAlertsInterval(String(g.alerts.interval_secs))
+        setAlertsCooldown(String(g.alerts.cooldown_secs))
+        if (g.alerts.restart_storm_threshold !== undefined) {
+          setAlertsStorm(String(g.alerts.restart_storm_threshold))
+        }
+      }
+      if (g.trust_report) {
+        setTrustReportEnabled(g.trust_report.enabled)
+        setTrustReportInterval(String(g.trust_report.interval_days))
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -246,6 +275,32 @@ export function GovernancePanel() {
         },
       },
       'Heartbeat',
+    )
+
+  const saveAlerts = () =>
+    saveSection(
+      {
+        alerts: {
+          enabled: alertsEnabled,
+          // Blank = keep the stored URL (the server never echoes it back).
+          webhook_url: alertsWebhookUrl.trim(),
+          interval_secs: Math.max(10, parseInt(alertsInterval, 10) || 60),
+          cooldown_secs: Math.max(0, parseInt(alertsCooldown, 10) || 900),
+          restart_storm_threshold: Math.max(0, parseInt(alertsStorm, 10) || 5),
+        },
+      },
+      'Webhook alerts',
+    )
+
+  const saveTrustReport = () =>
+    saveSection(
+      {
+        trust_report: {
+          enabled: trustReportEnabled,
+          interval_days: Math.max(1, parseInt(trustReportInterval, 10) || 7),
+        },
+      },
+      'Trust report',
     )
 
   return (
@@ -463,6 +518,78 @@ export function GovernancePanel() {
           </ConfigFieldCard>
 
           <ConfigFieldCard
+            label="Webhook alerts"
+            description="POST a JSON alert on DLQ growth, provider down, budget exhaustion, or restart storms. Blank URL keeps the stored value; clearing it is a config-file operation."
+          >
+            <div className="mt-2 flex flex-col gap-3">
+              <Flex align="center" gap="3" wrap="wrap">
+                <Text size="1" color="gray">enabled</Text>
+                <Switch checked={alertsEnabled} onCheckedChange={setAlertsEnabled} />
+                <Text size="1" color="gray">every (s)</Text>
+                <TextField.Root
+                  type="number"
+                  value={alertsInterval}
+                  onChange={(e) => setAlertsInterval(e.target.value)}
+                  style={{ width: 90 }}
+                />
+                <Text size="1" color="gray">cooldown (s)</Text>
+                <TextField.Root
+                  type="number"
+                  value={alertsCooldown}
+                  onChange={(e) => setAlertsCooldown(e.target.value)}
+                  style={{ width: 90 }}
+                />
+                <Text size="1" color="gray">storm ≥</Text>
+                <TextField.Root
+                  type="number"
+                  value={alertsStorm}
+                  onChange={(e) => setAlertsStorm(e.target.value)}
+                  style={{ width: 70 }}
+                />
+              </Flex>
+              <div>
+                <Text size="1" color="gray">
+                  webhook URL {gov.alerts?.webhook_configured ? '(configured — blank keeps it)' : '(not configured)'}
+                </Text>
+                <TextField.Root
+                  className="mt-1"
+                  value={alertsWebhookUrl}
+                  onChange={(e) => setAlertsWebhookUrl(e.target.value)}
+                  placeholder="https://hooks.example.com/microclaw"
+                />
+              </div>
+              <Flex>
+                <Button size="1" onClick={() => void saveAlerts()}>Save alerts</Button>
+              </Flex>
+            </div>
+          </ConfigFieldCard>
+
+          <ConfigFieldCard
+            label="Trust report"
+            description="Periodic digest of verified work, spend, and guardrail events, delivered to control chats. No LLM calls."
+          >
+            <div className="mt-2 flex flex-col gap-3">
+              <Flex align="center" gap="3" wrap="wrap">
+                <Text size="1" color="gray">enabled</Text>
+                <Switch checked={trustReportEnabled} onCheckedChange={setTrustReportEnabled} />
+                <Text size="1" color="gray">every (days)</Text>
+                <TextField.Root
+                  type="number"
+                  value={trustReportInterval}
+                  onChange={(e) => setTrustReportInterval(e.target.value)}
+                  style={{ width: 90 }}
+                />
+                <Badge size="1" color="gray">
+                  last sent: {gov.trust_report?.last_sent_at ?? 'never'}
+                </Badge>
+              </Flex>
+              <Flex>
+                <Button size="1" onClick={() => void saveTrustReport()}>Save trust report</Button>
+              </Flex>
+            </div>
+          </ConfigFieldCard>
+
+          <ConfigFieldCard
             label="Progress heartbeats (non-web channels)"
             description="Live '⏳ Working…' message edited in place during long turns. Configure under channels.<name>.progress_updates in config.yaml."
           >
@@ -543,6 +670,9 @@ export function GovernancePanel() {
                 {gov.alerts?.enabled && gov.alerts?.webhook_configured
                   ? `webhook alerts every ${gov.alerts.interval_secs}s`
                   : 'webhook alerts off'}
+              </Badge>
+              <Badge size="1" color={(gov.approvals?.standing_grants ?? 0) > 0 ? 'orange' : 'gray'}>
+                standing tool approvals: {gov.approvals?.standing_grants ?? 0}
               </Badge>
             </Flex>
           </ConfigFieldCard>

@@ -68,6 +68,62 @@ pub fn budget_refusal_body(
     }
 }
 
+/// Notice sent when a restart interrupted a turn at an uncertain tool
+/// boundary and the run was deliberately not replayed.
+pub fn interruption_notice(
+    lang: UserMessageLanguage,
+    progress: Option<&str>,
+    tool_summary: Option<&str>,
+) -> String {
+    let tool_summary = tool_summary.filter(|value| !value.trim().is_empty());
+    let progress = progress.filter(|value| !value.trim().is_empty());
+
+    let en = {
+        let mut notice = "⚠️ I restarted while a tool operation was in progress. I did not \
+                          replay it because the external side effect may already have happened."
+            .to_string();
+        if let Some(summary) = tool_summary {
+            notice.push_str("\n\nOperation at the uncertain boundary: ");
+            notice.push_str(summary);
+            notice.push('.');
+        }
+        if let Some(progress) = progress {
+            notice.push_str("\nLast durable progress: ");
+            notice.push_str(progress);
+            notice.push('.');
+        }
+        notice.push_str(
+            "\n\nPlease verify the external state, then tell me to continue. This run was \
+             stopped deliberately to avoid duplicating a write, message, command, or other \
+             side effect.",
+        );
+        notice
+    };
+    let zh = {
+        let mut notice = "⚠️ 我在一次工具操作进行中重启了。因为外部副作用可能已经发生，我没有重放这次操作。"
+            .to_string();
+        if let Some(summary) = tool_summary {
+            notice.push_str("\n\n不确定边界上的操作：");
+            notice.push_str(summary);
+            notice.push('。');
+        }
+        if let Some(progress) = progress {
+            notice.push_str("\n最后一次持久进度：");
+            notice.push_str(progress);
+            notice.push('。');
+        }
+        notice.push_str(
+            "\n\n请先核实外部状态，然后告诉我继续。这次运行是有意停下的，以避免重复写入、发消息、执行命令等副作用。",
+        );
+        notice
+    };
+    match lang {
+        UserMessageLanguage::En => en,
+        UserMessageLanguage::Zh => zh,
+        UserMessageLanguage::Bilingual => format!("{en}\n\n{zh}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
