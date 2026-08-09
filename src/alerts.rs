@@ -119,18 +119,24 @@ pub fn evaluate_alerts(
     }
 
     let cooldown = Duration::from_secs(cfg.cooldown_secs);
+    // Filter by cooldown only — do NOT record last_sent here. The caller
+    // records it after a successful delivery, so a failed webhook POST does
+    // not start the cooldown and silently drop the alert.
     candidates
         .into_iter()
-        .filter(|alert| {
-            match loop_state.last_sent.get(alert.class) {
-                Some(sent) if now.duration_since(*sent) < cooldown => false,
-                _ => {
-                    loop_state.last_sent.insert(alert.class, now);
-                    true
-                }
-            }
+        .filter(|alert| match loop_state.last_sent.get(alert.class) {
+            Some(sent) => now.duration_since(*sent) >= cooldown,
+            None => true,
         })
         .collect()
+}
+
+impl AlertLoopState {
+    /// Record that an alert class was successfully delivered at `now`,
+    /// starting its cooldown window.
+    fn mark_sent(&mut self, class: &'static str, now: Instant) {
+        self.last_sent.insert(class, now);
+    }
 }
 
 async fn gather_sample(state: &Arc<AppState>) -> HealthSample {
@@ -154,12 +160,14 @@ async fn gather_sample(state: &Arc<AppState>) -> HealthSample {
     }
 }
 
+/// Deliver one alert; returns true when the webhook accepted it. Every
+/// attempt (success or failure) is recorded in the audit chain.
 async fn deliver_alert(
     state: &Arc<AppState>,
     client: &reqwest::Client,
     url: &str,
     alert: &Alert,
-) {
+) -> bool {
     let body = json!({
         "source": "microclaw",
         "class": alert.class,
@@ -197,6 +205,7 @@ async fn deliver_alert(
         )
     })
     .await;
+    outcome.is_ok()
 }
 
 /// One poll: gather, evaluate, deliver. Extracted from the loop for
@@ -208,11 +217,18 @@ pub async fn run_alerts_once(
 ) -> usize {
     let cfg = &state.config.alerts;
     let sample = gather_sample(state).await;
-    let alerts = evaluate_alerts(loop_state, &sample, cfg, Instant::now());
+    let now = Instant::now();
+    let alerts = evaluate_alerts(loop_state, &sample, cfg, now);
+    let mut delivered = 0usize;
     for alert in &alerts {
-        deliver_alert(state, client, &cfg.webhook_url, alert).await;
+        // Start the cooldown only on a successful delivery: a webhook that
+        // is briefly down must not suppress the alert for a full cooldown.
+        if deliver_alert(state, client, &cfg.webhook_url, alert).await {
+            loop_state.mark_sent(alert.class, now);
+            delivered += 1;
+        }
     }
-    alerts.len()
+    delivered
 }
 
 /// Spawn the supervised alerts loop; a no-op unless alerts are enabled
@@ -287,6 +303,10 @@ mod tests {
         let alerts = evaluate_alerts(&mut state, &grown, &cfg(), now);
         let classes: Vec<_> = alerts.iter().map(|a| a.class).collect();
         assert_eq!(classes, vec!["dlq_growth", "budget_exhaustion"]);
+        // Simulate successful delivery starting the cooldown.
+        for a in &alerts {
+            state.mark_sent(a.class, now);
+        }
 
         // Still growing, but inside the cooldown window → suppressed.
         let grown_again = HealthSample {
@@ -295,6 +315,30 @@ mod tests {
             ..Default::default()
         };
         assert!(evaluate_alerts(&mut state, &grown_again, &cfg(), now).is_empty());
+    }
+
+    #[test]
+    fn unmarked_alert_is_not_suppressed_next_poll() {
+        // Models a failed delivery: evaluate returns the alert but the caller
+        // never calls mark_sent, so the next poll re-offers it.
+        let mut state = AlertLoopState::default();
+        let now = Instant::now();
+        evaluate_alerts(&mut state, &HealthSample::default(), &cfg(), now);
+
+        let grown = HealthSample {
+            dlq_pending: 2,
+            ..Default::default()
+        };
+        assert_eq!(evaluate_alerts(&mut state, &grown, &cfg(), now).len(), 1);
+        // Delivery "failed" → no mark_sent. Growth continues; still offered.
+        let grown_more = HealthSample {
+            dlq_pending: 3,
+            ..Default::default()
+        };
+        assert_eq!(
+            evaluate_alerts(&mut state, &grown_more, &cfg(), now).len(),
+            1
+        );
     }
 
     #[test]

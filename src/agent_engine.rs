@@ -779,10 +779,6 @@ pub(crate) fn parse_approval_reply(text: &str) -> ApprovalReply {
     }
 }
 
-fn is_explicit_user_approval(text: &str) -> bool {
-    !matches!(parse_approval_reply(text), ApprovalReply::DenyOrOther)
-}
-
 /// How long a pending-approval marker may be converted into a standing
 /// grant. Past this, an "always" reply is treated as unrelated to the old
 /// prompt (the one-shot approval flow is unaffected — this only guards the
@@ -1335,17 +1331,18 @@ async fn process_with_agent_logic(
 
     metrics.input_text = latest_user_text_for_approval.clone();
 
-    let approval_reply = parse_approval_reply(&latest_user_text_for_approval);
-    let explicit_user_approval = is_explicit_user_approval(&latest_user_text_for_approval);
-    {
-        // A pending approval (recorded when a previous turn paused) is
-        // resolved by whatever the user says next: any reply consumes the
-        // marker, and only a fresh "always allow" converts it into a
-        // standing per-chat allowance (registry choke point, audit chain).
-        // Consuming unconditionally + the freshness window prevents a
-        // stale marker from granting a tool weeks later because an
-        // unrelated message happened to contain "always".
+    // An approval reply is only meaningful when a previous turn actually
+    // paused for approval in THIS chat. We gate on the pending marker so a
+    // bare "1"/"2" (or the word "approve") in an ordinary conversation —
+    // e.g. answering an unrelated multiple-choice question — is never
+    // mistaken for high-risk tool approval. Non-user turns (scheduler,
+    // heartbeat: override_prompt is set) must never consume the marker or
+    // count as approval, since no human is replying.
+    let mut explicit_user_approval = false;
+    if override_prompt.is_none() {
         let pending_key = format!("pending_approval_tool:{chat_id}");
+        // Any user reply consumes the pending marker (approve, deny, or an
+        // unrelated message all resolve the pause).
         let pending = call_blocking(state.db.clone(), {
             let pending_key = pending_key.clone();
             move |db| {
@@ -1358,10 +1355,14 @@ async fn process_with_agent_logic(
         })
         .await
         .unwrap_or_default();
-        if approval_reply == ApprovalReply::ApproveAlways {
-            if let Some(tool) =
-                pending.and_then(|value| pending_approval_tool(&value, chrono::Utc::now()))
-            {
+        // Honor the reply only within the freshness window; a stale or
+        // legacy (timestampless) marker fails closed.
+        if let Some(tool) =
+            pending.and_then(|value| pending_approval_tool(&value, chrono::Utc::now()))
+        {
+            let reply = parse_approval_reply(&latest_user_text_for_approval);
+            explicit_user_approval = reply != ApprovalReply::DenyOrOther;
+            if reply == ApprovalReply::ApproveAlways {
                 let grant_key = format!("approved_tool:{chat_id}:{tool}");
                 let _ = call_blocking(state.db.clone(), move |db| {
                     db.set_runtime_meta(&grant_key, &chrono::Utc::now().to_rfc3339())?;
@@ -5171,14 +5172,12 @@ mod tests {
 
     #[test]
     fn test_is_explicit_user_approval() {
-        assert!(super::is_explicit_user_approval(
-            "<user_message sender=\"u\">批准</user_message>"
-        ));
-        assert!(super::is_explicit_user_approval("Go ahead and run it"));
-        assert!(!super::is_explicit_user_approval("不要执行"));
-        assert!(!super::is_explicit_user_approval(
-            "not approve this command"
-        ));
+        use super::{parse_approval_reply, ApprovalReply};
+        let approves = |t: &str| parse_approval_reply(t) != ApprovalReply::DenyOrOther;
+        assert!(approves("<user_message sender=\"u\">批准</user_message>"));
+        assert!(approves("Go ahead and run it"));
+        assert!(!approves("不要执行"));
+        assert!(!approves("not approve this command"));
     }
 
     #[test]

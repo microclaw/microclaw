@@ -3220,6 +3220,10 @@ function App() {
 
   useEffect(() => {
     writeSessionToUrl(sessionKey)
+    // A pending approval belongs to the session it was raised in; switching
+    // sessions must drop it so its buttons can't post a reply into an
+    // unrelated chat.
+    setPendingApproval(null)
   }, [sessionKey])
 
   const runtimeKey = `${sessionKey}-${runtimeNonce}`

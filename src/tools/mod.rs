@@ -570,6 +570,20 @@ impl ToolRegistry {
         self.add_tool(tool);
     }
 
+    /// Register every MCP tool from `mcp_manager`, mapping each server's
+    /// trust tier onto the tool's effective risk. Shared by all boot paths
+    /// (runtime, ACP) so trust tiers are honored uniformly.
+    pub fn register_mcp_tools(&mut self, mcp_manager: &crate::mcp::McpManager) {
+        for (server, tool_info) in mcp_manager.all_tools() {
+            let risk = match server.trust() {
+                crate::mcp::McpTrust::Trusted => ToolRisk::Low,
+                crate::mcp::McpTrust::Limited => ToolRisk::Medium,
+                crate::mcp::McpTrust::Sandboxed => ToolRisk::High,
+            };
+            self.add_tool_with_risk(Box::new(crate::tools::mcp::McpTool::new(server, tool_info)), risk);
+        }
+    }
+
     /// Effective risk of a tool: registration-time override first, then the
     /// shared name-derived mapping.
     pub fn effective_tool_risk(&self, name: &str) -> ToolRisk {
@@ -755,31 +769,48 @@ impl ToolRegistry {
         {
             return ToolResult::error(msg).with_error_type("execution_policy_blocked");
         }
+        let mut input = input;
         if self.config.high_risk_tool_user_confirmation_required {
-            // A standing per-chat allowance (operator replied "always allow"
-            // to a previous approval prompt) satisfies the gate. It never
-            // bypasses tool_policy, egress policy, or in-tool gates like the
-            // bash dangerous-pattern check, which still run.
-            let standing = if let Some(db) = self.audit_db.clone() {
-                let key = format!("approved_tool:{}:{}", auth.caller_chat_id, name);
-                microclaw_storage::db::call_blocking(db, move |db| db.get_runtime_meta(&key))
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some()
-            } else {
-                false
-            };
-            if standing {
-                tracing::info!(
-                    tool = name,
-                    chat_id = auth.caller_chat_id,
-                    "High-risk tool allowed by standing per-chat approval"
-                );
-            } else if let Some(blocked) =
-                require_high_risk_approval_with_risk(name, effective_risk, auth, &input)
-            {
-                return blocked;
+            // Only tools that can actually pause for approval need the
+            // standing-grant lookup: High-risk tools (registry gate) plus the
+            // tools with their own in-tool gates (`a2a_send` sandboxed peer;
+            // `bash` is already High-risk). Everything else skips the DB read
+            // on the hot path.
+            let gateable = effective_risk == ToolRisk::High || name == "a2a_send";
+            if gateable {
+                // A standing per-chat allowance (operator replied "always
+                // allow" to a previous prompt) satisfies the gate. It never
+                // bypasses tool_policy or egress policy, which already ran
+                // above. When present, inject the approval marker so the
+                // in-tool gates (bash dangerous patterns, sandboxed a2a
+                // peers) honor it too instead of re-prompting every call.
+                let standing = if let Some(db) = self.audit_db.clone() {
+                    let key = format!("approved_tool:{}:{}", auth.caller_chat_id, name);
+                    microclaw_storage::db::call_blocking(db, move |db| db.get_runtime_meta(&key))
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some()
+                } else {
+                    false
+                };
+                if standing {
+                    tracing::info!(
+                        tool = name,
+                        chat_id = auth.caller_chat_id,
+                        "High-risk tool allowed by standing per-chat approval"
+                    );
+                    if let serde_json::Value::Object(map) = &mut input {
+                        map.insert(
+                            "__microclaw_high_risk_approved".to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                    }
+                } else if let Some(blocked) =
+                    require_high_risk_approval_with_risk(name, effective_risk, auth, &input)
+                {
+                    return blocked;
+                }
             }
         }
 

@@ -399,7 +399,11 @@ fn requires_high_risk_approval(risk: ToolRisk, auth: &ToolAuthContext) -> bool {
     risk == ToolRisk::High && (auth.caller_channel == "web" || auth.is_control_chat())
 }
 
-const HIGH_RISK_APPROVED_KEY: &str = "__microclaw_high_risk_approved";
+/// Input marker injected after explicit operator approval so a high-risk
+/// tool (or an in-tool gate like bash dangerous patterns / sandboxed A2A
+/// peers) executes on retry. Shared across crates so a rename can't silently
+/// desync the producers and consumers.
+pub const HIGH_RISK_APPROVED_KEY: &str = "__microclaw_high_risk_approved";
 
 pub fn require_high_risk_approval(
     name: &str,

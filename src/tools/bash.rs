@@ -79,7 +79,7 @@ impl BashTool {
     }
 }
 
-const BASH_HIGH_RISK_APPROVED_KEY: &str = "__microclaw_high_risk_approved";
+use microclaw_tools::runtime::HIGH_RISK_APPROVED_KEY as BASH_HIGH_RISK_APPROVED_KEY;
 
 fn extract_env_files(input: &serde_json::Value) -> Vec<PathBuf> {
     super::auth_context_from_input(input)

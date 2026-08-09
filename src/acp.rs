@@ -58,9 +58,7 @@ pub async fn serve(
         memory_backend.clone(),
     );
     let mut tools = tools;
-    for (server, tool_info) in mcp_manager.all_tools() {
-        tools.add_tool(Box::new(crate::tools::mcp::McpTool::new(server, tool_info)));
-    }
+    tools.register_mcp_tools(&mcp_manager);
 
     let chat_turn_queue = Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(
         config.chat_turn_queue_max_pending,

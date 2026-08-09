@@ -45,8 +45,14 @@ fn resolve_request_timeout_secs(
 /// server's tools are registered: `trusted` → low, `limited` → medium
 /// (the historical default for every MCP tool), `sandboxed` → high (so a
 /// `max_risk: medium` policy blocks it and web/control-chat calls require
-/// explicit approval). A tier can only match or raise the historical
-/// risk, never grant new capability by itself.
+/// explicit approval).
+///
+/// Note the mapping is two-directional: `sandboxed` raises scrutiny, and
+/// `trusted` *lowers* the tool's rated risk from the historical medium to
+/// low — so a server marked `trusted` passes a `max_risk: low` policy that
+/// would otherwise block all MCP tools. Tiers never add a tool the server
+/// didn't expose, but `trusted` is a deliberate risk downgrade; audit it
+/// as such.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum McpTrust {

@@ -344,9 +344,14 @@ fn epoch_ms() -> u64 {
 pub struct ProviderFailoverSnapshot {
     /// Calls that were served by the fallback model since process start.
     pub total_fallbacks: u64,
-    /// Provider failures since the last success (any provider instance).
+    /// Provider failures since the last success (approximate: shared across
+    /// provider instances, reset by a success on any of them).
     pub consecutive_failures: u64,
-    /// True while any circuit breaker is within its open window.
+    /// True while any circuit breaker's cooldown window is still open. The
+    /// window expires on its own and is NOT cleared by a success on a
+    /// different provider instance (an aux-slot success must not mask a
+    /// down primary), so this can briefly over-report a breaker that
+    /// recovered early — a conservative, fail-safe bias.
     pub breaker_open: bool,
     pub last_failure_epoch_ms: Option<u64>,
 }
@@ -394,8 +399,12 @@ impl CircuitBreaker {
         if let Ok(mut guard) = self.open_until.lock() {
             *guard = None;
         }
+        // Reset only this instance's contribution to the shared consecutive
+        // counter. The global breaker-open window is deliberately NOT
+        // cleared here: a success on this (possibly aux) instance must not
+        // mask a different instance's still-open primary breaker; the window
+        // expires on its own timeline.
         FAILURES_CONSECUTIVE.store(0, Ordering::Relaxed);
-        BREAKER_OPEN_UNTIL_EPOCH_MS.store(0, Ordering::Relaxed);
     }
 
     fn record_failure(&self, now: Instant) {
@@ -406,8 +415,10 @@ impl CircuitBreaker {
             if let Ok(mut guard) = self.open_until.lock() {
                 *guard = Some(now + self.cooldown);
             }
+            // Extend the shared window to the furthest-out cooldown rather
+            // than overwriting, so concurrent breakers can't shorten it.
             BREAKER_OPEN_UNTIL_EPOCH_MS
-                .store(epoch_ms() + self.cooldown.as_millis() as u64, Ordering::Relaxed);
+                .fetch_max(epoch_ms() + self.cooldown.as_millis() as u64, Ordering::Relaxed);
         }
     }
 }

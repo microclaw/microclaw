@@ -9,10 +9,7 @@ use crate::a2a::{
 use crate::config::Config;
 use crate::http_client::default_llm_user_agent;
 use microclaw_core::llm_types::ToolDefinition;
-
-/// Approval marker injected by the executor's retry path after explicit
-/// operator approval; must match the shared high-risk marker key.
-const A2A_HIGH_RISK_APPROVED_KEY: &str = "__microclaw_high_risk_approved";
+use microclaw_tools::runtime::HIGH_RISK_APPROVED_KEY as A2A_HIGH_RISK_APPROVED_KEY;
 
 pub struct A2AListPeersTool {
     config: Config,
