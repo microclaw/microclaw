@@ -1815,7 +1815,40 @@ async fn process_with_agent_logic(
         }
     }
 
+    // Tracks the input-token size of the most recent provider request so the
+    // context-pressure check can compact before the next call overflows.
+    let mut last_observed_input_tokens: i64 = 0;
     for iteration in 0..state.config.max_tool_iterations {
+        // Context-pressure compaction: when the previous request already
+        // consumed more than `context_pressure_compact_pct` of the model's
+        // window, compact mid-turn instead of running into a hard overflow.
+        let pressure_pct = state.config.context_pressure_compact_pct;
+        if pressure_pct > 0 && last_observed_input_tokens > 0 {
+            let threshold = state
+                .config
+                .model_context_window
+                .saturating_mul(pressure_pct)
+                / 100;
+            if last_observed_input_tokens as usize >= threshold
+                && messages.len() > state.config.compact_keep_recent
+            {
+                info!(
+                    chat_id,
+                    last_observed_input_tokens,
+                    threshold,
+                    "Context pressure: compacting session mid-turn"
+                );
+                messages = compact_messages(
+                    state,
+                    context.caller_channel,
+                    chat_id,
+                    &messages,
+                    state.config.compact_keep_recent,
+                )
+                .await;
+                last_observed_input_tokens = 0;
+            }
+        }
         // Safe replay boundary: all preceding tool calls have paired results
         // and no tool is currently executing.
         checkpoint_turn_state(
@@ -1870,58 +1903,89 @@ async fn process_with_agent_logic(
         let llm_span_id = new_span_id();
         let llm_start = now_unix_nano();
 
-        let response = if let Some(tx) = event_tx {
-            let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            let forward_tx = tx.clone();
-            let forward_handle = tokio::spawn(async move {
-                while let Some(delta) = llm_rx.recv().await {
-                    let _ = forward_tx.send(AgentEvent::TextDelta { delta });
-                }
-            });
-            let response = if let Some(provider) = scoped_provider.as_ref() {
+        // One call per attempt; on a context-overflow error the messages are
+        // compacted once and the call retried, otherwise errors propagate as
+        // before.
+        let mut overflow_retry_done = false;
+        let response = loop {
+            let attempt = if let Some(tx) = event_tx {
+                let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let forward_tx = tx.clone();
+                let forward_handle = tokio::spawn(async move {
+                    while let Some(delta) = llm_rx.recv().await {
+                        let _ = forward_tx.send(AgentEvent::TextDelta { delta });
+                    }
+                });
+                let attempt = if let Some(provider) = scoped_provider.as_ref() {
+                    provider
+                        .send_message_stream_with_model(
+                            &system_prompt,
+                            messages.clone(),
+                            Some(tool_defs.clone()),
+                            Some(&llm_tx),
+                            Some(&effective_model),
+                        )
+                        .await
+                } else {
+                    state
+                        .llm
+                        .send_message_stream_with_model(
+                            &system_prompt,
+                            messages.clone(),
+                            Some(tool_defs.clone()),
+                            Some(&llm_tx),
+                            Some(&effective_model),
+                        )
+                        .await
+                };
+                drop(llm_tx);
+                let _ = forward_handle.await;
+                attempt
+            } else if let Some(provider) = scoped_provider.as_ref() {
                 provider
-                    .send_message_stream_with_model(
+                    .send_message_with_model(
                         &system_prompt,
                         messages.clone(),
                         Some(tool_defs.clone()),
-                        Some(&llm_tx),
                         Some(&effective_model),
                     )
-                    .await?
+                    .await
             } else {
                 state
                     .llm
-                    .send_message_stream_with_model(
+                    .send_message_with_model(
                         &system_prompt,
                         messages.clone(),
                         Some(tool_defs.clone()),
-                        Some(&llm_tx),
                         Some(&effective_model),
                     )
-                    .await?
+                    .await
             };
-            drop(llm_tx);
-            let _ = forward_handle.await;
-            response
-        } else if let Some(provider) = scoped_provider.as_ref() {
-            provider
-                .send_message_with_model(
-                    &system_prompt,
-                    messages.clone(),
-                    Some(tool_defs.clone()),
-                    Some(&effective_model),
-                )
-                .await?
-        } else {
-            state
-                .llm
-                .send_message_with_model(
-                    &system_prompt,
-                    messages.clone(),
-                    Some(tool_defs.clone()),
-                    Some(&effective_model),
-                )
-                .await?
+            match attempt {
+                Ok(response) => break response,
+                Err(e)
+                    if !overflow_retry_done
+                        && crate::llm::is_context_overflow_error(&e)
+                        && messages.len() > state.config.compact_keep_recent =>
+                {
+                    warn!(
+                        chat_id,
+                        iteration = iteration + 1,
+                        "Provider reported context overflow; compacting session and retrying once"
+                    );
+                    overflow_retry_done = true;
+                    messages = compact_messages(
+                        state,
+                        context.caller_channel,
+                        chat_id,
+                        &messages,
+                        state.config.compact_keep_recent,
+                    )
+                    .await;
+                    last_observed_input_tokens = 0;
+                }
+                Err(e) => return Err(e.into()),
+            }
         };
 
         if let Some(exp) = &state.trace_exporter {
@@ -1985,6 +2049,7 @@ async fn process_with_agent_logic(
 
         metrics.llm_requests += 1;
         if let Some(usage) = &response.usage {
+            last_observed_input_tokens = usage.input_tokens as i64;
             metrics.input_tokens += usage.input_tokens as i64;
             metrics.output_tokens += usage.output_tokens as i64;
             let channel = context.caller_channel.to_string();
@@ -3485,6 +3550,40 @@ pub fn archive_conversation(data_dir: &str, channel: &str, chat_id: i64, message
 }
 
 /// Compact old messages by summarizing them via LLM, keeping recent messages verbatim.
+/// `true` when the message carries tool_use/tool_result blocks that must not
+/// be separated from their partner by a compaction boundary.
+fn message_has_tool_blocks(message: &Message) -> bool {
+    match &message.content {
+        MessageContent::Blocks(blocks) => blocks.iter().any(|b| {
+            matches!(
+                b,
+                ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. }
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// Pick a compaction split point at (or before) `total - keep_recent` such
+/// that the kept window starts on a plain user message — never between a
+/// tool_use and its tool_result, which would produce an invalid request.
+/// Returns 0 when no safe boundary exists (callers skip compaction).
+fn safe_compact_split(messages: &[Message], keep_recent: usize) -> usize {
+    let total = messages.len();
+    if total <= keep_recent {
+        return 0;
+    }
+    let mut split = total - keep_recent;
+    while split > 0 {
+        let candidate = &messages[split];
+        if candidate.role == "user" && !message_has_tool_blocks(candidate) {
+            return split;
+        }
+        split -= 1;
+    }
+    0
+}
+
 async fn compact_messages(
     state: &AppState,
     caller_channel: &str,
@@ -3497,7 +3596,10 @@ async fn compact_messages(
         return messages.to_vec();
     }
 
-    let split_at = total - keep_recent;
+    let split_at = safe_compact_split(messages, keep_recent);
+    if split_at == 0 {
+        return messages.to_vec();
+    }
     let old_messages = &messages[..split_at];
     let recent_messages = &messages[split_at..];
 
@@ -3662,9 +3764,54 @@ async fn compact_messages(
 mod tests {
     use super::{
         build_db_memory_context, duplicate_call_key, format_mid_turn_injection,
-        history_to_claude_messages, process_with_agent, sanitize_user_visible_text, strip_thinking,
-        AgentRequestContext,
+        history_to_claude_messages, process_with_agent, safe_compact_split,
+        sanitize_user_visible_text, strip_thinking, AgentRequestContext,
     };
+    use microclaw_core::llm_types::{ContentBlock, MessageContent};
+
+    #[test]
+    fn safe_compact_split_lands_on_plain_user_message() {
+        let text = |role: &str, t: &str| Message {
+            role: role.into(),
+            content: MessageContent::Text(t.into()),
+        };
+        let tool_result_msg = Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "out".into(),
+                is_error: None,
+            }]),
+        };
+        // 6 messages; keep_recent=2 would naively split at 4 (a tool_result
+        // user message) — the safe split walks back to the plain user at 2.
+        let messages = vec![
+            text("user", "q1"),
+            text("assistant", "a1"),
+            text("user", "q2"),
+            text("assistant", "uses tool"),
+            tool_result_msg.clone(),
+            text("assistant", "a2"),
+        ];
+        assert_eq!(safe_compact_split(&messages, 2), 2);
+        // All-tool history has no safe boundary → 0 (skip compaction).
+        let messages = vec![tool_result_msg.clone(), tool_result_msg];
+        assert_eq!(safe_compact_split(&messages, 1), 0);
+        // Short histories never split.
+        let messages = vec![text("user", "q1")];
+        assert_eq!(safe_compact_split(&messages, 5), 0);
+    }
+
+    #[test]
+    fn context_overflow_error_detection() {
+        use microclaw_core::error::MicroClawError;
+        let e = MicroClawError::LlmApi("400 Bad Request: prompt is too long: 210000 tokens".into());
+        assert!(crate::llm::is_context_overflow_error(&e));
+        let e = MicroClawError::LlmApi("context_length_exceeded".into());
+        assert!(crate::llm::is_context_overflow_error(&e));
+        let e = MicroClawError::LlmApi("429 rate limited".into());
+        assert!(!crate::llm::is_context_overflow_error(&e));
+    }
     use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
     use crate::llm::LlmProvider;

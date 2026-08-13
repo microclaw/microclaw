@@ -43,6 +43,19 @@ pub(crate) fn is_retryable_transport_error(err: &reqwest::Error) -> bool {
     err.is_timeout() || err.is_connect() || err.is_request()
 }
 
+/// Provider-agnostic detection of a "request exceeds the model context
+/// window" error. The agent loop compacts the session and retries once when
+/// it sees one of these instead of failing the turn.
+pub fn is_context_overflow_error(err: &microclaw_core::error::MicroClawError) -> bool {
+    let text = err.to_string().to_ascii_lowercase();
+    text.contains("context_length_exceeded")     // OpenAI
+        || text.contains("prompt is too long")   // Anthropic
+        || text.contains("input is too long")    // Anthropic (older phrasing)
+        || text.contains("maximum context length")
+        || text.contains("exceed context limit")
+        || text.contains("exceeds the context window")
+}
+
 /// Parse a `Retry-After` header in delta-seconds form (the HTTP-date form is
 /// ignored — providers use seconds in practice).
 fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {

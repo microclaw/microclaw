@@ -271,6 +271,12 @@ fn default_max_session_messages() -> usize {
 fn default_diff_max_lines() -> usize {
     microclaw_core::diff::DEFAULT_DIFF_MAX_LINES
 }
+fn default_model_context_window() -> usize {
+    200_000
+}
+fn default_context_pressure_compact_pct() -> usize {
+    85
+}
 fn default_file_diffs_in_chat() -> bool {
     true
 }
@@ -1582,6 +1588,15 @@ pub struct Config {
     /// progress updates. The web UI always receives diff events. Default: true.
     #[serde(default = "default_file_diffs_in_chat")]
     pub file_diffs_in_chat: bool,
+    /// Approximate context window (tokens) of the configured model, used by
+    /// the mid-turn context-pressure check. Default: 200000.
+    #[serde(default = "default_model_context_window")]
+    pub model_context_window: usize,
+    /// Compact the session mid-turn once a request consumes this percentage
+    /// of `model_context_window`. 0 disables the pressure check (the
+    /// overflow-error retry still applies). Default: 85.
+    #[serde(default = "default_context_pressure_compact_pct")]
+    pub context_pressure_compact_pct: usize,
     #[serde(default = "default_compact_keep_recent")]
     pub compact_keep_recent: usize,
     #[serde(default = "default_tool_timeout_secs")]
@@ -2333,6 +2348,8 @@ impl Config {
             max_session_messages: 40,
             diff_max_lines: default_diff_max_lines(),
             file_diffs_in_chat: default_file_diffs_in_chat(),
+            model_context_window: default_model_context_window(),
+            context_pressure_compact_pct: default_context_pressure_compact_pct(),
             compact_keep_recent: 20,
             default_tool_timeout_secs: default_tool_timeout_secs(),
             tool_timeout_overrides: HashMap::new(),
