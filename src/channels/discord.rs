@@ -720,10 +720,34 @@ impl EventHandler for Handler {
         } else {
             None
         };
-        let mut tap = crate::channels::event_tap::EventTap::spawn_with_progress(
+        // File-edit diffs ride the same opt-in as the progress heartbeat.
+        let on_diff: Option<crate::channels::event_tap::DiffEmit> =
+            if self.app_state.config.file_diffs_in_chat
+                && progress_settings.enabled
+                && (is_private_chat || progress_settings.groups)
+            {
+                let http_for_diff = ctx.http.clone();
+                let channel_for_diff = msg.channel_id;
+                Some(Box::new(move |text| {
+                    let http = http_for_diff.clone();
+                    let channel = channel_for_diff;
+                    Box::pin(async move {
+                        if let Err(e) = channel.say(&http, text).await {
+                            warn!("Discord: file diff send failed: {e}");
+                        }
+                    })
+                }))
+            } else {
+                None
+            };
+        let mut tap = crate::channels::event_tap::EventTap::spawn_with_options(
             event_rx,
-            injection_ack,
-            progress,
+            crate::channels::event_tap::TapOptions {
+                on_inject: injection_ack,
+                progress,
+                on_diff,
+                max_iterations: self.app_state.config.max_tool_iterations,
+            },
         );
         // Process with shared agent engine (reuses the same loop as Telegram)
         match process_with_agent_with_events_guarded(

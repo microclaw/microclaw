@@ -547,6 +547,7 @@ async fn execute_single_tool(
             bytes: result.bytes,
             error_type: result.error_type.clone(),
         });
+        emit_file_diff_event(tx, &result);
     }
     if result.is_error {
         metrics.tool_errors += 1;
@@ -782,6 +783,7 @@ async fn execute_wave_parallel(
                 bytes: result.bytes,
                 error_type: result.error_type.clone(),
             });
+            emit_file_diff_event(tx, &result);
         }
 
         results.push((
@@ -795,6 +797,38 @@ async fn execute_wave_parallel(
     }
 
     results
+}
+
+/// Forward a `file_diff` metadata payload (attached by edit_file/write_file)
+/// as an `AgentEvent::FileDiff` so channels and the web UI can render what
+/// changed. Successful edits only — error results never carry the payload.
+fn emit_file_diff_event(
+    tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    result: &microclaw_tools::runtime::ToolResult,
+) {
+    let Some(fd) = result
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get(microclaw_core::diff::FILE_DIFF_METADATA_KEY))
+    else {
+        return;
+    };
+    let (Some(path), Some(diff)) = (
+        fd.get("path").and_then(|v| v.as_str()),
+        fd.get("diff").and_then(|v| v.as_str()),
+    ) else {
+        return;
+    };
+    let _ = tx.send(AgentEvent::FileDiff {
+        path: path.to_string(),
+        diff: diff.to_string(),
+        added: fd.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+        removed: fd.get("removed").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+        truncated: fd
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    });
 }
 
 /// Build a short, operator-readable preview of the action awaiting approval.

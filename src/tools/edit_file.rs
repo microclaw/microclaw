@@ -11,6 +11,7 @@ use super::{schema_object, Tool, ToolResult};
 pub struct EditFileTool {
     working_dir: PathBuf,
     working_dir_isolation: WorkingDirIsolation,
+    diff_max_lines: usize,
 }
 
 impl EditFileTool {
@@ -25,7 +26,13 @@ impl EditFileTool {
         Self {
             working_dir: PathBuf::from(working_dir),
             working_dir_isolation,
+            diff_max_lines: microclaw_core::diff::DEFAULT_DIFF_MAX_LINES,
         }
+    }
+
+    pub fn with_diff_max_lines(mut self, max_lines: usize) -> Self {
+        self.diff_max_lines = max_lines;
+        self
     }
 }
 
@@ -102,11 +109,26 @@ impl Tool for EditFileTool {
                 } else {
                     format!(" (matched via `{}` strategy — re-read the file if you want to confirm the byte-exact form)", fm.strategy)
                 };
-                ToolResult::success(format!(
-                    "Successfully edited {}{}",
-                    resolved_path.display(),
-                    suffix
-                ))
+                let diff = microclaw_core::diff::unified_diff(
+                    &content,
+                    &fm.new_content,
+                    self.diff_max_lines,
+                );
+                let mut result = ToolResult::success(match &diff {
+                    Some(d) => format!(
+                        "Successfully edited {} ({}){}",
+                        resolved_path.display(),
+                        d.stats(),
+                        suffix
+                    ),
+                    None => format!("Successfully edited {}{}", resolved_path.display(), suffix),
+                });
+                if let Some(d) = diff {
+                    result = result.with_metadata(microclaw_core::diff::file_diff_metadata(
+                        path, &d,
+                    ));
+                }
+                result
             }
             Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
         }

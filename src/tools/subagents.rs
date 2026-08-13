@@ -1447,6 +1447,7 @@ impl Tool for SessionsSpawnTool {
         let channel_registry = self.channel_registry.clone();
         let subagent_channel_registry = self.channel_registry.clone();
         let fan_in_channel_registry = self.channel_registry.clone();
+        let caller_channel_for_event = auth.caller_channel.clone();
         tokio::spawn(async move {
             let run_id_for_finish = run_id_async.clone();
             let _ = call_blocking(db.clone(), {
@@ -1511,6 +1512,24 @@ impl Tool for SessionsSpawnTool {
             } else {
                 run_future.await
             };
+
+            let finish_status = match &final_outcome {
+                Ok(_) => "completed",
+                Err(err) if err == "cancelled" => "cancelled",
+                Err(err) if err == "timed_out" => "timed_out",
+                Err(err) if err.contains("budget_exceeded:") => "budget_exceeded",
+                Err(_) => "failed",
+            };
+            // Surface completion into the parent turn's heartbeat if it is
+            // still running (no-op otherwise).
+            crate::agent_engine::send_turn_event(
+                &auth.caller_channel,
+                chat_id,
+                crate::agent_engine::AgentEvent::SubagentFinished {
+                    run_id: run_id_async.clone(),
+                    status: finish_status.to_string(),
+                },
+            );
 
             match final_outcome {
                 Ok((result, artifact_json, input_tokens, output_tokens)) => {
@@ -1626,6 +1645,14 @@ impl Tool for SessionsSpawnTool {
         });
 
         info!("subagent accepted run_id={run_id} chat_id={chat_id}");
+        crate::agent_engine::send_turn_event(
+            &caller_channel_for_event,
+            chat_id,
+            crate::agent_engine::AgentEvent::SubagentStarted {
+                run_id: run_id.clone(),
+                label: label.clone().unwrap_or_else(|| specialist.clone()),
+            },
+        );
         ToolResult::success(
             json!({
                 "status": "accepted",

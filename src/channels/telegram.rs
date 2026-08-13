@@ -1194,9 +1194,10 @@ async fn handle_message(
         let bot_for_progress = bot.clone();
         let chat_for_progress = msg.chat.id;
         let thread_for_progress = msg.thread_id;
+        let pin_progress = progress_settings.pin;
         let progress_msg: std::sync::Arc<tokio::sync::Mutex<Option<MessageId>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(None));
-        let emit: crate::channels::event_tap::ProgressEmit = Box::new(move |text, _terminal| {
+        let emit: crate::channels::event_tap::ProgressEmit = Box::new(move |text, terminal| {
             let bot = bot_for_progress.clone();
             let chat = chat_for_progress;
             let tid = thread_for_progress;
@@ -1208,6 +1209,15 @@ async fn handle_message(
                         if let Err(e) = bot.edit_message_text(chat, message_id, text).await {
                             warn!("Telegram: progress edit failed: {e}");
                         }
+                        // Auto-clear the pin once the turn is done so the
+                        // status panel doesn't linger at the top of the chat.
+                        if terminal && pin_progress {
+                            if let Err(e) =
+                                bot.unpin_chat_message(chat).message_id(message_id).await
+                            {
+                                warn!("Telegram: progress unpin failed: {e}");
+                            }
+                        }
                     }
                     None => {
                         let mut req = bot.send_message(chat, text);
@@ -1215,7 +1225,18 @@ async fn handle_message(
                             req = req.message_thread_id(tid);
                         }
                         match req.await {
-                            Ok(sent) => *slot = Some(sent.id),
+                            Ok(sent) => {
+                                *slot = Some(sent.id);
+                                if pin_progress && !terminal {
+                                    if let Err(e) = bot
+                                        .pin_chat_message(chat, sent.id)
+                                        .disable_notification(true)
+                                        .await
+                                    {
+                                        warn!("Telegram: progress pin failed: {e}");
+                                    }
+                                }
+                            }
                             Err(e) => warn!("Telegram: progress send failed: {e}"),
                         }
                     }
@@ -1226,10 +1247,40 @@ async fn handle_message(
     } else {
         None
     };
-    let mut tap = crate::channels::event_tap::EventTap::spawn_with_progress(
+    // File-edit diffs ride the same opt-in as the progress heartbeat so a
+    // channel that wants a quiet chat stays quiet.
+    let on_diff: Option<crate::channels::event_tap::DiffEmit> = if state.config.file_diffs_in_chat
+        && progress_settings.enabled
+        && (is_private_chat || progress_settings.groups)
+    {
+        let bot_for_diff = bot.clone();
+        let chat_for_diff = msg.chat.id;
+        let thread_for_diff = msg.thread_id;
+        Some(Box::new(move |text| {
+            let bot = bot_for_diff.clone();
+            let chat = chat_for_diff;
+            let tid = thread_for_diff;
+            Box::pin(async move {
+                let mut req = bot.send_message(chat, text);
+                if let Some(tid) = tid {
+                    req = req.message_thread_id(tid);
+                }
+                if let Err(e) = req.await {
+                    warn!("Telegram: file diff send failed: {e}");
+                }
+            })
+        }))
+    } else {
+        None
+    };
+    let mut tap = crate::channels::event_tap::EventTap::spawn_with_options(
         event_rx,
-        injection_ack,
-        progress,
+        crate::channels::event_tap::TapOptions {
+            on_inject: injection_ack,
+            progress,
+            on_diff,
+            max_iterations: state.config.max_tool_iterations,
+        },
     );
     match process_with_agent_with_events_guarded(
         &state,

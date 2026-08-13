@@ -224,6 +224,49 @@ async fn start_stream_run_internal(
                                 )
                                 .await;
                         }
+                        AgentEvent::FileDiff {
+                            path,
+                            diff,
+                            added,
+                            removed,
+                            truncated,
+                        } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "file_diff",
+                                    json!({
+                                        "path": path,
+                                        "diff": diff,
+                                        "added": added,
+                                        "removed": removed,
+                                        "truncated": truncated,
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
+                        AgentEvent::SubagentStarted { run_id, label } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "subagent_started",
+                                    json!({"run_id": run_id, "label": label}).to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
+                        AgentEvent::SubagentFinished { run_id, status } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "subagent_finished",
+                                    json!({"run_id": run_id, "status": status}).to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                     }
                 }
             });

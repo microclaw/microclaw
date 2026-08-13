@@ -159,6 +159,12 @@ timezone: "UTC"
 max_session_messages: 40
 compact_keep_recent: 20
 
+# File-edit diff rendering: edit_file/write_file attach a unified diff
+# (+N -M stats) to their result; the web UI always shows it, and chat
+# channels with progress_updates enabled deliver it as a ```diff message.
+# diff_max_lines: 120          # cap on rendered diff lines
+# file_diffs_in_chat: true     # set false to keep diffs out of chat channels
+
 # Anthropic prompt caching (system_and_3 strategy).
 # When enabled, microclaw inserts up to 4 cache_control breakpoints per
 # request — system prompt + last 3 messages — so multi-turn chats hit the
@@ -248,6 +254,7 @@ channels:
     #   groups: false                # also emit in group chats (default: private only)
     #   min_turn_seconds: 30         # stay silent for turns shorter than this
     #   update_interval_seconds: 20  # edit throttle (≤3/min, under Telegram's edit cap)
+    #   pin: false                   # pin the progress message during long turns (Telegram only)
   discord:
     enabled: false
     bot_token: ""

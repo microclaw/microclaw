@@ -11,6 +11,7 @@ use super::{schema_object, Tool, ToolResult};
 pub struct WriteFileTool {
     working_dir: PathBuf,
     working_dir_isolation: WorkingDirIsolation,
+    diff_max_lines: usize,
 }
 
 impl WriteFileTool {
@@ -25,7 +26,13 @@ impl WriteFileTool {
         Self {
             working_dir: PathBuf::from(working_dir),
             working_dir_isolation,
+            diff_max_lines: microclaw_core::diff::DEFAULT_DIFF_MAX_LINES,
         }
+    }
+
+    pub fn with_diff_max_lines(mut self, max_lines: usize) -> Self {
+        self.diff_max_lines = max_lines;
+        self
     }
 }
 
@@ -92,6 +99,12 @@ impl Tool for WriteFileTool {
 
         info!("Writing file: {}", resolved_path.display());
 
+        // Previous content (empty for a new file) so overwrites render as a
+        // diff instead of a bare success line. Non-UTF-8 files skip the diff.
+        let previous = tokio::fs::read_to_string(&resolved_path)
+            .await
+            .unwrap_or_default();
+
         if let Some(parent) = resolved_path.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 return ToolResult::error(format!("Failed to create directories: {e}"));
@@ -100,7 +113,21 @@ impl Tool for WriteFileTool {
 
         match tokio::fs::write(&resolved_path, content).await {
             Ok(()) => {
-                ToolResult::success(format!("Successfully wrote to {}", resolved_path.display()))
+                let diff =
+                    microclaw_core::diff::unified_diff(&previous, content, self.diff_max_lines);
+                let mut result = ToolResult::success(match &diff {
+                    Some(d) => format!(
+                        "Successfully wrote to {} ({})",
+                        resolved_path.display(),
+                        d.stats()
+                    ),
+                    None => format!("Successfully wrote to {}", resolved_path.display()),
+                });
+                if let Some(d) = diff {
+                    result = result
+                        .with_metadata(microclaw_core::diff::file_diff_metadata(path, &d));
+                }
+                result
             }
             Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
         }

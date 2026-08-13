@@ -268,6 +268,12 @@ fn detect_system_timezone() -> String {
 fn default_max_session_messages() -> usize {
     40
 }
+fn default_diff_max_lines() -> usize {
+    microclaw_core::diff::DEFAULT_DIFF_MAX_LINES
+}
+fn default_file_diffs_in_chat() -> bool {
+    true
+}
 fn default_compact_keep_recent() -> usize {
     20
 }
@@ -1568,6 +1574,14 @@ pub struct Config {
     pub skills_catalog_top_k: usize,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
+    /// Cap on rendered unified-diff lines attached by file-modifying tools
+    /// (edit_file / write_file). Default: 120.
+    #[serde(default = "default_diff_max_lines")]
+    pub diff_max_lines: usize,
+    /// Deliver file-edit diffs as chat messages on channels that opted into
+    /// progress updates. The web UI always receives diff events. Default: true.
+    #[serde(default = "default_file_diffs_in_chat")]
+    pub file_diffs_in_chat: bool,
     #[serde(default = "default_compact_keep_recent")]
     pub compact_keep_recent: usize,
     #[serde(default = "default_tool_timeout_secs")]
@@ -2317,6 +2331,8 @@ impl Config {
             allowed_groups: vec![],
             control_chat_ids: vec![],
             max_session_messages: 40,
+            diff_max_lines: default_diff_max_lines(),
+            file_diffs_in_chat: default_file_diffs_in_chat(),
             compact_keep_recent: 20,
             default_tool_timeout_secs: default_tool_timeout_secs(),
             tool_timeout_overrides: HashMap::new(),

@@ -101,6 +101,25 @@ pub enum AgentEvent {
     MidTurnInjection {
         count: usize,
     },
+    /// Emitted after a successful file-modifying tool call, carrying the
+    /// rendered unified diff so channels/web can show what changed.
+    FileDiff {
+        path: String,
+        diff: String,
+        added: usize,
+        removed: usize,
+        truncated: bool,
+    },
+    /// Emitted when a sub-agent run is spawned from this turn.
+    SubagentStarted {
+        run_id: String,
+        label: String,
+    },
+    /// Emitted when a sub-agent run reaches a terminal state.
+    SubagentFinished {
+        run_id: String,
+        status: String,
+    },
     /// Emitted when a high-risk tool call pauses the turn waiting for
     /// operator approval. Carries the structured option card so richer
     /// clients (web) can render buttons instead of parsing the text.
@@ -113,6 +132,52 @@ pub enum AgentEvent {
         /// Optional advisory verdict from the aux-model risk reviewer.
         advisory: Option<String>,
     },
+}
+
+/// Live event senders for in-flight interactive turns, keyed by
+/// `(channel, chat_id)`. Background work that outlives a tool call (e.g. a
+/// sub-agent run finishing minutes later) can surface an event into the
+/// owning turn's heartbeat while it is still running; sends after the turn
+/// ended are silently dropped.
+static TURN_EVENT_SENDERS: std::sync::LazyLock<
+    std::sync::RwLock<std::collections::HashMap<(String, i64), UnboundedSender<AgentEvent>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// RAII registration of a turn's event sender; deregisters on drop so a
+/// panicking or early-returning turn can't leak a stale sender.
+pub(crate) struct TurnEventRegistration {
+    key: (String, i64),
+}
+
+impl Drop for TurnEventRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut map) = TURN_EVENT_SENDERS.write() {
+            map.remove(&self.key);
+        }
+    }
+}
+
+pub(crate) fn register_turn_events(
+    channel: &str,
+    chat_id: i64,
+    tx: UnboundedSender<AgentEvent>,
+) -> TurnEventRegistration {
+    let key = (channel.to_string(), chat_id);
+    if let Ok(mut map) = TURN_EVENT_SENDERS.write() {
+        map.insert(key.clone(), tx);
+    }
+    TurnEventRegistration { key }
+}
+
+/// Send an event into the live turn for `(channel, chat_id)` if one is
+/// running with an event consumer attached. Returns `true` when delivered.
+pub fn send_turn_event(channel: &str, chat_id: i64, event: AgentEvent) -> bool {
+    let Ok(map) = TURN_EVENT_SENDERS.read() else {
+        return false;
+    };
+    map.get(&(channel.to_string(), chat_id))
+        .map(|tx| tx.send(event).is_ok())
+        .unwrap_or(false)
 }
 
 #[async_trait]
@@ -977,6 +1042,12 @@ pub(crate) async fn process_with_agent_impl(
     let root_span_id = new_span_id();
     let start_time = now_unix_nano();
     let mut metrics = AgentMetrics::default();
+
+    // Expose this turn's event channel to background producers (sub-agent
+    // lifecycle) for as long as the turn runs.
+    let _turn_events_registration = event_tx.map(|tx| {
+        register_turn_events(context.caller_channel, context.chat_id, tx.clone())
+    });
 
     let result = process_with_agent_logic(
         state,
