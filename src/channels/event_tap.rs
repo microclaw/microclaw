@@ -23,6 +23,10 @@ pub struct EventTapResult {
     /// Channel adapters use this to suppress the duplicate final reply when
     /// the agent already delivered output via the `send_message` tool.
     pub used_send_message_tool: bool,
+    /// `true` if the turn paused on a high-risk tool approval
+    /// (`ApprovalRequired` observed). Channel adapters use this to attach
+    /// interactive approve/deny buttons to the approval prompt.
+    pub approval_requested: bool,
 }
 
 /// Concurrent event consumer.
@@ -211,6 +215,9 @@ impl EventTap {
                     }
                     AgentEvent::Iteration { iteration: i } => {
                         iteration = *i;
+                    }
+                    AgentEvent::ApprovalRequired { .. } => {
+                        result.approval_requested = true;
                     }
                     AgentEvent::SubagentStarted { .. } => {
                         subagents_running += 1;

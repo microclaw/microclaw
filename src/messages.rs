@@ -46,6 +46,41 @@ pub fn approval_prompt(
     }
 }
 
+/// Labels for the interactive approval buttons (approve once / always
+/// allow / deny), matching the numbered option card in [`approval_prompt`].
+pub fn approval_button_labels(lang: UserMessageLanguage) -> [String; 3] {
+    match lang {
+        UserMessageLanguage::Zh => [
+            "✅ 批准本次".into(),
+            "🔁 始终允许".into(),
+            "❌ 拒绝".into(),
+        ],
+        _ => [
+            "✅ Approve once".into(),
+            "🔁 Always allow".into(),
+            "❌ Deny".into(),
+        ],
+    }
+}
+
+/// Short prompt line shown on the interactive approval button message.
+pub fn approval_buttons_hint(lang: UserMessageLanguage) -> &'static str {
+    match lang {
+        UserMessageLanguage::Zh => "请选择：",
+        UserMessageLanguage::Bilingual => "Choose an option / 请选择：",
+        UserMessageLanguage::En => "Choose an option:",
+    }
+}
+
+/// Confirmation line the approval button message is edited to after a
+/// choice is made.
+pub fn approval_choice_ack(lang: UserMessageLanguage, label: &str) -> String {
+    match lang {
+        UserMessageLanguage::Zh => format!("已选择：{label}"),
+        _ => format!("Selected: {label}"),
+    }
+}
+
 /// Suffix appended after the (stable, test-guarded) budget refusal prefix.
 pub fn budget_refusal_body(
     lang: UserMessageLanguage,

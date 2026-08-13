@@ -782,11 +782,8 @@ impl EventHandler for Handler {
                 drop(event_tx);
                 let response_for_voice = response.clone();
                 while tap.replay_rx.recv().await.is_some() {}
-                let used_send_message_tool = tap
-                    .join
-                    .await
-                    .map(|r| r.used_send_message_tool)
-                    .unwrap_or(false);
+                let tap_result = tap.join.await.unwrap_or_default();
+                let used_send_message_tool = tap_result.used_send_message_tool;
 
                 if used_send_message_tool {
                     if !response.is_empty() {
@@ -839,6 +836,19 @@ impl EventHandler for Handler {
                     let _ = call_blocking(self.app_state.db.clone(), move |db| {
                         db.store_message(&bot_msg)
                     })
+                    .await;
+                }
+
+                // Interactive approval: follow the text card with
+                // Approve/Always/Deny buttons (see telegram.rs counterpart).
+                if tap_result.approval_requested {
+                    send_discord_approval_buttons(
+                        &ctx,
+                        msg.channel_id,
+                        channel_id,
+                        discord_chat_type,
+                        self.app_state.config.user_message_language,
+                    )
                     .await;
                 }
 
@@ -898,6 +908,160 @@ impl EventHandler for Handler {
 
     async fn ready(&self, _ctx: Context, ready: Ready) {
         info!("Discord bot connected as {}", ready.user.name);
+    }
+
+    /// Approval button taps: acknowledge by replacing the buttons with the
+    /// chosen label, store the choice as a synthetic "1"/"2"/"3" reply, and
+    /// run a turn so the pending-approval parsing decides.
+    async fn interaction_create(
+        &self,
+        ctx: Context,
+        interaction: serenity::model::application::Interaction,
+    ) {
+        let serenity::model::application::Interaction::Component(comp) = interaction else {
+            return;
+        };
+        let custom_id = comp.data.custom_id.clone();
+        let Some(rest) = custom_id.strip_prefix("apv:") else {
+            return;
+        };
+        let mut parts = rest.splitn(3, ':');
+        let (Some(choice), Some(chat_id_str)) = (parts.next(), parts.next()) else {
+            return;
+        };
+        let chat_type = if parts.next().unwrap_or("p") == "p" {
+            "private"
+        } else {
+            "group"
+        };
+        if !matches!(choice, "1" | "2" | "3") {
+            return;
+        }
+        let Ok(internal_chat_id) = chat_id_str.parse::<i64>() else {
+            return;
+        };
+
+        let lang = self.app_state.config.user_message_language;
+        let labels = crate::messages::approval_button_labels(lang);
+        let chosen_label = labels[choice.parse::<usize>().unwrap_or(1) - 1].clone();
+        let ack = serenity::builder::CreateInteractionResponse::UpdateMessage(
+            serenity::builder::CreateInteractionResponseMessage::new()
+                .content(crate::messages::approval_choice_ack(lang, &chosen_label))
+                .components(vec![]),
+        );
+        if let Err(e) = comp.create_response(&ctx.http, ack).await {
+            warn!("Discord: approval ack failed: {e}");
+        }
+
+        let stored = StoredMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            chat_id: internal_chat_id,
+            sender_name: comp.user.name.clone(),
+            content: choice.to_string(),
+            is_from_bot: false,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        let _ = call_blocking(self.app_state.db.clone(), move |db| db.store_message(&stored)).await;
+
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, None);
+        let result = process_with_agent_with_events_guarded(
+            &self.app_state,
+            AgentRequestContext {
+                caller_channel: &self.runtime.channel_name,
+                chat_id: internal_chat_id,
+                chat_type,
+            },
+            None,
+            None,
+            Some(&event_tx),
+            None,
+        )
+        .await;
+        drop(event_tx);
+        while tap.replay_rx.recv().await.is_some() {}
+        let tap_result = tap.join.await.unwrap_or_default();
+
+        match result {
+            Ok(response) => {
+                if !tap_result.used_send_message_tool && !response.is_empty() {
+                    let delivered =
+                        send_discord_response(&ctx, comp.channel_id, &response).await;
+                    if delivered {
+                        let bot_msg = StoredMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            chat_id: internal_chat_id,
+                            sender_name: self.runtime.bot_username.clone(),
+                            content: response,
+                            is_from_bot: true,
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        };
+                        let _ = call_blocking(self.app_state.db.clone(), move |db| {
+                            db.store_message(&bot_msg)
+                        })
+                        .await;
+                    } else {
+                        let channel_name = self.runtime.channel_name.clone();
+                        let _ = call_blocking(self.app_state.db.clone(), move |db| {
+                            db.enqueue_outbox_message(internal_chat_id, &channel_name, &response)
+                        })
+                        .await;
+                    }
+                }
+                if tap_result.approval_requested {
+                    send_discord_approval_buttons(
+                        &ctx,
+                        comp.channel_id,
+                        internal_chat_id,
+                        chat_type,
+                        lang,
+                    )
+                    .await;
+                }
+            }
+            Err(e) => {
+                error!("Discord: approval callback turn failed: {e}");
+                if !should_suppress_user_error(&e) {
+                    let _ = comp.channel_id.say(&ctx.http, format!("Error: {e}")).await;
+                }
+            }
+        }
+    }
+}
+
+/// Send the Approve/Always/Deny button row that follows a high-risk
+/// approval prompt (see the telegram.rs counterpart for the flow).
+async fn send_discord_approval_buttons(
+    ctx: &Context,
+    discord_channel: ChannelId,
+    internal_chat_id: i64,
+    chat_type: &str,
+    lang: crate::config::UserMessageLanguage,
+) {
+    use serenity::builder::{CreateActionRow, CreateButton, CreateMessage};
+    use serenity::model::application::ButtonStyle;
+    let chat_type_code = if chat_type == "private" { "p" } else { "g" };
+    let labels = crate::messages::approval_button_labels(lang);
+    let styles = [
+        ButtonStyle::Success,
+        ButtonStyle::Primary,
+        ButtonStyle::Danger,
+    ];
+    let buttons: Vec<CreateButton> = labels
+        .iter()
+        .zip(styles)
+        .enumerate()
+        .map(|(i, (label, style))| {
+            CreateButton::new(format!("apv:{}:{internal_chat_id}:{chat_type_code}", i + 1))
+                .label(label.clone())
+                .style(style)
+        })
+        .collect();
+    let message = CreateMessage::new()
+        .content(crate::messages::approval_buttons_hint(lang))
+        .components(vec![CreateActionRow::Buttons(buttons)]);
+    if let Err(e) = discord_channel.send_message(&ctx.http, message).await {
+        warn!("Discord: approval buttons send failed: {e}");
     }
 }
 
