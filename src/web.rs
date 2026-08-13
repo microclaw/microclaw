@@ -3510,6 +3510,7 @@ mod tests {
             LlmProviderProfile {
                 provider: Some("openai".to_string()),
                 api_key: None,
+                api_keys: Vec::new(),
                 llm_base_url: Some(format!("http://{addr}/v1")),
                 llm_user_agent: None,
                 default_model: Some("custom-model".to_string()),

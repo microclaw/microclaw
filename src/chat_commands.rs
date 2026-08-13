@@ -1492,6 +1492,7 @@ mod tests {
             LlmProviderProfile {
                 provider: Some("openai".to_string()),
                 api_key: None,
+                api_keys: Vec::new(),
                 llm_base_url: None,
                 llm_user_agent: None,
                 default_model: Some("gpt-5.2".to_string()),
@@ -1504,6 +1505,7 @@ mod tests {
             LlmProviderProfile {
                 provider: Some("anthropic".to_string()),
                 api_key: Some("k".to_string()),
+                api_keys: Vec::new(),
                 llm_base_url: None,
                 llm_user_agent: None,
                 default_model: Some("claude-sonnet-4-5-20250929".to_string()),
@@ -1968,6 +1970,7 @@ channels:
             LlmProviderProfile {
                 provider: Some("openai".to_string()),
                 api_key: None,
+                api_keys: Vec::new(),
                 llm_base_url: Some(format!("http://{addr}/v1")),
                 llm_user_agent: None,
                 default_model: Some("custom-model".to_string()),
@@ -2020,6 +2023,7 @@ channels:
             LlmProviderProfile {
                 provider: Some("openai".to_string()),
                 api_key: None,
+                api_keys: Vec::new(),
                 llm_base_url: Some(format!("http://{addr}/v1")),
                 llm_user_agent: None,
                 default_model: Some("custom-model".to_string()),
@@ -2064,6 +2068,7 @@ channels:
             alias: provider.to_string(),
             provider: provider.to_string(),
             api_key: String::new(),
+            api_keys: Vec::new(),
             llm_base_url: None,
             llm_user_agent: String::new(),
             default_model: "x".to_string(),
