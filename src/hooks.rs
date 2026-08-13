@@ -20,6 +20,9 @@ pub enum HookEvent {
     BeforeLLMCall,
     BeforeToolCall,
     AfterToolCall,
+    /// Fires once when an interactive turn finalizes (after the last model
+    /// response, before delivery). Observational: Block outcomes are ignored.
+    AfterTurn,
 }
 
 impl HookEvent {
@@ -28,6 +31,7 @@ impl HookEvent {
             HookEvent::BeforeLLMCall => "BeforeLLMCall",
             HookEvent::BeforeToolCall => "BeforeToolCall",
             HookEvent::AfterToolCall => "AfterToolCall",
+            HookEvent::AfterTurn => "AfterTurn",
         }
     }
 
@@ -36,6 +40,7 @@ impl HookEvent {
             "BeforeLLMCall" => Some(HookEvent::BeforeLLMCall),
             "BeforeToolCall" => Some(HookEvent::BeforeToolCall),
             "AfterToolCall" => Some(HookEvent::AfterToolCall),
+            "AfterTurn" => Some(HookEvent::AfterTurn),
             _ => None,
         }
     }
@@ -394,6 +399,32 @@ impl HookManager {
                     "duration_ms": result.duration_ms,
                     "error_type": result.error_type
                 }
+            }),
+        )
+        .await
+    }
+
+    /// Observational post-turn event: fired once when an interactive turn
+    /// finalizes. Block outcomes are ignored by the caller (the response is
+    /// already produced); hooks use this for logging/notification side
+    /// effects.
+    pub async fn run_after_turn(
+        &self,
+        chat_id: i64,
+        caller_channel: &str,
+        iterations: usize,
+        tools_used: &[String],
+        response_preview: &str,
+    ) -> Result<HookOutcome> {
+        self.run(
+            HookEvent::AfterTurn,
+            json!({
+                "event": HookEvent::AfterTurn.as_str(),
+                "chat_id": chat_id,
+                "caller_channel": caller_channel,
+                "iterations": iterations,
+                "tools_used": tools_used,
+                "response_preview": response_preview
             }),
         )
         .await

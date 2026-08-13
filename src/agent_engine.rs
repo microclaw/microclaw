@@ -134,6 +134,14 @@ pub enum AgentEvent {
     },
 }
 
+/// Default prompt for the opt-in post-edit self-recheck pass.
+/// `{{USER}}` / `{{RESULT}}` are replaced with the original request and the
+/// draft reply.
+const DEFAULT_SELF_RECHECK_PROMPT: &str = "[self_recheck]: You just modified files for this \
+request: \"{{USER}}\". Before finishing, re-read the modified files and verify the change is \
+complete and consistent (no leftover placeholders, no broken references, validation run if \
+cheap). Fix anything you find, then give your final answer. Draft reply was: {{RESULT}}";
+
 /// Live event senders for in-flight interactive turns, keyed by
 /// `(channel, chat_id)`. Background work that outlives a tool call (e.g. a
 /// sub-agent run finishing minutes later) can surface an event into the
@@ -1818,6 +1826,12 @@ async fn process_with_agent_logic(
     // Tracks the input-token size of the most recent provider request so the
     // context-pressure check can compact before the next call overflows.
     let mut last_observed_input_tokens: i64 = 0;
+    // Post-turn self-recheck state: whether a file-modifying tool ran this
+    // turn, which tools ran (for the AfterTurn hook), and whether the single
+    // recheck pass already happened.
+    let mut file_modifying_tool_used = false;
+    let mut tools_used_this_turn: Vec<String> = Vec::new();
+    let mut self_recheck_done = false;
     for iteration in 0..state.config.max_tool_iterations {
         // Context-pressure compaction: when the previous request already
         // consumed more than `context_pressure_compact_pct` of the model's
@@ -2272,6 +2286,38 @@ async fn process_with_agent_logic(
                 }
             }
 
+            // --- Gated self-recheck ---
+            // After a turn that modified files, run one quality pass before
+            // finalizing (opt-in via `self_recheck.enabled`). One pass per
+            // turn; the recheck's own reply finalizes normally.
+            if state.config.self_recheck.enabled
+                && !self_recheck_done
+                && file_modifying_tool_used
+                && has_displayable_output
+                && override_prompt.is_none()
+            {
+                self_recheck_done = true;
+                let template = state
+                    .config
+                    .self_recheck
+                    .prompt
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_SELF_RECHECK_PROMPT.to_string());
+                let recheck_prompt = template
+                    .replace("{{USER}}", &truncate_for_log(&metrics.input_text, 800))
+                    .replace("{{RESULT}}", &truncate_for_log(&visible_text, 1200));
+                info!(chat_id, "Self-recheck: running post-edit quality pass");
+                messages.push(Message {
+                    role: "assistant".into(),
+                    content: MessageContent::Text(text.clone()),
+                });
+                messages.push(Message {
+                    role: "user".into(),
+                    content: MessageContent::Text(recheck_prompt),
+                });
+                continue;
+            }
+
             // Add final assistant message and save session (keep full text including thinking)
             messages.push(Message {
                 role: "assistant".into(),
@@ -2312,10 +2358,34 @@ async fn process_with_agent_logic(
                 response_len = final_text.len(),
                 "Agent request completed"
             );
+            // Observational AfterTurn hook — fired off-path so a slow hook
+            // can't delay delivery; Block outcomes are ignored by design.
+            {
+                let hooks = state.hooks.clone();
+                let caller_channel = context.caller_channel.to_string();
+                let tools_used = tools_used_this_turn.clone();
+                let preview = truncate_for_log(&final_text, 500);
+                let iterations = iteration + 1;
+                tokio::spawn(async move {
+                    let _ = hooks
+                        .run_after_turn(chat_id, &caller_channel, iterations, &tools_used, &preview)
+                        .await;
+                });
+            }
             return Ok(final_text);
         }
 
         if stop_reason == "tool_use" {
+            for block in &response.content {
+                if let ResponseContentBlock::ToolUse { name, .. } = block {
+                    if name == "edit_file" || name == "write_file" {
+                        file_modifying_tool_used = true;
+                    }
+                    if !tools_used_this_turn.contains(name) {
+                        tools_used_this_turn.push(name.clone());
+                    }
+                }
+            }
             let tool_use_count = response
                 .content
                 .iter()

@@ -1029,6 +1029,18 @@ impl AuxModels {
     }
 }
 
+/// Opt-in post-edit self-recheck (one review pass after file-modifying
+/// turns, before the reply finalizes).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SelfRecheckConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Custom prompt template; `{{USER}}` and `{{RESULT}}` placeholders are
+    /// replaced with the original request and the draft reply.
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubagentConfig {
     #[serde(default = "default_subagent_max_concurrent")]
@@ -1597,6 +1609,11 @@ pub struct Config {
     /// overflow-error retry still applies). Default: 85.
     #[serde(default = "default_context_pressure_compact_pct")]
     pub context_pressure_compact_pct: usize,
+    /// Opt-in post-edit quality pass: after a turn that ran edit_file /
+    /// write_file, one extra review iteration runs before the reply is
+    /// finalized.
+    #[serde(default)]
+    pub self_recheck: SelfRecheckConfig,
     #[serde(default = "default_compact_keep_recent")]
     pub compact_keep_recent: usize,
     #[serde(default = "default_tool_timeout_secs")]
@@ -2350,6 +2367,7 @@ impl Config {
             file_diffs_in_chat: default_file_diffs_in_chat(),
             model_context_window: default_model_context_window(),
             context_pressure_compact_pct: default_context_pressure_compact_pct(),
+            self_recheck: SelfRecheckConfig::default(),
             compact_keep_recent: 20,
             default_tool_timeout_secs: default_tool_timeout_secs(),
             tool_timeout_overrides: HashMap::new(),
