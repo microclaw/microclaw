@@ -1,5 +1,6 @@
 pub mod a2a;
 pub mod acp;
+pub mod headless;
 pub mod acp_subagent;
 pub mod agent_engine;
 pub mod alerts;
