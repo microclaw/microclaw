@@ -677,8 +677,10 @@ pub async fn handle_chat_command(
                 Err(e) => format!("Failed to clear standing approvals: {e}"),
             });
         }
-        let grants =
-            call_blocking(state.db.clone(), move |db| db.list_runtime_meta_prefix(&prefix)).await;
+        let grants = call_blocking(state.db.clone(), move |db| {
+            db.list_runtime_meta_prefix(&prefix)
+        })
+        .await;
         return Some(match grants {
             Ok(rows) if rows.is_empty() => {
                 "No standing tool approvals for this chat. Reply \"2\" or \"always\" to an \
@@ -993,9 +995,10 @@ async fn build_model_response_with_persistence(
 
     // `/model here <name>` — override for this chat only (runtime scope;
     // cleared with `/model here reset` or on restart).
-    if let Some(rest) = requested
-        .strip_prefix("here ")
-        .or(if requested == "here" { Some("") } else { None })
+    if let Some(rest) =
+        requested
+            .strip_prefix("here ")
+            .or(if requested == "here" { Some("") } else { None })
     {
         let rest = rest.trim();
         let chat_key = chat_scoped_override_key(&caller_channel, chat_id);
@@ -1166,9 +1169,10 @@ async fn build_provider_response_with_persistence(
 
     // `/provider here <alias>` — override for this chat only (runtime
     // scope; cleared with `/provider here reset` or on restart).
-    if let Some(rest) = requested
-        .strip_prefix("here ")
-        .or(if requested == "here" { Some("") } else { None })
+    if let Some(rest) =
+        requested
+            .strip_prefix("here ")
+            .or(if requested == "here" { Some("") } else { None })
     {
         let rest = rest.trim();
         let chat_key = chat_scoped_override_key(caller_channel, chat_id);

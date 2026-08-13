@@ -20,9 +20,7 @@ use std::time::Instant;
 use serde_json::json;
 
 use crate::config::Config;
-use microclaw_core::llm_types::{
-    Message, MessageContent, ResponseContentBlock, ToolDefinition,
-};
+use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock, ToolDefinition};
 
 #[derive(Debug, serde::Serialize)]
 pub struct ModelProbe {
@@ -113,11 +111,7 @@ async fn probe_model(base: &Config, model: &str) -> ModelProbe {
 }
 
 fn render(probe: &ModelProbe, label: &str) -> String {
-    let verdict = if probe.passed() {
-        "PASS"
-    } else {
-        "FAIL"
-    };
+    let verdict = if probe.passed() { "PASS" } else { "FAIL" };
     let mut line = format!(
         "{verdict} {label} {} — responds: {}, tool calls: {}, {} ms",
         probe.model,
@@ -211,7 +205,10 @@ mod tests {
         assert!(ok.starts_with("PASS candidate test-model"));
         assert!(ok.contains("responds: yes, tool calls: yes"));
 
-        let bad = render(&probe(true, false, Some("model refused tools")), "candidate");
+        let bad = render(
+            &probe(true, false, Some("model refused tools")),
+            "candidate",
+        );
         assert!(bad.starts_with("FAIL"));
         assert!(bad.contains("tool calls: NO"));
         assert!(bad.contains("error: model refused tools"));

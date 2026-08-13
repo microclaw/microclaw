@@ -124,8 +124,8 @@ impl Tool for WriteFileTool {
                     None => format!("Successfully wrote to {}", resolved_path.display()),
                 });
                 if let Some(d) = diff {
-                    result = result
-                        .with_metadata(microclaw_core::diff::file_diff_metadata(path, &d));
+                    result =
+                        result.with_metadata(microclaw_core::diff::file_diff_metadata(path, &d));
                 }
                 result
             }

@@ -592,7 +592,10 @@ impl ToolRegistry {
                 crate::mcp::McpTrust::Limited => ToolRisk::Medium,
                 crate::mcp::McpTrust::Sandboxed => ToolRisk::High,
             };
-            self.add_tool_with_risk(Box::new(crate::tools::mcp::McpTool::new(server, tool_info)), risk);
+            self.add_tool_with_risk(
+                Box::new(crate::tools::mcp::McpTool::new(server, tool_info)),
+                risk,
+            );
         }
     }
 

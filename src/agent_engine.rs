@@ -154,9 +154,9 @@ the user approves it before anything is executed.\n</plan_mode>";
 /// sub-agent run finishing minutes later) can surface an event into the
 /// owning turn's heartbeat while it is still running; sends after the turn
 /// ended are silently dropped.
-static TURN_EVENT_SENDERS: std::sync::LazyLock<
-    std::sync::RwLock<std::collections::HashMap<(String, i64), UnboundedSender<AgentEvent>>>,
-> = std::sync::LazyLock::new(Default::default);
+type TurnEventSenderMap = std::collections::HashMap<(String, i64), UnboundedSender<AgentEvent>>;
+static TURN_EVENT_SENDERS: std::sync::LazyLock<std::sync::RwLock<TurnEventSenderMap>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// RAII registration of a turn's event sender; deregisters on drop so a
 /// panicking or early-returning turn can't leak a stale sender.
@@ -1068,9 +1068,8 @@ pub(crate) async fn process_with_agent_impl(
 
     // Expose this turn's event channel to background producers (sub-agent
     // lifecycle) for as long as the turn runs.
-    let _turn_events_registration = event_tx.map(|tx| {
-        register_turn_events(context.caller_channel, context.chat_id, tx.clone())
-    });
+    let _turn_events_registration = event_tx
+        .map(|tx| register_turn_events(context.caller_channel, context.chat_id, tx.clone()));
 
     let result = process_with_agent_logic(
         state,
@@ -1499,8 +1498,10 @@ async fn process_with_agent_logic(
             && parse_approval_reply(&latest_user_text_for_approval) != ApprovalReply::DenyOrOther
         {
             let mode_key = format!("chat_mode:{chat_id}");
-            let _ = call_blocking(state.db.clone(), move |db| db.delete_runtime_meta(&mode_key))
-                .await;
+            let _ = call_blocking(state.db.clone(), move |db| {
+                db.delete_runtime_meta(&mode_key)
+            })
+            .await;
             if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
                 messages[idx].content = MessageContent::Text(
                     "[plan_approved]: The user approved the plan you presented. Execute it now, step by step, and report the outcome."
@@ -2860,9 +2861,12 @@ async fn process_with_agent_logic(
                     })
                     .await;
                 }
-                let advisory =
-                    review_high_risk_action(state, &tool_name, batch_ctx.waiting_approval_preview.as_deref())
-                        .await;
+                let advisory = review_high_risk_action(
+                    state,
+                    &tool_name,
+                    batch_ctx.waiting_approval_preview.as_deref(),
+                )
+                .await;
                 let text = crate::messages::approval_prompt(
                     state.config.user_message_language,
                     &tool_name,
@@ -5597,7 +5601,10 @@ mod tests {
     fn test_pending_approval_tool_ttl_and_formats() {
         use super::pending_approval_tool;
         let now = chrono::Utc::now();
-        let fresh = format!("bash\n{}", (now - chrono::Duration::minutes(5)).to_rfc3339());
+        let fresh = format!(
+            "bash\n{}",
+            (now - chrono::Duration::minutes(5)).to_rfc3339()
+        );
         assert_eq!(pending_approval_tool(&fresh, now).as_deref(), Some("bash"));
 
         // Stale markers must never convert into a standing grant.
@@ -5613,7 +5620,10 @@ mod tests {
         );
 
         // A marker "from the future" (clock skew) also fails closed.
-        let future = format!("bash\n{}", (now + chrono::Duration::minutes(10)).to_rfc3339());
+        let future = format!(
+            "bash\n{}",
+            (now + chrono::Duration::minutes(10)).to_rfc3339()
+        );
         assert_eq!(pending_approval_tool(&future, now), None);
     }
 

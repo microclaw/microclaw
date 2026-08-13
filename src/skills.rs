@@ -238,7 +238,10 @@ impl SkillManager {
                 // An unreadable lockfile means integrity can no longer be
                 // proven for any managed skill; log loudly but do not
                 // brick unmanaged/local skills.
-                tracing::error!("ClawHub lockfile {} is unreadable: {e}", lock_path.display());
+                tracing::error!(
+                    "ClawHub lockfile {} is unreadable: {e}",
+                    lock_path.display()
+                );
                 *cache = Some(reasons.clone());
                 return reasons;
             }
@@ -325,7 +328,10 @@ impl SkillManager {
                     }
                     // The lockfile is keyed by install slug == directory
                     // name, which may differ from the frontmatter name.
-                    let dir_slug = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+                    let dir_slug = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default();
                     if let Some(reason) = clawhub_blocked.get(dir_slug) {
                         statuses.push(SkillAvailability {
                             meta,
@@ -1248,8 +1254,7 @@ ok
         std::fs::create_dir_all(&dir).unwrap();
         write_skill(&dir, "managed", "managed skill", "ok");
         write_skill(&dir, "local", "local skill", "ok");
-        let tree =
-            microclaw_clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
+        let tree = microclaw_clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
         let lock_path = dir.join("clawhub.lock.json");
         write_lock_entry(&lock_path, "managed", Some(tree));
 
@@ -1289,8 +1294,7 @@ ok
         ));
         std::fs::create_dir_all(&dir).unwrap();
         write_skill(&dir, "managed", "managed skill", "ok");
-        let tree =
-            microclaw_clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
+        let tree = microclaw_clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
         let lock_path = dir.join("clawhub.lock.json");
         write_lock_entry(&lock_path, "managed", Some(tree));
 

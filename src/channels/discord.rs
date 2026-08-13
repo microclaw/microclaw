@@ -961,7 +961,10 @@ impl EventHandler for Handler {
             is_from_bot: false,
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
-        let _ = call_blocking(self.app_state.db.clone(), move |db| db.store_message(&stored)).await;
+        let _ = call_blocking(self.app_state.db.clone(), move |db| {
+            db.store_message(&stored)
+        })
+        .await;
 
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
         let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, None);
@@ -985,8 +988,7 @@ impl EventHandler for Handler {
         match result {
             Ok(response) => {
                 if !tap_result.used_send_message_tool && !response.is_empty() {
-                    let delivered =
-                        send_discord_response(&ctx, comp.channel_id, &response).await;
+                    let delivered = send_discord_response(&ctx, comp.channel_id, &response).await;
                     if delivered {
                         let bot_msg = StoredMessage {
                             id: uuid::Uuid::new_v4().to_string(),

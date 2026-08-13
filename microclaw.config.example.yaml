@@ -165,6 +165,24 @@ compact_keep_recent: 20
 # diff_max_lines: 120          # cap on rendered diff lines
 # file_diffs_in_chat: true     # set false to keep diffs out of chat channels
 
+# Context-pressure compaction: compact the session mid-turn once a request
+# consumes this share of the model's context window (0 disables; the
+# compact-and-retry on provider "context length exceeded" errors always applies).
+# model_context_window: 200000
+# context_pressure_compact_pct: 85
+
+# Post-edit self-recheck (off by default): after a turn that ran
+# edit_file/write_file, one extra review pass runs before the reply is final.
+# self_recheck:
+#   enabled: true
+#   prompt: ""                  # optional custom template ({{USER}}/{{RESULT}})
+
+# API key rotation pool: extra keys tried on 401/403/429 (round-robin with
+# api_key). Also available per profile under llm_providers.<alias>.api_keys.
+# api_keys:
+#   - "sk-second-key"
+#   - "sk-third-key"
+
 # Anthropic prompt caching (system_and_3 strategy).
 # When enabled, microclaw inserts up to 4 cache_control breakpoints per
 # request — system prompt + last 3 messages — so multi-turn chats hit the

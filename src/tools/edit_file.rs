@@ -124,9 +124,8 @@ impl Tool for EditFileTool {
                     None => format!("Successfully edited {}{}", resolved_path.display(), suffix),
                 });
                 if let Some(d) = diff {
-                    result = result.with_metadata(microclaw_core::diff::file_diff_metadata(
-                        path, &d,
-                    ));
+                    result =
+                        result.with_metadata(microclaw_core::diff::file_diff_metadata(path, &d));
                 }
                 result
             }

@@ -1079,7 +1079,8 @@ async fn handle_slack_approval_action(
     };
     let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&stored)).await;
 
-    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<crate::agent_engine::AgentEvent>();
+    let (event_tx, event_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::agent_engine::AgentEvent>();
     let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, None);
     let result = process_with_agent_with_events_guarded(
         &app_state,
@@ -1771,30 +1772,29 @@ async fn handle_slack_message(
         None
     };
     // File-edit diffs ride the same opt-in as the progress heartbeat.
-    let on_diff: Option<crate::channels::event_tap::DiffEmit> = if app_state
-        .config
-        .file_diffs_in_chat
-        && progress_settings.enabled
-        && (is_dm || progress_settings.groups)
-    {
-        let token_for_diff = bot_token.to_string();
-        let channel_for_diff = channel.to_string();
-        let thread_for_diff = normalized_thread_ts.map(|s| s.to_string());
-        Some(Box::new(move |text| {
-            let token = token_for_diff.clone();
-            let channel = channel_for_diff.clone();
-            let thread = thread_for_diff.clone();
-            Box::pin(async move {
-                if let Err(e) =
-                    post_slack_message_ts(&token, &channel, thread.as_deref(), &text).await
-                {
-                    warn!("Slack: file diff send failed: {e}");
-                }
-            })
-        }))
-    } else {
-        None
-    };
+    let on_diff: Option<crate::channels::event_tap::DiffEmit> =
+        if app_state.config.file_diffs_in_chat
+            && progress_settings.enabled
+            && (is_dm || progress_settings.groups)
+        {
+            let token_for_diff = bot_token.to_string();
+            let channel_for_diff = channel.to_string();
+            let thread_for_diff = normalized_thread_ts.map(|s| s.to_string());
+            Some(Box::new(move |text| {
+                let token = token_for_diff.clone();
+                let channel = channel_for_diff.clone();
+                let thread = thread_for_diff.clone();
+                Box::pin(async move {
+                    if let Err(e) =
+                        post_slack_message_ts(&token, &channel, thread.as_deref(), &text).await
+                    {
+                        warn!("Slack: file diff send failed: {e}");
+                    }
+                })
+            }))
+        } else {
+            None
+        };
     let mut tap = crate::channels::event_tap::EventTap::spawn_with_options(
         event_rx,
         crate::channels::event_tap::TapOptions {

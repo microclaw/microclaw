@@ -92,10 +92,7 @@ pub fn estimate_percent(
     } else {
         0
     };
-    explicit
-        .map(|p| p.min(100))
-        .unwrap_or(estimated)
-        .max(floor)
+    explicit.map(|p| p.min(100)).unwrap_or(estimated).max(floor)
 }
 
 /// One-line progress text from the tap's view of the turn.

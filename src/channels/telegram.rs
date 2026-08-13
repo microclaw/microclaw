@@ -907,15 +907,13 @@ async fn handle_message(
                 .text()
                 .or_else(|| replied.caption())
                 .unwrap_or_default();
-            let quoted_author = replied.from.as_ref().map(|u| {
-                u.username
-                    .clone()
-                    .unwrap_or_else(|| u.first_name.clone())
-            });
-            if let Some(prefix) = microclaw_core::text::quoted_context_prefix(
-                quoted_author.as_deref(),
-                quoted_text,
-            ) {
+            let quoted_author = replied
+                .from
+                .as_ref()
+                .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone()));
+            if let Some(prefix) =
+                microclaw_core::text::quoted_context_prefix(quoted_author.as_deref(), quoted_text)
+            {
                 text = format!("{prefix}{text}");
             }
         }
@@ -1505,7 +1503,11 @@ async fn send_approval_keyboard(
     lang: crate::config::UserMessageLanguage,
 ) {
     use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
-    let chat_type_code = if runtime_chat_type == "private" { "p" } else { "g" };
+    let chat_type_code = if runtime_chat_type == "private" {
+        "p"
+    } else {
+        "g"
+    };
     let labels = crate::messages::approval_button_labels(lang);
     let buttons: Vec<Vec<InlineKeyboardButton>> = vec![labels
         .iter()
@@ -1555,7 +1557,11 @@ async fn handle_callback_query(
     let Ok(internal_chat_id) = chat_id_str.parse::<i64>() else {
         return Ok(());
     };
-    let runtime_chat_type = if chat_type_code == "p" { "private" } else { "group" };
+    let runtime_chat_type = if chat_type_code == "p" {
+        "private"
+    } else {
+        "group"
+    };
 
     let _ = bot.answer_callback_query(q.id.clone()).await;
 

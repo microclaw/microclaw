@@ -43,7 +43,16 @@ Rust 2021, Tokio, teloxide 0.17, serenity 0.12, provider-agnostic LLM runtime (A
 - **Path guard**: sensitive paths (.ssh, .aws, .env, credentials, etc.) are blocked in file tools via `path_guard` module
 - **Platform-extensible core**: Telegram/Discord/Slack/Feishu/Web adapters reuse `process_with_agent`; new platforms integrate through the same core loop
 - **SOUL.md**: optional personality file injected into system prompt. Loaded from `soul_path` config, `data_dir/SOUL.md`, or `./SOUL.md`. Per-chat overrides via `data_dir/runtime/groups/{chat_id}/SOUL.md`
-- **Event tap + progress heartbeat**: non-web channels consume `AgentEvent`s concurrently with the agent loop via `EventTap` (`src/channels/event_tap.rs`); Telegram/Discord/Slack can opt into a throttled edit-in-place "⏳ Working…" heartbeat (`channels.<name>.progress_updates`)
+- **Event tap + progress heartbeat**: non-web channels consume `AgentEvent`s concurrently with the agent loop via `EventTap` (`src/channels/event_tap.rs`); Telegram/Discord/Slack can opt into a throttled edit-in-place heartbeat (`channels.<name>.progress_updates`) with a percent bar (explicit `report_progress` calls win over an iteration/elapsed estimator), a live sub-agent count, and optional message pinning (`pin`, Telegram)
+- **File-edit diffs**: `edit_file`/`write_file` attach a unified diff (`microclaw-core::diff`, `+N -M` stats, `diff_max_lines` cap) to `ToolResult::metadata`; `tool_executor` forwards it as `AgentEvent::FileDiff` → web SSE + ```diff chat messages behind the progress opt-in (`file_diffs_in_chat`)
+- **Interactive approval buttons**: the `ApprovalRequired` option card renders as buttons on Telegram (inline keyboard + callback), Discord (components + interaction), Slack (Block Kit + Socket Mode `interactive` envelopes) and web; a tap stores a synthetic "1"/"2"/"3" reply and re-enters the text approval-parsing path
+- **Reply-quote forwarding**: replying to an earlier message prepends `[quoted from <author>: …]` (shared `quoted_context_prefix` helper) on Telegram/Discord/Weixin
+- **Context-pressure compaction**: mid-turn compaction at `context_pressure_compact_pct` of `model_context_window`, plus compact-and-retry on provider context-overflow errors; compaction split is tool-block aware (`safe_compact_split`)
+- **Plan mode**: `/plan` (or ACP session mode "plan") restricts the loop to read-only tools and presents a plan; an approving reply executes it with the full toolset
+- **Self-recheck**: opt-in (`self_recheck.enabled`) one-pass post-edit review before finalizing; hooks gained an observational `AfterTurn` event
+- **Headless CLI**: `microclaw run -p "<prompt>" [--session <name>] [--json]` runs one prompt without channels (`src/headless.rs`)
+- **API key rotation**: `api_keys` (top-level or per provider profile) forms a round-robin pool rotated on 401/403/429 (`KeyPool` in `src/llm.rs`)
+- **Per-chat model override**: `/model here <name>` / `/provider here <alias>` scope overrides to one chat (runtime-only, key `channel#chat_id`)
 - **Interrupted-turn recovery**: interactive turns are tracked in the `active_turns` table (with a rolling `progress_text` checkpoint per tool iteration); on restart `src/turn_recovery.rs` notifies chats whose turn was killed mid-run — including how far it got — and retires orphaned sub-agent runs as `interrupted`
 - **Delivery outbox**: final replies whose channel send fails are queued in `outbox_messages` and redelivered with backoff by `src/outbox.rs` (supervised loop); depth surfaces in the web Governance tab
 

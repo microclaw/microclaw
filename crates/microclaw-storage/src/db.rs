@@ -11978,9 +11978,8 @@ impl Database {
     ) -> Result<Vec<(String, String)>, MicroClawError> {
         let conn = self.lock_conn();
         let pattern = format!("{}%", prefix.replace('%', "\\%").replace('_', "\\_"));
-        let mut stmt = conn.prepare(
-            "SELECT key, value FROM db_meta WHERE key LIKE ?1 ESCAPE '\\' ORDER BY key",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM db_meta WHERE key LIKE ?1 ESCAPE '\\' ORDER BY key")?;
         let rows = stmt
             .query_map([&pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -12006,11 +12005,7 @@ impl Database {
     }
 
     /// Count audit-chain events of one kind recorded at or after `since`.
-    pub fn count_audit_events_since(
-        &self,
-        kind: &str,
-        since: &str,
-    ) -> Result<i64, MicroClawError> {
+    pub fn count_audit_events_since(&self, kind: &str, since: &str) -> Result<i64, MicroClawError> {
         let conn = self.lock_conn();
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM audit_logs WHERE kind = ?1 AND created_at >= ?2",
@@ -12022,10 +12017,7 @@ impl Database {
 
     /// Exact depth of the scheduled-task dead-letter queue (unlike
     /// `list_scheduled_task_dlq`, this is not clamped by a LIMIT).
-    pub fn count_scheduled_task_dlq(
-        &self,
-        include_replayed: bool,
-    ) -> Result<i64, MicroClawError> {
+    pub fn count_scheduled_task_dlq(&self, include_replayed: bool) -> Result<i64, MicroClawError> {
         let conn = self.lock_conn();
         let replay_filter = if include_replayed {
             ""
@@ -12043,10 +12035,7 @@ impl Database {
     /// Completion-contract verdict tallies (verified, failed) recorded at
     /// or after `since` (RFC 3339). Verdicts are the `contract` events
     /// written when a sub-agent run's exit criteria are checked.
-    pub fn contract_verdict_counts_since(
-        &self,
-        since: &str,
-    ) -> Result<(i64, i64), MicroClawError> {
+    pub fn contract_verdict_counts_since(&self, since: &str) -> Result<(i64, i64), MicroClawError> {
         let conn = self.lock_conn();
         let counts = conn.query_row(
             "SELECT
@@ -13903,7 +13892,8 @@ mod tests {
         db.append_subagent_event("run-2", "contract", Some("verified 3/3"))
             .unwrap();
         // Non-contract events must not count.
-        db.append_subagent_event("run-3", "submit_result", None).unwrap();
+        db.append_subagent_event("run-3", "submit_result", None)
+            .unwrap();
 
         let (verified, failed) = db
             .contract_verdict_counts_since("2000-01-01T00:00:00Z")

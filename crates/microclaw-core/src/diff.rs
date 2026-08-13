@@ -69,7 +69,10 @@ pub fn unified_diff(old: &str, new: &str, max_lines: usize) -> Option<UnifiedDif
                 ChangeTag::Equal => " ",
             };
             let value = change.value();
-            lines.push(format!("{sign}{}", value.strip_suffix('\n').unwrap_or(value)));
+            lines.push(format!(
+                "{sign}{}",
+                value.strip_suffix('\n').unwrap_or(value)
+            ));
         }
     }
     if truncated {

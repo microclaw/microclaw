@@ -421,10 +421,9 @@ fn default_mode_state() -> SessionModeState {
         vec![
             SessionMode::new(ACP_MODE_ID, "Chat")
                 .description("General-purpose MicroClaw chat mode."),
-            SessionMode::new(ACP_PLAN_MODE_ID, "Plan")
-                .description(
-                    "Read-only research mode: presents a plan for approval before executing.",
-                ),
+            SessionMode::new(ACP_PLAN_MODE_ID, "Plan").description(
+                "Read-only research mode: presents a plan for approval before executing.",
+            ),
         ],
     )
 }

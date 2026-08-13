@@ -1562,9 +1562,7 @@ fn summarize_weixin_item(item: &WeixinWebhookMessageItem) -> Option<String> {
                 } else {
                     Some(reference.display_name.trim())
                 };
-                if let Some(prefix) =
-                    microclaw_core::text::quoted_context_prefix(author, excerpt)
-                {
+                if let Some(prefix) = microclaw_core::text::quoted_context_prefix(author, excerpt) {
                     return Some(format!("{prefix}{text}"));
                 }
             }

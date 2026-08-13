@@ -843,7 +843,10 @@ mod tests {
       }
     }"#;
         let cfg: McpConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(cfg.mcp_servers.get("safe").unwrap().trust, McpTrust::Trusted);
+        assert_eq!(
+            cfg.mcp_servers.get("safe").unwrap().trust,
+            McpTrust::Trusted
+        );
         assert_eq!(
             cfg.mcp_servers.get("risky").unwrap().trust,
             McpTrust::Sandboxed

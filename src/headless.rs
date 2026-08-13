@@ -25,6 +25,7 @@ use microclaw_storage::db::{call_blocking, Database, StoredMessage};
 
 pub const HEADLESS_CHANNEL: &str = "headless";
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_once(
     config: Config,
     db: Database,

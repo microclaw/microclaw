@@ -529,8 +529,10 @@ impl CircuitBreaker {
             }
             // Extend the shared window to the furthest-out cooldown rather
             // than overwriting, so concurrent breakers can't shorten it.
-            BREAKER_OPEN_UNTIL_EPOCH_MS
-                .fetch_max(epoch_ms() + self.cooldown.as_millis() as u64, Ordering::Relaxed);
+            BREAKER_OPEN_UNTIL_EPOCH_MS.fetch_max(
+                epoch_ms() + self.cooldown.as_millis() as u64,
+                Ordering::Relaxed,
+            );
         }
     }
 }

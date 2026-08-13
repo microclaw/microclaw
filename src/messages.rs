@@ -50,11 +50,7 @@ pub fn approval_prompt(
 /// allow / deny), matching the numbered option card in [`approval_prompt`].
 pub fn approval_button_labels(lang: UserMessageLanguage) -> [String; 3] {
     match lang {
-        UserMessageLanguage::Zh => [
-            "✅ 批准本次".into(),
-            "🔁 始终允许".into(),
-            "❌ 拒绝".into(),
-        ],
+        UserMessageLanguage::Zh => ["✅ 批准本次".into(), "🔁 始终允许".into(), "❌ 拒绝".into()],
         _ => [
             "✅ Approve once".into(),
             "🔁 Always allow".into(),
@@ -82,11 +78,7 @@ pub fn approval_choice_ack(lang: UserMessageLanguage, label: &str) -> String {
 }
 
 /// Suffix appended after the (stable, test-guarded) budget refusal prefix.
-pub fn budget_refusal_body(
-    lang: UserMessageLanguage,
-    used: i64,
-    budget: i64,
-) -> String {
+pub fn budget_refusal_body(lang: UserMessageLanguage, used: i64, budget: i64) -> String {
     let en = format!(
         " for this chat ({used} of {budget} tokens in the last 24h). I'll be available again \
          once usage rolls out of the window. An operator can raise \
@@ -135,8 +127,9 @@ pub fn interruption_notice(
         notice
     };
     let zh = {
-        let mut notice = "⚠️ 我在一次工具操作进行中重启了。因为外部副作用可能已经发生，我没有重放这次操作。"
-            .to_string();
+        let mut notice =
+            "⚠️ 我在一次工具操作进行中重启了。因为外部副作用可能已经发生，我没有重放这次操作。"
+                .to_string();
         if let Some(summary) = tool_summary {
             notice.push_str("\n\n不确定边界上的操作：");
             notice.push_str(summary);
