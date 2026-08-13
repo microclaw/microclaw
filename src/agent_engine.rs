@@ -679,6 +679,7 @@ fn build_provider_runtime_config(
     let mut cfg = state.config.clone();
     cfg.llm_provider = profile.provider.clone();
     cfg.api_key = profile.api_key.clone();
+    cfg.api_keys = profile.api_keys.clone();
     cfg.llm_base_url = profile.llm_base_url.clone();
     cfg.llm_user_agent = profile.llm_user_agent.clone();
     cfg.show_thinking = profile.show_thinking;

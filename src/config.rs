@@ -729,6 +729,9 @@ pub struct LlmProviderProfile {
     pub provider: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+    /// Additional API keys rotated on auth/rate-limit errors.
+    #[serde(default)]
+    pub api_keys: Vec<String>,
     #[serde(default)]
     pub llm_base_url: Option<String>,
     #[serde(default)]
@@ -746,6 +749,8 @@ pub struct ResolvedLlmProviderProfile {
     pub alias: String,
     pub provider: String,
     pub api_key: String,
+    /// Additional API keys rotated on auth/rate-limit errors.
+    pub api_keys: Vec<String>,
     pub llm_base_url: Option<String>,
     pub llm_user_agent: String,
     pub default_model: String,
@@ -1467,6 +1472,11 @@ pub struct Config {
     pub llm_provider: String,
     #[serde(default = "default_api_key")]
     pub api_key: String,
+    /// Additional API keys forming a rotation pool with `api_key`: on
+    /// auth (401/403) or rate-limit (429) errors the provider advances to
+    /// the next key before retrying.
+    #[serde(default)]
+    pub api_keys: Vec<String>,
     #[serde(default = "default_model")]
     pub model: String,
     #[serde(default)]
@@ -2316,6 +2326,7 @@ impl Config {
             bot_username: "bot".into(),
             llm_provider: "anthropic".into(),
             api_key: "key".into(),
+            api_keys: Vec::new(),
             model: "claude-sonnet-4-5-20250929".into(),
             provider_presets: HashMap::new(),
             llm_providers: HashMap::new(),
@@ -3202,6 +3213,7 @@ Use operator password + API keys for Web auth."
         if alias == self.llm_provider {
             let mut provider = self.llm_provider.clone();
             let mut api_key = self.api_key.clone();
+            let mut api_keys = self.api_keys.clone();
             let mut llm_base_url = self.llm_base_url.clone();
             let mut llm_user_agent = self.llm_user_agent.clone();
             let mut default_model = self.model.clone();
@@ -3213,6 +3225,9 @@ Use operator password + API keys for Web auth."
                 }
                 if let Some(v) = &profile.api_key {
                     api_key = v.clone();
+                }
+                if !profile.api_keys.is_empty() {
+                    api_keys = profile.api_keys.clone();
                 }
                 if let Some(v) = &profile.llm_base_url {
                     llm_base_url = Some(v.clone());
@@ -3248,6 +3263,7 @@ Use operator password + API keys for Web auth."
                 alias,
                 provider,
                 api_key,
+                api_keys,
                 llm_base_url,
                 llm_user_agent,
                 default_model,
@@ -3262,6 +3278,14 @@ Use operator password + API keys for Web auth."
             .api_key
             .clone()
             .unwrap_or_else(|| self.api_key.clone());
+        // A profile with its own key(s) never inherits the top-level pool.
+        let api_keys = if !profile.api_keys.is_empty() {
+            profile.api_keys.clone()
+        } else if profile.api_key.is_none() {
+            self.api_keys.clone()
+        } else {
+            Vec::new()
+        };
         let llm_base_url = profile
             .llm_base_url
             .clone()
@@ -3295,6 +3319,7 @@ Use operator password + API keys for Web auth."
             alias,
             provider,
             api_key,
+            api_keys,
             llm_base_url,
             llm_user_agent,
             default_model,
@@ -3503,6 +3528,11 @@ fn merge_provider_profile(
     LlmProviderProfile {
         provider: override_profile.provider.or(base.provider),
         api_key: override_profile.api_key.or(base.api_key),
+        api_keys: if override_profile.api_keys.is_empty() {
+            base.api_keys
+        } else {
+            override_profile.api_keys
+        },
         llm_base_url: override_profile.llm_base_url.or(base.llm_base_url),
         llm_user_agent: override_profile.llm_user_agent.or(base.llm_user_agent),
         default_model: override_profile.default_model.or(base.default_model),
