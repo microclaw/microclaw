@@ -71,6 +71,8 @@ MicroClaw supports a `SOUL.md` file that defines the bot's personality, voice, v
 
 **Per-chat override**: place a `SOUL.md` at `<data_dir>/runtime/groups/<chat_id>/SOUL.md` to give a specific chat a different personality.
 
+**Presets**: `examples/soul/group-concise.md` ships a group-chat-tuned soul (short replies, match the asker's language, no markdown walls) for busy groups.
+
 **Implementation**: `load_soul_content()` and `build_system_prompt()` in `src/agent_engine.rs`. The soul content is wrapped in `<soul>` XML tags in the system prompt.
 
 ## Adding a tool
