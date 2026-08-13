@@ -142,6 +142,13 @@ request: \"{{USER}}\". Before finishing, re-read the modified files and verify t
 complete and consistent (no leftover placeholders, no broken references, validation run if \
 cheap). Fix anything you find, then give your final answer. Draft reply was: {{RESULT}}";
 
+/// System-prompt suffix injected while a chat is in plan mode (`/plan`).
+const PLAN_MODE_SYSTEM_SUFFIX: &str = "\n\n<plan_mode>\nYou are in PLAN MODE. Research the \
+request using the read-only tools available, then present a concise, numbered implementation \
+plan. Do NOT modify files, run state-changing commands, send messages, or schedule anything — \
+tools with side effects are unavailable in this mode. End your reply with the complete plan; \
+the user approves it before anything is executed.\n</plan_mode>";
+
 /// Live event senders for in-flight interactive turns, keyed by
 /// `(channel, chat_id)`. Background work that outlives a tool call (e.g. a
 /// sub-agent run finishing minutes later) can surface an event into the
@@ -1468,6 +1475,55 @@ async fn process_with_agent_logic(
         }
     }
 
+    // --- Plan-mode approval ---
+    // When the previous plan-mode turn presented a plan, an approving reply
+    // exits plan mode and rewrites the message into an execute instruction;
+    // any other reply keeps refining the plan.
+    if override_prompt.is_none() {
+        let plan_marker_key = format!("pending_plan_approval:{chat_id}");
+        let pending_plan = call_blocking(state.db.clone(), {
+            let key = plan_marker_key.clone();
+            move |db| {
+                let value = db.get_runtime_meta(&key)?;
+                if value.is_some() {
+                    db.delete_runtime_meta(&key)?;
+                }
+                Ok::<_, microclaw_core::error::MicroClawError>(value)
+            }
+        })
+        .await
+        .unwrap_or_default();
+        if pending_plan
+            .and_then(|value| pending_approval_tool(&value, chrono::Utc::now()))
+            .is_some()
+            && parse_approval_reply(&latest_user_text_for_approval) != ApprovalReply::DenyOrOther
+        {
+            let mode_key = format!("chat_mode:{chat_id}");
+            let _ = call_blocking(state.db.clone(), move |db| db.delete_runtime_meta(&mode_key))
+                .await;
+            if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
+                messages[idx].content = MessageContent::Text(
+                    "[plan_approved]: The user approved the plan you presented. Execute it now, step by step, and report the outcome."
+                        .to_string(),
+                );
+            }
+            info!(chat_id, "Plan approved — exiting plan mode and executing");
+        }
+    }
+
+    // Plan mode: read-only research + present a plan for approval. Read
+    // after the approval handling above so an approving reply runs with the
+    // full toolset.
+    let plan_mode_active = override_prompt.is_none() && {
+        let mode_key = format!("chat_mode:{chat_id}");
+        call_blocking(state.db.clone(), move |db| db.get_runtime_meta(&mode_key))
+            .await
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("plan")
+    };
+
     // Build system prompt
     let file_memory = state
         .memory
@@ -1711,8 +1767,26 @@ async fn process_with_agent_logic(
         );
     }
 
+    if plan_mode_active {
+        system_prompt.push_str(PLAN_MODE_SYSTEM_SUFFIX);
+    }
+
     let learning_foundry_mode = context.caller_channel == "learning_foundry";
-    let tool_defs = if learning_foundry_mode {
+    let tool_defs = if plan_mode_active {
+        // Read-only research tools only — nothing that mutates state.
+        state
+            .tools
+            .definitions()
+            .iter()
+            .filter(|definition| {
+                matches!(
+                    microclaw_tools::runtime::tool_concurrency_class(&definition.name),
+                    microclaw_tools::runtime::ToolConcurrencyClass::ReadOnly
+                ) || matches!(definition.name.as_str(), "todo_write" | "clarify")
+            })
+            .cloned()
+            .collect()
+    } else if learning_foundry_mode {
         state
             .tools
             .definitions()
@@ -2342,7 +2416,7 @@ async fn process_with_agent_logic(
                 state.skill_review_queue.enqueue(chat_id);
             }
 
-            let final_text = if display_text.trim().is_empty() {
+            let mut final_text = if display_text.trim().is_empty() {
                 if stop_reason == "max_tokens" {
                     "I reached the model output limit before producing a visible reply. Please ask me to continue."
                         .to_string()
@@ -2353,6 +2427,19 @@ async fn process_with_agent_logic(
             } else {
                 display_text
             };
+            // Plan mode: arm the approval marker so the next approving reply
+            // executes the plan, and tell the user how to proceed.
+            if plan_mode_active && override_prompt.is_none() {
+                let marker_key = format!("pending_plan_approval:{chat_id}");
+                let marker_value = format!("plan\n{}", chrono::Utc::now().to_rfc3339());
+                let _ = call_blocking(state.db.clone(), move |db| {
+                    db.set_runtime_meta(&marker_key, &marker_value)
+                })
+                .await;
+                final_text.push_str(
+                    "\n\n📋 Plan mode: reply \"approve\" / \"1\" / \"批准\" to execute this plan, keep chatting to refine it, or /plan off to exit.",
+                );
+            }
             if let Some(tx) = event_tx {
                 let _ = tx.send(AgentEvent::FinalResponse {
                     text: final_text.clone(),

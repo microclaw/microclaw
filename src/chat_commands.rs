@@ -545,6 +545,32 @@ pub async fn handle_chat_command(
         return Some("Context cleared (session + chat history, scheduled tasks kept).".to_string());
     }
 
+    if trimmed == "/plan" || trimmed.starts_with("/plan ") {
+        let arg = trimmed.strip_prefix("/plan").map(str::trim).unwrap_or("");
+        let mode_key = format!("chat_mode:{chat_id}");
+        if arg.eq_ignore_ascii_case("off") || arg.eq_ignore_ascii_case("exit") {
+            let plan_key = format!("pending_plan_approval:{chat_id}");
+            let _ = call_blocking(state.db.clone(), move |db| {
+                db.delete_runtime_meta(&mode_key)?;
+                db.delete_runtime_meta(&plan_key)?;
+                Ok::<_, microclaw_core::error::MicroClawError>(())
+            })
+            .await;
+            return Some("Plan mode off — back to normal execution.".to_string());
+        }
+        if arg.is_empty() || arg.eq_ignore_ascii_case("on") {
+            let _ = call_blocking(state.db.clone(), move |db| {
+                db.set_runtime_meta(&mode_key, "plan")
+            })
+            .await;
+            return Some(
+                "📋 Plan mode on: I'll research with read-only tools and present a plan for approval before changing anything. `/plan off` to exit."
+                    .to_string(),
+            );
+        }
+        return Some("Usage: /plan (enter plan mode), /plan off (exit).".to_string());
+    }
+
     if trimmed == "/reset" {
         let _ = call_blocking(state.db.clone(), move |db| db.clear_chat_context(chat_id)).await;
         let groups_dir = std::path::PathBuf::from(&state.config.data_dir).join("groups");
