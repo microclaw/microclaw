@@ -518,6 +518,19 @@ impl EventHandler for Handler {
             return;
         }
 
+        // Reply-quote forwarding: prepend the referenced message's content so
+        // terse follow-ups keep their referent (see telegram.rs counterpart).
+        if !voice_inbound {
+            if let Some(referenced) = msg.referenced_message.as_deref() {
+                if let Some(prefix) = microclaw_core::text::quoted_context_prefix(
+                    Some(&referenced.author.name),
+                    &referenced.content,
+                ) {
+                    text = format!("{prefix}{text}");
+                }
+            }
+        }
+
         // Store the chat and message
         let title = format!("discord-{external_channel_id}");
         let _ = call_blocking(self.app_state.db.clone(), move |db| {

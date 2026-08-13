@@ -896,6 +896,29 @@ async fn handle_message(
         return Ok(());
     }
 
+    // Reply-quote forwarding: when this message replies to an earlier one,
+    // prepend the referenced content so terse follow-ups keep their referent
+    // even after the original scrolled out of the session window.
+    if !voice_inbound {
+        if let Some(replied) = msg.reply_to_message() {
+            let quoted_text = replied
+                .text()
+                .or_else(|| replied.caption())
+                .unwrap_or_default();
+            let quoted_author = replied.from.as_ref().map(|u| {
+                u.username
+                    .clone()
+                    .unwrap_or_else(|| u.first_name.clone())
+            });
+            if let Some(prefix) = microclaw_core::text::quoted_context_prefix(
+                quoted_author.as_deref(),
+                quoted_text,
+            ) {
+                text = format!("{prefix}{text}");
+            }
+        }
+    }
+
     let sender_name = msg
         .from
         .as_ref()
