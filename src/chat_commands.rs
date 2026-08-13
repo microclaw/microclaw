@@ -706,6 +706,7 @@ pub async fn handle_chat_command(
                 state.llm_provider_overrides.clone(),
                 state.llm_model_overrides.clone(),
                 caller_channel,
+                chat_id,
                 trimmed,
                 true,
             )
@@ -933,12 +934,19 @@ pub async fn build_model_response(
     .await
 }
 
+/// Override-map key for a per-chat model/provider override
+/// (`/model here …`). `#` cannot appear in channel names, so chat-scoped
+/// keys never collide with channel-wide ones.
+pub fn chat_scoped_override_key(channel: &str, chat_id: i64) -> String {
+    format!("{channel}#{chat_id}")
+}
+
 async fn build_model_response_with_persistence(
     config: &Config,
     llm_provider_overrides: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
     llm_model_overrides: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
     caller_channel: &str,
-    _chat_id: i64,
+    chat_id: i64,
     command_text: &str,
     persist_to_config: bool,
 ) -> String {
@@ -956,6 +964,54 @@ async fn build_model_response_with_persistence(
     )
     .await;
     let provider = profile.alias.clone();
+
+    // `/model here <name>` — override for this chat only (runtime scope;
+    // cleared with `/model here reset` or on restart).
+    if let Some(rest) = requested
+        .strip_prefix("here ")
+        .or(if requested == "here" { Some("") } else { None })
+    {
+        let rest = rest.trim();
+        let chat_key = chat_scoped_override_key(&caller_channel, chat_id);
+        if rest.is_empty() {
+            let overrides = llm_model_overrides.read().await;
+            return match overrides.get(&chat_key) {
+                Some(model) => format!("Model for this chat: {provider} / {model} (per-chat override; `/model here reset` to clear)"),
+                None => format!("No per-chat model override. Current provider/model: {provider} / {current_model}. Set one with `/model here <name>`."),
+            };
+        }
+        if rest.eq_ignore_ascii_case("reset") || rest.eq_ignore_ascii_case("default") {
+            let mut overrides = llm_model_overrides.write().await;
+            overrides.remove(&chat_key);
+            return format!(
+                "Per-chat model override cleared. Current provider/model: {provider} / {current_model}"
+            );
+        }
+        if normalize_model_name(rest).is_none() {
+            return format!(
+                "Model '{rest}' is not a valid model id. Use `/model here reset` to clear the per-chat override."
+            );
+        }
+        let mut allowed_models = profile.models.clone();
+        if is_placeholder_model_list(&allowed_models) {
+            if let Ok(live) = fetch_models_from_provider_api(&profile).await {
+                if !live.is_empty() {
+                    allowed_models = live;
+                }
+            }
+        }
+        if !allowed_models.is_empty() && !allowed_models.iter().any(|m| m == rest) {
+            return format!(
+                "Model '{rest}' is not configured for provider '{provider}'. Available: {}",
+                allowed_models.join(", ")
+            );
+        }
+        let mut overrides = llm_model_overrides.write().await;
+        overrides.insert(chat_key, rest.to_string());
+        return format!(
+            "Model switched for this chat to: {provider} / {rest} (runtime only; `/model here reset` to clear)"
+        );
+    }
 
     if requested.is_empty() {
         return format!("Current provider/model: {provider} / {current_model}");
@@ -1060,6 +1116,7 @@ pub async fn build_provider_response(
         llm_provider_overrides,
         llm_model_overrides,
         caller_channel,
+        0,
         command_text,
         false,
     )
@@ -1071,6 +1128,7 @@ async fn build_provider_response_with_persistence(
     llm_provider_overrides: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
     llm_model_overrides: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
     caller_channel: &str,
+    chat_id: i64,
     command_text: &str,
     persist_to_config: bool,
 ) -> String {
@@ -1079,6 +1137,60 @@ async fn build_provider_response_with_persistence(
         .strip_prefix("/provider")
         .map(str::trim)
         .unwrap_or("");
+
+    // `/provider here <alias>` — override for this chat only (runtime
+    // scope; cleared with `/provider here reset` or on restart).
+    if let Some(rest) = requested
+        .strip_prefix("here ")
+        .or(if requested == "here" { Some("") } else { None })
+    {
+        let rest = rest.trim();
+        let chat_key = chat_scoped_override_key(caller_channel, chat_id);
+        if rest.is_empty() {
+            let overrides = llm_provider_overrides.read().await;
+            return match overrides.get(&chat_key) {
+                Some(alias) => format!(
+                    "Provider for this chat: {alias} (per-chat override; `/provider here reset` to clear)"
+                ),
+                None => "No per-chat provider override. Set one with `/provider here <alias>`."
+                    .to_string(),
+            };
+        }
+        if rest.eq_ignore_ascii_case("reset") || rest.eq_ignore_ascii_case("default") {
+            {
+                let mut provider_overrides = llm_provider_overrides.write().await;
+                provider_overrides.remove(&chat_key);
+            }
+            {
+                let mut model_overrides = llm_model_overrides.write().await;
+                model_overrides.remove(&chat_key);
+            }
+            return "Per-chat provider override cleared.".to_string();
+        }
+        let requested_alias = rest.to_ascii_lowercase();
+        let Some(profile) = config.resolve_llm_provider_profile(&requested_alias) else {
+            let names = config
+                .list_llm_provider_profiles()
+                .into_iter()
+                .map(|p| p.alias)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!("Unknown provider '{rest}'. Available providers: {names}");
+        };
+        {
+            let mut provider_overrides = llm_provider_overrides.write().await;
+            provider_overrides.insert(chat_key.clone(), profile.alias.clone());
+        }
+        {
+            let mut model_overrides = llm_model_overrides.write().await;
+            model_overrides.remove(&chat_key);
+        }
+        return format!(
+            "Provider switched for this chat to: {} (backend={}), model {} (runtime only; `/provider here reset` to clear)",
+            profile.alias, profile.provider, profile.default_model
+        );
+    }
+
     if requested.is_empty() {
         let (profile, model) = resolve_effective_provider_and_model(
             config,
@@ -1550,6 +1662,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_command_here_sets_per_chat_override() {
+        let cfg = test_config();
+        let provider_overrides = Arc::new(RwLock::new(HashMap::new()));
+        let overrides = Arc::new(RwLock::new(HashMap::new()));
+        let text = build_model_response(
+            &cfg,
+            provider_overrides.clone(),
+            overrides.clone(),
+            "telegram",
+            42,
+            "/model here gpt-5",
+        )
+        .await;
+        assert!(
+            text.contains("Model switched for this chat to: openai / gpt-5"),
+            "unexpected: {text}"
+        );
+        {
+            let guard = overrides.read().await;
+            assert_eq!(
+                guard
+                    .get(&super::chat_scoped_override_key("telegram", 42))
+                    .map(String::as_str),
+                Some("gpt-5")
+            );
+            // Channel-wide override untouched.
+            assert!(guard.get("telegram").is_none());
+        }
+        let text = build_model_response(
+            &cfg,
+            provider_overrides,
+            overrides.clone(),
+            "telegram",
+            42,
+            "/model here reset",
+        )
+        .await;
+        assert!(text.contains("Per-chat model override cleared"));
+        let guard = overrides.read().await;
+        assert!(guard
+            .get(&super::chat_scoped_override_key("telegram", 42))
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn model_command_rejects_wildcard_override() {
         let cfg = test_config();
         let provider_overrides = Arc::new(RwLock::new(HashMap::new()));
@@ -1685,6 +1842,7 @@ channels:
             provider_overrides.clone(),
             model_overrides,
             "telegram",
+            0,
             "/provider cloudflare",
             true,
         )

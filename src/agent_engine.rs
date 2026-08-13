@@ -692,10 +692,14 @@ async fn resolve_effective_provider_and_model(
     caller_channel: &str,
     chat_id: i64,
 ) -> (ResolvedLlmProviderProfile, String, Option<SessionSettings>) {
+    // Per-chat override (set via `/model here …` / `/provider here …`) wins
+    // over the channel-wide one.
+    let chat_key = crate::chat_commands::chat_scoped_override_key(caller_channel, chat_id);
     let provider_alias = {
         let overrides = state.llm_provider_overrides.read().await;
         overrides
-            .get(caller_channel)
+            .get(&chat_key)
+            .or_else(|| overrides.get(caller_channel))
             .cloned()
             .unwrap_or_else(|| state.config.llm_provider.clone())
     };
@@ -710,7 +714,10 @@ async fn resolve_effective_provider_and_model(
         .expect("default llm provider profile should always resolve");
     let raw_model_override = {
         let overrides = state.llm_model_overrides.read().await;
-        overrides.get(caller_channel).cloned()
+        overrides
+            .get(&chat_key)
+            .or_else(|| overrides.get(caller_channel))
+            .cloned()
     };
     if raw_model_override
         .as_deref()
