@@ -101,6 +101,25 @@ pub enum AgentEvent {
     MidTurnInjection {
         count: usize,
     },
+    /// Emitted after a successful file-modifying tool call, carrying the
+    /// rendered unified diff so channels/web can show what changed.
+    FileDiff {
+        path: String,
+        diff: String,
+        added: usize,
+        removed: usize,
+        truncated: bool,
+    },
+    /// Emitted when a sub-agent run is spawned from this turn.
+    SubagentStarted {
+        run_id: String,
+        label: String,
+    },
+    /// Emitted when a sub-agent run reaches a terminal state.
+    SubagentFinished {
+        run_id: String,
+        status: String,
+    },
     /// Emitted when a high-risk tool call pauses the turn waiting for
     /// operator approval. Carries the structured option card so richer
     /// clients (web) can render buttons instead of parsing the text.
@@ -113,6 +132,67 @@ pub enum AgentEvent {
         /// Optional advisory verdict from the aux-model risk reviewer.
         advisory: Option<String>,
     },
+}
+
+/// Default prompt for the opt-in post-edit self-recheck pass.
+/// `{{USER}}` / `{{RESULT}}` are replaced with the original request and the
+/// draft reply.
+const DEFAULT_SELF_RECHECK_PROMPT: &str = "[self_recheck]: You just modified files for this \
+request: \"{{USER}}\". Before finishing, re-read the modified files and verify the change is \
+complete and consistent (no leftover placeholders, no broken references, validation run if \
+cheap). Fix anything you find, then give your final answer. Draft reply was: {{RESULT}}";
+
+/// System-prompt suffix injected while a chat is in plan mode (`/plan`).
+const PLAN_MODE_SYSTEM_SUFFIX: &str = "\n\n<plan_mode>\nYou are in PLAN MODE. Research the \
+request using the read-only tools available, then present a concise, numbered implementation \
+plan. Do NOT modify files, run state-changing commands, send messages, or schedule anything — \
+tools with side effects are unavailable in this mode. End your reply with the complete plan; \
+the user approves it before anything is executed.\n</plan_mode>";
+
+/// Live event senders for in-flight interactive turns, keyed by
+/// `(channel, chat_id)`. Background work that outlives a tool call (e.g. a
+/// sub-agent run finishing minutes later) can surface an event into the
+/// owning turn's heartbeat while it is still running; sends after the turn
+/// ended are silently dropped.
+type TurnEventSenderMap = std::collections::HashMap<(String, i64), UnboundedSender<AgentEvent>>;
+static TURN_EVENT_SENDERS: std::sync::LazyLock<std::sync::RwLock<TurnEventSenderMap>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// RAII registration of a turn's event sender; deregisters on drop so a
+/// panicking or early-returning turn can't leak a stale sender.
+pub(crate) struct TurnEventRegistration {
+    key: (String, i64),
+}
+
+impl Drop for TurnEventRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut map) = TURN_EVENT_SENDERS.write() {
+            map.remove(&self.key);
+        }
+    }
+}
+
+pub(crate) fn register_turn_events(
+    channel: &str,
+    chat_id: i64,
+    tx: UnboundedSender<AgentEvent>,
+) -> TurnEventRegistration {
+    let key = (channel.to_string(), chat_id);
+    if let Ok(mut map) = TURN_EVENT_SENDERS.write() {
+        map.insert(key.clone(), tx);
+    }
+    TurnEventRegistration { key }
+}
+
+/// Send an event into the live turn for `(channel, chat_id)` if one is
+/// running with an event consumer attached. Returns `true` when delivered.
+pub fn send_turn_event(channel: &str, chat_id: i64, event: AgentEvent) -> bool {
+    let Ok(map) = TURN_EVENT_SENDERS.read() else {
+        return false;
+    };
+    map.get(&(channel.to_string(), chat_id))
+        .map(|tx| tx.send(event).is_ok())
+        .unwrap_or(false)
 }
 
 #[async_trait]
@@ -606,6 +686,7 @@ fn build_provider_runtime_config(
     let mut cfg = state.config.clone();
     cfg.llm_provider = profile.provider.clone();
     cfg.api_key = profile.api_key.clone();
+    cfg.api_keys = profile.api_keys.clone();
     cfg.llm_base_url = profile.llm_base_url.clone();
     cfg.llm_user_agent = profile.llm_user_agent.clone();
     cfg.show_thinking = profile.show_thinking;
@@ -618,10 +699,14 @@ async fn resolve_effective_provider_and_model(
     caller_channel: &str,
     chat_id: i64,
 ) -> (ResolvedLlmProviderProfile, String, Option<SessionSettings>) {
+    // Per-chat override (set via `/model here …` / `/provider here …`) wins
+    // over the channel-wide one.
+    let chat_key = crate::chat_commands::chat_scoped_override_key(caller_channel, chat_id);
     let provider_alias = {
         let overrides = state.llm_provider_overrides.read().await;
         overrides
-            .get(caller_channel)
+            .get(&chat_key)
+            .or_else(|| overrides.get(caller_channel))
             .cloned()
             .unwrap_or_else(|| state.config.llm_provider.clone())
     };
@@ -636,7 +721,10 @@ async fn resolve_effective_provider_and_model(
         .expect("default llm provider profile should always resolve");
     let raw_model_override = {
         let overrides = state.llm_model_overrides.read().await;
-        overrides.get(caller_channel).cloned()
+        overrides
+            .get(&chat_key)
+            .or_else(|| overrides.get(caller_channel))
+            .cloned()
     };
     if raw_model_override
         .as_deref()
@@ -977,6 +1065,11 @@ pub(crate) async fn process_with_agent_impl(
     let root_span_id = new_span_id();
     let start_time = now_unix_nano();
     let mut metrics = AgentMetrics::default();
+
+    // Expose this turn's event channel to background producers (sub-agent
+    // lifecycle) for as long as the turn runs.
+    let _turn_events_registration = event_tx
+        .map(|tx| register_turn_events(context.caller_channel, context.chat_id, tx.clone()));
 
     let result = process_with_agent_logic(
         state,
@@ -1381,6 +1474,57 @@ async fn process_with_agent_logic(
         }
     }
 
+    // --- Plan-mode approval ---
+    // When the previous plan-mode turn presented a plan, an approving reply
+    // exits plan mode and rewrites the message into an execute instruction;
+    // any other reply keeps refining the plan.
+    if override_prompt.is_none() {
+        let plan_marker_key = format!("pending_plan_approval:{chat_id}");
+        let pending_plan = call_blocking(state.db.clone(), {
+            let key = plan_marker_key.clone();
+            move |db| {
+                let value = db.get_runtime_meta(&key)?;
+                if value.is_some() {
+                    db.delete_runtime_meta(&key)?;
+                }
+                Ok::<_, microclaw_core::error::MicroClawError>(value)
+            }
+        })
+        .await
+        .unwrap_or_default();
+        if pending_plan
+            .and_then(|value| pending_approval_tool(&value, chrono::Utc::now()))
+            .is_some()
+            && parse_approval_reply(&latest_user_text_for_approval) != ApprovalReply::DenyOrOther
+        {
+            let mode_key = format!("chat_mode:{chat_id}");
+            let _ = call_blocking(state.db.clone(), move |db| {
+                db.delete_runtime_meta(&mode_key)
+            })
+            .await;
+            if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
+                messages[idx].content = MessageContent::Text(
+                    "[plan_approved]: The user approved the plan you presented. Execute it now, step by step, and report the outcome."
+                        .to_string(),
+                );
+            }
+            info!(chat_id, "Plan approved — exiting plan mode and executing");
+        }
+    }
+
+    // Plan mode: read-only research + present a plan for approval. Read
+    // after the approval handling above so an approving reply runs with the
+    // full toolset.
+    let plan_mode_active = override_prompt.is_none() && {
+        let mode_key = format!("chat_mode:{chat_id}");
+        call_blocking(state.db.clone(), move |db| db.get_runtime_meta(&mode_key))
+            .await
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("plan")
+    };
+
     // Build system prompt
     let file_memory = state
         .memory
@@ -1624,8 +1768,26 @@ async fn process_with_agent_logic(
         );
     }
 
+    if plan_mode_active {
+        system_prompt.push_str(PLAN_MODE_SYSTEM_SUFFIX);
+    }
+
     let learning_foundry_mode = context.caller_channel == "learning_foundry";
-    let tool_defs = if learning_foundry_mode {
+    let tool_defs = if plan_mode_active {
+        // Read-only research tools only — nothing that mutates state.
+        state
+            .tools
+            .definitions()
+            .iter()
+            .filter(|definition| {
+                matches!(
+                    microclaw_tools::runtime::tool_concurrency_class(&definition.name),
+                    microclaw_tools::runtime::ToolConcurrencyClass::ReadOnly
+                ) || matches!(definition.name.as_str(), "todo_write" | "clarify")
+            })
+            .cloned()
+            .collect()
+    } else if learning_foundry_mode {
         state
             .tools
             .definitions()
@@ -1744,7 +1906,46 @@ async fn process_with_agent_logic(
         }
     }
 
+    // Tracks the input-token size of the most recent provider request so the
+    // context-pressure check can compact before the next call overflows.
+    let mut last_observed_input_tokens: i64 = 0;
+    // Post-turn self-recheck state: whether a file-modifying tool ran this
+    // turn, which tools ran (for the AfterTurn hook), and whether the single
+    // recheck pass already happened.
+    let mut file_modifying_tool_used = false;
+    let mut tools_used_this_turn: Vec<String> = Vec::new();
+    let mut self_recheck_done = false;
     for iteration in 0..state.config.max_tool_iterations {
+        // Context-pressure compaction: when the previous request already
+        // consumed more than `context_pressure_compact_pct` of the model's
+        // window, compact mid-turn instead of running into a hard overflow.
+        let pressure_pct = state.config.context_pressure_compact_pct;
+        if pressure_pct > 0 && last_observed_input_tokens > 0 {
+            let threshold = state
+                .config
+                .model_context_window
+                .saturating_mul(pressure_pct)
+                / 100;
+            if last_observed_input_tokens as usize >= threshold
+                && messages.len() > state.config.compact_keep_recent
+            {
+                info!(
+                    chat_id,
+                    last_observed_input_tokens,
+                    threshold,
+                    "Context pressure: compacting session mid-turn"
+                );
+                messages = compact_messages(
+                    state,
+                    context.caller_channel,
+                    chat_id,
+                    &messages,
+                    state.config.compact_keep_recent,
+                )
+                .await;
+                last_observed_input_tokens = 0;
+            }
+        }
         // Safe replay boundary: all preceding tool calls have paired results
         // and no tool is currently executing.
         checkpoint_turn_state(
@@ -1799,58 +2000,89 @@ async fn process_with_agent_logic(
         let llm_span_id = new_span_id();
         let llm_start = now_unix_nano();
 
-        let response = if let Some(tx) = event_tx {
-            let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            let forward_tx = tx.clone();
-            let forward_handle = tokio::spawn(async move {
-                while let Some(delta) = llm_rx.recv().await {
-                    let _ = forward_tx.send(AgentEvent::TextDelta { delta });
-                }
-            });
-            let response = if let Some(provider) = scoped_provider.as_ref() {
+        // One call per attempt; on a context-overflow error the messages are
+        // compacted once and the call retried, otherwise errors propagate as
+        // before.
+        let mut overflow_retry_done = false;
+        let response = loop {
+            let attempt = if let Some(tx) = event_tx {
+                let (llm_tx, mut llm_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let forward_tx = tx.clone();
+                let forward_handle = tokio::spawn(async move {
+                    while let Some(delta) = llm_rx.recv().await {
+                        let _ = forward_tx.send(AgentEvent::TextDelta { delta });
+                    }
+                });
+                let attempt = if let Some(provider) = scoped_provider.as_ref() {
+                    provider
+                        .send_message_stream_with_model(
+                            &system_prompt,
+                            messages.clone(),
+                            Some(tool_defs.clone()),
+                            Some(&llm_tx),
+                            Some(&effective_model),
+                        )
+                        .await
+                } else {
+                    state
+                        .llm
+                        .send_message_stream_with_model(
+                            &system_prompt,
+                            messages.clone(),
+                            Some(tool_defs.clone()),
+                            Some(&llm_tx),
+                            Some(&effective_model),
+                        )
+                        .await
+                };
+                drop(llm_tx);
+                let _ = forward_handle.await;
+                attempt
+            } else if let Some(provider) = scoped_provider.as_ref() {
                 provider
-                    .send_message_stream_with_model(
+                    .send_message_with_model(
                         &system_prompt,
                         messages.clone(),
                         Some(tool_defs.clone()),
-                        Some(&llm_tx),
                         Some(&effective_model),
                     )
-                    .await?
+                    .await
             } else {
                 state
                     .llm
-                    .send_message_stream_with_model(
+                    .send_message_with_model(
                         &system_prompt,
                         messages.clone(),
                         Some(tool_defs.clone()),
-                        Some(&llm_tx),
                         Some(&effective_model),
                     )
-                    .await?
+                    .await
             };
-            drop(llm_tx);
-            let _ = forward_handle.await;
-            response
-        } else if let Some(provider) = scoped_provider.as_ref() {
-            provider
-                .send_message_with_model(
-                    &system_prompt,
-                    messages.clone(),
-                    Some(tool_defs.clone()),
-                    Some(&effective_model),
-                )
-                .await?
-        } else {
-            state
-                .llm
-                .send_message_with_model(
-                    &system_prompt,
-                    messages.clone(),
-                    Some(tool_defs.clone()),
-                    Some(&effective_model),
-                )
-                .await?
+            match attempt {
+                Ok(response) => break response,
+                Err(e)
+                    if !overflow_retry_done
+                        && crate::llm::is_context_overflow_error(&e)
+                        && messages.len() > state.config.compact_keep_recent =>
+                {
+                    warn!(
+                        chat_id,
+                        iteration = iteration + 1,
+                        "Provider reported context overflow; compacting session and retrying once"
+                    );
+                    overflow_retry_done = true;
+                    messages = compact_messages(
+                        state,
+                        context.caller_channel,
+                        chat_id,
+                        &messages,
+                        state.config.compact_keep_recent,
+                    )
+                    .await;
+                    last_observed_input_tokens = 0;
+                }
+                Err(e) => return Err(e.into()),
+            }
         };
 
         if let Some(exp) = &state.trace_exporter {
@@ -1914,6 +2146,7 @@ async fn process_with_agent_logic(
 
         metrics.llm_requests += 1;
         if let Some(usage) = &response.usage {
+            last_observed_input_tokens = usage.input_tokens as i64;
             metrics.input_tokens += usage.input_tokens as i64;
             metrics.output_tokens += usage.output_tokens as i64;
             let channel = context.caller_channel.to_string();
@@ -2136,6 +2369,38 @@ async fn process_with_agent_logic(
                 }
             }
 
+            // --- Gated self-recheck ---
+            // After a turn that modified files, run one quality pass before
+            // finalizing (opt-in via `self_recheck.enabled`). One pass per
+            // turn; the recheck's own reply finalizes normally.
+            if state.config.self_recheck.enabled
+                && !self_recheck_done
+                && file_modifying_tool_used
+                && has_displayable_output
+                && override_prompt.is_none()
+            {
+                self_recheck_done = true;
+                let template = state
+                    .config
+                    .self_recheck
+                    .prompt
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_SELF_RECHECK_PROMPT.to_string());
+                let recheck_prompt = template
+                    .replace("{{USER}}", &truncate_for_log(&metrics.input_text, 800))
+                    .replace("{{RESULT}}", &truncate_for_log(&visible_text, 1200));
+                info!(chat_id, "Self-recheck: running post-edit quality pass");
+                messages.push(Message {
+                    role: "assistant".into(),
+                    content: MessageContent::Text(text.clone()),
+                });
+                messages.push(Message {
+                    role: "user".into(),
+                    content: MessageContent::Text(recheck_prompt),
+                });
+                continue;
+            }
+
             // Add final assistant message and save session (keep full text including thinking)
             messages.push(Message {
                 role: "assistant".into(),
@@ -2152,7 +2417,7 @@ async fn process_with_agent_logic(
                 state.skill_review_queue.enqueue(chat_id);
             }
 
-            let final_text = if display_text.trim().is_empty() {
+            let mut final_text = if display_text.trim().is_empty() {
                 if stop_reason == "max_tokens" {
                     "I reached the model output limit before producing a visible reply. Please ask me to continue."
                         .to_string()
@@ -2163,6 +2428,19 @@ async fn process_with_agent_logic(
             } else {
                 display_text
             };
+            // Plan mode: arm the approval marker so the next approving reply
+            // executes the plan, and tell the user how to proceed.
+            if plan_mode_active && override_prompt.is_none() {
+                let marker_key = format!("pending_plan_approval:{chat_id}");
+                let marker_value = format!("plan\n{}", chrono::Utc::now().to_rfc3339());
+                let _ = call_blocking(state.db.clone(), move |db| {
+                    db.set_runtime_meta(&marker_key, &marker_value)
+                })
+                .await;
+                final_text.push_str(
+                    "\n\n📋 Plan mode: reply \"approve\" / \"1\" / \"批准\" to execute this plan, keep chatting to refine it, or /plan off to exit.",
+                );
+            }
             if let Some(tx) = event_tx {
                 let _ = tx.send(AgentEvent::FinalResponse {
                     text: final_text.clone(),
@@ -2176,10 +2454,34 @@ async fn process_with_agent_logic(
                 response_len = final_text.len(),
                 "Agent request completed"
             );
+            // Observational AfterTurn hook — fired off-path so a slow hook
+            // can't delay delivery; Block outcomes are ignored by design.
+            {
+                let hooks = state.hooks.clone();
+                let caller_channel = context.caller_channel.to_string();
+                let tools_used = tools_used_this_turn.clone();
+                let preview = truncate_for_log(&final_text, 500);
+                let iterations = iteration + 1;
+                tokio::spawn(async move {
+                    let _ = hooks
+                        .run_after_turn(chat_id, &caller_channel, iterations, &tools_used, &preview)
+                        .await;
+                });
+            }
             return Ok(final_text);
         }
 
         if stop_reason == "tool_use" {
+            for block in &response.content {
+                if let ResponseContentBlock::ToolUse { name, .. } = block {
+                    if name == "edit_file" || name == "write_file" {
+                        file_modifying_tool_used = true;
+                    }
+                    if !tools_used_this_turn.contains(name) {
+                        tools_used_this_turn.push(name.clone());
+                    }
+                }
+            }
             let tool_use_count = response
                 .content
                 .iter()
@@ -2559,9 +2861,12 @@ async fn process_with_agent_logic(
                     })
                     .await;
                 }
-                let advisory =
-                    review_high_risk_action(state, &tool_name, batch_ctx.waiting_approval_preview.as_deref())
-                        .await;
+                let advisory = review_high_risk_action(
+                    state,
+                    &tool_name,
+                    batch_ctx.waiting_approval_preview.as_deref(),
+                )
+                .await;
                 let text = crate::messages::approval_prompt(
                     state.config.user_message_language,
                     &tool_name,
@@ -3414,6 +3719,40 @@ pub fn archive_conversation(data_dir: &str, channel: &str, chat_id: i64, message
 }
 
 /// Compact old messages by summarizing them via LLM, keeping recent messages verbatim.
+/// `true` when the message carries tool_use/tool_result blocks that must not
+/// be separated from their partner by a compaction boundary.
+fn message_has_tool_blocks(message: &Message) -> bool {
+    match &message.content {
+        MessageContent::Blocks(blocks) => blocks.iter().any(|b| {
+            matches!(
+                b,
+                ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. }
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// Pick a compaction split point at (or before) `total - keep_recent` such
+/// that the kept window starts on a plain user message — never between a
+/// tool_use and its tool_result, which would produce an invalid request.
+/// Returns 0 when no safe boundary exists (callers skip compaction).
+fn safe_compact_split(messages: &[Message], keep_recent: usize) -> usize {
+    let total = messages.len();
+    if total <= keep_recent {
+        return 0;
+    }
+    let mut split = total - keep_recent;
+    while split > 0 {
+        let candidate = &messages[split];
+        if candidate.role == "user" && !message_has_tool_blocks(candidate) {
+            return split;
+        }
+        split -= 1;
+    }
+    0
+}
+
 async fn compact_messages(
     state: &AppState,
     caller_channel: &str,
@@ -3426,7 +3765,10 @@ async fn compact_messages(
         return messages.to_vec();
     }
 
-    let split_at = total - keep_recent;
+    let split_at = safe_compact_split(messages, keep_recent);
+    if split_at == 0 {
+        return messages.to_vec();
+    }
     let old_messages = &messages[..split_at];
     let recent_messages = &messages[split_at..];
 
@@ -3591,9 +3933,54 @@ async fn compact_messages(
 mod tests {
     use super::{
         build_db_memory_context, duplicate_call_key, format_mid_turn_injection,
-        history_to_claude_messages, process_with_agent, sanitize_user_visible_text, strip_thinking,
-        AgentRequestContext,
+        history_to_claude_messages, process_with_agent, safe_compact_split,
+        sanitize_user_visible_text, strip_thinking, AgentRequestContext,
     };
+    use microclaw_core::llm_types::{ContentBlock, MessageContent};
+
+    #[test]
+    fn safe_compact_split_lands_on_plain_user_message() {
+        let text = |role: &str, t: &str| Message {
+            role: role.into(),
+            content: MessageContent::Text(t.into()),
+        };
+        let tool_result_msg = Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: "out".into(),
+                is_error: None,
+            }]),
+        };
+        // 6 messages; keep_recent=2 would naively split at 4 (a tool_result
+        // user message) — the safe split walks back to the plain user at 2.
+        let messages = vec![
+            text("user", "q1"),
+            text("assistant", "a1"),
+            text("user", "q2"),
+            text("assistant", "uses tool"),
+            tool_result_msg.clone(),
+            text("assistant", "a2"),
+        ];
+        assert_eq!(safe_compact_split(&messages, 2), 2);
+        // All-tool history has no safe boundary → 0 (skip compaction).
+        let messages = vec![tool_result_msg.clone(), tool_result_msg];
+        assert_eq!(safe_compact_split(&messages, 1), 0);
+        // Short histories never split.
+        let messages = vec![text("user", "q1")];
+        assert_eq!(safe_compact_split(&messages, 5), 0);
+    }
+
+    #[test]
+    fn context_overflow_error_detection() {
+        use microclaw_core::error::MicroClawError;
+        let e = MicroClawError::LlmApi("400 Bad Request: prompt is too long: 210000 tokens".into());
+        assert!(crate::llm::is_context_overflow_error(&e));
+        let e = MicroClawError::LlmApi("context_length_exceeded".into());
+        assert!(crate::llm::is_context_overflow_error(&e));
+        let e = MicroClawError::LlmApi("429 rate limited".into());
+        assert!(!crate::llm::is_context_overflow_error(&e));
+    }
     use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
     use crate::llm::LlmProvider;
@@ -5214,7 +5601,10 @@ mod tests {
     fn test_pending_approval_tool_ttl_and_formats() {
         use super::pending_approval_tool;
         let now = chrono::Utc::now();
-        let fresh = format!("bash\n{}", (now - chrono::Duration::minutes(5)).to_rfc3339());
+        let fresh = format!(
+            "bash\n{}",
+            (now - chrono::Duration::minutes(5)).to_rfc3339()
+        );
         assert_eq!(pending_approval_tool(&fresh, now).as_deref(), Some("bash"));
 
         // Stale markers must never convert into a standing grant.
@@ -5230,7 +5620,10 @@ mod tests {
         );
 
         // A marker "from the future" (clock skew) also fails closed.
-        let future = format!("bash\n{}", (now + chrono::Duration::minutes(10)).to_rfc3339());
+        let future = format!(
+            "bash\n{}",
+            (now + chrono::Duration::minutes(10)).to_rfc3339()
+        );
         assert_eq!(pending_approval_tool(&future, now), None);
     }
 

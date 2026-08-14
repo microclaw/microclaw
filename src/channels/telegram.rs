@@ -516,7 +516,9 @@ pub async fn start_telegram_bot(
     }
 
     mark_channel_started(&ctx.channel_name);
-    let handler = Update::filter_message().endpoint(handle_message);
+    let handler = dptree::entry()
+        .branch(Update::filter_message().endpoint(handle_message))
+        .branch(Update::filter_callback_query().endpoint(handle_callback_query));
     let channel_name = ctx.channel_name.clone();
     let listener = teloxide::update_listeners::polling_default(bot.clone()).await;
     let listener_error_handler = teloxide::error_handlers::LoggingErrorHandler::with_custom_text(
@@ -896,6 +898,27 @@ async fn handle_message(
         return Ok(());
     }
 
+    // Reply-quote forwarding: when this message replies to an earlier one,
+    // prepend the referenced content so terse follow-ups keep their referent
+    // even after the original scrolled out of the session window.
+    if !voice_inbound {
+        if let Some(replied) = msg.reply_to_message() {
+            let quoted_text = replied
+                .text()
+                .or_else(|| replied.caption())
+                .unwrap_or_default();
+            let quoted_author = replied
+                .from
+                .as_ref()
+                .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone()));
+            if let Some(prefix) =
+                microclaw_core::text::quoted_context_prefix(quoted_author.as_deref(), quoted_text)
+            {
+                text = format!("{prefix}{text}");
+            }
+        }
+    }
+
     let sender_name = msg
         .from
         .as_ref()
@@ -1194,9 +1217,10 @@ async fn handle_message(
         let bot_for_progress = bot.clone();
         let chat_for_progress = msg.chat.id;
         let thread_for_progress = msg.thread_id;
+        let pin_progress = progress_settings.pin;
         let progress_msg: std::sync::Arc<tokio::sync::Mutex<Option<MessageId>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(None));
-        let emit: crate::channels::event_tap::ProgressEmit = Box::new(move |text, _terminal| {
+        let emit: crate::channels::event_tap::ProgressEmit = Box::new(move |text, terminal| {
             let bot = bot_for_progress.clone();
             let chat = chat_for_progress;
             let tid = thread_for_progress;
@@ -1208,6 +1232,15 @@ async fn handle_message(
                         if let Err(e) = bot.edit_message_text(chat, message_id, text).await {
                             warn!("Telegram: progress edit failed: {e}");
                         }
+                        // Auto-clear the pin once the turn is done so the
+                        // status panel doesn't linger at the top of the chat.
+                        if terminal && pin_progress {
+                            if let Err(e) =
+                                bot.unpin_chat_message(chat).message_id(message_id).await
+                            {
+                                warn!("Telegram: progress unpin failed: {e}");
+                            }
+                        }
                     }
                     None => {
                         let mut req = bot.send_message(chat, text);
@@ -1215,7 +1248,18 @@ async fn handle_message(
                             req = req.message_thread_id(tid);
                         }
                         match req.await {
-                            Ok(sent) => *slot = Some(sent.id),
+                            Ok(sent) => {
+                                *slot = Some(sent.id);
+                                if pin_progress && !terminal {
+                                    if let Err(e) = bot
+                                        .pin_chat_message(chat, sent.id)
+                                        .disable_notification(true)
+                                        .await
+                                    {
+                                        warn!("Telegram: progress pin failed: {e}");
+                                    }
+                                }
+                            }
                             Err(e) => warn!("Telegram: progress send failed: {e}"),
                         }
                     }
@@ -1226,10 +1270,40 @@ async fn handle_message(
     } else {
         None
     };
-    let mut tap = crate::channels::event_tap::EventTap::spawn_with_progress(
+    // File-edit diffs ride the same opt-in as the progress heartbeat so a
+    // channel that wants a quiet chat stays quiet.
+    let on_diff: Option<crate::channels::event_tap::DiffEmit> = if state.config.file_diffs_in_chat
+        && progress_settings.enabled
+        && (is_private_chat || progress_settings.groups)
+    {
+        let bot_for_diff = bot.clone();
+        let chat_for_diff = msg.chat.id;
+        let thread_for_diff = msg.thread_id;
+        Some(Box::new(move |text| {
+            let bot = bot_for_diff.clone();
+            let chat = chat_for_diff;
+            let tid = thread_for_diff;
+            Box::pin(async move {
+                let mut req = bot.send_message(chat, text);
+                if let Some(tid) = tid {
+                    req = req.message_thread_id(tid);
+                }
+                if let Err(e) = req.await {
+                    warn!("Telegram: file diff send failed: {e}");
+                }
+            })
+        }))
+    } else {
+        None
+    };
+    let mut tap = crate::channels::event_tap::EventTap::spawn_with_options(
         event_rx,
-        injection_ack,
-        progress,
+        crate::channels::event_tap::TapOptions {
+            on_inject: injection_ack,
+            progress,
+            on_diff,
+            max_iterations: state.config.max_tool_iterations,
+        },
     );
     match process_with_agent_with_events_guarded(
         &state,
@@ -1289,15 +1363,14 @@ async fn handle_message(
                 }
             }
 
+            // Drain whatever events the tap forwarded (both delivery paths);
+            // `used_send_message_tool` / `approval_requested` are detected by
+            // the tap concurrently with the agent loop.
+            while tap.replay_rx.recv().await.is_some() {}
+            let tap_result = tap.join.await.unwrap_or_default();
+
             if !used_streaming {
-                // Drain whatever events the tap forwarded; `used_send_message_tool`
-                // is detected by the tap concurrently with the agent loop.
-                while tap.replay_rx.recv().await.is_some() {}
-                let used_send_message_tool = tap
-                    .join
-                    .await
-                    .map(|r| r.used_send_message_tool)
-                    .unwrap_or(false);
+                let used_send_message_tool = tap_result.used_send_message_tool;
 
                 if used_send_message_tool {
                     if !response.is_empty() {
@@ -1358,6 +1431,21 @@ async fn handle_message(
                 }
             }
 
+            // Interactive approval: when the turn paused on a high-risk tool,
+            // follow the text card with Approve/Always/Deny buttons. A tap
+            // feeds the same reply-parsing path as a typed "1"/"2"/"3".
+            if tap_result.approval_requested {
+                send_approval_keyboard(
+                    &bot,
+                    msg.chat.id,
+                    msg.thread_id,
+                    chat_id,
+                    runtime_chat_type,
+                    state.config.user_message_language,
+                )
+                .await;
+            }
+
             // Voice round-trip: when the inbound was a voice message and the
             // operator opted in, synthesize the reply as audio and send it
             // back so the user can listen to the response on the same surface
@@ -1399,6 +1487,188 @@ async fn handle_message(
     // If messages were queued during this run, re-dispatch to process them.
     maybe_rerun_for_pending(state, &tg_channel_name, chat_id, runtime_chat_type);
 
+    Ok(())
+}
+
+/// Send the interactive Approve/Always/Deny keyboard that follows a
+/// high-risk approval prompt. Callback data embeds the option number plus
+/// the internal chat id and chat type so the callback handler can rebuild
+/// the processing context without a message to anchor on.
+async fn send_approval_keyboard(
+    bot: &Bot,
+    chat: ChatId,
+    thread_id: Option<ThreadId>,
+    internal_chat_id: i64,
+    runtime_chat_type: &str,
+    lang: crate::config::UserMessageLanguage,
+) {
+    use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+    let chat_type_code = if runtime_chat_type == "private" {
+        "p"
+    } else {
+        "g"
+    };
+    let labels = crate::messages::approval_button_labels(lang);
+    let buttons: Vec<Vec<InlineKeyboardButton>> = vec![labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            InlineKeyboardButton::callback(
+                label.clone(),
+                format!("apv:{}:{internal_chat_id}:{chat_type_code}", i + 1),
+            )
+        })
+        .collect()];
+    let mut req = bot
+        .send_message(chat, crate::messages::approval_buttons_hint(lang))
+        .reply_markup(InlineKeyboardMarkup::new(buttons));
+    if let Some(tid) = thread_id {
+        req = req.message_thread_id(tid);
+    }
+    if let Err(e) = req.await {
+        warn!("Telegram: approval keyboard send failed: {e}");
+    }
+}
+
+/// Handle a tap on one of the approval buttons: acknowledge, replace the
+/// keyboard with the chosen label, store the choice as a synthetic user
+/// reply ("1"/"2"/"3"), and run a turn so the existing pending-approval
+/// parsing decides — identical semantics to typing the number.
+async fn handle_callback_query(
+    bot: Bot,
+    q: teloxide::types::CallbackQuery,
+    state: Arc<AppState>,
+    ctx: TelegramRuntimeContext,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(data) = q.data.clone() else {
+        return Ok(());
+    };
+    let Some(rest) = data.strip_prefix("apv:") else {
+        return Ok(());
+    };
+    let mut parts = rest.splitn(3, ':');
+    let (Some(choice), Some(chat_id_str)) = (parts.next(), parts.next()) else {
+        return Ok(());
+    };
+    let chat_type_code = parts.next().unwrap_or("p");
+    if !matches!(choice, "1" | "2" | "3") {
+        return Ok(());
+    }
+    let Ok(internal_chat_id) = chat_id_str.parse::<i64>() else {
+        return Ok(());
+    };
+    let runtime_chat_type = if chat_type_code == "p" {
+        "private"
+    } else {
+        "group"
+    };
+
+    let _ = bot.answer_callback_query(q.id.clone()).await;
+
+    let lang = state.config.user_message_language;
+    let labels = crate::messages::approval_button_labels(lang);
+    let chosen_label = labels[choice.parse::<usize>().unwrap_or(1) - 1].clone();
+
+    // Replace the button message with the chosen label so the choice is
+    // visible and can't be tapped twice.
+    let (tg_chat, thread_id) = match q.message.as_ref() {
+        Some(m) => {
+            let chat_id = m.chat().id;
+            let thread_id = match m.regular_message() {
+                Some(regular) => regular.thread_id,
+                None => None,
+            };
+            let _ = bot
+                .edit_message_text(
+                    chat_id,
+                    m.id(),
+                    crate::messages::approval_choice_ack(lang, &chosen_label),
+                )
+                .await;
+            (chat_id, thread_id)
+        }
+        None => return Ok(()),
+    };
+
+    let clicker = q
+        .from
+        .username
+        .clone()
+        .unwrap_or_else(|| q.from.first_name.clone());
+    let stored = StoredMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: internal_chat_id,
+        sender_name: clicker,
+        content: choice.to_string(),
+        is_from_bot: false,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let _ = call_blocking(state.db.clone(), move |db| db.store_message(&stored)).await;
+
+    // Run the follow-up turn: the engine consumes the pending-approval
+    // marker and interprets the stored "1"/"2"/"3" reply.
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, None);
+    let result = process_with_agent_with_events_guarded(
+        &state,
+        AgentRequestContext {
+            caller_channel: &ctx.channel_name,
+            chat_id: internal_chat_id,
+            chat_type: runtime_chat_type,
+        },
+        None,
+        None,
+        Some(&event_tx),
+        None,
+    )
+    .await;
+    drop(event_tx);
+    while tap.replay_rx.recv().await.is_some() {}
+    let tap_result = tap.join.await.unwrap_or_default();
+
+    match result {
+        Ok(response) => {
+            if !tap_result.used_send_message_tool && !response.is_empty() {
+                let delivered = send_response(&bot, tg_chat, &response, thread_id, None).await;
+                if delivered {
+                    let bot_msg = StoredMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        chat_id: internal_chat_id,
+                        sender_name: ctx.bot_username.clone(),
+                        content: response,
+                        is_from_bot: true,
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    };
+                    let _ =
+                        call_blocking(state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+                } else {
+                    let channel_name = ctx.channel_name.clone();
+                    let _ = call_blocking(state.db.clone(), move |db| {
+                        db.enqueue_outbox_message(internal_chat_id, &channel_name, &response)
+                    })
+                    .await;
+                }
+            }
+            // A denied approval can pause the turn again — re-offer buttons.
+            if tap_result.approval_requested {
+                send_approval_keyboard(
+                    &bot,
+                    tg_chat,
+                    thread_id,
+                    internal_chat_id,
+                    runtime_chat_type,
+                    lang,
+                )
+                .await;
+            }
+        }
+        Err(e) => {
+            error!("Telegram: approval callback turn failed: {e}");
+            if !should_suppress_user_error(&e) {
+                let _ = bot.send_message(tg_chat, format!("Error: {e}")).await;
+            }
+        }
+    }
     Ok(())
 }
 

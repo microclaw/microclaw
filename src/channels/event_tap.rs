@@ -23,6 +23,10 @@ pub struct EventTapResult {
     /// Channel adapters use this to suppress the duplicate final reply when
     /// the agent already delivered output via the `send_message` tool.
     pub used_send_message_tool: bool,
+    /// `true` if the turn paused on a high-risk tool approval
+    /// (`ApprovalRequired` observed). Channel adapters use this to attach
+    /// interactive approve/deny buttons to the approval prompt.
+    pub approval_requested: bool,
 }
 
 /// Concurrent event consumer.
@@ -56,17 +60,82 @@ pub struct ProgressConfig {
 pub type ProgressEmit =
     Box<dyn Fn(String, bool) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
+/// Async emitter for a chat-facing file-diff message (already formatted).
+pub type DiffEmit =
+    Box<dyn Fn(String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
+
+/// Render a compact 6-slot progress bar for a 0-100 percent value.
+pub fn progress_bar(percent: u8) -> String {
+    let percent = percent.min(100);
+    let filled = (usize::from(percent) * 6 + 50) / 100;
+    let mut bar = String::new();
+    for i in 0..6 {
+        bar.push(if i < filled { '▰' } else { '▱' });
+    }
+    format!("{bar} {percent}%")
+}
+
+/// Blend an explicit percent (from a `report_progress` tool call) with an
+/// activity-based fallback so weaker models that never report progress still
+/// show motion. The fallback grows with iterations relative to the
+/// configured cap and is itself capped at 90% (only a real terminal event
+/// reaches 100%). Explicit reports always win and the result never goes
+/// backwards.
+pub fn estimate_percent(
+    explicit: Option<u8>,
+    iteration: usize,
+    max_iterations: usize,
+    floor: u8,
+) -> u8 {
+    let estimated = if max_iterations > 0 {
+        ((iteration.min(max_iterations) * 90) / max_iterations) as u8
+    } else {
+        0
+    };
+    explicit.map(|p| p.min(100)).unwrap_or(estimated).max(floor)
+}
+
 /// One-line progress text from the tap's view of the turn.
 pub fn progress_text(iteration: usize, last_tool: Option<&str>) -> String {
-    match last_tool {
+    progress_text_rich(iteration, last_tool, None, 0)
+}
+
+/// Progress line with an optional percent bar and live sub-agent count.
+pub fn progress_text_rich(
+    iteration: usize,
+    last_tool: Option<&str>,
+    percent: Option<u8>,
+    subagents_running: usize,
+) -> String {
+    let mut line = match last_tool {
         Some(tool) => format!("⏳ Working — step {iteration}, using `{tool}`…"),
         None => format!("⏳ Working — step {iteration}…"),
+    };
+    if let Some(p) = percent {
+        line.push_str(&format!("\n{}", progress_bar(p)));
     }
+    if subagents_running > 0 {
+        line.push_str(&format!("\n🤖 {subagents_running} sub-agent(s) running"));
+    }
+    line
 }
 
 /// Terminal text the progress message is edited to when the turn completes.
 pub fn progress_done_text() -> &'static str {
     "✅ Done — reply below."
+}
+
+/// Optional behaviors layered on the tap. `Default` is a bare pass-through.
+#[derive(Default)]
+pub struct TapOptions {
+    pub on_inject: Option<InjectionAck>,
+    pub progress: Option<(ProgressConfig, ProgressEmit)>,
+    /// Chat-facing file-diff delivery (already-formatted message per diff).
+    pub on_diff: Option<DiffEmit>,
+    /// The turn's `max_tool_iterations` cap, used by the fallback percent
+    /// estimator. 0 disables the estimator (percent shows only when the
+    /// agent reports one explicitly).
+    pub max_iterations: usize,
 }
 
 impl EventTap {
@@ -83,10 +152,33 @@ impl EventTap {
     /// silent) and is spaced at least `interval_secs` apart; a terminal
     /// emission fires when the stream ends iff progress was ever shown.
     pub fn spawn_with_progress(
-        mut event_rx: UnboundedReceiver<AgentEvent>,
+        event_rx: UnboundedReceiver<AgentEvent>,
         on_inject: Option<InjectionAck>,
         progress: Option<(ProgressConfig, ProgressEmit)>,
     ) -> Self {
+        Self::spawn_with_options(
+            event_rx,
+            TapOptions {
+                on_inject,
+                progress,
+                ..TapOptions::default()
+            },
+        )
+    }
+
+    /// Full-option variant: progress heartbeat (with percent estimation and
+    /// live sub-agent count), mid-turn injection acks, and chat-facing file
+    /// diff delivery.
+    pub fn spawn_with_options(
+        mut event_rx: UnboundedReceiver<AgentEvent>,
+        options: TapOptions,
+    ) -> Self {
+        let TapOptions {
+            on_inject,
+            progress,
+            on_diff,
+            max_iterations,
+        } = options;
         let (replay_tx, replay_rx) = unbounded_channel();
         let join = tokio::spawn(async move {
             let mut result = EventTapResult::default();
@@ -95,6 +187,9 @@ impl EventTap {
             let mut emitted = false;
             let mut iteration = 0usize;
             let mut last_tool: Option<String> = None;
+            let mut explicit_percent: Option<u8> = None;
+            let mut percent_floor: u8 = 0;
+            let mut subagents_running: usize = 0;
             while let Some(event) = event_rx.recv().await {
                 match &event {
                     AgentEvent::MidTurnInjection { count } => {
@@ -102,14 +197,44 @@ impl EventTap {
                             cb(*count).await;
                         }
                     }
-                    AgentEvent::ToolStart { name, .. } => {
+                    AgentEvent::ToolStart { name, input } => {
                         if name == "send_message" {
                             result.used_send_message_tool = true;
+                        }
+                        // The agent's own progress reports double as the
+                        // explicit percent source for the heartbeat bar.
+                        if name == "report_progress" {
+                            if let Some(p) = input.get("percent").and_then(|v| v.as_u64()) {
+                                explicit_percent = Some(p.min(100) as u8);
+                            }
                         }
                         last_tool = Some(name.clone());
                     }
                     AgentEvent::Iteration { iteration: i } => {
                         iteration = *i;
+                    }
+                    AgentEvent::ApprovalRequired { .. } => {
+                        result.approval_requested = true;
+                    }
+                    AgentEvent::SubagentStarted { .. } => {
+                        subagents_running += 1;
+                    }
+                    AgentEvent::SubagentFinished { .. } => {
+                        subagents_running = subagents_running.saturating_sub(1);
+                    }
+                    AgentEvent::FileDiff {
+                        path,
+                        diff,
+                        added,
+                        removed,
+                        ..
+                    } => {
+                        if let Some(cb) = on_diff.as_ref() {
+                            cb(microclaw_core::diff::format_diff_chat_message(
+                                path, diff, *added, *removed,
+                            ))
+                            .await;
+                        }
                     }
                     _ => {}
                 }
@@ -119,7 +244,28 @@ impl EventTap {
                         .map(|t| t.elapsed().as_secs() >= cfg.interval_secs.max(5))
                         .unwrap_or(true);
                     if long_enough && spaced {
-                        emit(progress_text(iteration.max(1), last_tool.as_deref()), false).await;
+                        let percent = if max_iterations > 0 || explicit_percent.is_some() {
+                            let p = estimate_percent(
+                                explicit_percent,
+                                iteration,
+                                max_iterations,
+                                percent_floor,
+                            );
+                            percent_floor = p;
+                            Some(p)
+                        } else {
+                            None
+                        };
+                        emit(
+                            progress_text_rich(
+                                iteration.max(1),
+                                last_tool.as_deref(),
+                                percent,
+                                subagents_running,
+                            ),
+                            false,
+                        )
+                        .await;
                         emitted = true;
                         last_emit = Some(tokio::time::Instant::now());
                     }
@@ -157,6 +303,9 @@ impl EventTap {
 pub struct ProgressUpdatesSettings {
     pub enabled: bool,
     pub groups: bool,
+    /// Pin the progress message while the turn runs and unpin it on
+    /// completion (Telegram only today). Default off.
+    pub pin: bool,
     pub config: ProgressConfig,
 }
 
@@ -167,6 +316,7 @@ pub fn progress_updates_settings(
     let mut out = ProgressUpdatesSettings {
         enabled: false,
         groups: false,
+        pin: false,
         config: ProgressConfig {
             min_turn_secs: 30,
             interval_secs: 20,
@@ -196,6 +346,9 @@ pub fn progress_updates_settings(
     }
     if let Some(v) = get_bool("groups") {
         out.groups = v;
+    }
+    if let Some(v) = get_bool("pin") {
+        out.pin = v;
     }
     if let Some(v) = get_u64("min_turn_seconds") {
         out.config.min_turn_secs = v;
@@ -381,5 +534,93 @@ mod tests {
             "⏳ Working — step 3, using `web_search`…"
         );
         assert_eq!(progress_text(1, None), "⏳ Working — step 1…");
+    }
+
+    #[test]
+    fn progress_bar_renders_six_slots() {
+        assert_eq!(progress_bar(0), "▱▱▱▱▱▱ 0%");
+        assert_eq!(progress_bar(50), "▰▰▰▱▱▱ 50%");
+        assert_eq!(progress_bar(100), "▰▰▰▰▰▰ 100%");
+        assert_eq!(progress_bar(250), "▰▰▰▰▰▰ 100%");
+    }
+
+    #[test]
+    fn estimate_percent_prefers_explicit_and_never_regresses() {
+        // Explicit report wins over the estimator.
+        assert_eq!(estimate_percent(Some(40), 1, 20, 0), 40);
+        // Estimator: iteration 10 of 20 → 45% (of the 90% cap).
+        assert_eq!(estimate_percent(None, 10, 20, 0), 45);
+        // Estimator never exceeds 90 without an explicit report.
+        assert_eq!(estimate_percent(None, 20, 20, 0), 90);
+        assert_eq!(estimate_percent(None, 99, 20, 0), 90);
+        // Floor keeps the bar from moving backwards.
+        assert_eq!(estimate_percent(None, 1, 20, 60), 60);
+    }
+
+    #[test]
+    fn rich_progress_text_includes_bar_and_subagents() {
+        let line = progress_text_rich(3, Some("bash"), Some(50), 2);
+        assert!(line.contains("step 3, using `bash`"));
+        assert!(line.contains("▰▰▰▱▱▱ 50%"));
+        assert!(line.contains("🤖 2 sub-agent(s) running"));
+    }
+
+    #[tokio::test]
+    async fn file_diff_events_reach_diff_callback() {
+        use std::sync::{Arc, Mutex};
+        let (tx, rx) = unbounded_channel();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_in = seen.clone();
+        let on_diff: DiffEmit = Box::new(move |msg| {
+            let seen = seen_in.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push(msg);
+            })
+        });
+        let mut tap = EventTap::spawn_with_options(
+            rx,
+            TapOptions {
+                on_diff: Some(on_diff),
+                ..TapOptions::default()
+            },
+        );
+        tx.send(AgentEvent::FileDiff {
+            path: "src/x.rs".into(),
+            diff: "@@ -1 +1 @@\n-a\n+b".into(),
+            added: 1,
+            removed: 1,
+            truncated: false,
+        })
+        .unwrap();
+        drop(tx);
+        while tap.replay_rx.recv().await.is_some() {}
+        let _ = tap.join.await.unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].starts_with("📝 `src/x.rs` (+1 -1)"));
+        assert!(seen[0].contains("```diff"));
+    }
+
+    #[tokio::test]
+    async fn subagent_events_adjust_running_count() {
+        let (tx, rx) = unbounded_channel();
+        let mut tap = EventTap::spawn(rx, None);
+        tx.send(AgentEvent::SubagentStarted {
+            run_id: "r1".into(),
+            label: "worker".into(),
+        })
+        .unwrap();
+        tx.send(AgentEvent::SubagentFinished {
+            run_id: "r1".into(),
+            status: "completed".into(),
+        })
+        .unwrap();
+        drop(tx);
+        let mut count = 0;
+        while tap.replay_rx.recv().await.is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 2);
+        let _ = tap.join.await.unwrap();
     }
 }

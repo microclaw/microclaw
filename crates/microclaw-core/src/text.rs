@@ -37,6 +37,29 @@ pub fn split_text(text: &str, max_len: usize) -> Vec<String> {
 /// Remove private reasoning and textual protocol artifacts before content is
 /// handed to a user-facing channel. Real tool calls are structured blocks; a
 /// literal `[tool_use: ...]` line is therefore always an implementation leak.
+/// Cap on the excerpt embedded by [`quoted_context_prefix`].
+pub const QUOTED_CONTEXT_MAX_CHARS: usize = 400;
+
+/// Build the `[quoted from …]` prefix that channel adapters prepend when a
+/// user replies to an earlier message, so terse follow-ups ("why?", "fix
+/// it") keep their referent even after the original scrolled out of the
+/// session window. Returns `None` when the referenced content is empty.
+pub fn quoted_context_prefix(author: Option<&str>, excerpt: &str) -> Option<String> {
+    let trimmed = excerpt.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut capped: String = trimmed.chars().take(QUOTED_CONTEXT_MAX_CHARS).collect();
+    if capped.chars().count() < trimmed.chars().count() {
+        capped.push('…');
+    }
+    let author = author.map(str::trim).filter(|a| !a.is_empty());
+    Some(match author {
+        Some(a) => format!("[quoted from {a}: {capped}]\n"),
+        None => format!("[quoted: {capped}]\n"),
+    })
+}
+
 pub fn sanitize_user_visible_text(text: &str) -> String {
     fn strip_tag_blocks(input: &str, open: &str, close: &str) -> String {
         let mut result = String::with_capacity(input.len());
@@ -78,7 +101,22 @@ pub fn sanitize_user_visible_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize_user_visible_text, split_text};
+    use super::{
+        quoted_context_prefix, sanitize_user_visible_text, split_text, QUOTED_CONTEXT_MAX_CHARS,
+    };
+
+    #[test]
+    fn quoted_context_includes_author_and_caps_length() {
+        let p = quoted_context_prefix(Some("alice"), "hello world").unwrap();
+        assert_eq!(p, "[quoted from alice: hello world]\n");
+        let p = quoted_context_prefix(None, "hi").unwrap();
+        assert_eq!(p, "[quoted: hi]\n");
+        assert!(quoted_context_prefix(Some("bob"), "   ").is_none());
+        let long = "x".repeat(QUOTED_CONTEXT_MAX_CHARS + 50);
+        let p = quoted_context_prefix(None, &long).unwrap();
+        assert!(p.contains('…'));
+        assert!(p.chars().count() < long.chars().count());
+    }
 
     #[test]
     fn sanitizes_private_reasoning_and_fake_tool_calls() {

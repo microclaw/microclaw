@@ -142,7 +142,11 @@ async fn gather(state: &Arc<AppState>, window_days: u64) -> TrustReportData {
 
 /// True when the persisted last-sent marker is at least `interval_days` old
 /// (or absent/unparseable — a fresh install reports on the first tick).
-pub fn report_due(last_sent: Option<&str>, interval_days: u64, now: chrono::DateTime<chrono::Utc>) -> bool {
+pub fn report_due(
+    last_sent: Option<&str>,
+    interval_days: u64,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
     match last_sent.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
         Some(sent) => {
             now.signed_duration_since(sent.with_timezone(&chrono::Utc))
@@ -156,10 +160,11 @@ pub fn report_due(last_sent: Option<&str>, interval_days: u64, now: chrono::Date
 /// Returns true when a report was delivered to at least one chat.
 pub async fn run_trust_report_once(state: &Arc<AppState>) -> bool {
     let cfg = &state.config.trust_report;
-    let last_sent =
-        call_blocking(state.db.clone(), |db| db.get_runtime_meta(LAST_SENT_META_KEY))
-            .await
-            .unwrap_or_default();
+    let last_sent = call_blocking(state.db.clone(), |db| {
+        db.get_runtime_meta(LAST_SENT_META_KEY)
+    })
+    .await
+    .unwrap_or_default();
     if !report_due(last_sent.as_deref(), cfg.interval_days, chrono::Utc::now()) {
         return false;
     }

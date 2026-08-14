@@ -182,14 +182,20 @@ impl ToolRegistry {
                 &config.working_dir,
                 config.working_dir_isolation,
             )),
-            Box::new(write_file::WriteFileTool::new_with_isolation(
-                &config.working_dir,
-                config.working_dir_isolation,
-            )),
-            Box::new(edit_file::EditFileTool::new_with_isolation(
-                &config.working_dir,
-                config.working_dir_isolation,
-            )),
+            Box::new(
+                write_file::WriteFileTool::new_with_isolation(
+                    &config.working_dir,
+                    config.working_dir_isolation,
+                )
+                .with_diff_max_lines(config.diff_max_lines),
+            ),
+            Box::new(
+                edit_file::EditFileTool::new_with_isolation(
+                    &config.working_dir,
+                    config.working_dir_isolation,
+                )
+                .with_diff_max_lines(config.diff_max_lines),
+            ),
             Box::new(glob::GlobTool::new_with_isolation(
                 &config.working_dir,
                 config.working_dir_isolation,
@@ -439,14 +445,20 @@ impl ToolRegistry {
                 &config.working_dir,
                 config.working_dir_isolation,
             )),
-            Box::new(write_file::WriteFileTool::new_with_isolation(
-                &config.working_dir,
-                config.working_dir_isolation,
-            )),
-            Box::new(edit_file::EditFileTool::new_with_isolation(
-                &config.working_dir,
-                config.working_dir_isolation,
-            )),
+            Box::new(
+                write_file::WriteFileTool::new_with_isolation(
+                    &config.working_dir,
+                    config.working_dir_isolation,
+                )
+                .with_diff_max_lines(config.diff_max_lines),
+            ),
+            Box::new(
+                edit_file::EditFileTool::new_with_isolation(
+                    &config.working_dir,
+                    config.working_dir_isolation,
+                )
+                .with_diff_max_lines(config.diff_max_lines),
+            ),
             Box::new(glob::GlobTool::new_with_isolation(
                 &config.working_dir,
                 config.working_dir_isolation,
@@ -580,7 +592,10 @@ impl ToolRegistry {
                 crate::mcp::McpTrust::Limited => ToolRisk::Medium,
                 crate::mcp::McpTrust::Sandboxed => ToolRisk::High,
             };
-            self.add_tool_with_risk(Box::new(crate::tools::mcp::McpTool::new(server, tool_info)), risk);
+            self.add_tool_with_risk(
+                Box::new(crate::tools::mcp::McpTool::new(server, tool_info)),
+                risk,
+            );
         }
     }
 

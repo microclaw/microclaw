@@ -36,6 +36,10 @@ yanked = "deny"
 #   quick-xml >=0.41, which the parents haven't adopted yet. render_pdf parses
 #   local documents, not untrusted network XML. Remove once typst's chain
 #   moves to quick-xml 0.41+.
+#
+# RUSTSEC-2026-0247: `bitmaps` is unmaintained (repo archived 2026-05-03) —
+#   transitive via matrix-sdk -> imbl; no first-party use and no safe upgrade
+#   available until matrix-sdk's imbl chain migrates off it.
 ignore = [
   "RUSTSEC-2026-0049",
   "RUSTSEC-2026-0098",
@@ -50,6 +54,7 @@ ignore = [
   "RUSTSEC-2026-0195",
   "RUSTSEC-2026-0192",
   "RUSTSEC-2026-0206",
+  "RUSTSEC-2026-0247",
 ]
 
 [bans]

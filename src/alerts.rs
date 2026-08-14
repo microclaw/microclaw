@@ -195,14 +195,7 @@ async fn deliver_alert(
     let class = alert.class;
     let status = status.to_string();
     let _ = call_blocking(state.db.clone(), move |db| {
-        db.log_audit_event(
-            "alert",
-            "alerts_loop",
-            class,
-            None,
-            &status,
-            Some(&detail),
-        )
+        db.log_audit_event("alert", "alerts_loop", class, None, &status, Some(&detail))
     })
     .await;
     outcome.is_ok()

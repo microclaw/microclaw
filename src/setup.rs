@@ -3160,6 +3160,7 @@ impl SetupApp {
                 provider: Some(draft.provider.trim().to_ascii_lowercase())
                     .filter(|v| !v.is_empty()),
                 api_key: Some(draft.api_key.trim().to_string()).filter(|v| !v.is_empty()),
+                api_keys: Vec::new(),
                 llm_base_url: Some(draft.base_url.trim().to_string()).filter(|v| !v.is_empty()),
                 llm_user_agent: Some(draft.user_agent.trim().to_string()).filter(|v| !v.is_empty()),
                 default_model: Some(draft.default_model.trim().to_string())

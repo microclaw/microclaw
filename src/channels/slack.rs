@@ -933,6 +933,237 @@ async fn post_slack_message_ts(
         .ok_or_else(|| "Slack chat.postMessage response missing ts".to_string())
 }
 
+/// Post the Approve/Always/Deny Block Kit button row that follows a
+/// high-risk approval prompt. Button values embed the option number plus
+/// the internal chat id and chat type so the block_actions handler can
+/// rebuild the processing context.
+async fn post_slack_approval_buttons(
+    bot_token: &str,
+    channel: &str,
+    thread_ts: Option<&str>,
+    internal_chat_id: i64,
+    chat_type: &str,
+    lang: crate::config::UserMessageLanguage,
+) -> Result<(), String> {
+    let chat_type_code = if chat_type == "private" { "p" } else { "g" };
+    let labels = crate::messages::approval_button_labels(lang);
+    let elements: Vec<serde_json::Value> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let mut button = serde_json::json!({
+                "type": "button",
+                "text": {"type": "plain_text", "text": label},
+                "action_id": format!("apv_{}", i + 1),
+                "value": format!("apv:{}:{internal_chat_id}:{chat_type_code}", i + 1),
+            });
+            if i == 0 {
+                button["style"] = serde_json::Value::String("primary".into());
+            } else if i == 2 {
+                button["style"] = serde_json::Value::String("danger".into());
+            }
+            button
+        })
+        .collect();
+    let hint = crate::messages::approval_buttons_hint(lang);
+    let client = reqwest::Client::new();
+    let mut body = serde_json::json!({
+        "channel": channel,
+        "text": hint,
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": hint}},
+            {"type": "actions", "elements": elements},
+        ],
+    });
+    if let Some(thread_ts) = thread_ts {
+        if !thread_ts.trim().is_empty() {
+            body["thread_ts"] = serde_json::Value::String(thread_ts.to_string());
+        }
+    }
+    let resp = client
+        .post("https://slack.com/api/chat.postMessage")
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {bot_token}"),
+        )
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to post Slack approval buttons: {e}"))?;
+    let resp_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Slack chat.postMessage response: {e}"))?;
+    if resp_json.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = resp_json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("Slack chat.postMessage error: {err}"));
+    }
+    Ok(())
+}
+
+/// Handle a tap on one of the Slack approval buttons (block_actions
+/// payload): replace the buttons with the chosen label, store the choice
+/// as a synthetic "1"/"2"/"3" reply, and run a turn so the existing
+/// pending-approval parsing decides.
+async fn handle_slack_approval_action(
+    app_state: Arc<AppState>,
+    runtime: SlackRuntimeContext,
+    bot_token: String,
+    payload: serde_json::Value,
+) {
+    let action_value = payload
+        .pointer("/actions/0/value")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let Some(rest) = action_value.strip_prefix("apv:") else {
+        return;
+    };
+    let mut parts = rest.splitn(3, ':');
+    let (Some(choice), Some(chat_id_str)) = (parts.next(), parts.next()) else {
+        return;
+    };
+    let chat_type = if parts.next().unwrap_or("p") == "p" {
+        "private"
+    } else {
+        "group"
+    };
+    if !matches!(choice, "1" | "2" | "3") {
+        return;
+    }
+    let Ok(internal_chat_id) = chat_id_str.parse::<i64>() else {
+        return;
+    };
+    let slack_channel = payload
+        .pointer("/channel/id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let message_ts = payload
+        .pointer("/message/ts")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let message_thread_ts = payload
+        .pointer("/message/thread_ts")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let clicker = payload
+        .pointer("/user/username")
+        .or_else(|| payload.pointer("/user/name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("slack-user")
+        .to_string();
+
+    let lang = app_state.config.user_message_language;
+    let labels = crate::messages::approval_button_labels(lang);
+    let chosen_label = labels[choice.parse::<usize>().unwrap_or(1) - 1].clone();
+    if !slack_channel.is_empty() && !message_ts.is_empty() {
+        let ack = crate::messages::approval_choice_ack(lang, &chosen_label);
+        if let Err(e) = update_slack_message(&bot_token, &slack_channel, &message_ts, &ack).await {
+            warn!("Slack: approval ack edit failed: {e}");
+        }
+    }
+
+    let stored = StoredMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: internal_chat_id,
+        sender_name: clicker,
+        content: choice.to_string(),
+        is_from_bot: false,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&stored)).await;
+
+    let (event_tx, event_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::agent_engine::AgentEvent>();
+    let mut tap = crate::channels::event_tap::EventTap::spawn(event_rx, None);
+    let result = process_with_agent_with_events_guarded(
+        &app_state,
+        AgentRequestContext {
+            caller_channel: &runtime.channel_name,
+            chat_id: internal_chat_id,
+            chat_type,
+        },
+        None,
+        None,
+        Some(&event_tx),
+        None,
+    )
+    .await;
+    drop(event_tx);
+    while tap.replay_rx.recv().await.is_some() {}
+    let tap_result = tap.join.await.unwrap_or_default();
+
+    match result {
+        Ok(response) => {
+            if !tap_result.used_send_message_tool && !response.is_empty() {
+                match send_slack_response(
+                    &bot_token,
+                    &slack_channel,
+                    message_thread_ts.as_deref(),
+                    &response,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        let bot_msg = StoredMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            chat_id: internal_chat_id,
+                            sender_name: runtime.bot_username.clone(),
+                            content: response,
+                            is_from_bot: true,
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        };
+                        let _ = call_blocking(app_state.db.clone(), move |db| {
+                            db.store_message(&bot_msg)
+                        })
+                        .await;
+                    }
+                    Err(e) => {
+                        error!("Slack: approval follow-up send failed; queued to outbox: {e}");
+                        let channel_name = runtime.channel_name.clone();
+                        let _ = call_blocking(app_state.db.clone(), move |db| {
+                            db.enqueue_outbox_message(internal_chat_id, &channel_name, &response)
+                        })
+                        .await;
+                    }
+                }
+            }
+            if tap_result.approval_requested {
+                if let Err(e) = post_slack_approval_buttons(
+                    &bot_token,
+                    &slack_channel,
+                    message_thread_ts.as_deref(),
+                    internal_chat_id,
+                    chat_type,
+                    lang,
+                )
+                .await
+                {
+                    warn!("Slack: approval buttons send failed: {e}");
+                }
+            }
+        }
+        Err(e) => {
+            error!("Slack: approval callback turn failed: {e}");
+            if !should_suppress_user_error(&e) {
+                let _ = send_slack_response(
+                    &bot_token,
+                    &slack_channel,
+                    message_thread_ts.as_deref(),
+                    &format!("Error: {e}"),
+                )
+                .await;
+            }
+        }
+    }
+}
+
 /// Edit an existing Slack message in place via chat.update.
 async fn update_slack_message(
     bot_token: &str,
@@ -1068,6 +1299,28 @@ async fn run_socket_mode(
                 }
 
                 let envelope_type = envelope.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                // Block Kit button taps (approval buttons) arrive as
+                // `interactive` envelopes in Socket Mode.
+                if envelope_type == "interactive" {
+                    let payload = envelope.get("payload").cloned().unwrap_or_default();
+                    if payload.get("type").and_then(|v| v.as_str()) == Some("block_actions") {
+                        let is_approval = payload
+                            .pointer("/actions/0/value")
+                            .and_then(|v| v.as_str())
+                            .map(|v| v.starts_with("apv:"))
+                            .unwrap_or(false);
+                        if is_approval {
+                            tokio::spawn(handle_slack_approval_action(
+                                app_state.clone(),
+                                runtime.clone(),
+                                bot_token.to_string(),
+                                payload,
+                            ));
+                        }
+                    }
+                    continue;
+                }
 
                 if envelope_type == "events_api" {
                     let event_type = envelope
@@ -1518,10 +1771,38 @@ async fn handle_slack_message(
     } else {
         None
     };
-    let mut tap = crate::channels::event_tap::EventTap::spawn_with_progress(
+    // File-edit diffs ride the same opt-in as the progress heartbeat.
+    let on_diff: Option<crate::channels::event_tap::DiffEmit> =
+        if app_state.config.file_diffs_in_chat
+            && progress_settings.enabled
+            && (is_dm || progress_settings.groups)
+        {
+            let token_for_diff = bot_token.to_string();
+            let channel_for_diff = channel.to_string();
+            let thread_for_diff = normalized_thread_ts.map(|s| s.to_string());
+            Some(Box::new(move |text| {
+                let token = token_for_diff.clone();
+                let channel = channel_for_diff.clone();
+                let thread = thread_for_diff.clone();
+                Box::pin(async move {
+                    if let Err(e) =
+                        post_slack_message_ts(&token, &channel, thread.as_deref(), &text).await
+                    {
+                        warn!("Slack: file diff send failed: {e}");
+                    }
+                })
+            }))
+        } else {
+            None
+        };
+    let mut tap = crate::channels::event_tap::EventTap::spawn_with_options(
         event_rx,
-        injection_ack,
-        progress,
+        crate::channels::event_tap::TapOptions {
+            on_inject: injection_ack,
+            progress,
+            on_diff,
+            max_iterations: app_state.config.max_tool_iterations,
+        },
     );
 
     match process_with_agent_with_events_guarded(
@@ -1542,11 +1823,8 @@ async fn handle_slack_message(
             drop(event_tx);
             let response_for_voice = response.clone();
             while tap.replay_rx.recv().await.is_some() {}
-            let used_send_message_tool = tap
-                .join
-                .await
-                .map(|r| r.used_send_message_tool)
-                .unwrap_or(false);
+            let tap_result = tap.join.await.unwrap_or_default();
+            let used_send_message_tool = tap_result.used_send_message_tool;
 
             if used_send_message_tool {
                 if !response.is_empty() {
@@ -1600,6 +1878,23 @@ async fn handle_slack_message(
                 };
                 let _ =
                     call_blocking(app_state.db.clone(), move |db| db.store_message(&bot_msg)).await;
+            }
+
+            // Interactive approval: follow the text card with
+            // Approve/Always/Deny buttons (see telegram.rs counterpart).
+            if tap_result.approval_requested {
+                if let Err(e) = post_slack_approval_buttons(
+                    bot_token,
+                    channel,
+                    normalized_thread_ts,
+                    chat_id,
+                    slack_chat_type,
+                    app_state.config.user_message_language,
+                )
+                .await
+                {
+                    warn!("Slack: approval buttons send failed: {e}");
+                }
             }
 
             // Voice round-trip: synthesize the reply as audio and upload via

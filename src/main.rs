@@ -65,6 +65,8 @@ enum MainCommand {
     Start,
     /// Serve Agent Client Protocol (ACP) over stdio
     Acp,
+    /// Run a single prompt headlessly and print the reply (for scripts/CI)
+    Run(RunCommand),
     /// Full-screen setup wizard (or `setup --enable-sandbox`)
     Setup(SetupCommand),
     /// Preflight diagnostics
@@ -108,6 +110,24 @@ enum MainCommand {
     Upgrade,
     /// Show version
     Version,
+}
+
+#[derive(Debug, Args)]
+#[command(after_help = "\x1b[1mExamples:\x1b[22m\n  \
+    microclaw run -p \"summarize docs/README.md\"\n  \
+    microclaw run -p \"run the tests\" --json | jq .response")]
+struct RunCommand {
+    /// The prompt to run
+    #[arg(short = 'p', long = "prompt", value_name = "TEXT")]
+    prompt: String,
+    /// Emit a JSON envelope ({"ok":..., "response":..., "chat_id":...})
+    /// instead of plain text
+    #[arg(long)]
+    json: bool,
+    /// Reuse a named headless session instead of the default one, so
+    /// consecutive runs share conversation context
+    #[arg(long, value_name = "NAME")]
+    session: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -741,9 +761,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     apply_config_override(cli.config.as_ref())?;
 
+    let mut run_command: Option<RunCommand> = None;
     let launch_mode = match cli.command {
         Some(MainCommand::Start) => Some("start"),
         Some(MainCommand::Acp) => Some("acp"),
+        Some(MainCommand::Run(run)) => {
+            run_command = Some(run);
+            Some("run")
+        }
         Some(MainCommand::Gateway { args }) => {
             gateway::handle_gateway_cli(&args)?;
             return Ok(());
@@ -928,6 +953,21 @@ async fn main() -> anyhow::Result<()> {
                 mcp_manager,
             )
             .await?;
+        }
+        Some("run") => {
+            let run = run_command.expect("run command args resolved above");
+            let code = microclaw::headless::run_once(
+                runtime_config,
+                db,
+                memory_manager,
+                skill_manager,
+                mcp_manager,
+                run.prompt,
+                run.session,
+                run.json,
+            )
+            .await?;
+            std::process::exit(code);
         }
         _ => unreachable!("launch mode must be resolved before runtime init"),
     }

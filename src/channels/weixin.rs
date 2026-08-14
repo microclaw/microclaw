@@ -238,6 +238,13 @@ struct WeixinWebhookVideoItem {
 struct WeixinWebhookRefMessage {
     #[serde(default)]
     title: String,
+    /// Full referenced content when the webhook payload provides it
+    /// (falls back to `title` otherwise).
+    #[serde(default)]
+    desc: String,
+    /// Display name of the quoted message's author, when provided.
+    #[serde(default)]
+    display_name: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -1543,13 +1550,21 @@ fn summarize_weixin_item(item: &WeixinWebhookMessageItem) -> Option<String> {
                 .as_ref()
                 .map(|text| text.text.trim().to_string())
                 .filter(|text| !text.is_empty())?;
-            if let Some(reference) = item
-                .ref_msg
-                .as_ref()
-                .map(|reference| reference.title.trim().to_string())
-                .filter(|title| !title.is_empty())
-            {
-                return Some(format!("[quoted: {reference}]\n{text}"));
+            if let Some(reference) = item.ref_msg.as_ref() {
+                // Prefer the full referenced content over its title.
+                let excerpt = if reference.desc.trim().is_empty() {
+                    reference.title.trim()
+                } else {
+                    reference.desc.trim()
+                };
+                let author = if reference.display_name.trim().is_empty() {
+                    None
+                } else {
+                    Some(reference.display_name.trim())
+                };
+                if let Some(prefix) = microclaw_core::text::quoted_context_prefix(author, excerpt) {
+                    return Some(format!("{prefix}{text}"));
+                }
             }
             Some(text)
         }

@@ -268,6 +268,18 @@ fn detect_system_timezone() -> String {
 fn default_max_session_messages() -> usize {
     40
 }
+fn default_diff_max_lines() -> usize {
+    microclaw_core::diff::DEFAULT_DIFF_MAX_LINES
+}
+fn default_model_context_window() -> usize {
+    200_000
+}
+fn default_context_pressure_compact_pct() -> usize {
+    85
+}
+fn default_file_diffs_in_chat() -> bool {
+    true
+}
 fn default_compact_keep_recent() -> usize {
     20
 }
@@ -717,6 +729,9 @@ pub struct LlmProviderProfile {
     pub provider: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+    /// Additional API keys rotated on auth/rate-limit errors.
+    #[serde(default)]
+    pub api_keys: Vec<String>,
     #[serde(default)]
     pub llm_base_url: Option<String>,
     #[serde(default)]
@@ -734,6 +749,8 @@ pub struct ResolvedLlmProviderProfile {
     pub alias: String,
     pub provider: String,
     pub api_key: String,
+    /// Additional API keys rotated on auth/rate-limit errors.
+    pub api_keys: Vec<String>,
     pub llm_base_url: Option<String>,
     pub llm_user_agent: String,
     pub default_model: String,
@@ -1015,6 +1032,18 @@ impl AuxModels {
             _ => None,
         }
     }
+}
+
+/// Opt-in post-edit self-recheck (one review pass after file-modifying
+/// turns, before the reply finalizes).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SelfRecheckConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Custom prompt template; `{{USER}}` and `{{RESULT}}` placeholders are
+    /// replaced with the original request and the draft reply.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1443,6 +1472,11 @@ pub struct Config {
     pub llm_provider: String,
     #[serde(default = "default_api_key")]
     pub api_key: String,
+    /// Additional API keys forming a rotation pool with `api_key`: on
+    /// auth (401/403) or rate-limit (429) errors the provider advances to
+    /// the next key before retrying.
+    #[serde(default)]
+    pub api_keys: Vec<String>,
     #[serde(default = "default_model")]
     pub model: String,
     #[serde(default)]
@@ -1568,6 +1602,28 @@ pub struct Config {
     pub skills_catalog_top_k: usize,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
+    /// Cap on rendered unified-diff lines attached by file-modifying tools
+    /// (edit_file / write_file). Default: 120.
+    #[serde(default = "default_diff_max_lines")]
+    pub diff_max_lines: usize,
+    /// Deliver file-edit diffs as chat messages on channels that opted into
+    /// progress updates. The web UI always receives diff events. Default: true.
+    #[serde(default = "default_file_diffs_in_chat")]
+    pub file_diffs_in_chat: bool,
+    /// Approximate context window (tokens) of the configured model, used by
+    /// the mid-turn context-pressure check. Default: 200000.
+    #[serde(default = "default_model_context_window")]
+    pub model_context_window: usize,
+    /// Compact the session mid-turn once a request consumes this percentage
+    /// of `model_context_window`. 0 disables the pressure check (the
+    /// overflow-error retry still applies). Default: 85.
+    #[serde(default = "default_context_pressure_compact_pct")]
+    pub context_pressure_compact_pct: usize,
+    /// Opt-in post-edit quality pass: after a turn that ran edit_file /
+    /// write_file, one extra review iteration runs before the reply is
+    /// finalized.
+    #[serde(default)]
+    pub self_recheck: SelfRecheckConfig,
     #[serde(default = "default_compact_keep_recent")]
     pub compact_keep_recent: usize,
     #[serde(default = "default_tool_timeout_secs")]
@@ -2270,6 +2326,7 @@ impl Config {
             bot_username: "bot".into(),
             llm_provider: "anthropic".into(),
             api_key: "key".into(),
+            api_keys: Vec::new(),
             model: "claude-sonnet-4-5-20250929".into(),
             provider_presets: HashMap::new(),
             llm_providers: HashMap::new(),
@@ -2317,6 +2374,11 @@ impl Config {
             allowed_groups: vec![],
             control_chat_ids: vec![],
             max_session_messages: 40,
+            diff_max_lines: default_diff_max_lines(),
+            file_diffs_in_chat: default_file_diffs_in_chat(),
+            model_context_window: default_model_context_window(),
+            context_pressure_compact_pct: default_context_pressure_compact_pct(),
+            self_recheck: SelfRecheckConfig::default(),
             compact_keep_recent: 20,
             default_tool_timeout_secs: default_tool_timeout_secs(),
             tool_timeout_overrides: HashMap::new(),
@@ -3151,6 +3213,7 @@ Use operator password + API keys for Web auth."
         if alias == self.llm_provider {
             let mut provider = self.llm_provider.clone();
             let mut api_key = self.api_key.clone();
+            let mut api_keys = self.api_keys.clone();
             let mut llm_base_url = self.llm_base_url.clone();
             let mut llm_user_agent = self.llm_user_agent.clone();
             let mut default_model = self.model.clone();
@@ -3162,6 +3225,9 @@ Use operator password + API keys for Web auth."
                 }
                 if let Some(v) = &profile.api_key {
                     api_key = v.clone();
+                }
+                if !profile.api_keys.is_empty() {
+                    api_keys = profile.api_keys.clone();
                 }
                 if let Some(v) = &profile.llm_base_url {
                     llm_base_url = Some(v.clone());
@@ -3197,6 +3263,7 @@ Use operator password + API keys for Web auth."
                 alias,
                 provider,
                 api_key,
+                api_keys,
                 llm_base_url,
                 llm_user_agent,
                 default_model,
@@ -3211,6 +3278,14 @@ Use operator password + API keys for Web auth."
             .api_key
             .clone()
             .unwrap_or_else(|| self.api_key.clone());
+        // A profile with its own key(s) never inherits the top-level pool.
+        let api_keys = if !profile.api_keys.is_empty() {
+            profile.api_keys.clone()
+        } else if profile.api_key.is_none() {
+            self.api_keys.clone()
+        } else {
+            Vec::new()
+        };
         let llm_base_url = profile
             .llm_base_url
             .clone()
@@ -3244,6 +3319,7 @@ Use operator password + API keys for Web auth."
             alias,
             provider,
             api_key,
+            api_keys,
             llm_base_url,
             llm_user_agent,
             default_model,
@@ -3452,6 +3528,11 @@ fn merge_provider_profile(
     LlmProviderProfile {
         provider: override_profile.provider.or(base.provider),
         api_key: override_profile.api_key.or(base.api_key),
+        api_keys: if override_profile.api_keys.is_empty() {
+            base.api_keys
+        } else {
+            override_profile.api_keys
+        },
         llm_base_url: override_profile.llm_base_url.or(base.llm_base_url),
         llm_user_agent: override_profile.llm_user_agent.or(base.llm_user_agent),
         default_model: override_profile.default_model.or(base.default_model),

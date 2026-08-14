@@ -43,6 +43,118 @@ pub(crate) fn is_retryable_transport_error(err: &reqwest::Error) -> bool {
     err.is_timeout() || err.is_connect() || err.is_request()
 }
 
+/// Round-robin API-key pool. Providers read `current()` per request and
+/// call `advance()` on auth (401/403) or rate-limit (429) errors so a
+/// multi-account setup keeps working when one key is throttled or revoked.
+#[derive(Clone)]
+pub struct KeyPool {
+    keys: std::sync::Arc<Vec<String>>,
+    index: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    rotations: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl KeyPool {
+    pub fn new(primary: &str, extra: &[String]) -> Self {
+        let mut keys: Vec<String> = Vec::with_capacity(1 + extra.len());
+        keys.push(primary.to_string());
+        for key in extra {
+            let key = key.trim();
+            if !key.is_empty() && !keys.iter().any(|k| k == key) {
+                keys.push(key.to_string());
+            }
+        }
+        KeyPool {
+            keys: std::sync::Arc::new(keys),
+            index: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            rotations: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    pub fn current(&self) -> String {
+        let idx = self.index.load(std::sync::atomic::Ordering::Relaxed) % self.keys.len();
+        self.keys[idx].clone()
+    }
+
+    /// Rotate to the next key. Returns `false` (and does nothing) when the
+    /// pool has a single key, so callers can skip a pointless retry.
+    pub fn advance(&self) -> bool {
+        if self.keys.len() <= 1 {
+            return false;
+        }
+        self.index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.rotations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    pub fn rotations(&self) -> u64 {
+        self.rotations.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Statuses where rotating to another API key can plausibly help: bad or
+/// revoked credentials and per-account rate limits.
+pub(crate) fn is_key_rotation_status(status: u16) -> bool {
+    matches!(status, 401 | 403 | 429)
+}
+
+#[cfg(test)]
+mod key_pool_tests {
+    use super::*;
+
+    #[test]
+    fn key_pool_rotates_round_robin_and_dedupes() {
+        let pool = KeyPool::new("k1", &["k2".into(), " ".into(), "k1".into(), "k3".into()]);
+        assert_eq!(pool.len(), 3);
+        assert_eq!(pool.current(), "k1");
+        assert!(pool.advance());
+        assert_eq!(pool.current(), "k2");
+        assert!(pool.advance());
+        assert_eq!(pool.current(), "k3");
+        assert!(pool.advance());
+        assert_eq!(pool.current(), "k1");
+        assert_eq!(pool.rotations(), 3);
+    }
+
+    #[test]
+    fn single_key_pool_never_advances() {
+        let pool = KeyPool::new("only", &[]);
+        assert!(!pool.advance());
+        assert_eq!(pool.current(), "only");
+        assert_eq!(pool.rotations(), 0);
+    }
+
+    #[test]
+    fn rotation_statuses() {
+        assert!(is_key_rotation_status(401));
+        assert!(is_key_rotation_status(403));
+        assert!(is_key_rotation_status(429));
+        assert!(!is_key_rotation_status(500));
+    }
+}
+
+/// Provider-agnostic detection of a "request exceeds the model context
+/// window" error. The agent loop compacts the session and retries once when
+/// it sees one of these instead of failing the turn.
+pub fn is_context_overflow_error(err: &microclaw_core::error::MicroClawError) -> bool {
+    let text = err.to_string().to_ascii_lowercase();
+    text.contains("context_length_exceeded")     // OpenAI
+        || text.contains("prompt is too long")   // Anthropic
+        || text.contains("input is too long")    // Anthropic (older phrasing)
+        || text.contains("maximum context length")
+        || text.contains("exceed context limit")
+        || text.contains("exceeds the context window")
+}
+
 /// Parse a `Retry-After` header in delta-seconds form (the HTTP-date form is
 /// ignored — providers use seconds in practice).
 fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
@@ -417,8 +529,10 @@ impl CircuitBreaker {
             }
             // Extend the shared window to the furthest-out cooldown rather
             // than overwriting, so concurrent breakers can't shorten it.
-            BREAKER_OPEN_UNTIL_EPOCH_MS
-                .fetch_max(epoch_ms() + self.cooldown.as_millis() as u64, Ordering::Relaxed);
+            BREAKER_OPEN_UNTIL_EPOCH_MS.fetch_max(
+                epoch_ms() + self.cooldown.as_millis() as u64,
+                Ordering::Relaxed,
+            );
         }
     }
 }
@@ -604,7 +718,7 @@ impl LlmProvider for ResilientProvider {
 
 pub struct AnthropicProvider {
     http: reqwest::Client,
-    api_key: String,
+    key_pool: KeyPool,
     model: String,
     max_tokens: u32,
     base_url: String,
@@ -616,7 +730,7 @@ impl AnthropicProvider {
     pub fn new(config: &Config) -> Self {
         AnthropicProvider {
             http: reqwest::Client::new(),
-            api_key: config.api_key.clone(),
+            key_pool: KeyPool::new(&config.api_key, &config.api_keys),
             model: config.model.clone(),
             max_tokens: config.max_tokens,
             base_url: resolve_anthropic_messages_url(config.llm_base_url.as_deref().unwrap_or("")),
@@ -660,7 +774,7 @@ impl AnthropicProvider {
         let response = self
             .http
             .post(&self.base_url)
-            .header("x-api-key", &self.api_key)
+            .header("x-api-key", self.key_pool.current())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
@@ -1322,7 +1436,7 @@ impl LlmProvider for AnthropicProvider {
             let send_result = self
                 .http
                 .post(&self.base_url)
-                .header("x-api-key", &self.api_key)
+                .header("x-api-key", self.key_pool.current())
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&body)
@@ -1352,10 +1466,23 @@ impl LlmProvider for AnthropicProvider {
                 return Ok(parsed);
             }
 
-            if is_retryable_status(status.as_u16()) && retries < max_retries {
+            let rotated = is_key_rotation_status(status.as_u16())
+                && retries < max_retries
+                && self.key_pool.advance();
+            if rotated {
+                warn!(
+                    "Auth/rate-limit error (HTTP {status}); rotated to next API key ({} in pool)",
+                    self.key_pool.len()
+                );
+            }
+            if (is_retryable_status(status.as_u16()) || rotated) && retries < max_retries {
                 retries += 1;
                 let retry_after = parse_retry_after(response.headers());
-                let delay = retry_backoff(retries, retry_after);
+                let delay = if rotated && !is_retryable_status(status.as_u16()) {
+                    std::time::Duration::from_millis(200)
+                } else {
+                    retry_backoff(retries, retry_after)
+                };
                 warn!(
                     "Transient LLM error (HTTP {status}), retrying in {delay:?} (attempt {retries}/{max_retries})"
                 );
@@ -1415,7 +1542,7 @@ impl LlmProvider for AnthropicProvider {
 
 pub struct OpenAiProvider {
     http: reqwest::Client,
-    api_key: String,
+    key_pool: KeyPool,
     codex_account_id: Option<String>,
     provider: String,
     model: String,
@@ -1492,7 +1619,7 @@ impl OpenAiProvider {
                     warn!("Failed to build LLM HTTP client with user-agent: {e}");
                     reqwest::Client::new()
                 }),
-            api_key,
+            key_pool: KeyPool::new(&api_key, &config.api_keys),
             codex_account_id,
             provider: config.llm_provider.clone(),
             model: config.model.clone(),
@@ -1941,7 +2068,7 @@ impl LlmProvider for OpenAiProvider {
             provider = %self.provider,
             model = %model,
             url = %self.chat_url,
-            has_api_key = !self.api_key.trim().is_empty(),
+            has_api_key = !self.key_pool.current().trim().is_empty(),
             "Sending LLM request"
         );
 
@@ -1951,8 +2078,9 @@ impl LlmProvider for OpenAiProvider {
                 .post(&self.chat_url)
                 .header("Content-Type", "application/json")
                 .json(&body);
-            if !self.api_key.trim().is_empty() {
-                req = req.header("Authorization", format!("Bearer {}", self.api_key));
+            let api_key = self.key_pool.current();
+            if !api_key.trim().is_empty() {
+                req = req.header("Authorization", format!("Bearer {api_key}"));
             }
             let response = match req.send().await {
                 Ok(r) => r,
@@ -1983,10 +2111,23 @@ impl LlmProvider for OpenAiProvider {
                 ));
             }
 
-            if is_retryable_status(status.as_u16()) && retries < max_retries {
+            let rotated = is_key_rotation_status(status.as_u16())
+                && retries < max_retries
+                && self.key_pool.advance();
+            if rotated {
+                warn!(
+                    "Auth/rate-limit error (HTTP {status}); rotated to next API key ({} in pool)",
+                    self.key_pool.len()
+                );
+            }
+            if (is_retryable_status(status.as_u16()) || rotated) && retries < max_retries {
                 retries += 1;
                 let retry_after = parse_retry_after(response.headers());
-                let delay = retry_backoff(retries, retry_after);
+                let delay = if rotated && !is_retryable_status(status.as_u16()) {
+                    std::time::Duration::from_millis(200)
+                } else {
+                    retry_backoff(retries, retry_after)
+                };
                 warn!(
                     "Transient LLM error (HTTP {status}), retrying in {delay:?} (attempt {retries}/{max_retries})"
                 );
@@ -2119,8 +2260,9 @@ impl LlmProvider for OpenAiProvider {
                 .post(&self.chat_url)
                 .header("Content-Type", "application/json")
                 .json(&body);
-            if !self.api_key.trim().is_empty() {
-                req = req.header("Authorization", format!("Bearer {}", self.api_key));
+            let api_key = self.key_pool.current();
+            if !api_key.trim().is_empty() {
+                req = req.header("Authorization", format!("Bearer {api_key}"));
             }
             let response = req.send().await?;
             let status = response.status();
@@ -2306,8 +2448,9 @@ impl OpenAiProvider {
                 .post(&self.responses_url)
                 .header("Content-Type", "application/json")
                 .json(&body);
-            if !self.api_key.trim().is_empty() {
-                req = req.header("Authorization", format!("Bearer {}", self.api_key));
+            let api_key = self.key_pool.current();
+            if !api_key.trim().is_empty() {
+                req = req.header("Authorization", format!("Bearer {api_key}"));
             }
             if let Some(account_id) = self.codex_account_id.as_deref() {
                 if !account_id.trim().is_empty() {
@@ -2335,10 +2478,23 @@ impl OpenAiProvider {
                 return Ok(translate_oai_responses_response(parsed));
             }
 
-            if is_retryable_status(status.as_u16()) && retries < max_retries {
+            let rotated = is_key_rotation_status(status.as_u16())
+                && retries < max_retries
+                && self.key_pool.advance();
+            if rotated {
+                warn!(
+                    "Auth/rate-limit error (HTTP {status}); rotated to next API key ({} in pool)",
+                    self.key_pool.len()
+                );
+            }
+            if (is_retryable_status(status.as_u16()) || rotated) && retries < max_retries {
                 retries += 1;
                 let retry_after = parse_retry_after(response.headers());
-                let delay = retry_backoff(retries, retry_after);
+                let delay = if rotated && !is_retryable_status(status.as_u16()) {
+                    std::time::Duration::from_millis(200)
+                } else {
+                    retry_backoff(retries, retry_after)
+                };
                 warn!(
                     "Transient LLM error (HTTP {status}), retrying in {delay:?} (attempt {retries}/{max_retries})"
                 );

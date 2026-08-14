@@ -31,6 +31,7 @@ use tracing::warn;
 const ACP_CHANNEL: &str = "acp";
 const ACP_CHAT_TYPE: &str = "acp";
 const ACP_MODE_ID: &str = "chat";
+const ACP_PLAN_MODE_ID: &str = "plan";
 
 pub async fn serve(
     config: Config,
@@ -267,6 +268,22 @@ impl Agent for MicroClawAcpAgent {
         &self,
         args: SetSessionModeRequest,
     ) -> AcpResult<SetSessionModeResponse> {
+        // Toggle the engine's per-chat plan-mode flag so the shared agent
+        // loop restricts tools and presents a plan for approval.
+        let (chat_id, _) = self
+            .ensure_session(&args.session_id, current_or_default_cwd())
+            .await
+            .map_err(to_acp_error)?;
+        let entering_plan = args.mode_id.0.as_ref() == ACP_PLAN_MODE_ID;
+        let mode_key = format!("chat_mode:{chat_id}");
+        let _ = call_blocking(self.app_state.db.clone(), move |db| {
+            if entering_plan {
+                db.set_runtime_meta(&mode_key, "plan")
+            } else {
+                db.delete_runtime_meta(&mode_key).map(|_| ())
+            }
+        })
+        .await;
         self.send_update(
             args.session_id,
             SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(args.mode_id)),
@@ -401,8 +418,13 @@ fn current_or_default_cwd() -> PathBuf {
 fn default_mode_state() -> SessionModeState {
     SessionModeState::new(
         ACP_MODE_ID,
-        vec![SessionMode::new(ACP_MODE_ID, "Chat")
-            .description("General-purpose MicroClaw chat mode.")],
+        vec![
+            SessionMode::new(ACP_MODE_ID, "Chat")
+                .description("General-purpose MicroClaw chat mode."),
+            SessionMode::new(ACP_PLAN_MODE_ID, "Plan").description(
+                "Read-only research mode: presents a plan for approval before executing.",
+            ),
+        ],
     )
 }
 
@@ -423,6 +445,10 @@ fn available_commands() -> Vec<AvailableCommand> {
         ),
         AvailableCommand::new("/models", "List configured models."),
         AvailableCommand::new("/model", "Inspect or switch the current bot/account model."),
+        AvailableCommand::new(
+            "/plan",
+            "Enter plan mode (read-only research + plan approval); /plan off to exit.",
+        ),
     ]
 }
 
