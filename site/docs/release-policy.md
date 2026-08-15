@@ -36,7 +36,7 @@ Release candidates should satisfy:
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
 - `npm --prefix web run build`
-- `npm --prefix website run build`
+- `npm --prefix site run build`
 - `node scripts/generate_docs_artifacts.mjs --check`
 - security dependency audit
 - release asset packaging smoke
