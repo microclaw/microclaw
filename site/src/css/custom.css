@@ -1,43 +1,48 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
 
 :root {
-  --ifm-color-primary: #137f66;
-  --ifm-color-primary-dark: #116f59;
-  --ifm-color-primary-darker: #0f664f;
-  --ifm-color-primary-darkest: #0b4f3e;
-  --ifm-color-primary-light: #16957a;
-  --ifm-color-primary-lighter: #1ba587;
-  --ifm-color-primary-lightest: #2cbf9d;
-  --ifm-font-family-base: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --ifm-color-primary: #345fe8;
+  --ifm-color-primary-dark: #2853d7;
+  --ifm-color-primary-darker: #224bc7;
+  --ifm-color-primary-darkest: #18399f;
+  --ifm-color-primary-light: #4c76f0;
+  --ifm-color-primary-lighter: #668bf5;
+  --ifm-color-primary-lightest: #9ab4ff;
+  --ifm-font-family-base: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
   --ifm-heading-font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
   --ifm-font-family-monospace: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
   --ifm-code-font-size: 92%;
-  --ifm-background-color: #f4f7f4;
-  --ifm-footer-background-color: #0b1614;
-  --docusaurus-highlighted-code-line-bg: rgba(15, 30, 27, 0.12);
+  --ifm-background-color: #f5f7ff;
+  --ifm-footer-background-color: #161722;
+  --docusaurus-highlighted-code-line-bg: rgba(52, 95, 232, 0.12);
 
-  --mc-surface: #f4f7f4;
-  --mc-surface-alt: #eaf1ee;
+  --mc-surface: #f5f7ff;
+  --mc-surface-alt: #edf1ff;
   --mc-card: #ffffff;
-  --mc-ink: #0c1c19;
+  --mc-ink: #171927;
+  --mc-blue: #7aa2f7;
+  --mc-cyan: #7dcfff;
+  --mc-violet: #bb9af7;
+  --mc-orange: #ff9e64;
+  --mc-night: #1a1b26;
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #61e8b3;
-  --ifm-color-primary-dark: #4ddca4;
-  --ifm-color-primary-darker: #42d49b;
-  --ifm-color-primary-darkest: #2aba82;
-  --ifm-color-primary-light: #75edbe;
-  --ifm-color-primary-lighter: #86f0c7;
-  --ifm-color-primary-lightest: #a8f5d7;
-  --ifm-background-color: #09110f;
-  --ifm-footer-background-color: #040907;
+  --ifm-color-primary: #7aa2f7;
+  --ifm-color-primary-dark: #638ff0;
+  --ifm-color-primary-darker: #527fe8;
+  --ifm-color-primary-darkest: #345fc5;
+  --ifm-color-primary-light: #91b3fa;
+  --ifm-color-primary-lighter: #a6c2fb;
+  --ifm-color-primary-lightest: #d1defd;
+  --ifm-background-color: #1a1b26;
+  --ifm-footer-background-color: #10111a;
   --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
 
-  --mc-surface: #09110f;
-  --mc-surface-alt: #0f1916;
-  --mc-card: #121f1b;
-  --mc-ink: #f2faf5;
+  --mc-surface: #1a1b26;
+  --mc-surface-alt: #202231;
+  --mc-card: #24283b;
+  --mc-ink: #c0caf5;
 }
 
 body {
@@ -53,7 +58,7 @@ html,
 .navbar {
   backdrop-filter: blur(14px);
   background: color-mix(in srgb, var(--ifm-background-color) 84%, transparent);
-  border-bottom: 1px solid rgba(7, 20, 17, 0.1);
+  border-bottom: 1px solid rgba(52, 95, 232, 0.14);
 }
 
 [data-theme='dark'] .navbar {
@@ -62,7 +67,11 @@ html,
 
 .navbar__title {
   font-weight: 700;
-  letter-spacing: 0.015em;
+  letter-spacing: 0.04em;
+}
+
+.navbar__logo img {
+  filter: drop-shadow(0 0 8px rgba(125, 207, 255, 0.3));
 }
 
 .navbar__link {
@@ -70,8 +79,17 @@ html,
 }
 
 .button {
-  border-radius: 999px;
+  border-radius: 8px;
   font-weight: 700;
+}
+
+code,
+pre {
+  border-color: rgba(122, 162, 247, 0.2);
+}
+
+[data-theme='dark'] code {
+  color: #7dcfff;
 }
 
 .footer__title {

@@ -1,14 +1,20 @@
 <svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0F1E1B"/>
-      <stop offset="100%" stop-color="#1F7A62"/>
+      <stop offset="0%" stop-color="#1A1B26"/>
+      <stop offset="58%" stop-color="#24283B"/>
+      <stop offset="100%" stop-color="#16264D"/>
     </linearGradient>
   </defs>
   <rect width="1200" height="630" fill="url(#bg)"/>
-  <circle cx="980" cy="120" r="140" fill="rgba(69,224,159,0.2)"/>
-  <circle cx="160" cy="520" r="180" fill="rgba(242,196,90,0.18)"/>
-  <text x="96" y="220" fill="#F5F3EE" font-family="Space Grotesk, Arial, sans-serif" font-size="80" font-weight="600">MicroClaw</text>
-  <text x="96" y="320" fill="#D5E9E2" font-family="Space Grotesk, Arial, sans-serif" font-size="36">Agentic AI assistant for modern chat surfaces</text>
-  <text x="96" y="380" fill="#D5E9E2" font-family="Space Grotesk, Arial, sans-serif" font-size="28">Rust • Tools • Scheduling • Memory</text>
+  <circle cx="1010" cy="105" r="190" fill="#7AA2F7" fill-opacity="0.14"/>
+  <circle cx="180" cy="560" r="230" fill="#BB9AF7" fill-opacity="0.1"/>
+  <path d="M0 520L1200 120M0 600L1200 200" stroke="#7DCFFF" stroke-opacity="0.08" stroke-width="2"/>
+  <image href="logo.png" x="820" y="130" width="300" height="300"/>
+  <text x="86" y="210" fill="#C0CAF5" font-family="Space Grotesk, Arial, sans-serif" font-size="82" font-weight="700">MicroClaw</text>
+  <text x="90" y="300" fill="#7DCFFF" font-family="IBM Plex Mono, monospace" font-size="34">Agentic runtime for modern chat surfaces</text>
+  <text x="90" y="370" fill="#A9B1D6" font-family="IBM Plex Mono, monospace" font-size="27">Rust  /  Tools  /  Scheduling  /  Memory</text>
+  <rect x="90" y="420" width="280" height="5" rx="2.5" fill="#7AA2F7"/>
+  <rect x="378" y="420" width="96" height="5" rx="2.5" fill="#BB9AF7"/>
+  <rect x="482" y="420" width="48" height="5" rx="2.5" fill="#FF9E64"/>
 </svg>

@@ -58,6 +58,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- Replaced the green MicroClaw identity with a blue cyber-claw mark across
+  repository and documentation-site assets, and refreshed the public site's
+  palette, typography, cards, controls, favicons, PWA icons, and social card.
 - Reworked the root README files into concise project entry points, moved
   setup and integration detail into task-focused documentation, and added
   localized overview and quick-start pages for 10 widely used languages.

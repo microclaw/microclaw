@@ -1,20 +1,20 @@
 .hero {
   position: relative;
   overflow: hidden;
-  color: var(--mc-ink);
+  color: #c0caf5;
   padding: 6.5rem 0 5.5rem;
   background:
-    radial-gradient(circle at 12% 14%, rgba(255, 191, 79, 0.23), transparent 46%),
-    radial-gradient(circle at 84% 22%, rgba(20, 181, 160, 0.25), transparent 52%),
-    linear-gradient(160deg, #f8f3e6 0%, #edf7f4 56%, #e9f5ff 100%);
+    radial-gradient(circle at 16% 10%, rgba(187, 154, 247, 0.2), transparent 38%),
+    radial-gradient(circle at 84% 18%, rgba(125, 207, 255, 0.2), transparent 40%),
+    linear-gradient(155deg, #151620 0%, #1a1b26 52%, #17233d 100%);
 }
 
 .heroBackdrop {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 68% 76%, rgba(23, 99, 229, 0.13), transparent 44%),
-    radial-gradient(circle at 28% 76%, rgba(14, 168, 132, 0.16), transparent 48%);
+    radial-gradient(circle at 68% 76%, rgba(122, 162, 247, 0.18), transparent 44%),
+    radial-gradient(circle at 28% 76%, rgba(125, 207, 255, 0.1), transparent 48%);
   pointer-events: none;
 }
 
@@ -23,10 +23,10 @@
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(16, 44, 38, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(16, 44, 38, 0.08) 1px, transparent 1px);
-  background-size: 56px 56px;
-  opacity: 0.26;
+    linear-gradient(rgba(122, 162, 247, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(122, 162, 247, 0.09) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.42;
 }
 
 .heroLayout {
@@ -46,10 +46,11 @@
 .eyebrow {
   display: inline-flex;
   align-items: center;
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 0.4rem 0.9rem;
-  border: 1px solid rgba(16, 44, 38, 0.24);
-  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(125, 207, 255, 0.34);
+  background: rgba(122, 162, 247, 0.08);
+  color: #7dcfff;
   font-size: 0.77rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -62,6 +63,8 @@
   line-height: 1.03;
   font-size: clamp(2.4rem, 5.2vw, 4rem);
   letter-spacing: -0.02em;
+  color: #f3f5ff;
+  text-shadow: 0 0 34px rgba(122, 162, 247, 0.2);
 }
 
 .heroSubtitle {
@@ -74,7 +77,7 @@
 .heroSubtext {
   margin-top: 1rem;
   margin-bottom: 0;
-  color: rgba(9, 29, 24, 0.78);
+  color: #a9b1d6;
   font-size: 1.05rem;
   line-height: 1.6;
   max-width: 64ch;
@@ -92,14 +95,14 @@
   align-items: center;
   justify-content: center;
   min-height: 3rem;
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 0.72rem 1.5rem;
-  border: 1px solid rgba(8, 22, 19, 0.2);
-  background: linear-gradient(130deg, #081b22 0%, #173347 50%, #21586d 100%);
+  border: 1px solid rgba(125, 207, 255, 0.32);
+  background: rgba(36, 40, 59, 0.8);
   color: #f8fcff;
   font-weight: 700;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: 0 10px 26px rgba(9, 25, 32, 0.28);
+  box-shadow: 0 10px 26px rgba(4, 8, 18, 0.32);
 }
 
 .darkButton:hover {
@@ -117,10 +120,11 @@
 }
 
 .heroMetaRow span {
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 0.34rem 0.8rem;
-  background: rgba(255, 255, 255, 0.76);
-  border: 1px solid rgba(8, 22, 19, 0.16);
+  background: rgba(36, 40, 59, 0.72);
+  border: 1px solid rgba(122, 162, 247, 0.2);
+  color: #a9b1d6;
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -131,12 +135,12 @@
   width: 100%;
   max-width: 760px;
   min-width: 560px;
-  border-radius: 24px;
+  border-radius: 12px;
   padding: 1.5rem;
-  background: linear-gradient(160deg, rgba(6, 19, 30, 0.95), rgba(14, 36, 50, 0.94));
-  border: 1px solid rgba(148, 210, 255, 0.26);
+  background: linear-gradient(160deg, rgba(27, 29, 43, 0.98), rgba(22, 38, 77, 0.96));
+  border: 1px solid rgba(122, 162, 247, 0.34);
   color: #ecf8ff;
-  box-shadow: 0 28px 54px rgba(5, 16, 24, 0.35);
+  box-shadow: 0 28px 70px rgba(2, 8, 24, 0.52), 0 0 46px rgba(122, 162, 247, 0.1);
   min-height: 236px;
   min-width: 0;
   overflow: hidden;
@@ -152,25 +156,25 @@
   color: rgba(227, 242, 255, 0.78);
 }
 
-.crabLane {
-  position: relative;
-  flex: 1;
-  min-width: 7rem;
-  max-width: 34rem;
-  height: 1.6rem;
-}
-
-.pulseDot {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
+.installIdentity {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 1.25rem;
-  line-height: 1;
-  animation: crabDrift 100s ease-in-out infinite;
+  gap: 0.72rem;
+}
+
+.brandGlyph {
+  width: 3.25rem;
+  height: 3.25rem;
+  object-fit: contain;
+  filter: drop-shadow(0 0 16px rgba(125, 207, 255, 0.44));
+}
+
+.liveSignal {
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 2px;
+  background: #7dcfff;
+  box-shadow: 0 0 16px rgba(125, 207, 255, 0.9);
 }
 
 .systemSwitcher {
@@ -187,7 +191,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.42rem;
-  border-radius: 999px;
+  border-radius: 6px;
   border: 1px solid rgba(128, 179, 226, 0.34);
   background: rgba(8, 23, 36, 0.42);
   color: rgba(196, 219, 240, 0.84);
@@ -200,9 +204,9 @@
 }
 
 .systemTabActive {
-  border-color: rgba(133, 255, 201, 0.72);
-  background: rgba(133, 255, 201, 0.22);
-  color: #d7ffe9;
+  border-color: rgba(125, 207, 255, 0.72);
+  background: rgba(122, 162, 247, 0.2);
+  color: #e2e8ff;
 }
 
 .systemIcon {
@@ -213,7 +217,7 @@
 }
 
 .systemIconMac {
-  background: radial-gradient(circle at 34% 32%, #ddfff1, #63eab8 68%);
+  background: radial-gradient(circle at 34% 32%, #ffffff, #bb9af7 68%);
 }
 
 .systemIconWindows {
@@ -241,7 +245,7 @@
 }
 
 .installTab {
-  border-radius: 12px;
+  border-radius: 6px;
   border: 1px solid rgba(144, 201, 255, 0.3);
   background: rgba(255, 255, 255, 0.04);
   color: rgba(237, 248, 255, 0.88);
@@ -253,9 +257,9 @@
 }
 
 .installTabActive {
-  border-color: rgba(133, 255, 201, 0.75);
-  background: rgba(133, 255, 201, 0.12);
-  color: #d7ffe9;
+  border-color: rgba(125, 207, 255, 0.75);
+  background: rgba(122, 162, 247, 0.14);
+  color: #e2e8ff;
 }
 
 .installHint {
@@ -275,7 +279,7 @@
 .installCommand {
   min-width: 0;
   width: 100%;
-  border-radius: 14px;
+  border-radius: 6px;
   border: 1px solid rgba(144, 201, 255, 0.24);
   background: rgba(4, 14, 23, 0.9);
   color: #f4fbff;
@@ -291,10 +295,10 @@
 }
 
 .copyButton {
-  border-radius: 14px;
-  border: 1px solid rgba(133, 255, 201, 0.4);
-  background: rgba(133, 255, 201, 0.15);
-  color: #dbffed;
+  border-radius: 6px;
+  border: 1px solid rgba(125, 207, 255, 0.46);
+  background: rgba(122, 162, 247, 0.18);
+  color: #dbe7ff;
   font-weight: 700;
   min-width: 5.2rem;
   padding: 0.7rem 0.82rem;
@@ -302,11 +306,11 @@
 }
 
 .copyButtonCopied {
-  background: rgba(133, 255, 201, 0.24);
+  background: rgba(187, 154, 247, 0.28);
 }
 
 .proofStrip {
-  background: #0c1720;
+  background: #10111a;
   color: rgba(230, 242, 255, 0.9);
   padding: 1.4rem 0;
 }
@@ -323,7 +327,7 @@
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #85ffc9;
+  color: #7dcfff;
 }
 
 .proofGrid p {
@@ -354,7 +358,7 @@
 
 .sectionHeader p {
   margin: 0;
-  color: rgba(8, 22, 19, 0.72);
+  color: rgba(23, 25, 39, 0.72);
   font-size: 1.02rem;
 }
 
@@ -365,13 +369,13 @@
 }
 
 .capabilityCard {
-  border-radius: 18px;
+  border-radius: 10px;
   padding: 1.35rem;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.72)),
-    linear-gradient(90deg, rgba(255, 191, 79, 0.3), rgba(20, 181, 160, 0.2));
-  border: 1px solid rgba(7, 21, 18, 0.09);
-  box-shadow: 0 10px 24px rgba(8, 22, 19, 0.08);
+    linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(245, 247, 255, 0.86)),
+    linear-gradient(90deg, rgba(122, 162, 247, 0.22), rgba(187, 154, 247, 0.16));
+  border: 1px solid rgba(52, 95, 232, 0.12);
+  box-shadow: 0 10px 24px rgba(22, 38, 77, 0.08);
 }
 
 .capabilityCard h3 {
@@ -381,7 +385,7 @@
 
 .capabilityCard p {
   margin: 0;
-  color: rgba(8, 22, 19, 0.78);
+  color: rgba(23, 25, 39, 0.78);
 }
 
 .archLayout {
@@ -392,11 +396,11 @@
 }
 
 .archVisualCard {
-  border-radius: 20px;
+  border-radius: 10px;
   padding: 1rem;
   background: #ffffff;
-  border: 1px solid rgba(8, 22, 19, 0.08);
-  box-shadow: 0 16px 36px rgba(8, 22, 19, 0.12);
+  border: 1px solid rgba(52, 95, 232, 0.1);
+  box-shadow: 0 16px 36px rgba(22, 38, 77, 0.12);
 }
 
 .archVisualCard img {
@@ -411,9 +415,9 @@
 }
 
 .stepCard {
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 1rem 1.05rem;
-  border: 1px solid rgba(7, 21, 18, 0.1);
+  border: 1px solid rgba(52, 95, 232, 0.12);
   background: #ffffff;
 }
 
@@ -423,7 +427,7 @@
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #1764e5;
+  color: #345fe8;
 }
 
 .stepCard h3 {
@@ -433,7 +437,7 @@
 
 .stepCard p {
   margin: 0;
-  color: rgba(8, 22, 19, 0.74);
+  color: rgba(23, 25, 39, 0.74);
   font-size: 0.95rem;
 }
 
@@ -444,11 +448,11 @@
 }
 
 .useCaseCard {
-  border-radius: 18px;
+  border-radius: 10px;
   padding: 1.35rem;
-  background: linear-gradient(150deg, #ffffff, #f2f9f6);
-  border: 1px solid rgba(7, 21, 18, 0.1);
-  box-shadow: 0 12px 28px rgba(8, 22, 19, 0.08);
+  background: linear-gradient(150deg, #ffffff, #f0f3ff);
+  border: 1px solid rgba(52, 95, 232, 0.12);
+  box-shadow: 0 12px 28px rgba(22, 38, 77, 0.08);
 }
 
 .useCaseCard h3 {
@@ -458,7 +462,7 @@
 
 .useCaseCard p {
   margin: 0.55rem 0 0.85rem;
-  color: rgba(8, 22, 19, 0.78);
+  color: rgba(23, 25, 39, 0.78);
 }
 
 .useCaseCard a {
@@ -472,14 +476,14 @@
 }
 
 .ctaCard {
-  border-radius: 22px;
+  border-radius: 12px;
   padding: 2rem;
   background:
-    radial-gradient(circle at 0% 0%, rgba(255, 191, 79, 0.22), transparent 45%),
-    radial-gradient(circle at 100% 100%, rgba(20, 181, 160, 0.22), transparent 50%),
-    linear-gradient(150deg, #0d1e1a, #132b24);
-  color: #f5fff9;
-  border: 1px solid rgba(133, 255, 201, 0.3);
+    radial-gradient(circle at 0% 0%, rgba(187, 154, 247, 0.22), transparent 45%),
+    radial-gradient(circle at 100% 100%, rgba(125, 207, 255, 0.18), transparent 50%),
+    linear-gradient(150deg, #1a1b26, #16264d);
+  color: #f3f5ff;
+  border: 1px solid rgba(122, 162, 247, 0.32);
   display: flex;
   justify-content: space-between;
   gap: 1.2rem;
@@ -489,7 +493,7 @@
 
 .ctaCard p {
   margin: 0.6rem 0 0;
-  color: rgba(218, 240, 228, 0.85);
+  color: #a9b1d6;
 }
 
 .ctaActions {
@@ -500,16 +504,16 @@
 }
 
 .inlineLink {
-  color: #b7ffd9;
+  color: #7dcfff;
   font-weight: 700;
   align-self: center;
 }
 
 :global([data-theme='dark']) .hero {
   background:
-    radial-gradient(circle at 12% 14%, rgba(255, 191, 79, 0.18), transparent 46%),
-    radial-gradient(circle at 84% 22%, rgba(20, 181, 160, 0.2), transparent 52%),
-    linear-gradient(160deg, #0a1112 0%, #0d1917 52%, #101a22 100%);
+    radial-gradient(circle at 12% 14%, rgba(187, 154, 247, 0.18), transparent 46%),
+    radial-gradient(circle at 84% 22%, rgba(125, 207, 255, 0.2), transparent 52%),
+    linear-gradient(160deg, #151620 0%, #1a1b26 52%, #17233d 100%);
 }
 
 :global([data-theme='dark']) .heroPattern {
@@ -522,7 +526,7 @@
 :global([data-theme='dark']) .heroMetaRow span {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.18);
-  color: #d6f3ea;
+  color: #c0caf5;
 }
 
 :global([data-theme='dark']) .heroSubtext,
@@ -530,23 +534,23 @@
 :global([data-theme='dark']) .capabilityCard p,
 :global([data-theme='dark']) .stepCard p,
 :global([data-theme='dark']) .useCaseCard p {
-  color: rgba(233, 247, 240, 0.76);
+  color: rgba(192, 202, 245, 0.78);
 }
 
 :global([data-theme='dark']) .section,
 :global([data-theme='dark']) .finalCta {
-  background: #0b1311;
+  background: #1a1b26;
 }
 
 :global([data-theme='dark']) .sectionAlt {
-  background: #101b18;
+  background: #202231;
 }
 
 :global([data-theme='dark']) .capabilityCard,
 :global([data-theme='dark']) .stepCard,
 :global([data-theme='dark']) .useCaseCard,
 :global([data-theme='dark']) .archVisualCard {
-  background: #12201d;
+  background: #24283b;
   border-color: rgba(255, 255, 255, 0.1);
   box-shadow: none;
 }
@@ -554,11 +558,11 @@
 :global([data-theme='dark']) .capabilityCard h3,
 :global([data-theme='dark']) .stepCard h3,
 :global([data-theme='dark']) .useCaseCard h3 {
-  color: #f3fff8;
+  color: #f3f5ff;
 }
 
 :global([data-theme='dark']) .proofStrip {
-  background: #070e12;
+  background: #10111a;
 }
 
 @media (max-width: 1120px) {
@@ -629,16 +633,5 @@
   .section,
   .sectionAlt {
     padding: 4.2rem 0;
-  }
-}
-@keyframes crabDrift {
-  0%,
-  100% {
-    right: 0;
-    transform: translateY(-50%);
-  }
-  55% {
-    right: 50%;
-    transform: translateY(-50%);
   }
 }

@@ -172,12 +172,11 @@ function HomepageHeader() {
 
           <div className={styles.installPanel}>
             <div className={styles.installHeader}>
-              <span>{messages.quickstart}</span>
-              <span className={styles.crabLane}>
-                <span className={styles.pulseDot} aria-label="rust">
-                  🦀
-                </span>
+              <span className={styles.installIdentity}>
+                <img className={styles.brandGlyph} src="/img/logo.png" alt="" />
+                {messages.quickstart}
               </span>
+              <span className={styles.liveSignal} aria-hidden="true" />
             </div>
             <div className={styles.systemSwitcher}>
               <div className={styles.systemTabs}>
