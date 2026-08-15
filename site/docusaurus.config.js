@@ -103,6 +103,13 @@ const config = {
 
   headTags: [
     {
+      tagName: 'meta',
+      attributes: {
+        name: 'theme-color',
+        content: '#1a1b26',
+      },
+    },
+    {
       tagName: 'link',
       attributes: {
         rel: 'icon',
