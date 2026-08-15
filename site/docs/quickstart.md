@@ -55,7 +55,7 @@ Use the interactive setup wizard:
 microclaw setup
 ```
 
-<!-- Placeholder: replace with real screenshot later -->
+{/* Placeholder: replace with real screenshot later */}
 ![Setup Wizard (placeholder)](/img/setup-wizard.png)
 
 It validates required fields, tests chat/LLM connectivity, and writes `microclaw.config.yaml` with backup in `microclaw.config.backups/` (latest 50 kept).

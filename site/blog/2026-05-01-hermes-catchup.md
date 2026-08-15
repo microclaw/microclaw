@@ -12,7 +12,7 @@ The inspiration is [hermes-agent](https://github.com/nousresearch/hermes-agent) 
 
 So this isn't a port — it's a re-application of patterns hermes already validated, drawn against MicroClaw's engineering boundaries.
 
-<!-- truncate -->
+{/* truncate */}
 
 ## Per-chat user model (USER.md)
 

@@ -9,7 +9,7 @@ Telegram forum groups are useful until every thread shares one agent memory buff
 
 MicroClaw's Telegram topic mode fixes that by routing each forum topic as its own chat session, while still replying inside the original Telegram thread.
 
-<!-- truncate -->
+{/* truncate */}
 
 ## What topic mode does
 

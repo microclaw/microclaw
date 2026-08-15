@@ -37,3 +37,18 @@ skills:
 memory:
   label: Memory
   permalink: /memory
+multimedia:
+  label: Multimedia
+  permalink: /multimedia
+security:
+  label: Security
+  permalink: /security
+performance:
+  label: Performance
+  permalink: /performance
+cost:
+  label: Cost
+  permalink: /cost
+checkpoints:
+  label: Checkpoints
+  permalink: /checkpoints

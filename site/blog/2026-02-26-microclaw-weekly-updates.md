@@ -9,7 +9,7 @@ This weekly update summarizes what changed in MicroClaw during **February 20, 20
 
 The pace was high: channel coverage expanded, runtime reliability was hardened, and setup/config workflows became much better for multi-account bot operations.
 
-<!-- truncate -->
+{/* truncate */}
 
 ## Scope
 
@@ -114,4 +114,3 @@ Based on this week’s direction, likely near-term priorities:
 2. Strengthen multi-account UX in setup/web/docs and migration safety
 3. Expand plugin maturity from framework to production patterns
 4. Keep reliability instrumentation and docs in lockstep with runtime behavior
-

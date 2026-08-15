@@ -9,7 +9,7 @@ MicroClaw has moved quickly in February, with significant updates across ClawHub
 
 This post summarizes the direction and outcomes based on the **50 most recent commits** on `main`.
 
-<!-- truncate -->
+{/* truncate */}
 
 ## Scope and Time Window
 

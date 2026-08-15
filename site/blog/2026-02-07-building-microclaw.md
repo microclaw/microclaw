@@ -11,7 +11,7 @@ It can run shell and file tools, browse the web, schedule jobs, and persist memo
 
 ![MicroClaw runtime overview](/img/blog/refresh-2026-02/01-building-microclaw-overview.svg)
 
-<!-- truncate -->
+{/* truncate */}
 
 ## 2026-02-14 Update Snapshot
 

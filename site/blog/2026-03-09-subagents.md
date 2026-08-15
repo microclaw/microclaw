@@ -9,7 +9,7 @@ The old way to delegate work inside an agent was to nest another mini-agent loop
 
 MicroClaw is moving past that shape with session-native subagents: asynchronous runs with IDs, lifecycle state, limits, and follow-up controls.
 
-<!-- truncate -->
+{/* truncate */}
 
 ## What changed
 

@@ -14,7 +14,7 @@ Quick Start: https://microclaw.org/docs/quickstart
 
 ![MicroClaw system architecture](/img/blog/microclaw-runtime/01-system-architecture.svg)
 
-<!-- truncate -->
+{/* truncate */}
 
 ## What MicroClaw Is Today
 

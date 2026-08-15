@@ -14,7 +14,7 @@ The thesis, lifted from the design docs that drove this release: "being human" i
 
 MicroClaw used to be robotic on *both* layers: it dumped long answers up top, and although it could run sub-agents concurrently, it worked in silence until everything was finished. This release reworks both — and gates every outward-facing, proactive behavior behind a default-off switch.
 
-<!-- truncate -->
+{/* truncate */}
 
 ## Surface layer: chatting like a human
 

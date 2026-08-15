@@ -9,7 +9,7 @@ MicroClaw now includes a dedicated HTTP hook trigger surface for external automa
 
 This closes a common integration gap: webhook systems and scripts can trigger agent runs directly, without relying on chat-native ingress or static scheduler-only flows.
 
-<!-- truncate -->
+{/* truncate */}
 
 ## What shipped
 

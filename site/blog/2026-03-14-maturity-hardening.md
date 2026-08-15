@@ -11,7 +11,7 @@ The latest maturity hardening pass in MicroClaw is not a flashy new model integr
 
 For an agent runtime, that matters. If your bot can execute tools, store memory, expose Web APIs, and run background work, "it compiles" is not enough. You also need repeatable checks around security posture, release shape, and operator safety defaults.
 
-<!-- truncate -->
+{/* truncate */}
 
 ## What shipped
 

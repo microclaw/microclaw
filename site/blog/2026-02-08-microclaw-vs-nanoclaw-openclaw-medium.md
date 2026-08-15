@@ -15,7 +15,7 @@ This comparison is updated using publicly available docs/repos as of **February 
 
 ![Three-path capability spectrum](/img/blog/refresh-2026-02/03-three-paths-spectrum.svg)
 
-<!-- truncate -->
+{/* truncate */}
 
 ## TL;DR
 
