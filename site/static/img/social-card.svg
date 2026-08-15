@@ -1,4 +1,4 @@
-<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#1A1B26"/>
@@ -6,11 +6,11 @@
       <stop offset="100%" stop-color="#16264D"/>
     </linearGradient>
   </defs>
-  <rect width="1200" height="630" fill="url(#bg)"/>
-  <circle cx="1010" cy="105" r="190" fill="#7AA2F7" fill-opacity="0.14"/>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <circle cx="1080" cy="105" r="190" fill="#7AA2F7" fill-opacity="0.14"/>
   <circle cx="180" cy="560" r="230" fill="#BB9AF7" fill-opacity="0.1"/>
-  <path d="M0 520L1200 120M0 600L1200 200" stroke="#7DCFFF" stroke-opacity="0.08" stroke-width="2"/>
-  <image href="logo.png" x="820" y="130" width="300" height="300"/>
+  <path d="M0 520L1280 94M0 600L1280 174" stroke="#7DCFFF" stroke-opacity="0.08" stroke-width="2"/>
+  <image href="logo.png" x="900" y="130" width="300" height="300"/>
   <text x="86" y="210" fill="#C0CAF5" font-family="Space Grotesk, Arial, sans-serif" font-size="82" font-weight="700">MicroClaw</text>
   <text x="90" y="300" fill="#7DCFFF" font-family="IBM Plex Mono, monospace" font-size="34">Agentic runtime for modern chat surfaces</text>
   <text x="90" y="370" fill="#A9B1D6" font-family="IBM Plex Mono, monospace" font-size="27">Rust  /  Tools  /  Scheduling  /  Memory</text>
