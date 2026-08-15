@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1740" height="1020" viewBox="0 0 1740 1020">
+  <defs>
+    <linearGradient id="bg10" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f0f9ff"/><stop offset="100%" stop-color="#fef3c7"/></linearGradient>
+    <style>.tt{font:700 40px 'Avenir Next',Helvetica,sans-serif;fill:#111827}.h{font:700 24px 'Avenir Next',Helvetica,sans-serif;fill:#111827}.x{font:500 17px 'Avenir Next',Helvetica,sans-serif;fill:#374151}.l{stroke:#334155;stroke-width:3;marker-end:url(#m10)}</style>
+    <marker id="m10" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#334155"/></marker>
+  </defs>
+  <rect width="1740" height="1020" fill="url(#bg10)"/>
+  <text class="tt" x="70" y="84">Database + Observability Schema (High Level)</text>
+
+  <rect x="86" y="170" width="350" height="248" rx="16" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3"/><text class="h" x="208" y="214">chats</text><text class="x" x="120" y="254">id, title, type, last_message_time</text>
+  <rect x="496" y="130" width="448" height="320" rx="16" fill="#c4b5fd" stroke="#6d28d9" stroke-width="3"/><text class="h" x="664" y="174">messages</text><text class="x" x="528" y="214">id, chat_id, sender, content</text><text class="x" x="528" y="244">is_from_bot, timestamp</text>
+  <rect x="496" y="490" width="448" height="220" rx="16" fill="#86efac" stroke="#15803d" stroke-width="3"/><text class="h" x="674" y="534">sessions</text><text class="x" x="528" y="574">chat_id, messages_json, updated_at</text>
+  <rect x="86" y="500" width="350" height="232" rx="16" fill="#fde68a" stroke="#a16207" stroke-width="3"/><text class="h" x="134" y="546">scheduled_tasks</text><text class="x" x="120" y="586">prompt, schedule, next_run, status</text>
+
+  <rect x="1010" y="130" width="330" height="260" rx="16" fill="#f9a8d4" stroke="#be185d" stroke-width="3"/><text class="h" x="1116" y="174">memories</text><text class="x" x="1040" y="214">category, confidence, source</text><text class="x" x="1040" y="244">last_seen, archived lifecycle</text>
+  <rect x="1010" y="430" width="330" height="200" rx="16" fill="#fca5a5" stroke="#b91c1c" stroke-width="3"/><text class="h" x="1048" y="474">memory_supersede_edges</text><text class="x" x="1040" y="514">from_memory_id -> to_memory_id</text>
+  <rect x="1390" y="130" width="286" height="240" rx="16" fill="#67e8f9" stroke="#0e7490" stroke-width="3"/><text class="h" x="1432" y="174">memory_reflector_runs</text><text class="x" x="1418" y="214">run metadata + outcomes</text>
+  <rect x="1390" y="420" width="286" height="210" rx="16" fill="#a7f3d0" stroke="#047857" stroke-width="3"/><text class="h" x="1422" y="464">memory_injection_logs</text><text class="x" x="1420" y="504">prompt injection telemetry</text>
+  <rect x="1010" y="700" width="666" height="180" rx="16" fill="#bfdbfe" stroke="#1d4ed8" stroke-width="3"/><text class="h" x="1220" y="744">db_meta + schema_migrations</text><text class="x" x="1048" y="784">schema versioning, migration history, legacy upgrade tracking</text>
+
+  <line class="l" x1="436" y1="252" x2="496" y2="252"/><line class="l" x1="262" y1="418" x2="262" y2="500"/><line class="l" x1="720" y1="450" x2="720" y2="490"/>
+  <line class="l" x1="944" y1="252" x2="1010" y2="252"/><line class="l" x1="1176" y1="390" x2="1176" y2="430"/><line class="l" x1="1340" y1="252" x2="1390" y2="252"/>
+  <line class="l" x1="1340" y1="522" x2="1390" y2="522"/>
+</svg>

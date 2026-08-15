@@ -1,0 +1,13 @@
+{
+  "link.title.Docs": {"message": "文档"},
+  "link.title.Project": {"message": "项目"},
+  "link.title.More": {"message": "更多"},
+  "link.item.label.Overview": {"message": "概览"},
+  "link.item.label.Quickstart": {"message": "快速开始"},
+  "link.item.label.Issues": {"message": "问题"},
+  "link.item.label.Releases": {"message": "发布"},
+  "link.item.label.Blog": {"message": "博客"},
+  "link.item.label.License": {"message": "许可证"},
+  "link.item.label.Security": {"message": "安全"},
+  "link.item.label.Support": {"message": "支持"}
+}

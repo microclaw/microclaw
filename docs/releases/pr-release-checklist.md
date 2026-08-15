@@ -12,7 +12,7 @@ Last reviewed: 2026-03-05
 - [ ] API contract changes documented (new/changed endpoints, request/response fields).
 - [ ] Security-sensitive paths reviewed (auth scope, CSRF, audit events).
 - [ ] Governance/support docs updated when policy or support expectations changed (`SECURITY.md`, `SUPPORT.md`, `docs/releases/release-policy.md`).
-- [ ] Docs updated in both `docs/` and `website/docs/` when user-facing behavior changes.
+- [ ] Docs updated in both `docs/` and `site/docs/` when user-facing behavior changes.
 
 ## Required Validation
 

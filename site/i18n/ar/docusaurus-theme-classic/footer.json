@@ -1,0 +1,4 @@
+{
+  "link.title.Docs": {"message": "الوثائق"}, "link.title.Project": {"message": "المشروع"}, "link.title.More": {"message": "المزيد"},
+  "link.item.label.Overview": {"message": "نظرة عامة"}, "link.item.label.Quickstart": {"message": "البدء السريع"}, "link.item.label.Issues": {"message": "المشكلات"}, "link.item.label.Releases": {"message": "الإصدارات"}, "link.item.label.Blog": {"message": "المدونة"}, "link.item.label.License": {"message": "الترخيص"}, "link.item.label.Security": {"message": "الأمان"}, "link.item.label.Support": {"message": "الدعم"}
+}

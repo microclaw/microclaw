@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1660" height="920" viewBox="0 0 1660 920">
+  <defs>
+    <linearGradient id="bg8" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#dcfce7"/><stop offset="100%" stop-color="#dbeafe"/></linearGradient>
+    <style>.tt{font:700 40px 'Avenir Next',Helvetica,sans-serif;fill:#052e2b}.h{font:700 22px 'Avenir Next',Helvetica,sans-serif;fill:#065f46}.x{font:500 18px 'Avenir Next',Helvetica,sans-serif;fill:#14532d}.a{stroke:#166534;stroke-width:4;fill:none;marker-end:url(#m8)}</style>
+    <marker id="m8" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#166534"/></marker>
+  </defs>
+  <rect width="1660" height="920" fill="url(#bg8)"/>
+  <text class="tt" x="70" y="88">Background Workers: Scheduler + Reflector</text>
+
+  <circle cx="260" cy="460" r="120" fill="#bbf7d0" stroke="#15803d" stroke-width="3"/><text class="h" x="204" y="455">Poll Tick</text><text class="x" x="170" y="486">periodic loop</text>
+  <circle cx="620" cy="320" r="120" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3"/><text class="h" x="545" y="315">Due Tasks</text><text class="x" x="510" y="346">scheduled_tasks</text>
+  <circle cx="620" cy="600" r="120" fill="#f9a8d4" stroke="#be185d" stroke-width="3"/><text class="h" x="532" y="595">Reflector</text><text class="x" x="500" y="626">memory extraction</text>
+  <circle cx="1010" cy="320" r="120" fill="#fde68a" stroke="#a16207" stroke-width="3"/><text class="h" x="934" y="315">Agent Run</text><text class="x" x="892" y="346">process_with_agent</text>
+  <circle cx="1010" cy="600" r="120" fill="#c4b5fd" stroke="#6d28d9" stroke-width="3"/><text class="h" x="925" y="595">Memory Ops</text><text class="x" x="885" y="626">dedup / supersede</text>
+  <circle cx="1390" cy="460" r="120" fill="#67e8f9" stroke="#0e7490" stroke-width="3"/><text class="h" x="1308" y="455">Observability</text><text class="x" x="1266" y="486">runs + injections</text>
+
+  <path class="a" d="M380 410 L510 350"/><path class="a" d="M380 510 L510 570"/>
+  <path class="a" d="M740 320 L890 320"/><path class="a" d="M740 600 L890 600"/>
+  <path class="a" d="M1125 370 L1290 430"/><path class="a" d="M1125 550 L1290 490"/>
+</svg>

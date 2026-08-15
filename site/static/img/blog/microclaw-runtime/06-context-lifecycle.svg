@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1640" height="920" viewBox="0 0 1640 920">
+  <defs>
+    <linearGradient id="bg6" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ecfeff"/><stop offset="100%" stop-color="#e0e7ff"/></linearGradient>
+    <style>.tt{font:700 40px 'Avenir Next',Helvetica,sans-serif;fill:#0c1f33}.h{font:700 23px 'Avenir Next',Helvetica,sans-serif;fill:#0c1f33}.x{font:500 18px 'Avenir Next',Helvetica,sans-serif;fill:#334155}.a{stroke:#334155;stroke-width:4;fill:none;marker-end:url(#m6)}</style>
+    <marker id="m6" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#334155"/></marker>
+  </defs>
+  <rect width="1640" height="920" fill="url(#bg6)"/>
+  <text class="tt" x="70" y="86">Session and Context Lifecycle</text>
+
+  <rect x="90" y="230" width="292" height="184" rx="16" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3"/><text class="h" x="175" y="304">Restore</text><text class="x" x="132" y="339">load session or rebuild history</text>
+  <rect x="430" y="230" width="292" height="184" rx="16" fill="#86efac" stroke="#15803d" stroke-width="3"/><text class="h" x="530" y="304">Enrich</text><text class="x" x="448" y="339">file memory + structured memory + skills</text>
+  <rect x="770" y="230" width="292" height="184" rx="16" fill="#fde68a" stroke="#a16207" stroke-width="3"/><text class="h" x="848" y="304">Compact</text><text class="x" x="810" y="339">summarize old context on threshold</text>
+  <rect x="1110" y="230" width="292" height="184" rx="16" fill="#f9a8d4" stroke="#be185d" stroke-width="3"/><text class="h" x="1190" y="304">Persist</text><text class="x" x="1148" y="339">store updated state for resume</text>
+
+  <path class="a" d="M382 322 L430 322"/><path class="a" d="M722 322 L770 322"/><path class="a" d="M1062 322 L1110 322"/>
+
+  <rect x="270" y="514" width="1100" height="230" rx="20" fill="#ffffffcc" stroke="#334155" stroke-width="3"/>
+  <text class="h" x="602" y="582">Quality + Reflector Feedback Loop</text>
+  <text class="x" x="338" y="622">explicit remember path, normalization, dedup, supersede edges, and periodic reflector extraction</text>
+  <text class="x" x="430" y="658">all feeding future prompt injection with observability logs for recall quality</text>
+</svg>

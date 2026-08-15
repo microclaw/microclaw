@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1660" height="920" viewBox="0 0 1660 920">
+  <defs>
+    <linearGradient id="bg5" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#eef2ff"/><stop offset="100%" stop-color="#ecfeff"/></linearGradient>
+    <style>.tt{font:700 42px 'Avenir Next',Helvetica,sans-serif;fill:#111827}.h{font:700 27px 'Avenir Next',Helvetica,sans-serif;fill:#111827}.x{font:500 19px 'Avenir Next',Helvetica,sans-serif;fill:#1f2937}.a{stroke:#374151;stroke-width:4;fill:none;marker-end:url(#m5)}</style>
+    <marker id="m5" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#374151"/></marker>
+  </defs>
+  <rect width="1660" height="920" fill="url(#bg5)"/>
+  <text class="tt" x="70" y="86">Main Agent vs Sub-Agent Boundaries</text>
+
+  <rect x="110" y="170" width="660" height="640" rx="24" fill="#ffffffcc" stroke="#334155" stroke-width="3"/>
+  <text class="h" x="350" y="238">Main Agent</text>
+  <rect x="160" y="286" width="560" height="84" rx="14" fill="#93c5fd" stroke="#1d4ed8" stroke-width="2.5"/><text class="x" x="188" y="338">Full toolset available (registry)</text>
+  <rect x="160" y="388" width="560" height="84" rx="14" fill="#86efac" stroke="#15803d" stroke-width="2.5"/><text class="x" x="188" y="440">Can message, schedule, and manage memory flows</text>
+  <rect x="160" y="490" width="560" height="84" rx="14" fill="#fde68a" stroke="#a16207" stroke-width="2.5"/><text class="x" x="188" y="542">Applies risk/approval checks in sensitive contexts</text>
+  <rect x="160" y="592" width="560" height="84" rx="14" fill="#f9a8d4" stroke="#be185d" stroke-width="2.5"/><text class="x" x="188" y="644">May delegate isolated work to sub-agent</text>
+
+  <rect x="890" y="170" width="660" height="640" rx="24" fill="#ffffffcc" stroke="#334155" stroke-width="3"/>
+  <text class="h" x="1140" y="238">Sub-Agent</text>
+  <rect x="940" y="286" width="560" height="84" rx="14" fill="#bfdbfe" stroke="#1d4ed8" stroke-width="2.5"/><text class="x" x="968" y="338">Restricted registry (`new_sub_agent`)</text>
+  <rect x="940" y="388" width="560" height="84" rx="14" fill="#99f6e4" stroke="#0f766e" stroke-width="2.5"/><text class="x" x="968" y="440">Focused on bounded tasks and safe delegation</text>
+  <rect x="940" y="490" width="560" height="84" rx="14" fill="#fecaca" stroke="#b91c1c" stroke-width="2.5"/><text class="x" x="968" y="542">No recursive delegation or broad side effects</text>
+  <rect x="940" y="592" width="560" height="84" rx="14" fill="#ddd6fe" stroke="#6d28d9" stroke-width="2.5"/><text class="x" x="968" y="644">Returns results to main loop for final response</text>
+
+  <path class="a" d="M770 450 L890 450"/><text class="x" x="784" y="430">delegate</text>
+</svg>

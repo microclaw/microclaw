@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="920" viewBox="0 0 1560 920">
+  <defs>
+    <linearGradient id="bg7" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fef3c7"/><stop offset="100%" stop-color="#e0f2fe"/></linearGradient>
+    <style>.tt{font:700 42px 'Avenir Next',Helvetica,sans-serif;fill:#111827}.h{font:700 24px 'Avenir Next',Helvetica,sans-serif;fill:#111827}.x{font:500 18px 'Avenir Next',Helvetica,sans-serif;fill:#374151}.a{stroke:#374151;stroke-width:3;fill:none;marker-end:url(#m7)}</style>
+    <marker id="m7" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#374151"/></marker>
+  </defs>
+  <rect width="1560" height="920" fill="url(#bg7)"/>
+  <text class="tt" x="70" y="86">File + Structured Memory Model</text>
+
+  <rect x="520" y="160" width="520" height="130" rx="18" fill="#c4b5fd" stroke="#6d28d9" stroke-width="3"/>
+  <text class="h" x="690" y="215">Memory Manager</text><text class="x" x="626" y="246">builds memory context for prompts</text>
+
+  <rect x="140" y="380" width="520" height="260" rx="20" fill="#86efac" stroke="#15803d" stroke-width="3"/>
+  <text class="h" x="300" y="442">File Memory</text>
+  <text class="x" x="200" y="484">`runtime/groups/AGENTS.md` (global)</text>
+  <text class="x" x="200" y="520">`runtime/groups/{chat_id}/AGENTS.md` (chat)</text>
+  <text class="x" x="200" y="556">human-editable, persistent notes</text>
+
+  <rect x="900" y="380" width="520" height="260" rx="20" fill="#f9a8d4" stroke="#be185d" stroke-width="3"/>
+  <text class="h" x="1030" y="442">Structured Memory</text>
+  <text class="x" x="960" y="484">`memories` + supersede edges</text>
+  <text class="x" x="960" y="520">confidence/source/last_seen lifecycle</text>
+  <text class="x" x="960" y="556">reflector + quality gating support</text>
+
+  <path class="a" d="M700 290 L420 380"/><path class="a" d="M860 290 L1140 380"/>
+
+  <rect x="400" y="730" width="760" height="110" rx="16" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3"/>
+  <text class="x" x="510" y="797">both layers feed system prompt memory injection and observability</text>
+</svg>

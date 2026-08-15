@@ -1,0 +1,39 @@
+architecture:
+  label: Architecture
+  permalink: /architecture
+rust:
+  label: Rust
+  permalink: /rust
+chat:
+  label: Chat
+  permalink: /chat
+agents:
+  label: Agentic AI
+  permalink: /agents
+telegram:
+  label: Telegram
+  permalink: /telegram
+comparison:
+  label: Comparison
+  permalink: /comparison
+release:
+  label: Release
+  permalink: /release
+runtime:
+  label: Runtime
+  permalink: /runtime
+channels:
+  label: Channels
+  permalink: /channels
+web:
+  label: Web
+  permalink: /web
+reliability:
+  label: Reliability
+  permalink: /reliability
+skills:
+  label: Skills
+  permalink: /skills
+memory:
+  label: Memory
+  permalink: /memory

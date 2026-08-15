@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1660" height="920" viewBox="0 0 1660 920">
+  <defs>
+    <linearGradient id="bg11" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ecfeff"/><stop offset="100%" stop-color="#fef9c3"/></linearGradient>
+    <style>.tt{font:700 40px 'Avenir Next',Helvetica,sans-serif;fill:#0f172a}.n{font:700 30px 'Avenir Next',Helvetica,sans-serif;fill:#0f172a}.x{font:500 21px 'Avenir Next',Helvetica,sans-serif;fill:#1e293b}.a{stroke:#334155;stroke-width:4;fill:none;marker-end:url(#m11)}</style>
+    <marker id="m11" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#334155"/></marker>
+  </defs>
+  <rect width="1660" height="920" fill="url(#bg11)"/>
+  <text class="tt" x="70" y="86">How to Add a New Tool</text>
+
+  <rect x="120" y="230" width="290" height="170" rx="16" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3"/><text class="n" x="160" y="292">1</text><text class="x" x="200" y="292">Create file</text><text class="x" x="160" y="332">`src/tools/my_tool.rs`</text>
+  <rect x="470" y="230" width="290" height="170" rx="16" fill="#c4b5fd" stroke="#6d28d9" stroke-width="3"/><text class="n" x="510" y="292">2</text><text class="x" x="550" y="292">Implement `Tool` trait</text>
+  <rect x="820" y="230" width="290" height="170" rx="16" fill="#86efac" stroke="#15803d" stroke-width="3"/><text class="n" x="860" y="292">3</text><text class="x" x="900" y="292">Export module</text><text class="x" x="860" y="332">`tools/mod.rs`</text>
+  <rect x="1170" y="230" width="290" height="170" rx="16" fill="#fde68a" stroke="#a16207" stroke-width="3"/><text class="n" x="1210" y="292">4</text><text class="x" x="1250" y="292">Register in registry</text>
+  <rect x="670" y="520" width="330" height="190" rx="16" fill="#f9a8d4" stroke="#be185d" stroke-width="3"/><text class="n" x="720" y="586">5</text><text class="x" x="760" y="586">Inject dependencies</text><text class="x" x="720" y="626">Bot / DB / config as needed</text>
+
+  <path class="a" d="M410 315 L470 315"/><path class="a" d="M760 315 L820 315"/><path class="a" d="M1110 315 L1170 315"/><path class="a" d="M1320 400 L980 520"/>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="920" viewBox="0 0 1500 920">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fff7ed"/><stop offset="50%" stop-color="#fee2e2"/><stop offset="100%" stop-color="#dcfce7"/></linearGradient>
+    <style>.t{font:700 44px 'Avenir Next',Helvetica,sans-serif;fill:#111827}.s{font:500 22px 'Avenir Next',Helvetica,sans-serif;fill:#374151}.h{font:700 26px 'Avenir Next',Helvetica,sans-serif;fill:#111827}.x{font:500 19px 'Avenir Next',Helvetica,sans-serif;fill:#1f2937}.l{stroke:#334155;stroke-width:4}</style>
+  </defs>
+  <rect width="1500" height="920" fill="url(#bg2)"/>
+  <text class="t" x="80" y="90">Why Built with Rust</text>
+  <text class="s" x="80" y="126">A runtime choice that optimizes for reliability and scale</text>
+
+  <circle cx="750" cy="460" r="150" fill="#fb923c" stroke="#7c2d12" stroke-width="4"/>
+  <text class="h" x="694" y="456">Rust</text><text class="x" x="666" y="488">Core Runtime</text>
+
+  <rect x="140" y="220" width="340" height="150" rx="18" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3"/><text class="h" x="210" y="287">Performance</text><text class="x" x="183" y="322">Tokio async with low overhead</text>
+  <rect x="1020" y="220" width="340" height="150" rx="18" fill="#c4b5fd" stroke="#6d28d9" stroke-width="3"/><text class="h" x="1132" y="287">Safety</text><text class="x" x="1092" y="322">Strong type and memory guarantees</text>
+  <rect x="140" y="560" width="340" height="150" rx="18" fill="#86efac" stroke="#15803d" stroke-width="3"/><text class="h" x="170" y="627">Maintainability</text><text class="x" x="196" y="662">Clear module boundaries</text>
+  <rect x="1020" y="560" width="340" height="150" rx="18" fill="#f9a8d4" stroke="#be185d" stroke-width="3"/><text class="h" x="1095" y="627">Deployment</text><text class="x" x="1080" y="662">Portable production binary</text>
+
+  <line class="l" x1="610" y1="380" x2="480" y2="340"/><line class="l" x1="890" y1="380" x2="1020" y2="340"/>
+  <line class="l" x1="610" y1="540" x2="480" y2="590"/><line class="l" x1="890" y1="540" x2="1020" y2="590"/>
+</svg>

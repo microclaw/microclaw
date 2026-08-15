@@ -10,7 +10,7 @@ Rust 2021, Tokio, teloxide 0.17, serenity 0.12, provider-agnostic LLM runtime (A
 
 - `src/` -- Rust source for the bot binary
 - `web/` -- Built-in Web UI (React + Vite). Compiled to `web/dist/` and embedded into the Rust binary via `include_dir!`. This is the chat interface and settings panel served by microclaw itself at runtime.
-- `website/` -- **Separate git repository** (landing page + documentation site). Not part of the microclaw binary. Contains the public-facing marketing site and docs. Changes here have no effect on the bot.
+- `site/` -- Landing page and documentation site. It is versioned with this repository but is not part of the microclaw binary. Changes here have no effect on the bot runtime.
 
 ## Project layout
 

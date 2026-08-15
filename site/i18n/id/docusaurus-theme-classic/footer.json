@@ -1,0 +1,4 @@
+{
+  "link.title.Docs": {"message": "Dokumentasi"}, "link.title.Project": {"message": "Proyek"}, "link.title.More": {"message": "Lainnya"},
+  "link.item.label.Overview": {"message": "Ikhtisar"}, "link.item.label.Quickstart": {"message": "Mulai cepat"}, "link.item.label.Issues": {"message": "Masalah"}, "link.item.label.Releases": {"message": "Rilis"}, "link.item.label.Blog": {"message": "Blog"}, "link.item.label.License": {"message": "Lisensi"}, "link.item.label.Security": {"message": "Keamanan"}, "link.item.label.Support": {"message": "Dukungan"}
+}

@@ -44,5 +44,5 @@ Typical cases:
 ## Related docs
 
 - `README.md`
-- `website/docs/acp.md`
-- `website/docs/testing.md`
+- `site/docs/acp.md`
+- `site/docs/testing.md`

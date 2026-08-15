@@ -1,0 +1,4 @@
+{
+  "link.title.Docs": {"message": "دستاویزات"}, "link.title.Project": {"message": "پروجیکٹ"}, "link.title.More": {"message": "مزید"},
+  "link.item.label.Overview": {"message": "جائزہ"}, "link.item.label.Quickstart": {"message": "فوری آغاز"}, "link.item.label.Issues": {"message": "مسائل"}, "link.item.label.Releases": {"message": "ریلیزز"}, "link.item.label.Blog": {"message": "بلاگ"}, "link.item.label.License": {"message": "لائسنس"}, "link.item.label.Security": {"message": "سکیورٹی"}, "link.item.label.Support": {"message": "مدد"}
+}

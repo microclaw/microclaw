@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1720" height="920" viewBox="0 0 1720 920">
+  <defs>
+    <linearGradient id="bg9" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#fce7f3"/></linearGradient>
+    <style>.tt{font:700 40px 'Avenir Next',Helvetica,sans-serif;fill:#0f172a}.h{font:700 30px 'Avenir Next',Helvetica,sans-serif;fill:#0f172a}.x{font:500 21px 'Avenir Next',Helvetica,sans-serif;fill:#1e293b}</style>
+  </defs>
+  <rect width="1720" height="920" fill="url(#bg9)"/>
+  <text class="tt" x="70" y="88">Message Handling: Telegram vs Discord</text>
+
+  <rect x="100" y="168" width="720" height="660" rx="22" fill="#dbeafecc" stroke="#1d4ed8" stroke-width="3"/>
+  <text class="h" x="365" y="240">Telegram</text>
+  <text class="x" x="150" y="320">• Private chat: always respond</text>
+  <text class="x" x="150" y="380">• Group chat: mention-gated behavior</text>
+  <text class="x" x="150" y="440">• Typing/status updates during long runs</text>
+  <text class="x" x="150" y="500">• Split long replies by platform limits</text>
+  <text class="x" x="150" y="560">• Persist messages into shared storage</text>
+
+  <rect x="900" y="168" width="720" height="660" rx="22" fill="#fce7f3cc" stroke="#be185d" stroke-width="3"/>
+  <text class="h" x="1172" y="240">Discord</text>
+  <text class="x" x="950" y="320">• DMs: always respond</text>
+  <text class="x" x="950" y="380">• Server channels: mention/whitelist rules</text>
+  <text class="x" x="950" y="440">• Gateway events routed into same core loop</text>
+  <text class="x" x="950" y="500">• Split replies to channel-safe chunk size</text>
+  <text class="x" x="950" y="560">• Shared session and memory behavior</text>
+</svg>

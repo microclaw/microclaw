@@ -4,7 +4,7 @@
 
 - Keep changes scoped.
 - Prefer small PRs over large mixed refactors.
-- For behavior changes, update user-facing docs in `docs/` and `website/docs/`.
+- For behavior changes, update user-facing docs in `docs/` and `site/docs/`.
 - For security-sensitive or migration-sensitive changes, include rollback notes in the PR description.
 
 ## Local Setup
@@ -16,7 +16,7 @@ requirement during dependency installation.
 cp microclaw.config.example.yaml microclaw.config.yaml
 cargo build
 npm --prefix web ci
-npm --prefix website ci
+npm --prefix site ci
 ```
 
 ## Required Checks
@@ -28,7 +28,7 @@ cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 npm --prefix web run build
-npm --prefix website run build
+npm --prefix site run build
 node scripts/generate_docs_artifacts.mjs --check
 ```
 

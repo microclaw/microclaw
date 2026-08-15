@@ -1,0 +1,4 @@
+{
+  "link.title.Docs": {"message": "ডকুমেন্টেশন"}, "link.title.Project": {"message": "প্রজেক্ট"}, "link.title.More": {"message": "আরও"},
+  "link.item.label.Overview": {"message": "পরিচিতি"}, "link.item.label.Quickstart": {"message": "দ্রুত শুরু"}, "link.item.label.Issues": {"message": "সমস্যা"}, "link.item.label.Releases": {"message": "রিলিজ"}, "link.item.label.Blog": {"message": "ব্লগ"}, "link.item.label.License": {"message": "লাইসেন্স"}, "link.item.label.Security": {"message": "নিরাপত্তা"}, "link.item.label.Support": {"message": "সহায়তা"}
+}

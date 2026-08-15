@@ -1,0 +1,54 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="900" fill="#0D1726"/>
+  <rect x="70" y="70" width="1460" height="760" rx="36" fill="url(#bg)"/>
+  <circle cx="1270" cy="210" r="170" fill="#183A63" fill-opacity="0.45"/>
+  <circle cx="1380" cy="710" r="210" fill="#10304A" fill-opacity="0.5"/>
+  <circle cx="290" cy="170" r="120" fill="#1D6E7A" fill-opacity="0.35"/>
+
+  <rect x="150" y="165" width="610" height="520" rx="28" fill="#0F2235" stroke="#2D516E" stroke-width="2"/>
+  <rect x="190" y="210" width="530" height="58" rx="14" fill="#123250"/>
+  <rect x="190" y="294" width="420" height="24" rx="12" fill="#224E73"/>
+  <rect x="190" y="334" width="360" height="24" rx="12" fill="#224E73"/>
+  <rect x="190" y="374" width="460" height="24" rx="12" fill="#224E73"/>
+
+  <rect x="190" y="440" width="130" height="130" rx="20" fill="#133B45" stroke="#2FC6B7" stroke-width="2"/>
+  <path d="M230 505L264 539L328 471" stroke="#6EF5D4" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="356" y="440" width="324" height="30" rx="15" fill="#2FC6B7" fill-opacity="0.24"/>
+  <rect x="356" y="490" width="280" height="24" rx="12" fill="#7ED0FF" fill-opacity="0.32"/>
+  <rect x="356" y="530" width="220" height="24" rx="12" fill="#7ED0FF" fill-opacity="0.32"/>
+
+  <rect x="875" y="180" width="560" height="360" rx="30" fill="#10253A" stroke="#375E7B" stroke-width="2"/>
+  <path d="M1032 308L1115 252L1198 308V404L1115 458L1032 404V308Z" fill="#133D58" stroke="#80D7FF" stroke-width="3"/>
+  <path d="M1115 275L1166 305V365L1115 395L1064 365V305L1115 275Z" fill="#2FC6B7" fill-opacity="0.28" stroke="#6EF5D4" stroke-width="3"/>
+  <circle cx="968" cy="264" r="20" fill="#E8FBFF"/>
+  <circle cx="1290" cy="260" r="20" fill="#E8FBFF"/>
+  <circle cx="968" cy="450" r="20" fill="#E8FBFF"/>
+  <circle cx="1290" cy="450" r="20" fill="#E8FBFF"/>
+  <line x1="985" y1="274" x2="1076" y2="321" stroke="#7ED0FF" stroke-width="6"/>
+  <line x1="1273" y1="274" x2="1156" y2="322" stroke="#7ED0FF" stroke-width="6"/>
+  <line x1="985" y1="440" x2="1077" y2="391" stroke="#7ED0FF" stroke-width="6"/>
+  <line x1="1272" y1="439" x2="1154" y2="392" stroke="#7ED0FF" stroke-width="6"/>
+
+  <rect x="875" y="585" width="560" height="105" rx="26" fill="#122E45" stroke="#335A77" stroke-width="2"/>
+  <rect x="915" y="618" width="158" height="36" rx="18" fill="#1B7A66"/>
+  <text x="994" y="642" text-anchor="middle" fill="#E7FFFA" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">Security Audit</text>
+  <rect x="1095" y="618" width="118" height="36" rx="18" fill="#1C5F7C"/>
+  <text x="1154" y="642" text-anchor="middle" fill="#EAF8FF" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">CI</text>
+  <rect x="1235" y="618" width="160" height="36" rx="18" fill="#284C77"/>
+  <text x="1315" y="642" text-anchor="middle" fill="#EAF2FF" font-family="Verdana, Arial, sans-serif" font-size="22" font-weight="700">Self-check</text>
+
+  <text x="150" y="758" fill="#F5FBFF" font-family="Verdana, Arial, sans-serif" font-size="64" font-weight="700">
+    Maturity Hardening
+  </text>
+  <text x="150" y="808" fill="#A6C5DD" font-family="Verdana, Arial, sans-serif" font-size="28">
+    Security audit gates, operator risk checks, and explicit release policy for MicroClaw
+  </text>
+
+  <defs>
+    <linearGradient id="bg" x1="70" y1="70" x2="1530" y2="830" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#12263D"/>
+      <stop offset="1" stop-color="#0B1322"/>
+    </linearGradient>
+  </defs>
+</svg>

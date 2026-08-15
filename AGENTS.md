@@ -124,21 +124,21 @@ The following references are generated from source and must not be hand-edited:
 - `docs/generated/tools.md`
 - `docs/generated/provider-matrix.md`
 - `docs/generated/config-defaults.md`
-- matching generated pages under `website/docs/` when that repository is present
+- matching generated pages under `site/docs/`
 
 Regenerate the files in this repository with:
 
 ```sh
-node scripts/generate_docs_artifacts.mjs --no-website
+node scripts/generate_docs_artifacts.mjs
 ```
 
 Check this repository for drift with:
 
 ```sh
-node scripts/generate_docs_artifacts.mjs --check --no-website
+node scripts/generate_docs_artifacts.mjs --check
 ```
 
-When the separate `website` repository is checked out at `website/`, omit `--no-website` to update or check both repositories. Without that checkout, omitting the flag creates an ignored partial `website/` tree. If `node` is not on `PATH`, report that limitation rather than editing generated files manually.
+The public documentation site is versioned under `site/`, so generated references in `docs/` and `site/docs/` are updated and checked together. If `node` is not on `PATH`, report that limitation rather than editing generated files manually.
 
 ## Verification
 
@@ -175,4 +175,4 @@ Use repository-relative links in Markdown. Avoid copying large configuration or 
 - Do not commit secrets, tokens, local database files, or generated runtime state.
 - Keep English and Chinese README behaviorally aligned when changing shared user-facing facts.
 - Update `CHANGELOG.md` for user-visible changes according to the release policy.
-- For the separate `website` repository (`microclaw.github.io`), commit and push directly by default; open a pull request only when explicitly requested.
+- The public documentation site lives in `site/` and is committed with the main repository. Deploy it from that directory after the source commit is pushed.

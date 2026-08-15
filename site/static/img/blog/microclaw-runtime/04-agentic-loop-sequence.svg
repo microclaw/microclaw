@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1720" height="980" viewBox="0 0 1720 980">
+  <defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#eff6ff"/><stop offset="100%" stop-color="#fae8ff"/></linearGradient>
+    <style>.tt{font:700 40px 'Avenir Next',Helvetica,sans-serif;fill:#0f172a}.h{font:700 22px 'Avenir Next',Helvetica,sans-serif;fill:#1e293b}.x{font:500 18px 'Avenir Next',Helvetica,sans-serif;fill:#334155}.l{stroke:#94a3b8;stroke-width:2}.a{stroke:#334155;stroke-width:3;fill:none;marker-end:url(#m4)}</style>
+    <marker id="m4" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#334155"/></marker>
+  </defs>
+  <rect width="1720" height="980" fill="url(#bg4)"/>
+  <text class="tt" x="70" y="84">`process_with_agent` Sequence</text>
+
+  <text class="h" x="120" y="146">User</text><text class="h" x="420" y="146">Adapter</text><text class="h" x="720" y="146">Agent Engine</text><text class="h" x="1080" y="146">LLM Provider</text><text class="h" x="1390" y="146">Tools / DB</text>
+  <line class="l" x1="160" y1="170" x2="160" y2="900"/><line class="l" x1="480" y1="170" x2="480" y2="900"/><line class="l" x1="800" y1="170" x2="800" y2="900"/><line class="l" x1="1160" y1="170" x2="1160" y2="900"/><line class="l" x1="1460" y1="170" x2="1460" y2="900"/>
+
+  <path class="a" d="M180 230 L460 230"/><text class="x" x="242" y="216">message received</text>
+  <path class="a" d="M500 280 L780 280"/><text class="x" x="560" y="266">dispatch to shared loop</text>
+  <path class="a" d="M800 336 L1460 336"/><text class="x" x="938" y="322">load session + memory context</text>
+  <path class="a" d="M800 414 L1140 414"/><text class="x" x="880" y="400">request with tools</text>
+  <path class="a" d="M1160 486 L820 486"/><text class="x" x="975" y="472">tool_use</text>
+  <path class="a" d="M820 556 L1440 556"/><text class="x" x="968" y="542">execute + append results</text>
+  <path class="a" d="M1460 620 L820 620"/><text class="x" x="1042" y="606">tool_result</text>
+  <path class="a" d="M1140 704 L820 704"/><text class="x" x="960" y="690">end_turn text</text>
+  <path class="a" d="M800 770 L1460 770"/><text class="x" x="980" y="756">persist session + logs</text>
+  <path class="a" d="M780 834 L500 834"/><text class="x" x="600" y="820">response payload</text>
+  <path class="a" d="M460 872 L180 872"/><text class="x" x="258" y="858">final reply</text>
+</svg>

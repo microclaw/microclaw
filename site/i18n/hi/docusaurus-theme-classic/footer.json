@@ -1,0 +1,4 @@
+{
+  "link.title.Docs": {"message": "दस्तावेज़"}, "link.title.Project": {"message": "प्रोजेक्ट"}, "link.title.More": {"message": "अधिक"},
+  "link.item.label.Overview": {"message": "अवलोकन"}, "link.item.label.Quickstart": {"message": "त्वरित शुरुआत"}, "link.item.label.Issues": {"message": "समस्याएँ"}, "link.item.label.Releases": {"message": "रिलीज़"}, "link.item.label.Blog": {"message": "ब्लॉग"}, "link.item.label.License": {"message": "लाइसेंस"}, "link.item.label.Security": {"message": "सुरक्षा"}, "link.item.label.Support": {"message": "सहायता"}
+}

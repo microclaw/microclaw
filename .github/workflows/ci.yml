@@ -20,19 +20,14 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: node scripts/generate_docs_artifacts.mjs --check --no-website
+          cache-dependency-path: |
+            web/package-lock.json
+            site/package-lock.json
+      - run: node scripts/generate_docs_artifacts.mjs --check
       - run: npm --prefix web ci
       - run: npm --prefix web run build
-      - name: Build website docs when workspace is present
-        shell: bash
-        run: |
-          if [[ -f website/package-lock.json ]]; then
-            npm --prefix website ci
-            npm --prefix website run build
-          else
-            echo "website workspace not present in this checkout; skipping"
-          fi
+      - run: npm --prefix site ci
+      - run: npm --prefix site run build
 
   docker-build:
     name: Docker Build
@@ -144,15 +139,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm --prefix web ci
       - run: npm --prefix web run build
-      - name: Build website docs when workspace is present
-        shell: bash
-        run: |
-          if [[ -f website/package-lock.json ]]; then
-            npm --prefix website ci
-            npm --prefix website run build
-          else
-            echo "website workspace not present in this checkout; skipping"
-          fi
+      - run: npm --prefix site ci
+      - run: npm --prefix site run build
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.93.1

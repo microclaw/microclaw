@@ -1,0 +1,41 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Three Paths Spectrum</title>
+  <desc id="desc">NanoClaw, MicroClaw, OpenClaw positioned on a complexity and capability spectrum.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0b1730"/>
+      <stop offset="50%" stop-color="#0f3b24"/>
+      <stop offset="100%" stop-color="#3a1228"/>
+    </linearGradient>
+    <style>
+      .h{font:700 40px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#f8fafc}
+      .c{font:600 21px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#e2e8f0}
+      .b{font:700 28px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#f8fafc}
+      .s{font:600 19px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#e2e8f0}
+      .a{font:700 20px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#f1f5f9}
+    </style>
+  </defs>
+
+  <rect width="1200" height="700" fill="url(#bg)"/>
+
+  <text x="60" y="84" class="h">NanoClaw, MicroClaw, OpenClaw</text>
+  <text x="60" y="120" class="c">Capability vs complexity spectrum (snapshot: 2026-02-14)</text>
+
+  <line x1="120" y1="390" x2="1080" y2="390" stroke="#e2e8f0" stroke-width="10" opacity="0.95"/>
+  <polygon points="1080,390 1048,372 1048,408" fill="#e2e8f0"/>
+
+  <circle cx="260" cy="390" r="92" fill="#1e3a8a" stroke="#bfdbfe" stroke-width="4"/>
+  <text x="260" y="382" text-anchor="middle" class="b">NanoClaw</text>
+  <text x="260" y="414" text-anchor="middle" class="s">Minimal + isolated</text>
+
+  <circle cx="600" cy="390" r="98" fill="#166534" stroke="#bbf7d0" stroke-width="4"/>
+  <text x="600" y="382" text-anchor="middle" class="b">MicroClaw</text>
+  <text x="600" y="414" text-anchor="middle" class="s">Balanced runtime</text>
+
+  <circle cx="940" cy="390" r="104" fill="#7e22ce" stroke="#e9d5ff" stroke-width="4"/>
+  <text x="940" y="382" text-anchor="middle" class="b">OpenClaw</text>
+  <text x="940" y="414" text-anchor="middle" class="s">Platform breadth</text>
+
+  <text x="120" y="540" class="a">Lower operational complexity</text>
+  <text x="820" y="540" class="a">Higher feature surface</text>
+</svg>

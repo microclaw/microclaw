@@ -1,0 +1,4 @@
+{
+  "theme.blog.post.plurals": {"message": "{count} pos"},
+  "theme.blog.post.readingTime.plurals": {"message": "{readingTime} menit membaca"}
+}

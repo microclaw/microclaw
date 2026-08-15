@@ -1,0 +1,4 @@
+{
+  "link.title.Docs": {"message": "Documentation"}, "link.title.Project": {"message": "Projet"}, "link.title.More": {"message": "Plus"},
+  "link.item.label.Overview": {"message": "Vue d’ensemble"}, "link.item.label.Quickstart": {"message": "Démarrage"}, "link.item.label.Issues": {"message": "Tickets"}, "link.item.label.Releases": {"message": "Versions"}, "link.item.label.Blog": {"message": "Blog"}, "link.item.label.License": {"message": "Licence"}, "link.item.label.Security": {"message": "Sécurité"}, "link.item.label.Support": {"message": "Assistance"}
+}

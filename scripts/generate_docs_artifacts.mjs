@@ -194,7 +194,7 @@ function withWebsiteFrontmatter(id, title, body) {
 
 function main() {
   const checkOnly = process.argv.includes('--check');
-  const skipWebsite = process.argv.includes('--no-website');
+  const skipSite = process.argv.includes('--no-site') || process.argv.includes('--no-website');
 
   const tools = parseBuiltinTools();
   const configDefaults = parseConfigDefaults();
@@ -215,9 +215,9 @@ function main() {
     },
   ];
 
-  const websiteOutputs = [
+  const siteOutputs = [
     {
-      file: 'website/docs/generated-tools.md',
+      file: 'site/docs/generated-tools.md',
       content: withWebsiteFrontmatter(
         'generated-tools',
         'Generated Tools',
@@ -225,7 +225,7 @@ function main() {
       ),
     },
     {
-      file: 'website/docs/generated-config-defaults.md',
+      file: 'site/docs/generated-config-defaults.md',
       content: withWebsiteFrontmatter(
         'generated-config-defaults',
         'Generated Config Defaults',
@@ -233,7 +233,7 @@ function main() {
       ),
     },
     {
-      file: 'website/docs/generated-provider-matrix.md',
+      file: 'site/docs/generated-provider-matrix.md',
       content: withWebsiteFrontmatter(
         'generated-provider-matrix',
         'Generated Provider Matrix',
@@ -242,7 +242,7 @@ function main() {
     },
   ];
 
-  const outputs = skipWebsite ? rootOutputs : [...rootOutputs, ...websiteOutputs];
+  const outputs = skipSite ? rootOutputs : [...rootOutputs, ...siteOutputs];
 
   let changed = 0;
   for (const out of outputs) {

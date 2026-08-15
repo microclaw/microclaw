@@ -3,7 +3,6 @@ microclaw.config.yaml
 microclaw.config.yaml.*
 microclaw.config.backups/
 microclaw.data/
-website/
 tmp/
 working_dir/
 web/node_modules/

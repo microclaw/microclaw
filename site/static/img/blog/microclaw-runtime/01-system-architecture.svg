@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="1770" viewBox="0 0 1680 1770">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#dbeafe" />
+      <stop offset="48%" stop-color="#f5d0fe" />
+      <stop offset="100%" stop-color="#ccfbf1" />
+    </linearGradient>
+    <linearGradient id="coreBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.92" />
+      <stop offset="100%" stop-color="#f8fafc" stop-opacity="0.9" />
+    </linearGradient>
+    <style>
+      .title{font:700 50px 'Avenir Next',Helvetica,sans-serif;fill:#0f172a}
+      .subtitle{font:500 22px 'Avenir Next',Helvetica,sans-serif;fill:#334155}
+      .group{font:700 28px 'Avenir Next',Helvetica,sans-serif;fill:#0f172a}
+      .h{font:700 23px 'Avenir Next',Helvetica,sans-serif;fill:#0f172a}
+      .s{font:500 18px 'Avenir Next',Helvetica,sans-serif;fill:#1f2937}
+      .xs{font:500 16px 'Avenir Next',Helvetica,sans-serif;fill:#334155}
+      .a{stroke:#334155;stroke-width:2.2;fill:none;marker-end:url(#m)}
+      .b{stroke:#64748b;stroke-width:1.6;fill:none;marker-end:url(#m2)}
+    </style>
+    <marker id="m" markerWidth="7" markerHeight="7" refX="5.8" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 z" fill="#334155" />
+    </marker>
+    <marker id="m2" markerWidth="5.5" markerHeight="5.5" refX="4.8" refY="2.75" orient="auto">
+      <path d="M0,0 L5.5,2.75 L0,5.5 z" fill="#64748b" />
+    </marker>
+  </defs>
+  <rect width="1680" height="1770" fill="url(#bg)" />
+  <text class="title" x="64" y="138.0">MicroClaw Runtime Architecture</text>
+  <text class="subtitle" x="64" y="195.0">Channel adapters + shared engine + provider abstraction + tool execution + memory + observability</text>
+  <text class="group" x="76" y="312.0">Ingress Channels</text>
+  <rect x="70" y="348.0" width="260" height="159.0" rx="18" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3" />
+  <text class="h" x="136" y="438.0">Telegram</text>
+  <text class="xs" x="114" y="474.0">mentions + catch-up</text>
+  <rect x="70" y="540.0" width="260" height="159.0" rx="18" fill="#c4b5fd" stroke="#6d28d9" stroke-width="3" />
+  <text class="h" x="149" y="630.0">Discord</text>
+  <text class="xs" x="134" y="666.0">split delivery</text>
+  <rect x="70" y="732.0" width="260" height="159.0" rx="18" fill="#67e8f9" stroke="#0e7490" stroke-width="3" />
+  <text class="h" x="176" y="822.0">Web</text>
+  <text class="xs" x="127" y="858.0">SSE + stream replay</text>
+  <rect x="70" y="924.0" width="260" height="159.0" rx="18" fill="#86efac" stroke="#15803d" stroke-width="3" />
+  <text class="h" x="172" y="1014.0">Slack</text>
+  <text class="xs" x="132" y="1050.0">adapter extension</text>
+  <rect x="70" y="1116.0" width="260" height="159.0" rx="18" fill="#f9a8d4" stroke="#be185d" stroke-width="3" />
+  <text class="h" x="166" y="1206.0">Feishu</text>
+  <text class="xs" x="144" y="1242.0">platform parity</text>
+  <rect x="384" y="270.0" width="906" height="1380.0" rx="28" fill="url(#coreBg)" stroke="#334155" stroke-width="3" />
+  <text class="group" x="728" y="342.0">Shared Core (Rust)</text>
+  <rect x="420" y="384.0" width="834" height="111.0" rx="14" fill="#fde68a" stroke="#b45309" stroke-width="2.5" />
+  <text class="h" x="612" y="453.0">Agent Engine (`process_with_agent`)</text>
+  <rect x="420" y="525.0" width="272" height="180.0" rx="14" fill="#bfdbfe" stroke="#1d4ed8" stroke-width="2.5" />
+  <text class="h" x="468" y="600.0">Context Builder</text>
+  <text class="xs" x="448" y="637.5">session resume + compaction</text>
+  <text class="xs" x="458" y="672.0">skills + memory injection</text>
+  <rect x="710" y="525.0" width="272" height="180.0" rx="14" fill="#ddd6fe" stroke="#6d28d9" stroke-width="2.5" />
+  <text class="h" x="748" y="600.0">LLM Abstraction</text>
+  <text class="xs" x="730" y="637.5">Anthropic + OpenAI compat</text>
+  <text class="xs" x="754" y="672.0">stream + tool schema</text>
+  <rect x="1000" y="525.0" width="254" height="180.0" rx="14" fill="#fecaca" stroke="#b91c1c" stroke-width="2.5" />
+  <text class="h" x="1038" y="600.0">Safety Gate</text>
+  <text class="xs" x="1028" y="637.5">risk + approval policy</text>
+  <text class="xs" x="1040" y="672.0">path/tool guardrails</text>
+  <rect x="420" y="744.0" width="834" height="270.0" rx="16" fill="#e2e8f0" fill-opacity="0.62" stroke="#64748b" stroke-width="2" />
+  <text class="h" x="446" y="795.0">Tooling Layer</text>
+  <rect x="444" y="822.0" width="188" height="153.0" rx="12" fill="#bae6fd" stroke="#0369a1" stroke-width="2.2" />
+  <text class="s" x="505" y="900.0">read/write/edit</text>
+  <text class="xs" x="492" y="934.5">glob + grep + bash</text>
+  <rect x="648" y="822.0" width="188" height="153.0" rx="12" fill="#bbf7d0" stroke="#15803d" stroke-width="2.2" />
+  <text class="s" x="697" y="900.0">web_search</text>
+  <text class="xs" x="700" y="934.5">web_fetch</text>
+  <rect x="852" y="822.0" width="188" height="153.0" rx="12" fill="#fde68a" stroke="#a16207" stroke-width="2.2" />
+  <text class="s" x="888" y="900.0">schedule_task</text>
+  <text class="xs" x="885" y="934.5">task lifecycle</text>
+  <rect x="1056" y="822.0" width="174" height="153.0" rx="12" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2.2" />
+  <text class="s" x="1089" y="900.0">MCP + Skills</text>
+  <text class="xs" x="1097" y="934.5">sub-agent</text>
+  <rect x="420" y="1056.0" width="834" height="279.0" rx="16" fill="#f1f5f9" stroke="#64748b" stroke-width="2" />
+  <text class="h" x="446" y="1110.0">Memory and Persistence</text>
+  <rect x="444" y="1137.0" width="262" height="165.0" rx="12" fill="#86efac" stroke="#15803d" stroke-width="2.2" />
+  <text class="s" x="498" y="1215.0">AGENTS.md Memory</text>
+  <text class="xs" x="475" y="1251.0">global + per-chat scopes</text>
+  <rect x="724" y="1137.0" width="262" height="165.0" rx="12" fill="#f9a8d4" stroke="#be185d" stroke-width="2.2" />
+  <text class="s" x="764" y="1215.0">Structured Memory</text>
+  <text class="xs" x="765" y="1251.0">reflector + quality gates</text>
+  <rect x="1004" y="1137.0" width="226" height="165.0" rx="12" fill="#a7f3d0" stroke="#047857" stroke-width="2.2" />
+  <text class="s" x="1052" y="1215.0">SQLite DB</text>
+  <text class="xs" x="1028" y="1251.0">sessions/messages/tasks</text>
+  <rect x="420" y="1371.0" width="834" height="231.0" rx="14" fill="#99f6e4" stroke="#0f766e" stroke-width="2.4" />
+  <text class="h" x="448" y="1434.0">Runtime Services</text>
+  <text class="s" x="452" y="1482.0">scheduler runner  ·  memory reflector loop  ·  usage report API  ·  web gateway routes</text>
+  <text class="s" x="452" y="1530.0">outbound delivery helpers  ·  doctor diagnostics  ·  setup wizard  ·  config + migrations</text>
+  <text class="group" x="1320" y="312.0">External Systems</text>
+  <rect x="1320" y="357.0" width="292" height="171.0" rx="18" fill="#fca5a5" stroke="#b91c1c" stroke-width="3" />
+  <text class="s" x="1382" y="442.5">SQLite Storage</text>
+  <text class="xs" x="1381" y="478.5">sessions / memory / tasks</text>
+  <rect x="1320" y="570.0" width="292" height="171.0" rx="18" fill="#fcd34d" stroke="#a16207" stroke-width="3" />
+  <text class="s" x="1386" y="655.5">LLM Providers</text>
+  <text class="xs" x="1364" y="691.5">Anthropic + OpenAI compat</text>
+  <rect x="1320" y="783.0" width="292" height="171.0" rx="18" fill="#c4b5fd" stroke="#6d28d9" stroke-width="3" />
+  <text class="s" x="1384" y="868.5">MCP Servers</text>
+  <text class="xs" x="1388" y="904.5">stdio / HTTP-SSE</text>
+  <rect x="1320" y="996.0" width="292" height="171.0" rx="18" fill="#a7f3d0" stroke="#047857" stroke-width="3" />
+  <text class="s" x="1376" y="1081.5">Observability</text>
+  <text class="xs" x="1363" y="1117.5">usage + memory metrics</text>
+  <rect x="1320" y="1209.0" width="292" height="171.0" rx="18" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3" />
+  <text class="s" x="1388" y="1294.5">Web API / UI</text>
+  <text class="xs" x="1363" y="1330.5">chat + history + config</text>
+  <path class="a" d="M330 427.5 L384 427.5" />
+  <path class="a" d="M330 619.5 L384 619.5" />
+  <path class="a" d="M330 811.5 L384 811.5" />
+  <path class="a" d="M330 1003.5 L384 1003.5" />
+  <path class="a" d="M330 1195.5 L384 1195.5" />
+  <path class="a" d="M1254 438 L1320 438" />
+  <path class="a" d="M1254 652.5 L1320 652.5" />
+  <path class="a" d="M1254 865.5 L1320 865.5" />
+  <path class="a" d="M1254 1078.5 L1320 1078.5" />
+  <path class="a" d="M1254 1291.5 L1320 1291.5" />
+  <path class="b" d="M556 705 L556 822" />
+  <path class="b" d="M846 705 L846 822" />
+  <path class="b" d="M1126 705 L1126 822" />
+  <path class="b" d="M742 975 L742 1137" />
+  <path class="b" d="M946 975 L946 1137" />
+  <path class="b" d="M1143 975 L1143 1137" />
+  <path class="b" d="M575 1302 L575 1371" />
+  <path class="b" d="M855 1302 L855 1371" />
+  <path class="b" d="M1117 1302 L1117 1371" />
+</svg>

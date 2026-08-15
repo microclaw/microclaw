@@ -21,7 +21,7 @@ microclaw.config.yaml.*
 
 # JS build dependencies
 web/node_modules
-website/node_modules
+site/node_modules
 
 # Keep Docker context lean by excluding local docs site outputs
-website
+site

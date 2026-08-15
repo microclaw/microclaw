@@ -1,0 +1,48 @@
+<svg width="1200" height="680" viewBox="0 0 1200 680" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">MicroClaw Runtime Overview</title>
+  <desc id="desc">Adapters feed a shared Rust agent engine with tools, memory, scheduler and SQLite persistence.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1f2a"/>
+      <stop offset="100%" stop-color="#12384a"/>
+    </linearGradient>
+    <style>
+      .h{font:700 46px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#eaf6ff}
+      .t{font:500 24px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#d7ebf8}
+      .b{font:600 26px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#062031}
+      .s{font:500 21px -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;fill:#16384d}
+    </style>
+  </defs>
+  <rect width="1200" height="680" fill="url(#bg)"/>
+  <text x="60" y="90" class="h">MicroClaw Runtime (Snapshot 2026-02-14)</text>
+  <text x="60" y="130" class="t">One agent loop, multiple channels, durable state</text>
+
+  <rect x="60" y="190" width="300" height="300" rx="18" fill="#ecf7ff"/>
+  <text x="90" y="240" class="b">Channel Adapters</text>
+  <text x="90" y="285" class="s">Telegram</text>
+  <text x="90" y="325" class="s">Discord</text>
+  <text x="90" y="365" class="s">Web API</text>
+
+  <rect x="430" y="170" width="360" height="340" rx="18" fill="#c8f2ff"/>
+  <text x="470" y="225" class="b">Rust Agent Engine</text>
+  <text x="470" y="270" class="s">Reasoning + tool loop</text>
+  <text x="470" y="310" class="s">Session resume</text>
+  <text x="470" y="350" class="s">Context compaction</text>
+  <text x="470" y="390" class="s">Sub-agent boundary</text>
+
+  <rect x="860" y="190" width="280" height="300" rx="18" fill="#e4fff1"/>
+  <text x="895" y="240" class="b">State + Ops</text>
+  <text x="895" y="285" class="s">SQLite persistence</text>
+  <text x="895" y="325" class="s">Memory layers</text>
+  <text x="895" y="365" class="s">Scheduler + reflector</text>
+  <text x="895" y="405" class="s">Usage observability</text>
+
+  <path d="M360 340 L430 340" stroke="#9ad6f0" stroke-width="8" marker-end="url(#a)"/>
+  <path d="M790 340 L860 340" stroke="#9ad6f0" stroke-width="8" marker-end="url(#a)"/>
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#9ad6f0"/>
+    </marker>
+  </defs>
+</svg>
