@@ -1,67 +1,28 @@
 ---
 id: roadmap
-title: Roadmap
+title: Project Direction
 sidebar_position: 15
 ---
 
-This roadmap reflects current priorities. Items may shift as the project evolves.
+# Project direction
 
-## Already shipped
+MicroClaw develops around a small set of durable priorities instead of promising a fixed feature calendar.
 
-Everything in this section landed in v0.3.x–v0.4.0 and is documented elsewhere in
-these docs. It is listed here because earlier versions of this page carried these
-items as future work.
+## Current baseline
 
-- **Tool permission model** — risk tiers, `tool_policy` allow/deny lists, per-chat
-  standing grants, and structured approval option cards on web and chat channels
-- **Tool execution sandboxing** — filesystem path guard, command runner limits, and
-  egress policy
-- **Observability** — metrics, traces, and structured logs with an OpenTelemetry and
-  Langfuse path
-- **Robust web fetch** — content validation, HTML extraction, and URL safety checks
-- **Parallel tool execution within a turn** — bounded by `parallel_tool_max_concurrency`
-- **Streaming responses** — server-sent events on the web surface
-- **Group mention detection and reply quoting** — quoted-context forwarding on
-  Telegram, Discord, and Weixin
-- **Web UI console** — chat, settings, governance, usage, and task panels embedded in
-  the binary
-- **Multimodal input and output** — image description and generation, audio
-  transcription, PDF rendering
-- **Skill marketplace** — ClawHub with lockfile pinning and load-time integrity
-  verification
-- **Multi-agent orchestration** — `sub_agent`, `sessions_spawn`, specialist personas,
-  fan-in summaries, and progress reporting
+Version **v0.5.0** ships the channel-independent runtime, resumable execution, durable delivery, Web operator console, skills and plugins, MCP/ACP/A2A integration, scheduling, memory, hooks, governance, and observability. The release also decomposes the largest runtime and Web modules so future changes remain reviewable.
 
-## Near term
+## Active priorities
 
-- **Cut the next release.** A substantial body of work sits on `main` unreleased:
-  plan mode, the headless one-shot CLI, API-key pool rotation, per-chat model and
-  provider overrides, context-pressure compaction, approval buttons, and file-edit
-  diff rendering.
-- **Contributor build reliability.** Keep a clean clone building on current Node LTS
-  releases rather than a single pinned major, and keep the local check script
-  equivalent to CI.
-- **Frontend supply chain.** Move the web UI off build tooling with open advisories
-  and split the single-chunk bundle that ships inside the binary.
+- Make long-running work easier to inspect, resume, cancel, and recover safely.
+- Keep tool execution and extensions behind shared authorization, sandbox, egress, and audit boundaries.
+- Continue decomposing broad storage and runtime modules along stable domain boundaries.
+- Reduce release and contributor build latency without weakening the verification matrix.
+- Improve cross-channel progress delivery while keeping agent behavior channel-independent.
+- Retire dependency advisory exceptions as upstream fixes become available.
 
-## Mid term
+## Design constraints
 
-- **Sub-agent handoff contracts.** Harden parent/child result shaping for
-  orchestration-heavy flows, with clearer timeout and cancel semantics.
-- **Storage layer decomposition.** Split the monolithic query layer into
-  domain-scoped modules so schema changes stay reviewable.
-- **Dependency advisory burn-down.** Retire audit exceptions as upstream fixes land,
-  keeping each remaining exception justified with removal criteria.
+MicroClaw does not pursue channel count for its own sake, require a vector database as a core dependency, or allow extensions to bypass runtime governance. New work should strengthen the shared runtime rather than introduce channel-specific agent loops.
 
-## Long term
-
-- **Plugin host isolation.** Per-plugin principals and default-deny capabilities, per
-  the plugin-host runtime decision recorded in the RFCs. This boundary ships when it
-  is right, not to hit a date.
-- **Deeper thread-bound routing.** Extend fan-out and fan-in patterns across channels
-  with richer per-run observability.
-
-## Non-goals
-
-No enterprise SaaS build-out, no channel-count race, no vector database as a core
-dependency, and no self-modifying tool code.
+For dated planning material and implementation status, see the repository's [`docs/roadmap/`](https://github.com/microclaw/microclaw/tree/main/docs/roadmap) directory. Shipped behavior is documented in the main guides and [release notes](https://github.com/microclaw/microclaw/releases).

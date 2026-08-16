@@ -6,7 +6,9 @@ sidebar_position: 1
 
 # MicroClaw
 
-MicroClaw is a Rust multi-channel agent runtime for Telegram, Discord, Slack, Feishu/Lark, IRC, Web, and ACP-connected local clients. It combines one shared agent loop, one provider abstraction, persistent memory, background scheduling, and a local web control plane in a single binary.
+MicroClaw is a self-hosted Rust agent runtime for chat channels, the local Web console, and agent protocols. It combines one shared agent loop, one provider abstraction, persistent memory, background scheduling, governed extensions, and a local control plane in a single binary.
+
+The current stable release is **v0.5.0**. Use the `stable` branch for production deployments; `main` is the active development branch.
 
 ## What makes it different
 
@@ -50,7 +52,7 @@ MicroClaw enters an agentic loop for every message. LLM can call tools, inspect 
 - Agentic tool use (bash, file I/O, glob, grep)
 - Humanlike chat: short-first / BLUF replies, multi-bubble sends, zero-cost mood detection (`<conversation_mood>`), group etiquette
 - Concurrent specialist sub-agent team with named tasks (`label`), mid-run `report_progress`, opt-in standup + fan-in summaries, and specialist-to-specialist `consult_specialist`
-- 42 factory-ready built-in skills (compute, coding, research, planning, writing, diagrams, documents)
+- 45 factory-ready built-in skills (compute, coding, research, planning, writing, diagrams, documents)
 - Web search, fetch, and browser automation (with default-on SSRF guard against private/loopback/cloud-metadata IPs)
 - Multimedia tools: image generation, vision, text-to-speech, speech-to-text
 - Cross-channel voice: inbound transcription on Telegram/Discord/Slack/Feishu, opt-in TTS round-trip
@@ -67,6 +69,6 @@ MicroClaw enters an agentic loop for every message. LLM can call tools, inspect 
 - Personality customization via SOUL.md
 - Conversation archiving (automatic before compaction, manual via `/archive`)
 - Typing indicator that stays active during tool use
-- Local Web UI with session controls, config editing, and self-checks
+- Local Web operator console with chat, session controls, task history, configuration, governance, usage, skills, and diagnostics
 
 Continue with the Quickstart to get a bot running in minutes.

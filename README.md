@@ -8,6 +8,7 @@
 > For production use, choose the [`stable`](https://github.com/microclaw/microclaw/tree/stable) branch. `main` moves quickly and may include breaking changes.
 
 [![Website](https://img.shields.io/badge/Website-microclaw.org-blue)](https://microclaw.org)
+[![Latest release](https://img.shields.io/github/v/release/microclaw/microclaw?label=release)](https://github.com/microclaw/microclaw/releases/latest)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/pvmezwkAk5)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2Fmicroclaw-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/microclaw/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -61,6 +62,8 @@ microclaw start
 ```
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
+
+The current stable release is **v0.5.0**. It includes the decomposed runtime modules, React 19/Vite 8 web stack, and the refreshed operator console. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.5.0).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 

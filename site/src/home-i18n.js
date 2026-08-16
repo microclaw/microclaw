@@ -2,6 +2,7 @@ const en = {
   tagline: 'Agentic AI runtime for modern conversation surfaces, built in Rust.',
   description: 'MicroClaw is a Rust-first agent runtime for multi-channel automation with tools, memory, scheduling, and MCP federation.',
   eyebrow: 'RUST AGENT RUNTIME',
+  release: 'v0.5.0 is available',
   heroTitle: 'Build one agent core. Deploy it to every conversation surface.',
   heroText: 'MicroClaw gives teams tool-using automation with durable memory, resumable sessions, subagents, and channel adapters that never fork core business logic.',
   start: 'Start in 5 Minutes', github: 'View GitHub', meta: ['Single Service', 'SQLite Persistence', 'ACP + MCP + Skills'],
@@ -51,7 +52,7 @@ const en = {
 const translations = {
   en,
   'zh-CN': {
-    tagline: '用 Rust 构建、面向现代对话入口的智能体运行时。', description: 'MicroClaw 是一个 Rust 优先的多渠道智能体运行时，具备工具、记忆、调度和 MCP 联邦能力。', eyebrow: 'RUST 智能体运行时', heroTitle: '只构建一套智能体核心，部署到所有对话入口。', heroText: 'MicroClaw 为团队提供工具执行、持久记忆、可恢复会话、子智能体和不复制核心业务逻辑的渠道适配器。', start: '5 分钟开始', github: '查看 GitHub', meta: ['单一服务', 'SQLite 持久化', 'ACP + MCP + 技能'], quickstart: '快速开始', copy: '复制', copied: '已复制',
+    tagline: '用 Rust 构建、面向现代对话入口的智能体运行时。', description: 'MicroClaw 是一个 Rust 优先的多渠道智能体运行时，具备工具、记忆、调度和 MCP 联邦能力。', eyebrow: 'RUST 智能体运行时', release: 'v0.5.0 已发布', heroTitle: '只构建一套智能体核心，部署到所有对话入口。', heroText: 'MicroClaw 为团队提供工具执行、持久记忆、可恢复会话、子智能体和不复制核心业务逻辑的渠道适配器。', start: '5 分钟开始', github: '查看 GitHub', meta: ['单一服务', 'SQLite 持久化', 'ACP + MCP + 技能'], quickstart: '快速开始', copy: '复制', copied: '已复制',
     installLabels: {script: '安装脚本', brew: 'Homebrew', cargo: 'Cargo', powershell: 'PowerShell 脚本'}, installHints: {macScript: '推荐用于大多数 macOS 环境', brew: '适合使用 Homebrew 的工作流', source: '使用 Rust 工具链从源码构建', windowsScript: '推荐用于原生 Windows 安装', linuxScript: '推荐用于大多数 Linux 环境'},
     proof: [['架构', '渠道无关核心与适配器式投递'], ['记忆', 'AGENTS.md 与可观测的 SQLite 结构化记忆'], ['执行', '工具循环、原生与 ACP 子智能体、调度和后台任务'], ['扩展', '技能目录与 MCP 工具联邦']], whyTitle: '为什么团队选择 MicroClaw', whyText: '以运行时为中心，让渠道、模型和工具变化时核心逻辑依然稳定。',
     capabilities: [['渠道无关核心', '所有聊天和 Web 适配器共享同一个 agent loop。'], ['工具型 Agent Loop', '模型可以跨多个步骤连续调用工具，直到任务完成。'], ['并发专家团队', '具名专家子智能体可通过原生或 ACP Worker 并行工作。'], ['带质量门槛的记忆', '文件和 SQLite 记忆具备提取、去重和生命周期控制。'], ['技能 + MCP', '内置技能和外部 MCP Server 无需修改核心循环即可扩展能力。'], ['运维可见性', '用量、记忆观测、配置检查、指标和链路追踪让漂移可见。'], ['调度与后台任务', '周期任务和一次性任务都复用同一运行时。']], architectureTitle: '运行时架构一览', architectureText: '无论用户从哪里与智能体交流，背后都是同一个引擎。', architectureAlt: 'MicroClaw 架构概览', architectureSteps: [['接收', '渠道适配器把输入事件标准化为统一格式。'], ['组装上下文', '加载会话状态、记忆和已激活技能。'], ['推理与工具', 'Provider 层在受控循环中输出模型响应和工具调用。'], ['持久化与反思', '保存会话和记忆，并更新长期事实。'], ['投递', '按渠道限制分片，并以一致语义可靠投递。']], useCasesTitle: '用 MicroClaw 承载真实工作负载', useCasesText: '从个人运维到平台团队，一个运行时覆盖多种路径。', useCases: [['个人基础设施智能体', '在不同聊天中使用同一个具备记忆、调度和文件工具的助手。'], ['团队运维机器人', '使用权限感知工具和会话历史支持重复性内部流程。'], ['产品原型运行时', '在统一 Rust 核心上快速增加渠道和工具。']], readDetails: '查看实现细节', ctaTitle: '交付生产级 Rust 智能体技术栈。', ctaText: '从快速设置开始，再深入工具、权限、记忆和渠道部署。', quickstartCta: '快速开始', architectureDocs: '架构文档', toolsReference: '生成的工具参考',
@@ -91,5 +92,5 @@ const translations = {
 }
 
 export function getHomeMessages(locale) {
-  return translations[locale] || en;
+  return locale === 'en' ? en : {...en, ...(translations[locale] || {})};
 }

@@ -15,7 +15,7 @@ When a request matches a skill, the model can call `activate_skill` to load and 
 
 ## Current bundled skills
 
-MicroClaw ships **42 factory-ready built-in skills** so a fresh install is already a one-stop assistant — compute, coding, research, planning, writing, diagrams, and document handling — with nothing to wire up.
+MicroClaw ships **45 factory-ready built-in skills** so a fresh install is already a one-stop assistant — compute, coding, research, planning, writing, diagrams, and document handling — with nothing to wire up.
 
 Built-in skills live under `skills/built-in/<name>/SKILL.md`, are embedded into the binary at compile time via `include_dir!`, and are auto-installed at runtime by compatibility (incompatible ones — e.g. the Apple skills on Linux — are silently skipped).
 

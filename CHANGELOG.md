@@ -38,6 +38,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Website and README refresh.** The public homepage now highlights the current
+  release, project descriptions and skill counts match the v0.5.0 runtime, the
+  roadmap is recast as durable project direction, and obsolete Docusaurus
+  starter assets and internal iteration pages are removed.
+
 - **Monolith source files decomposed.** The five remaining oversized files
   are split into domain modules behind unchanged import paths: `src/llm.rs`
   (5,280 lines -> provider/translation/resilience modules), `src/setup.rs`

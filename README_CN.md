@@ -8,6 +8,7 @@
 > 生产环境请使用 [`stable`](https://github.com/microclaw/microclaw/tree/stable) 分支。`main` 更新频繁，可能包含破坏性变更。
 
 [![官网](https://img.shields.io/badge/Website-microclaw.org-blue)](https://microclaw.org)
+[![最新版本](https://img.shields.io/github/v/release/microclaw/microclaw?label=release)](https://github.com/microclaw/microclaw/releases/latest)
 [![Discord](https://img.shields.io/badge/Discord-加入-5865F2?logo=discord&logoColor=white)](https://discord.gg/pvmezwkAk5)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2Fmicroclaw-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/microclaw/)
 [![许可证：MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -62,6 +63,8 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
+当前稳定版本为 **v0.5.0**，包含运行时超大模块拆分、React 19/Vite 8 Web 技术栈，以及全面更新的操作控制台。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.5.0)。
+
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
 ## 为什么选择 MicroClaw
@@ -82,7 +85,7 @@ Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装
 | 可写工具执行时被中断 | 面对不确定的副作用会停止并要求核验，不会盲目重放 | 恢复审计事件 |
 | 渠道暂时不可用 | 任务完成与消息投递分开记录，结果可以保留在队列中重试 | 任务历史与投递诊断 |
 
-具体恢复模型见 [Durable Coworker 指南](docs/operations/durable-coworker.md)和[可靠性证明报告](docs/reports/reliability-differentiation-2026-07.md)。
+具体恢复模型见 [Durable Coworker 指南](docs/operations/durable-coworker.md)和[可靠性证明报告](docs/reports/reliability-differentiation-2026-07.md)。每个版本都会发布机器可读的[可靠性评分](docs/reports/reliability/README.md)，也可以用 `scripts/ci/reliability_scorecard.sh` 在本地复现。
 
 ## 工作原理
 

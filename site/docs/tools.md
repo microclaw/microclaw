@@ -8,7 +8,7 @@ MicroClaw exposes built-in tools to LLM through JSON Schema definitions (plus op
 
 For anti-drift, this page is complemented by the generated source-of-truth at [Generated Tools](./generated-tools), produced from code by `scripts/generate_docs_artifacts.mjs` (currently **58 built-in tools**). The curated table below highlights the most-used tools; the generated page is authoritative for the full set.
 
-Skill workflows are provided by local `SKILL.md` files — MicroClaw ships **42 factory-ready built-in skills** (see [Skills](./skills)) and loads them through `activate_skill`.
+Skill workflows are provided by local `SKILL.md` files — MicroClaw ships **45 factory-ready built-in skills** (see [Skills](./skills)) and loads them through `activate_skill`.
 
 ## Tool List (Curated)
 
