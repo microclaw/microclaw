@@ -4,7 +4,7 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
-## Unreleased
+## 0.5.0 - 2026-08-16
 
 ### Added
 
@@ -43,6 +43,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   The bundle is now split into `react`, `markdown`, and `vendor` chunks instead
   of one ~957 kB file, so the assets embedded in the binary cache
   independently.
+- **Web UI frontend decomposed.** `web/src/main.tsx` (4,927 lines, 61% of the
+  frontend) is split into `lib/` modules (think-tag extraction, backend types,
+  config model, session helpers, SSE parsing) and per-concern components
+  (chat thread, config controls, all settings tabs); `main.tsx` is now 2,373
+  lines with identical behavior, verified end-to-end against a running
+  backend.
 - **Docs site dark theme rebuilt for contrast.** The page, section, and card
   tones previously sat within ~5% lightness with card shadows disabled, which
   read as one flat grey field; they now form a deliberate lightness ladder with

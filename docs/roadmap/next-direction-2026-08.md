@@ -203,10 +203,10 @@ Status reflects what landed in the change that added this document.
 | 4 | Chunk the embedded web bundle | **Done** — one 957 kB chunk to `react`/`markdown`/`vendor` |
 | 5 | Docs-site contrast (see §10) | **Done** |
 | 6 | Roadmap index; correct the misleading `IMPLEMENTED.md` scope | **Done** |
-| 7 | `CHANGELOG` entry for the unreleased work | **Done** — written as `Unreleased` |
-| 8 | **Cut the release**: pick the version, bump `Cargo.toml`, squash the duplicate commit, tag | **Open — maintainer call** |
+| 7 | `CHANGELOG` entry for the unreleased work | **Done** — finalized as `0.5.0 - 2026-08-16` |
+| 8 | **Cut the release**: version bumped to 0.5.0 on the PR branch; tagging `v0.5.0` after merge is the maintainer's step | **Prepared** |
 | 9 | **Cut v0.4.1** from `v0.4-lts` so released v0.4.x carries the hardening fixes | **Open — maintainer call** |
-| 10 | Split `web/src/main.tsx` (4,927 lines) | Open |
+| 10 | Split `web/src/main.tsx` (4,927 lines) | **Done** — 2,373 lines, tabs and libs extracted, E2E-verified |
 | 11 | Prune the 79 remote branches | Open |
 | 12 | Decompose `db.rs` into domain modules behind the existing facade | Open — needs its own plan |
 
