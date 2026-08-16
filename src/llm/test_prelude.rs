@@ -1,5 +1,7 @@
 #![allow(unused_imports)]
 
+use super::*;
+
 pub(crate) use serde_json::json;
 
 pub(crate) use std::io::{Read, Write};
