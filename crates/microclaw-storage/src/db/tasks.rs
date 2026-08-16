@@ -647,6 +647,64 @@ impl Database {
     }
 }
 
+impl Database {
+    pub fn claim_due_tasks(
+        &self,
+        now: &str,
+        limit: usize,
+    ) -> Result<Vec<ScheduledTask>, MicroClawError> {
+        let conn = self.lock_conn();
+        let tx = conn.unchecked_transaction()?;
+
+        let mut stmt = tx.prepare(
+            "SELECT id, chat_id, prompt, schedule_type, schedule_value, timezone, next_run, last_run, status, created_at, exit_criteria, run_count, max_runs, not_after
+             FROM scheduled_tasks
+             WHERE status = 'active' AND next_run <= ?1
+             ORDER BY next_run ASC, id ASC
+             LIMIT ?2",
+        )?;
+        let candidates = stmt
+            .query_map(params![now, limit as i64], |row| {
+                Ok(ScheduledTask {
+                    id: row.get(0)?,
+                    chat_id: row.get(1)?,
+                    prompt: row.get(2)?,
+                    schedule_type: row.get(3)?,
+                    schedule_value: row.get(4)?,
+                    timezone: row.get(5)?,
+                    next_run: row.get(6)?,
+                    last_run: row.get(7)?,
+                    status: row.get(8)?,
+                    created_at: row.get(9)?,
+                    exit_criteria: row.get(10)?,
+                    run_count: row.get(11)?,
+                    max_runs: row.get(12)?,
+                    not_after: row.get(13)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        let mut claimed = Vec::new();
+        for task in candidates {
+            let rows = tx.execute(
+                "UPDATE scheduled_tasks
+                 SET status = 'running'
+                 WHERE id = ?1 AND status = 'active' AND next_run <= ?2",
+                params![task.id, now],
+            )?;
+            if rows > 0 {
+                let mut claimed_task = task;
+                claimed_task.status = "running".to_string();
+                claimed.push(claimed_task);
+            }
+        }
+
+        tx.commit()?;
+        Ok(claimed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

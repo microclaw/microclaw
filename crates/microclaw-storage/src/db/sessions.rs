@@ -208,6 +208,35 @@ impl Database {
     }
 }
 
+impl Database {
+    pub fn save_session_skill_envs(
+        &self,
+        chat_id: i64,
+        skill_envs_json: &str,
+    ) -> Result<(), MicroClawError> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE sessions SET skill_envs_json = ?2 WHERE chat_id = ?1",
+            params![chat_id, skill_envs_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_session_skill_envs(&self, chat_id: i64) -> Result<Option<String>, MicroClawError> {
+        let conn = self.lock_conn();
+        let result = conn.query_row(
+            "SELECT skill_envs_json FROM sessions WHERE chat_id = ?1",
+            params![chat_id],
+            |row| row.get::<_, Option<String>>(0),
+        );
+        match result {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
