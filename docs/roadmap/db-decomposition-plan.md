@@ -1,6 +1,16 @@
 # db.rs decomposition plan
 
-Status: **proposed** · Prereq: lands only after v0.5.0 is tagged · Scope: `crates/microclaw-storage/src/db.rs`
+Status: **delivered in 0.5.0** · Scope: `crates/microclaw-storage/src/db.rs`
+
+> Executed 2026-08-16 on the v0.5.0 release branch, at the maintainer's
+> direction, as a single scripted transformation instead of the six staged
+> PRs below (the phasing was designed for incremental review; the release
+> PR carried it in one commit, `b38cca6`, with the same per-phase gates
+> applied at the end state). Integrity was machine-checked: 237/237 public
+> methods, 59/59 structs, 71/71 CREATE TABLE statements, 43/43 migration
+> blocks, identical test counts (124 / 125 with `sqlite-vec` / 1,509
+> workspace), clippy and fmt clean. The rest of this document is kept as
+> the design rationale.
 
 ## 1. Problem
 

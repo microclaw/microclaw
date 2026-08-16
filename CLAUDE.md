@@ -92,7 +92,7 @@ MicroClaw supports a `SOUL.md` file that defines the bot's personality, voice, v
 
 ## Database
 
-Core persistence is provided by `microclaw-storage` (`Database` wrapper over SQLite). Runtime state and observability tables are managed through versioned migrations.
+Core persistence is provided by `microclaw-storage` (`Database` wrapper over SQLite). The query layer lives in `crates/microclaw-storage/src/db/` as domain modules (chats, sessions, tasks, subagents, memory, learning, auth, audit, outbox, turns, tool_cache, meta, usage) that each contribute an `impl Database` block behind the single facade; `schema.rs` holds the versioned migrations (frozen text — append new version blocks, never edit old ones).
 
 ## Important conventions
 

@@ -1,0 +1,9 @@
+# Pure code-move commits, hidden from git blame.
+# Enable with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# refactor(storage): split db.rs into domain modules
+b38cca6490f3e20ff60a3985c1cdab609779a9eb
+# refactor(web): extract lib/ and component modules from main.tsx (phase 1)
+b863ce83339bd78a00aa70df854c28f6cc0f228b
+# refactor(web): extract settings tab components from App (phase 2)
+97526450f5eb6a3be4279727886c88d9cf906462

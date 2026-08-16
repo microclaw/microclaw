@@ -38,6 +38,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Storage layer decomposed.** `crates/microclaw-storage/src/db.rs` (17,178
+  lines, 237 public methods in one `impl` block) is split into 14 domain
+  modules under `db/` (chats, sessions, tasks, subagents, memory, learning,
+  usage, auth, audit, outbox, turns, tool cache, runtime meta, schema) behind
+  the unchanged `Database` facade. All moves are verbatim; public API,
+  migration history, and test counts are identical, and no consumer code
+  changed.
 - **Web UI build moved to vite 8 and React 19**, closing the remaining
   build-tooling advisories (vite path traversal, esbuild dev-server origin).
   The bundle is now split into `react`, `markdown`, and `vendor` chunks instead

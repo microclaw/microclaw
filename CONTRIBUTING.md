@@ -50,6 +50,9 @@ scripts/ci/stability_smoke.sh
 - Keep commit messages terse and descriptive.
 - Avoid mixing formatting-only changes with behavioral changes unless unavoidable.
 - Do not force-push over reviewer context unless the branch history is explicitly disposable.
+- Pure code-move commits (file splits, renames) go into `.git-blame-ignore-revs`;
+  run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once locally so
+  `git blame` keeps pointing at real authorship.
 
 ## Release-Oriented Changes
 
