@@ -208,7 +208,7 @@ Status reflects what landed in the change that added this document.
 | 9 | **Cut v0.4.1** from `v0.4-lts` so released v0.4.x carries the hardening fixes | **Open — maintainer call** |
 | 10 | Split `web/src/main.tsx` (4,927 lines) | **Done** — 2,373 lines, tabs and libs extracted, E2E-verified |
 | 11 | Prune the 79 remote branches | Open |
-| 12 | Decompose `db.rs` into domain modules behind the existing facade | Open — needs its own plan |
+| 12 | Decompose `db.rs` into domain modules behind the existing facade | **Planned** — see [`db-decomposition-plan.md`](./db-decomposition-plan.md) |
 
 Items 8 and 9 are deliberately left open: choosing a version number and creating a
 tag is a release decision, not a cleanup. The `CHANGELOG` is written and the tree is

@@ -9,6 +9,7 @@ first.
 | Document | Status | Notes |
 |---|---|---|
 | [`next-direction-2026-08.md`](./next-direction-2026-08.md) | **Active** | Full-tree health review and recommended order. |
+| [`db-decomposition-plan.md`](./db-decomposition-plan.md) | Proposed | Split `db.rs` (17k lines / 237 methods) into domain modules behind the same facade; starts after v0.5.0 tags. |
 | [`v0.4.0-plan.md`](./v0.4.0-plan.md) | Delivered | v0.4.0 shipped 2026-08-07; exit criteria met, `v0.4-lts` branch cut. |
 | [`v0.3.0-completion-and-v0.4.0-kickoff.md`](./v0.3.0-completion-and-v0.4.0-kickoff.md) | Delivered | Superseded by the v0.4.0 plan. |
 | [`v0.3.0-self-improving-runtime.md`](./v0.3.0-self-improving-runtime.md) | Delivered | v0.3.0 workstream. |
