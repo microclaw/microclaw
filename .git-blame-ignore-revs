@@ -7,3 +7,13 @@ b38cca6490f3e20ff60a3985c1cdab609779a9eb
 b863ce83339bd78a00aa70df854c28f6cc0f228b
 # refactor(web): extract settings tab components from App (phase 2)
 97526450f5eb6a3be4279727886c88d9cf906462
+# refactor(config): split config.rs into domain modules
+2d6e4c065de64662e43c2bd1b0cb9d18f8e68a67
+# refactor(llm): split llm.rs into provider modules
+bafa9552657ddee03c0442381f1db8e62e971faf
+# refactor(setup): split setup.rs into wizard domain modules
+198af16f0f31407a35261c0d4c16790c4b63f9b0
+# refactor(storage): split db/learning.rs into experience/skills/tracks
+04afdc5803e020bca75aed9f97444fe89da778f2
+# refactor(web): split web.rs hub into route/domain modules
+0a5fb969cd8018f3c0506bec8e87a59507839e1b

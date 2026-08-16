@@ -38,6 +38,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Monolith source files decomposed.** The five remaining oversized files
+  are split into domain modules behind unchanged import paths: `src/llm.rs`
+  (5,280 lines -> provider/translation/resilience modules), `src/setup.rs`
+  (11,276 -> eleven wizard modules), `src/web.rs` (6,775 -> state/dto/route
+  modules alongside the existing submodules), `src/config.rs` (5,387 -> eight
+  config domains), and `db/learning.rs` (6,923 -> experience/skills/tracks).
+  All moves are verbatim with pub(crate) visibility promotions only; test
+  counts are unchanged.
 - **Storage layer decomposed.** `crates/microclaw-storage/src/db.rs` (17,178
   lines, 237 public methods in one `impl` block) is split into 14 domain
   modules under `db/` (chats, sessions, tasks, subagents, memory, learning,

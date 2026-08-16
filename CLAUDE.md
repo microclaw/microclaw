@@ -21,9 +21,11 @@ Rust 2021, Tokio, teloxide 0.17, serenity 0.12, provider-agnostic LLM runtime (A
 - `crates/microclaw-app/` -- app-level support modules (logging, builtin skills, transcribe)
 - `src/main.rs` -- entry point, CLI
 - `src/runtime.rs` -- app wiring (`AppState`), provider/tool initialization, channel boot
+- `src/config/` -- config model split by domain (core, defaults, media, llm_profiles, subagents, autonomy, integrations, governance)
+- `src/setup/` -- interactive setup wizard (keys, values, presets, app, pickers, fields, validate, save, ui, wizard)
 - `src/agent_engine.rs` -- shared agent loop (`process_with_agent`)
-- `src/llm.rs` -- provider implementations + format translation
-- `src/web.rs` -- web API routes and streaming
+- `src/llm/` -- provider implementations (anthropic, openai, oai_translate, key_pool, sse, stream, resilience)
+- `src/web/` -- web API routes and streaming (state, server, dto, api_* route groups + per-feature submodules)
 - `src/memory.rs` -- file-memory manager (`runtime/groups/.../AGENTS.md`)
 - `src/scheduler.rs` -- background scheduler + memory reflector loops
 - `src/channels/*.rs` -- Telegram/Discord/Slack/Feishu adapters
@@ -92,7 +94,7 @@ MicroClaw supports a `SOUL.md` file that defines the bot's personality, voice, v
 
 ## Database
 
-Core persistence is provided by `microclaw-storage` (`Database` wrapper over SQLite). The query layer lives in `crates/microclaw-storage/src/db/` as domain modules (chats, sessions, tasks, subagents, memory, learning, auth, audit, outbox, turns, tool_cache, meta, usage) that each contribute an `impl Database` block behind the single facade; `schema.rs` holds the versioned migrations (frozen text — append new version blocks, never edit old ones).
+Core persistence is provided by `microclaw-storage` (`Database` wrapper over SQLite). The query layer lives in `crates/microclaw-storage/src/db/` as domain modules (chats, sessions, tasks, subagents, memory, learning/{experience,skills,tracks}, auth, audit, outbox, turns, tool_cache, meta, usage) that each contribute an `impl Database` block behind the single facade; `schema.rs` holds the versioned migrations (frozen text — append new version blocks, never edit old ones).
 
 ## Important conventions
 
