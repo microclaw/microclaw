@@ -53,7 +53,7 @@ Rust 2021, Tokio, teloxide 0.17, serenity 0.12, provider-agnostic LLM runtime (A
 - **Plan mode**: `/plan` (or ACP session mode "plan") restricts the loop to read-only tools and presents a plan; an approving reply executes it with the full toolset
 - **Self-recheck**: opt-in (`self_recheck.enabled`) one-pass post-edit review before finalizing; hooks gained an observational `AfterTurn` event
 - **Headless CLI**: `microclaw run -p "<prompt>" [--session <name>] [--json]` runs one prompt without channels (`src/headless.rs`)
-- **API key rotation**: `api_keys` (top-level or per provider profile) forms a round-robin pool rotated on 401/403/429 (`KeyPool` in `src/llm.rs`)
+- **API key rotation**: `api_keys` (top-level or per provider profile) forms a round-robin pool rotated on 401/403/429 (`KeyPool` in `src/llm/key_pool.rs`)
 - **Per-chat model override**: `/model here <name>` / `/provider here <alias>` scope overrides to one chat (runtime-only, key `channel#chat_id`)
 - **Interrupted-turn recovery**: interactive turns are tracked in the `active_turns` table (with a rolling `progress_text` checkpoint per tool iteration); on restart `src/turn_recovery.rs` notifies chats whose turn was killed mid-run — including how far it got — and retires orphaned sub-agent runs as `interrupted`
 - **Delivery outbox**: final replies whose channel send fails are queued in `outbox_messages` and redelivered with backoff by `src/outbox.rs` (supervised loop); depth surfaces in the web Governance tab
