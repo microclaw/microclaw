@@ -150,7 +150,9 @@ const config = {
       // Replace with your project's social card
       image: 'img/social-card.png',
       colorMode: {
-        defaultMode: 'dark',
+        // Visitors with an OS preference still get it (respectPrefersColorScheme).
+        // This only decides what someone with no preference sees first.
+        defaultMode: 'light',
         respectPrefersColorScheme: true,
       },
       navbar: {

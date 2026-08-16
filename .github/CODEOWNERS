@@ -4,7 +4,7 @@
 /src/tools/ @everettjf
 /src/agent_engine.rs @everettjf
 /src/runtime.rs @everettjf
-/src/llm.rs @everettjf
+/src/llm/ @everettjf
 /crates/microclaw-tools/ @everettjf
 /crates/microclaw-storage/ @everettjf
 /docs/security/ @everettjf

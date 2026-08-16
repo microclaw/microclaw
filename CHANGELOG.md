@@ -4,6 +4,86 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## 0.5.0 - 2026-08-16
+
+### Added
+
+- **Plan mode.** `/plan` (or the ACP `plan` session mode) restricts the agent
+  loop to read-only tools and presents a plan; an approving reply re-runs the
+  work with the full toolset.
+- **Headless one-shot CLI.** `microclaw run -p "<prompt>" [--session <name>]
+  [--json]` runs a single prompt with no channels attached.
+- **API-key pool rotation.** `api_keys` (top-level or per provider profile)
+  forms a round-robin pool that rotates on 401/403/429 responses.
+- **Per-chat model and provider overrides.** `/model here <name>` and
+  `/provider here <alias>` scope an override to one chat.
+- **Context-pressure compaction.** Mid-turn compaction triggers at
+  `context_pressure_compact_pct` of `model_context_window`, with
+  compact-and-retry on provider context-overflow errors. The compaction split
+  is tool-block aware.
+- **Interactive approval buttons.** High-risk approval option cards render as
+  native buttons on Telegram, Discord, Slack, and web; a tap re-enters the
+  existing text approval-parsing path.
+- **`AfterTurn` hook event and opt-in self-recheck.** `self_recheck.enabled`
+  adds a one-pass post-edit review before finalizing.
+- **File-edit diffs and progress reporting.** `edit_file`/`write_file` attach a
+  unified diff to tool metadata, forwarded to web SSE and to chat behind
+  `file_diffs_in_chat`. Non-web channels gained a throttled edit-in-place
+  progress heartbeat with a percent bar, live sub-agent count, and optional
+  message pinning.
+- **Reply-quote forwarding.** Replying to an earlier message prepends
+  `[quoted from <author>: …]` on Telegram, Discord, and Weixin.
+- **Group-concise soul preset.** `examples/soul/group-concise.md` tunes replies
+  for busy group chats.
+
+### Changed
+
+- **Monolith source files decomposed.** The five remaining oversized files
+  are split into domain modules behind unchanged import paths: `src/llm.rs`
+  (5,280 lines -> provider/translation/resilience modules), `src/setup.rs`
+  (11,276 -> eleven wizard modules), `src/web.rs` (6,775 -> state/dto/route
+  modules alongside the existing submodules), `src/config.rs` (5,387 -> eight
+  config domains), and `db/learning.rs` (6,923 -> experience/skills/tracks).
+  All moves are verbatim with pub(crate) visibility promotions only; test
+  counts are unchanged.
+- **Storage layer decomposed.** `crates/microclaw-storage/src/db.rs` (17,178
+  lines, 237 public methods in one `impl` block) is split into 14 domain
+  modules under `db/` (chats, sessions, tasks, subagents, memory, learning,
+  usage, auth, audit, outbox, turns, tool cache, runtime meta, schema) behind
+  the unchanged `Database` facade. All moves are verbatim; public API,
+  migration history, and test counts are identical, and no consumer code
+  changed.
+- **Web UI build moved to vite 8 and React 19**, closing the remaining
+  build-tooling advisories (vite path traversal, esbuild dev-server origin).
+  The bundle is now split into `react`, `markdown`, and `vendor` chunks instead
+  of one ~957 kB file, so the assets embedded in the binary cache
+  independently.
+- **Web UI frontend decomposed.** `web/src/main.tsx` (4,927 lines, 61% of the
+  frontend) is split into `lib/` modules (think-tag extraction, backend types,
+  config model, session helpers, SSE parsing) and per-concern components
+  (chat thread, config controls, all settings tabs); `main.tsx` is now 2,373
+  lines with identical behavior, verified end-to-end against a running
+  backend.
+- **Docs site dark theme rebuilt for contrast.** The page, section, and card
+  tones previously sat within ~5% lightness with card shadows disabled, which
+  read as one flat grey field; they now form a deliberate lightness ladder with
+  visible card edges. Site default color mode is `light` (an explicit OS
+  preference still wins).
+
+### Fixed
+
+- **A clean clone now builds on Node 22 LTS.** `web/package.json` pinned
+  `engines.node` to `24.x` while `web/.npmrc` sets `engine-strict=true`, so the
+  unconditional `npm ci` in `build.rs` aborted `cargo build` on any other Node
+  major — including in `snap/snapcraft.yaml`, which pulls `node/22/stable` and
+  therefore could not build the snap at all. The pin is now `>=22`.
+- **`check.sh` no longer passes silently on failure.** It had no `set -e`, so it
+  ran past failing steps and exited with the last command's status. It also
+  still invoked `npm --prefix website`, left over from the `website/` → `site/`
+  move, as did `deploy.sh` and five release checklists.
+- **CI now builds the web UI and docs site on both supported Node LTS majors**,
+  the gap that hid the `engines` break.
+
 ## 0.4.0 - 2026-08-07
 
 ### Added

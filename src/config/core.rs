@@ -1,47 +1,5 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use super::*;
 
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use tracing::warn;
-
-use crate::codex_auth::{
-    codex_auth_file_has_access_token, is_openai_codex_provider, is_qwen_portal_provider,
-    provider_allows_empty_api_key, qwen_oauth_file_has_access_token,
-};
-use crate::plugins::PluginsConfig;
-use microclaw_core::error::MicroClawError;
-use microclaw_core::redact::OutputGuardrailConfig;
-pub use microclaw_tools::egress::{EgressPolicyConfig, EgressPolicyMode};
-pub use microclaw_tools::sandbox::{SandboxBackend, SandboxConfig, SandboxMode, SecurityProfile};
-pub use microclaw_tools::types::WorkingDirIsolation;
-use microclaw_tools::web_content_validation::WebContentValidationConfig;
-use microclaw_tools::web_fetch::WebFetchUrlValidationConfig;
-use microclaw_tools::web_search::SearchProviderConfig;
-
-fn default_telegram_bot_token() -> String {
-    String::new()
-}
-fn default_bot_username() -> String {
-    String::new()
-}
-fn default_llm_provider() -> String {
-    "anthropic".into()
-}
-fn default_api_key() -> String {
-    String::new()
-}
-fn default_model() -> String {
-    String::new()
-}
-pub fn default_model_for_provider_name(provider: &str) -> &'static str {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "anthropic" => "claude-sonnet-4-5-20250929",
-        "ollama" => "llama3.2",
-        "openai-codex" => "gpt-5.3-codex",
-        _ => "gpt-5.2",
-    }
-}
 pub fn normalize_model_name(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed == "*" {
@@ -51,7 +9,7 @@ pub fn normalize_model_name(value: &str) -> Option<String> {
     }
 }
 
-fn normalize_string_list(values: &mut Vec<String>, lowercase: bool) {
+pub(crate) fn normalize_string_list(values: &mut Vec<String>, lowercase: bool) {
     *values = values
         .drain(..)
         .map(|value| {
@@ -78,1188 +36,21 @@ pub fn resolve_model_name_with_fallback(
         .or_else(|| fallback.and_then(normalize_model_name))
         .unwrap_or_else(|| default_model_for_provider_name(provider).to_string())
 }
-fn default_llm_user_agent() -> String {
-    crate::http_client::default_llm_user_agent()
-}
-fn default_max_tokens() -> u32 {
-    8192
-}
-fn default_max_tool_iterations() -> usize {
-    100
-}
-fn default_chat_turn_queue_max_pending() -> usize {
-    20
-}
-fn default_parallel_tool_max_concurrency() -> usize {
-    8
-}
-fn default_compaction_timeout_secs() -> u64 {
-    180
-}
-fn default_max_history_messages() -> usize {
-    50
-}
-fn default_max_document_size_mb() -> u64 {
-    100
-}
-fn default_memory_token_budget() -> usize {
-    1500
-}
-fn default_memory_l0_identity_pct() -> usize {
-    20
-}
-fn default_memory_l1_essential_pct() -> usize {
-    30
-}
-fn default_memory_max_entries_per_chat() -> usize {
-    200
-}
-fn default_memory_max_global_entries() -> usize {
-    500
-}
-fn default_kg_max_triples_per_chat() -> usize {
-    1000
-}
-fn default_tool_result_truncation_threshold_chars() -> usize {
-    4000
-}
-fn default_tool_result_truncation_head_chars() -> usize {
-    1500
-}
-fn default_tool_result_truncation_tail_chars() -> usize {
-    500
-}
-fn default_tool_result_artifact_ttl_hours() -> u64 {
-    24
-}
-fn default_memory_recency_half_life_days() -> f64 {
-    30.0
-}
-fn default_memory_graph_recall_enabled() -> bool {
-    true
-}
-fn default_memory_graph_max_hops() -> usize {
-    2
-}
-fn default_memory_graph_max_triples() -> usize {
-    10
-}
-fn default_tool_repeat_window() -> usize {
-    10
-}
-fn default_tool_repeat_limit() -> usize {
-    3
-}
-fn default_anthropic_prompt_cache_enabled() -> bool {
-    true
-}
-fn default_anthropic_prompt_cache_ttl() -> String {
-    "5m".to_string()
-}
-fn default_checkpoints_enabled() -> bool {
-    false
-}
-fn default_skill_archive_after_days() -> u64 {
-    30
-}
-fn default_skills_catalog_top_k() -> usize {
-    3
-}
-fn default_skill_review_min_tool_calls() -> usize {
-    5
-}
-fn default_data_dir() -> String {
-    default_data_root().to_string_lossy().to_string()
-}
 
 /// Expands a path string, replacing `~` with the user's home directory.
-fn expand_path(path: &str) -> PathBuf {
+pub(crate) fn expand_path(path: &str) -> PathBuf {
     match shellexpand::tilde(path) {
         std::borrow::Cow::Borrowed(p) => PathBuf::from(p),
         std::borrow::Cow::Owned(p) => PathBuf::from(p),
     }
 }
 
-fn default_data_root() -> PathBuf {
-    if std::env::var("SNAP").is_ok() {
-        if let Ok(snap_user_common) = std::env::var("SNAP_USER_COMMON") {
-            return PathBuf::from(snap_user_common);
-        }
-    }
-    expand_path("~/.microclaw")
-}
-
-fn default_working_dir() -> String {
-    default_data_root()
-        .join("working_dir")
-        .to_string_lossy()
-        .to_string()
-}
-fn default_working_dir_isolation() -> WorkingDirIsolation {
-    WorkingDirIsolation::Chat
-}
-fn default_rtk_binary_path() -> String {
-    "rtk".to_string()
-}
-
-/// Opt-in RTK (Rust Token Killer) integration for the bash tool.
-/// When enabled, commands are passed through `rtk rewrite` before execution;
-/// commands RTK recognizes run as `rtk <command>` and return compressed
-/// output, reducing token consumption. Commands without an RTK equivalent
-/// (or any rtk failure) run unchanged.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RtkConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Path to the rtk binary. Defaults to `rtk` resolved from PATH.
-    #[serde(default = "default_rtk_binary_path")]
-    pub binary_path: String,
-}
-
-impl Default for RtkConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            binary_path: default_rtk_binary_path(),
-        }
-    }
-}
-
-fn default_bash_dangerous_patterns() -> Vec<String> {
-    vec![
-        // Destructive recursive deletes against root or wildcards.
-        r"\brm\s+(-[a-zA-Z]*[rfRF][a-zA-Z]*\s+)+(/|\*|~|\$HOME)".into(),
-        // Pipe-to-shell installer pattern.
-        r"\b(curl|wget|fetch)\b[^|]*\|\s*(sudo\s+)?(sh|bash|zsh|fish)\b".into(),
-        // Privilege escalation.
-        r"\bsudo\b".into(),
-        // Disk-overwrite.
-        r"\bdd\s+if=".into(),
-        // Forkbomb.
-        r":\(\)\s*\{\s*:\s*\|\s*:&\s*\}\s*;\s*:".into(),
-        // Filesystem format.
-        r"\bmkfs(\.[a-z0-9]+)?\b".into(),
-        // Recursive chmod/chown on root.
-        r"\bch(mod|own)\s+-R\s+[^/]*\s+/(\s|$)".into(),
-    ]
-}
-fn default_high_risk_tool_user_confirmation_required() -> bool {
-    true
-}
-fn default_sandbox_image() -> String {
-    "ubuntu:25.10".into()
-}
-fn default_sandbox_container_prefix() -> String {
-    "microclaw-sandbox".into()
-}
-fn default_timezone() -> String {
-    "auto".into()
-}
-
-fn detect_system_timezone() -> String {
+pub(crate) fn detect_system_timezone() -> String {
     match iana_time_zone::get_timezone() {
         Ok(tz_name) => tz_name,
         Err(e) => {
             warn!("Failed to detect system timezone automatically: {e}. Falling back to UTC.");
             "UTC".into()
-        }
-    }
-}
-fn default_max_session_messages() -> usize {
-    40
-}
-fn default_diff_max_lines() -> usize {
-    microclaw_core::diff::DEFAULT_DIFF_MAX_LINES
-}
-fn default_model_context_window() -> usize {
-    200_000
-}
-fn default_context_pressure_compact_pct() -> usize {
-    85
-}
-fn default_file_diffs_in_chat() -> bool {
-    true
-}
-fn default_compact_keep_recent() -> usize {
-    20
-}
-fn default_tool_timeout_secs() -> u64 {
-    30
-}
-fn default_mcp_request_timeout_secs() -> u64 {
-    120
-}
-fn default_control_chat_ids() -> Vec<i64> {
-    Vec::new()
-}
-fn default_web_enabled() -> bool {
-    true
-}
-fn default_web_host() -> String {
-    "127.0.0.1".into()
-}
-fn default_web_port() -> u16 {
-    10961
-}
-fn default_web_max_inflight_per_session() -> usize {
-    10
-}
-fn default_web_max_requests_per_window() -> usize {
-    8
-}
-fn default_web_rate_window_seconds() -> u64 {
-    10
-}
-fn default_web_run_history_limit() -> usize {
-    512
-}
-fn default_web_session_idle_ttl_seconds() -> u64 {
-    300
-}
-fn default_allow_group_slash_without_mention() -> bool {
-    false
-}
-fn default_subagent_max_concurrent() -> usize {
-    4
-}
-fn default_subagent_max_active_per_chat() -> usize {
-    5
-}
-fn default_subagent_run_timeout_secs() -> u64 {
-    900
-}
-fn default_subagent_announce() -> bool {
-    false
-}
-fn default_subagent_progress_min_interval_secs() -> u64 {
-    45
-}
-fn default_subagent_max_spawn_depth() -> usize {
-    1
-}
-fn default_subagent_max_children_per_run() -> usize {
-    5
-}
-fn default_subagent_thread_bound_routing_enabled() -> bool {
-    true
-}
-fn default_subagent_announce_relay_interval_secs() -> u64 {
-    15
-}
-fn default_subagent_max_tokens_per_run() -> i64 {
-    400_000
-}
-fn default_subagent_orchestrate_max_workers() -> usize {
-    5
-}
-fn default_subagent_acp_auto_approve() -> bool {
-    true
-}
-fn default_a2a_enabled() -> bool {
-    false
-}
-
-fn default_model_prices() -> Vec<ModelPrice> {
-    Vec::new()
-}
-fn default_reflector_enabled() -> bool {
-    true
-}
-fn default_reflector_interval_mins() -> u64 {
-    15
-}
-fn default_dlq_replay_enabled() -> bool {
-    true
-}
-fn default_dlq_replay_interval_secs() -> u64 {
-    300
-}
-fn default_dlq_max_replay_attempts() -> u32 {
-    3
-}
-fn default_soul_path() -> Option<String> {
-    None
-}
-fn default_souls_dir() -> Option<String> {
-    None
-}
-fn default_context_max_chars() -> usize {
-    8000
-}
-fn default_user_model_max_chars() -> usize {
-    1500
-}
-fn default_clawhub_registry() -> String {
-    "https://clawhub.ai".into()
-}
-fn default_voice_provider() -> String {
-    "openai".into()
-}
-fn default_true() -> bool {
-    true
-}
-
-/// Load-time verification policy for ClawHub-managed skill trees.
-///
-/// `block` (default) makes a skill whose on-disk tree no longer matches the
-/// lockfile hash unavailable until it is reinstalled; `warn` only logs;
-/// `off` disables the check. Entries installed before tree hashing existed
-/// (no recorded hash) always warn instead of blocking.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ClawHubVerifyMode {
-    Off,
-    Warn,
-    #[default]
-    Block,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ClawHubConfig {
-    /// ClawHub registry URL
-    #[serde(default = "default_clawhub_registry", rename = "clawhub_registry")]
-    pub registry: String,
-    /// ClawHub API token (optional)
-    #[serde(default, rename = "clawhub_token")]
-    pub token: Option<String>,
-    /// Enable agent tools for ClawHub (search, install)
-    #[serde(default = "default_true", rename = "clawhub_agent_tools_enabled")]
-    pub agent_tools_enabled: bool,
-    /// Skip security warnings for ClawHub installs
-    #[serde(default, rename = "clawhub_skip_security_warnings")]
-    pub skip_security_warnings: bool,
-    /// Verify installed skill trees against the lockfile whenever skills load
-    #[serde(default, rename = "clawhub_verify_on_load")]
-    pub verify_on_load: ClawHubVerifyMode,
-}
-
-impl Default for ClawHubConfig {
-    fn default() -> Self {
-        Self {
-            registry: default_clawhub_registry(),
-            token: None,
-            agent_tools_enabled: default_true(),
-            skip_security_warnings: false,
-            verify_on_load: ClawHubVerifyMode::default(),
-        }
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ModelPrice {
-    pub model: String,
-    pub input_per_million_usd: f64,
-    pub output_per_million_usd: f64,
-}
-
-/// Configuration for multimedia tools (image generation, vision, TTS, STT).
-///
-/// All four tools are **disabled by default** — operators opt in per-tool.
-/// Credential resolution order for each tool (first non-empty wins):
-/// 1. `media.api_key` (plaintext in config; discouraged but supported)
-/// 2. Environment variable `MICROCLAW_OPENAI_API_KEY`
-/// 3. Environment variable `OPENAI_API_KEY`
-/// 4. `config.openai_api_key` (existing top-level field; used by transcribe)
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct MediaConfig {
-    /// Optional explicit API key. Prefer env vars (`MICROCLAW_OPENAI_API_KEY`
-    /// or `OPENAI_API_KEY`) over plaintext here.
-    #[serde(default)]
-    pub api_key: Option<String>,
-    /// Optional per-module base URL override. Falls back to `openai_base_url`
-    /// then to `https://api.openai.com/v1`.
-    #[serde(default)]
-    pub base_url: Option<String>,
-    /// Extra directories that `describe_image` / `transcribe_audio` may read
-    /// from, beyond the working_dir default. Absolute paths only. Empty by
-    /// default — matches the previous working-dir-only behavior.
-    #[serde(default)]
-    pub allowed_read_dirs: Vec<String>,
-    #[serde(default)]
-    pub image_gen: ImageGenConfig,
-    #[serde(default)]
-    pub vision: VisionConfig,
-    #[serde(default)]
-    pub tts: TtsConfig,
-    #[serde(default)]
-    pub stt: SttConfig,
-    #[serde(default)]
-    pub book: BookConfig,
-    #[serde(default)]
-    pub podcast: PodcastConfig,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ImageGenConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_image_model")]
-    pub model: String,
-    #[serde(default = "default_image_size")]
-    pub default_size: String,
-}
-
-impl Default for ImageGenConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: default_image_model(),
-            default_size: default_image_size(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VisionConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_vision_model")]
-    pub model: String,
-    #[serde(default = "default_vision_max_tokens")]
-    pub max_tokens: u32,
-}
-
-impl Default for VisionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: default_vision_model(),
-            max_tokens: default_vision_max_tokens(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TtsConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_tts_model")]
-    pub model: String,
-    #[serde(default = "default_tts_voice")]
-    pub default_voice: String,
-    #[serde(default = "default_tts_format")]
-    pub default_format: String,
-    /// Optional TTS-specific endpoint override, e.g. a dedicated speech host.
-    /// Falls back to `media.base_url`, then `openai_base_url`, then OpenAI.
-    #[serde(default)]
-    pub base_url: Option<String>,
-    /// Optional TTS-specific API key. Falls back to `media.api_key`, then
-    /// `MICROCLAW_OPENAI_API_KEY` / `OPENAI_API_KEY` / `openai_api_key`.
-    #[serde(default)]
-    pub api_key: Option<String>,
-}
-
-impl Default for TtsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: default_tts_model(),
-            default_voice: default_tts_voice(),
-            default_format: default_tts_format(),
-            base_url: None,
-            api_key: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SttConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_stt_model")]
-    pub model: String,
-    #[serde(default)]
-    pub language: Option<String>,
-}
-
-impl Default for SttConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: default_stt_model(),
-            language: None,
-        }
-    }
-}
-
-/// Configuration for the native `render_pdf` ("generate a book") tool.
-///
-/// Disabled by default — operators opt in via `media.book.enabled`. PDF
-/// rendering is fully self-contained (pure-Rust `genpdf`), so no external
-/// binaries are required.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BookConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Page size for rendered documents. Currently "A4" or "Letter".
-    #[serde(default = "default_book_page_size")]
-    pub page_size: String,
-    /// Path to a single-face TrueType (`.ttf`) font used to render text.
-    /// When unset, a usable system font is auto-detected (e.g. Arial Unicode
-    /// on macOS, DejaVu/Liberation on Linux). For CJK output, point this at a
-    /// CJK-capable TrueType font.
-    #[serde(default)]
-    pub font_path: Option<String>,
-}
-
-impl Default for BookConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            page_size: default_book_page_size(),
-            font_path: None,
-        }
-    }
-}
-
-/// Configuration for the native `generate_podcast` tool.
-///
-/// Disabled by default — operators opt in via `media.podcast.enabled`.
-/// Per-segment speech uses the OpenAI-compatible `/audio/speech` endpoint with
-/// the `media.tts` model; credentials/endpoint default to `media.tts` then the
-/// shared `media` settings, but can be overridden here. Segments are stitched
-/// into a single file by shelling out to `ffmpeg`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PodcastConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Path to (or name of) the `ffmpeg` binary used to concatenate segments.
-    #[serde(default = "default_ffmpeg_path")]
-    pub ffmpeg_path: String,
-    /// Default voice when a segment does not specify one.
-    #[serde(default = "default_tts_voice")]
-    pub default_voice: String,
-    /// Silence inserted between segments, in milliseconds.
-    #[serde(default = "default_segment_pause_ms")]
-    pub segment_pause_ms: u32,
-    /// Optional podcast-specific endpoint override. Falls back to
-    /// `media.tts.base_url`, then `media.base_url`, then `openai_base_url`.
-    #[serde(default)]
-    pub base_url: Option<String>,
-    /// Optional podcast-specific API key. Falls back to `media.tts.api_key`,
-    /// then `media.api_key` / `MICROCLAW_OPENAI_API_KEY` / `OPENAI_API_KEY`.
-    #[serde(default)]
-    pub api_key: Option<String>,
-}
-
-impl Default for PodcastConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            ffmpeg_path: default_ffmpeg_path(),
-            default_voice: default_tts_voice(),
-            segment_pause_ms: default_segment_pause_ms(),
-            base_url: None,
-            api_key: None,
-        }
-    }
-}
-
-fn default_image_model() -> String {
-    "gpt-image-1".into()
-}
-fn default_image_size() -> String {
-    "1024x1024".into()
-}
-fn default_vision_model() -> String {
-    "gpt-4o-mini".into()
-}
-fn default_vision_max_tokens() -> u32 {
-    1024
-}
-fn default_tts_model() -> String {
-    "tts-1".into()
-}
-fn default_tts_voice() -> String {
-    "alloy".into()
-}
-fn default_tts_format() -> String {
-    "mp3".into()
-}
-fn default_stt_model() -> String {
-    "whisper-1".into()
-}
-fn default_book_page_size() -> String {
-    "A4".into()
-}
-fn default_ffmpeg_path() -> String {
-    "ffmpeg".into()
-}
-fn default_segment_pause_ms() -> u32 {
-    500
-}
-
-impl MediaConfig {
-    /// Resolve the API key using the documented priority order. Returns
-    /// `None` if no source is configured. Never logs the value.
-    pub fn resolve_api_key(&self, fallback_openai_key: Option<&str>) -> Option<String> {
-        if let Some(k) = self.api_key.as_deref().filter(|s| !s.trim().is_empty()) {
-            return Some(k.to_string());
-        }
-        if let Ok(k) = std::env::var("MICROCLAW_OPENAI_API_KEY") {
-            if !k.trim().is_empty() {
-                return Some(k);
-            }
-        }
-        if let Ok(k) = std::env::var("OPENAI_API_KEY") {
-            if !k.trim().is_empty() {
-                return Some(k);
-            }
-        }
-        fallback_openai_key
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| s.to_string())
-    }
-
-    /// Resolve the base URL using the documented priority order. Always
-    /// returns a non-empty value (defaults to OpenAI).
-    pub fn resolve_base_url(&self, fallback: Option<&str>) -> String {
-        if let Some(u) = self.base_url.as_deref().filter(|s| !s.trim().is_empty()) {
-            return u.trim_end_matches('/').to_string();
-        }
-        if let Some(u) = fallback.filter(|s| !s.trim().is_empty()) {
-            return u.trim_end_matches('/').to_string();
-        }
-        "https://api.openai.com/v1".to_string()
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct LlmProviderProfile {
-    #[serde(default)]
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    /// Additional API keys rotated on auth/rate-limit errors.
-    #[serde(default)]
-    pub api_keys: Vec<String>,
-    #[serde(default)]
-    pub llm_base_url: Option<String>,
-    #[serde(default)]
-    pub llm_user_agent: Option<String>,
-    #[serde(default)]
-    pub default_model: Option<String>,
-    #[serde(default)]
-    pub models: Vec<String>,
-    #[serde(default)]
-    pub show_thinking: Option<bool>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ResolvedLlmProviderProfile {
-    pub alias: String,
-    pub provider: String,
-    pub api_key: String,
-    /// Additional API keys rotated on auth/rate-limit errors.
-    pub api_keys: Vec<String>,
-    pub llm_base_url: Option<String>,
-    pub llm_user_agent: String,
-    pub default_model: String,
-    pub models: Vec<String>,
-    pub show_thinking: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SubagentAcpTargetConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default = "default_subagent_acp_auto_approve")]
-    pub auto_approve: bool,
-}
-
-impl Default for SubagentAcpTargetConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            command: String::new(),
-            args: Vec::new(),
-            env: HashMap::new(),
-            auto_approve: default_subagent_acp_auto_approve(),
-        }
-    }
-}
-
-impl SubagentAcpTargetConfig {
-    fn normalize(&mut self) {
-        self.command = self.command.trim().to_string();
-        self.args = self
-            .args
-            .drain(..)
-            .map(|arg| arg.trim().to_string())
-            .filter(|arg| !arg.is_empty())
-            .collect();
-        self.env = self
-            .env
-            .drain()
-            .filter_map(|(key, value)| {
-                let normalized = key.trim().to_string();
-                if normalized.is_empty() {
-                    None
-                } else {
-                    Some((normalized, value))
-                }
-            })
-            .collect();
-    }
-
-    fn command_label(&self) -> String {
-        if self.command.trim().is_empty() {
-            "acp".to_string()
-        } else {
-            Path::new(&self.command)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("acp")
-                .to_string()
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ResolvedSubagentAcpTargetConfig {
-    pub name: Option<String>,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-    pub auto_approve: bool,
-}
-
-impl ResolvedSubagentAcpTargetConfig {
-    pub fn model_label(&self) -> String {
-        if let Some(name) = self.name.as_deref() {
-            format!(
-                "{name}/{}",
-                SubagentAcpTargetConfig {
-                    enabled: true,
-                    command: self.command.clone(),
-                    args: self.args.clone(),
-                    env: self.env.clone(),
-                    auto_approve: self.auto_approve,
-                }
-                .command_label()
-            )
-        } else {
-            SubagentAcpTargetConfig {
-                enabled: true,
-                command: self.command.clone(),
-                args: self.args.clone(),
-                env: self.env.clone(),
-                auto_approve: self.auto_approve,
-            }
-            .command_label()
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct SubagentAcpConfig {
-    #[serde(flatten)]
-    pub default_target: SubagentAcpTargetConfig,
-    #[serde(default, rename = "default_target")]
-    pub default_target_name: Option<String>,
-    #[serde(default)]
-    pub targets: HashMap<String, SubagentAcpTargetConfig>,
-}
-
-impl SubagentAcpConfig {
-    fn normalize(&mut self) {
-        self.default_target.normalize();
-        self.default_target_name = self
-            .default_target_name
-            .take()
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty());
-        self.targets = self
-            .targets
-            .drain()
-            .filter_map(|(key, mut value)| {
-                let normalized = key.trim().to_string();
-                if normalized.is_empty() {
-                    return None;
-                }
-                value.normalize();
-                Some((normalized, value))
-            })
-            .collect();
-    }
-
-    pub fn resolve_target(
-        &self,
-        requested_target: Option<&str>,
-    ) -> Result<ResolvedSubagentAcpTargetConfig, String> {
-        let requested_target = requested_target
-            .map(str::trim)
-            .filter(|target| !target.is_empty());
-        if let Some(name) = requested_target {
-            return self.resolve_named_target(name);
-        }
-        if let Some(name) = self.default_target_name.as_deref() {
-            return self.resolve_named_target(name);
-        }
-        if !self.default_target.command.trim().is_empty() {
-            return Ok(ResolvedSubagentAcpTargetConfig {
-                name: None,
-                command: self.default_target.command.clone(),
-                args: self.default_target.args.clone(),
-                env: self.default_target.env.clone(),
-                auto_approve: self.default_target.auto_approve,
-            });
-        }
-
-        let mut enabled_targets = self
-            .targets
-            .iter()
-            .filter(|(_, target)| target.enabled)
-            .collect::<Vec<_>>();
-        enabled_targets.sort_by(|(left, _), (right, _)| left.cmp(right));
-        match enabled_targets.as_slice() {
-            [] => Err(
-                "ACP runtime is enabled but no command is configured. Set subagents.acp.command or add an enabled target under subagents.acp.targets."
-                    .into(),
-            ),
-            [(name, _)] => self.resolve_named_target(name),
-            _ => Err(
-                "ACP runtime has multiple enabled named targets. Set runtime_target or subagents.acp.default_target."
-                    .into(),
-            ),
-        }
-    }
-
-    fn resolve_named_target(
-        &self,
-        target_name: &str,
-    ) -> Result<ResolvedSubagentAcpTargetConfig, String> {
-        let target = self.targets.get(target_name).ok_or_else(|| {
-            format!(
-                "Unknown ACP runtime target '{target_name}'. Configure it under subagents.acp.targets."
-            )
-        })?;
-        if !target.enabled {
-            return Err(format!(
-                "ACP runtime target '{target_name}' is disabled. Enable it under subagents.acp.targets.{target_name}.enabled."
-            ));
-        }
-        if target.command.trim().is_empty() {
-            return Err(format!(
-                "ACP runtime target '{target_name}' is enabled but command is empty."
-            ));
-        }
-        Ok(ResolvedSubagentAcpTargetConfig {
-            name: Some(target_name.to_string()),
-            command: target.command.clone(),
-            args: target.args.clone(),
-            env: target.env.clone(),
-            auto_approve: target.auto_approve,
-        })
-    }
-}
-
-/// Per-task auxiliary model overrides.
-///
-/// Each slot names a (typically cheaper) model used for a specific ancillary task
-/// instead of the main conversation model. Auxiliary models run on the *same*
-/// provider profile and credentials as the main model — only the model name is
-/// swapped — so the common case (e.g. a small/fast model for summarization) needs
-/// no extra provider configuration. An empty or unset slot falls back to the main
-/// model, so the default behavior is unchanged.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct AuxModels {
-    /// Model used for context compaction / history summarization. Falls back to the
-    /// main model when unset or empty.
-    #[serde(default)]
-    pub compaction: Option<String>,
-    /// Model used by the background memory reflector (fact/triple extraction). This
-    /// runs periodically per active chat, so a cheaper model here is pure savings.
-    /// Falls back to the main model when unset or empty.
-    #[serde(default)]
-    pub reflector: Option<String>,
-    /// Model used to generate short session titles. This is a one-shot
-    /// summarization, so a cheaper model is pure savings. Falls back to the
-    /// provider's default model when unset or empty.
-    #[serde(default)]
-    pub title: Option<String>,
-    /// Model used for image description (the `describe_image` tool). Overrides
-    /// `media.vision.model` when set; falls back to it when unset or empty.
-    #[serde(default)]
-    pub vision: Option<String>,
-    /// Model that writes a short advisory verdict on high-risk tool
-    /// approval prompts. Unlike the other slots this does NOT fall back to
-    /// the main model: unset means the reviewer is off (the default), so
-    /// enabling it is an explicit operator choice. Advisory only — it never
-    /// approves or denies anything itself.
-    #[serde(default)]
-    pub approval_reviewer: Option<String>,
-}
-
-impl AuxModels {
-    /// Resolve the model to use for context compaction, falling back to `main` when
-    /// no auxiliary model is configured.
-    pub fn compaction_model<'a>(&'a self, main: &'a str) -> &'a str {
-        match self.compaction.as_deref() {
-            Some(m) if !m.trim().is_empty() => m,
-            _ => main,
-        }
-    }
-
-    /// Optional model override for the memory reflector. Returns `None` (use the
-    /// provider's default model) when unset or empty, preserving prior behavior.
-    pub fn reflector_model(&self) -> Option<&str> {
-        match self.reflector.as_deref() {
-            Some(m) if !m.trim().is_empty() => Some(m),
-            _ => None,
-        }
-    }
-
-    /// Optional model override for session-title generation. Returns `None` (use
-    /// the provider's default model) when unset or empty, preserving prior behavior.
-    pub fn title_model(&self) -> Option<&str> {
-        match self.title.as_deref() {
-            Some(m) if !m.trim().is_empty() => Some(m),
-            _ => None,
-        }
-    }
-
-    /// Optional model override for image description. Returns `None` (use
-    /// `media.vision.model`) when unset or empty, preserving prior behavior.
-    pub fn vision_model(&self) -> Option<&str> {
-        match self.vision.as_deref() {
-            Some(m) if !m.trim().is_empty() => Some(m),
-            _ => None,
-        }
-    }
-}
-
-/// Opt-in post-edit self-recheck (one review pass after file-modifying
-/// turns, before the reply finalizes).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct SelfRecheckConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Custom prompt template; `{{USER}}` and `{{RESULT}}` placeholders are
-    /// replaced with the original request and the draft reply.
-    #[serde(default)]
-    pub prompt: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SubagentConfig {
-    #[serde(default = "default_subagent_max_concurrent")]
-    pub max_concurrent: usize,
-    #[serde(default = "default_subagent_max_active_per_chat")]
-    pub max_active_per_chat: usize,
-    #[serde(default = "default_subagent_run_timeout_secs")]
-    pub run_timeout_secs: u64,
-    #[serde(default = "default_subagent_announce")]
-    pub announce_to_chat: bool,
-    #[serde(default)]
-    pub fan_in_summary: bool,
-    #[serde(default)]
-    pub progress_reports: bool,
-    #[serde(default = "default_subagent_progress_min_interval_secs")]
-    pub progress_min_interval_secs: u64,
-    #[serde(default = "default_subagent_max_spawn_depth")]
-    pub max_spawn_depth: usize,
-    #[serde(default = "default_subagent_max_children_per_run")]
-    pub max_children_per_run: usize,
-    #[serde(default = "default_subagent_thread_bound_routing_enabled")]
-    pub thread_bound_routing_enabled: bool,
-    #[serde(default = "default_subagent_announce_relay_interval_secs")]
-    pub announce_relay_interval_secs: u64,
-    #[serde(default = "default_subagent_max_tokens_per_run")]
-    pub max_tokens_per_run: i64,
-    #[serde(default = "default_subagent_orchestrate_max_workers")]
-    pub orchestrate_max_workers: usize,
-    #[serde(default)]
-    pub acp: SubagentAcpConfig,
-    #[serde(default)]
-    pub standup: SubagentStandupConfig,
-}
-
-impl Default for SubagentConfig {
-    fn default() -> Self {
-        Self {
-            max_concurrent: default_subagent_max_concurrent(),
-            max_active_per_chat: default_subagent_max_active_per_chat(),
-            run_timeout_secs: default_subagent_run_timeout_secs(),
-            announce_to_chat: default_subagent_announce(),
-            fan_in_summary: false,
-            progress_reports: false,
-            progress_min_interval_secs: default_subagent_progress_min_interval_secs(),
-            max_spawn_depth: default_subagent_max_spawn_depth(),
-            max_children_per_run: default_subagent_max_children_per_run(),
-            thread_bound_routing_enabled: default_subagent_thread_bound_routing_enabled(),
-            announce_relay_interval_secs: default_subagent_announce_relay_interval_secs(),
-            max_tokens_per_run: default_subagent_max_tokens_per_run(),
-            orchestrate_max_workers: default_subagent_orchestrate_max_workers(),
-            acp: SubagentAcpConfig::default(),
-            standup: SubagentStandupConfig::default(),
-        }
-    }
-}
-
-fn default_subagent_standup_interval_secs() -> u64 {
-    1800
-}
-
-/// Proactive task-standup: periodically post a one-line status for tasks that
-/// have been running a while. Off by default — it sends unprompted messages.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SubagentStandupConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_subagent_standup_interval_secs")]
-    pub interval_secs: u64,
-}
-
-impl Default for SubagentStandupConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            interval_secs: default_subagent_standup_interval_secs(),
-        }
-    }
-}
-
-fn default_sleep_time_idle_hours() -> u64 {
-    6
-}
-fn default_sleep_time_min_interval_hours() -> u64 {
-    24
-}
-fn default_sleep_time_similarity_threshold() -> f64 {
-    0.82
-}
-fn default_sleep_time_max_archived_per_pass() -> usize {
-    20
-}
-
-/// "Sleep-time" memory consolidation: when a chat has been idle for a while, run a
-/// background, deterministic (no-LLM) pass that archives near-duplicate memories so
-/// the store stops accumulating redundancy between reflector runs. PROFILE memories
-/// are never touched, archiving is reversible, and the pass is capped and throttled.
-/// OFF by default. First slice of the v0.3.0 "Self-Improving Runtime" sleep-time
-/// consolidation (Pillar 1c).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SleepTimeConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Only consolidate a chat after this many hours with no messages.
-    #[serde(default = "default_sleep_time_idle_hours")]
-    pub idle_hours: u64,
-    /// At most one consolidation pass per chat per this many hours.
-    #[serde(default = "default_sleep_time_min_interval_hours")]
-    pub min_interval_hours: u64,
-    /// Jaccard similarity at/above which two same-category memories are treated as
-    /// duplicates (the lower-confidence one is archived). Clamped to [0.5, 1.0].
-    #[serde(default = "default_sleep_time_similarity_threshold")]
-    pub similarity_threshold: f64,
-    /// Safety cap on how many memories a single pass may archive per chat.
-    #[serde(default = "default_sleep_time_max_archived_per_pass")]
-    pub max_archived_per_pass: usize,
-}
-
-impl Default for SleepTimeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            idle_hours: default_sleep_time_idle_hours(),
-            min_interval_hours: default_sleep_time_min_interval_hours(),
-            similarity_threshold: default_sleep_time_similarity_threshold(),
-            max_archived_per_pass: default_sleep_time_max_archived_per_pass(),
-        }
-    }
-}
-
-fn default_token_budget_exempt_control_chats() -> bool {
-    true
-}
-
-/// Per-chat token spend cap. Counters Hermes-style "week-3 bill" drift:
-/// once a chat's rolling-24h total (input+output, all request kinds) hits
-/// `daily_per_chat`, new turns are refused with a notice until usage rolls
-/// out of the window. 0 (default) = unlimited; control chats exempt by
-/// default so operators can always reach the bot.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TokenBudgetConfig {
-    /// Total tokens (input+output) allowed per chat per rolling 24h. 0 = off.
-    #[serde(default)]
-    pub daily_per_chat: i64,
-    #[serde(default = "default_token_budget_exempt_control_chats")]
-    pub exempt_control_chats: bool,
-}
-
-impl Default for TokenBudgetConfig {
-    fn default() -> Self {
-        Self {
-            daily_per_chat: 0,
-            exempt_control_chats: default_token_budget_exempt_control_chats(),
-        }
-    }
-}
-
-impl TokenBudgetConfig {
-    /// True when a chat that has already spent `used` tokens in the window
-    /// must be refused a new turn.
-    pub fn blocks(&self, is_control_chat: bool, used: i64) -> bool {
-        if self.daily_per_chat <= 0 {
-            return false;
-        }
-        if self.exempt_control_chats && is_control_chat {
-            return false;
-        }
-        used >= self.daily_per_chat
-    }
-}
-
-fn default_alerts_interval_secs() -> u64 {
-    60
-}
-fn default_alerts_cooldown_secs() -> u64 {
-    900
-}
-fn default_alerts_restart_storm_threshold() -> u64 {
-    5
-}
-
-/// Opt-in operational webhook alerts. When enabled, a supervised loop
-/// polls runtime health every `interval_secs` and POSTs a JSON alert to
-/// `webhook_url` when a condition trips: scheduler DLQ growth, provider
-/// down (circuit breaker open / repeated failures), token-budget
-/// exhaustion, or a supervised-loop restart storm. OFF by default; the
-/// webhook URL participates in the configured-endpoint egress policy.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlertsConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Webhook that receives alert POSTs (JSON body: class, message,
-    /// generated_at).
-    #[serde(default)]
-    pub webhook_url: String,
-    /// Seconds between health polls. Default: 60 (min 10).
-    #[serde(default = "default_alerts_interval_secs")]
-    pub interval_secs: u64,
-    /// Minimum seconds between two alerts of the same class. Default: 900.
-    #[serde(default = "default_alerts_cooldown_secs")]
-    pub cooldown_secs: u64,
-    /// Supervised-loop restarts within one poll interval that count as a
-    /// storm. Default: 5.
-    #[serde(default = "default_alerts_restart_storm_threshold")]
-    pub restart_storm_threshold: u64,
-}
-
-impl Default for AlertsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            webhook_url: String::new(),
-            interval_secs: default_alerts_interval_secs(),
-            cooldown_secs: default_alerts_cooldown_secs(),
-            restart_storm_threshold: default_alerts_restart_storm_threshold(),
         }
     }
 }
@@ -1274,195 +65,6 @@ pub enum UserMessageLanguage {
     En,
     Zh,
     Bilingual,
-}
-
-fn default_trust_report_interval_days() -> u64 {
-    7
-}
-
-/// Opt-in periodic "trust report": a digest of what the agent actually did
-/// — task runs, contract verdicts, token spend, guardrail interventions,
-/// delivery/recovery health — delivered to every control chat. OFF by
-/// default. Built entirely from data MicroClaw already records (usage
-/// ledger, contract events, tamper-evident audit chain), so enabling it
-/// costs no extra LLM calls.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TrustReportConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Days between reports. Default: 7.
-    #[serde(default = "default_trust_report_interval_days")]
-    pub interval_days: u64,
-}
-
-impl Default for TrustReportConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            interval_days: default_trust_report_interval_days(),
-        }
-    }
-}
-
-fn default_heartbeat_interval_mins() -> u64 {
-    30
-}
-fn default_heartbeat_max_chars() -> usize {
-    8000
-}
-
-/// OpenClaw-style proactive heartbeat. When enabled, every `interval_mins`
-/// the bot reads each chat's `runtime/groups/<chat_id>/HEARTBEAT.md` checklist
-/// and runs an agent turn over it; the agent messages the chat only when
-/// something on the list genuinely needs attention, otherwise stays silent.
-/// OFF by default — and chats without a HEARTBEAT.md file are never touched.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HeartbeatConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Minutes between heartbeat sweeps. Default: 30.
-    #[serde(default = "default_heartbeat_interval_mins")]
-    pub interval_mins: u64,
-    /// Max characters of HEARTBEAT.md injected into the prompt. Default: 8000.
-    #[serde(default = "default_heartbeat_max_chars")]
-    pub max_chars: usize,
-}
-
-impl Default for HeartbeatConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            interval_mins: default_heartbeat_interval_mins(),
-            max_chars: default_heartbeat_max_chars(),
-        }
-    }
-}
-
-fn default_idle_checkin_idle_hours() -> u64 {
-    24
-}
-fn default_idle_checkin_min_interval_hours() -> u64 {
-    24
-}
-
-/// Proactive "long-silence" check-in: after a chat has been quiet for a while,
-/// optionally let the bot reach out IF it has something genuinely useful to say
-/// (a pending follow-up, a due reminder). OFF by default — it is outward-facing
-/// and uses an LLM call per idle chat.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IdleCheckinConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Only consider a chat idle after this many hours with no messages.
-    #[serde(default = "default_idle_checkin_idle_hours")]
-    pub idle_hours: u64,
-    /// At most one check-in per chat per this many hours.
-    #[serde(default = "default_idle_checkin_min_interval_hours")]
-    pub min_interval_hours: u64,
-}
-
-impl Default for IdleCheckinConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            idle_hours: default_idle_checkin_idle_hours(),
-            min_interval_hours: default_idle_checkin_min_interval_hours(),
-        }
-    }
-}
-
-fn default_interjection_min_interval_secs() -> u64 {
-    900
-}
-fn default_interjection_lookback_mins() -> u64 {
-    10
-}
-
-/// "Inner thoughts" interjection: in an active group chat where the bot was NOT
-/// addressed, occasionally evaluate whether it has a genuinely valuable thing to
-/// say and, if so, chime in once. OFF by default — it speaks unprompted in
-/// group conversations and uses an LLM call per evaluation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InterjectionConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Minimum seconds between unprompted interjections per chat.
-    #[serde(default = "default_interjection_min_interval_secs")]
-    pub min_interval_secs: u64,
-    /// Only consider chats with non-bot messages in the last this-many minutes.
-    #[serde(default = "default_interjection_lookback_mins")]
-    pub lookback_mins: u64,
-}
-
-impl Default for InterjectionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            min_interval_secs: default_interjection_min_interval_secs(),
-            lookback_mins: default_interjection_lookback_mins(),
-        }
-    }
-}
-
-/// Named per-peer trust tier for outbound A2A sends. `limited` (default)
-/// keeps the historical behavior; `sandboxed` treats a send to this peer
-/// as high-risk — on web/control chats it requires the explicit approval
-/// flow before the message leaves. `trusted` is currently equivalent to
-/// `limited` and reserved for future capability widening; tiers never
-/// lower existing guardrails.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum A2ATrust {
-    Trusted,
-    #[default]
-    Limited,
-    Sandboxed,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct A2APeerConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub base_url: String,
-    #[serde(default)]
-    pub bearer_token: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub default_session_key: Option<String>,
-    /// Trust tier for sends to this peer. Default: limited.
-    #[serde(default)]
-    pub trust: A2ATrust,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct A2AConfig {
-    #[serde(default = "default_a2a_enabled")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub public_base_url: Option<String>,
-    #[serde(default)]
-    pub agent_name: Option<String>,
-    #[serde(default)]
-    pub agent_description: Option<String>,
-    #[serde(default)]
-    pub shared_tokens: Vec<String>,
-    #[serde(default)]
-    pub peers: HashMap<String, A2APeerConfig>,
-}
-
-impl Default for A2AConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_a2a_enabled(),
-            public_base_url: None,
-            agent_name: None,
-            agent_description: None,
-            shared_tokens: Vec::new(),
-            peers: HashMap::new(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1900,7 +502,7 @@ pub struct Config {
     pub allowed_groups: Vec<i64>,
 }
 
-fn collect_enabled_channel_endpoints(value: &serde_yaml::Value, out: &mut Vec<String>) {
+pub(crate) fn collect_enabled_channel_endpoints(value: &serde_yaml::Value, out: &mut Vec<String>) {
     let Some(mapping) = value.as_mapping() else {
         return;
     };
@@ -3411,7 +2013,7 @@ Use operator password + API keys for Web auth."
     }
 }
 
-fn normalize_body_override_params(
+pub(crate) fn normalize_body_override_params(
     params: HashMap<String, serde_json::Value>,
 ) -> HashMap<String, serde_json::Value> {
     params
@@ -3427,7 +2029,7 @@ fn normalize_body_override_params(
         .collect()
 }
 
-fn normalize_provider_profiles(
+pub(crate) fn normalize_provider_profiles(
     profiles: HashMap<String, LlmProviderProfile>,
 ) -> HashMap<String, LlmProviderProfile> {
     profiles
@@ -3473,7 +2075,7 @@ fn normalize_provider_profiles(
         .collect()
 }
 
-fn migrate_model_override_alias_to_provider_preset(
+pub(crate) fn migrate_model_override_alias_to_provider_preset(
     value: &mut serde_yaml::Value,
     known_profiles: &HashMap<String, LlmProviderProfile>,
 ) {
@@ -3513,7 +2115,7 @@ fn migrate_model_override_alias_to_provider_preset(
     }
 }
 
-fn merge_provider_profile(
+pub(crate) fn merge_provider_profile(
     base: LlmProviderProfile,
     override_profile: LlmProviderProfile,
 ) -> LlmProviderProfile {
@@ -3671,7 +2273,7 @@ pub fn run_config_check() -> i32 {
 /// error is an unknown field or variant (the common YAML typo), suggest the
 /// closest valid name, and always point the user at `setup` / the example
 /// config. The original error (with its line/column) is preserved.
-fn friendly_yaml_error(path_str: &str, err: &serde_yaml::Error) -> String {
+pub(crate) fn friendly_yaml_error(path_str: &str, err: &serde_yaml::Error) -> String {
     let raw = err.to_string();
     let mut hint = String::new();
     if let Some((kind, token)) = extract_unknown_token(&raw) {
@@ -3694,7 +2296,7 @@ fn friendly_yaml_error(path_str: &str, err: &serde_yaml::Error) -> String {
 /// `clawhub_*` keys), plus the few fields excluded from serialization and the
 /// deprecated aliases handled elsewhere. Returns `None` if the baseline can't
 /// be derived, so callers skip the check rather than emit spurious warnings.
-fn known_top_level_config_keys() -> Option<std::collections::BTreeSet<String>> {
+pub(crate) fn known_top_level_config_keys() -> Option<std::collections::BTreeSet<String>> {
     let base: Config = serde_yaml::from_str("{}").ok()?;
     let serde_yaml::Value::Mapping(serialized) = serde_yaml::to_value(&base).ok()? else {
         return None;
@@ -3720,7 +2322,7 @@ fn known_top_level_config_keys() -> Option<std::collections::BTreeSet<String>> {
 /// so a typo like `discrod:` is otherwise invisible. Returns one human-readable
 /// warning per unrecognized key (with a did-you-mean suggestion when close).
 /// Does not fail the load.
-fn unknown_top_level_key_warnings(map: &serde_yaml::Mapping) -> Vec<String> {
+pub(crate) fn unknown_top_level_key_warnings(map: &serde_yaml::Mapping) -> Vec<String> {
     let Some(known) = known_top_level_config_keys() else {
         return Vec::new();
     };
@@ -3742,7 +2344,7 @@ fn unknown_top_level_key_warnings(map: &serde_yaml::Mapping) -> Vec<String> {
 }
 
 /// Extract `(kind, token)` from a serde "unknown variant/field `X`" message.
-fn extract_unknown_token(raw: &str) -> Option<(&'static str, &str)> {
+pub(crate) fn extract_unknown_token(raw: &str) -> Option<(&'static str, &str)> {
     for (needle, kind) in [
         ("unknown variant `", "variant"),
         ("unknown field `", "field"),
@@ -3758,7 +2360,7 @@ fn extract_unknown_token(raw: &str) -> Option<(&'static str, &str)> {
 }
 
 /// Collect the backtick-quoted options listed after "expected" in a serde error.
-fn extract_backtick_options(raw: &str) -> Vec<String> {
+pub(crate) fn extract_backtick_options(raw: &str) -> Vec<String> {
     let Some(exp) = raw.find("expected") else {
         return Vec::new();
     };
@@ -3778,7 +2380,7 @@ fn extract_backtick_options(raw: &str) -> Vec<String> {
 
 /// Pick the closest option to `token` by edit distance, if one is "close
 /// enough" (distance at most a third of the token length, min 2).
-fn suggest_closest(token: &str, options: &[String]) -> Option<String> {
+pub(crate) fn suggest_closest(token: &str, options: &[String]) -> Option<String> {
     let threshold = (token.chars().count() / 3).max(2);
     options
         .iter()
@@ -3789,7 +2391,7 @@ fn suggest_closest(token: &str, options: &[String]) -> Option<String> {
 }
 
 /// Standard Levenshtein edit distance.
-fn levenshtein(a: &str, b: &str) -> usize {
+pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=b.len()).collect();
@@ -3808,10 +2410,8 @@ fn levenshtein(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        crate::test_support::env_lock()
-    }
+    #[allow(unused_imports)]
+    use crate::config::test_prelude::*;
 
     #[test]
     fn config_check_reports_syntax_errors_with_location() {
@@ -3881,38 +2481,6 @@ mod tests {
     }
 
     #[test]
-    fn token_budget_disabled_never_blocks() {
-        let cfg = TokenBudgetConfig::default();
-        assert!(!cfg.blocks(false, i64::MAX));
-        assert!(!cfg.blocks(true, i64::MAX));
-    }
-
-    #[test]
-    fn token_budget_blocks_at_cap_but_exempts_control_chats() {
-        let cfg = TokenBudgetConfig {
-            daily_per_chat: 1000,
-            exempt_control_chats: true,
-        };
-        assert!(!cfg.blocks(false, 999));
-        assert!(cfg.blocks(false, 1000));
-        assert!(cfg.blocks(false, 5000));
-        // Control chat exempt by default
-        assert!(!cfg.blocks(true, 5000));
-        // ...unless exemption is turned off
-        let strict = TokenBudgetConfig {
-            daily_per_chat: 1000,
-            exempt_control_chats: false,
-        };
-        assert!(strict.blocks(true, 1000));
-    }
-
-    #[test]
-    fn aux_models_default_falls_back_to_main_model() {
-        let aux = AuxModels::default();
-        assert_eq!(aux.compaction_model("main-model"), "main-model");
-    }
-
-    #[test]
     fn friendly_error_suggests_closest_field() {
         // A real serde_yaml unknown-field error for a mistyped key.
         #[derive(Debug, serde::Deserialize)]
@@ -3971,24 +2539,6 @@ mod tests {
     }
 
     #[test]
-    fn aux_models_compaction_override_is_used() {
-        let aux = AuxModels {
-            compaction: Some("cheap-model".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(aux.compaction_model("main-model"), "cheap-model");
-    }
-
-    #[test]
-    fn aux_models_blank_override_falls_back() {
-        let aux = AuxModels {
-            compaction: Some("   ".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(aux.compaction_model("main-model"), "main-model");
-    }
-
-    #[test]
     fn aux_models_parse_from_yaml() {
         let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\naux_models:\n  compaction: claude-haiku-4-5\n  reflector: claude-haiku-4-5\n";
         let config: Config = serde_yaml::from_str(yaml).unwrap();
@@ -4003,54 +2553,10 @@ mod tests {
     }
 
     #[test]
-    fn aux_models_reflector_default_is_none() {
-        let aux = AuxModels::default();
-        assert_eq!(aux.reflector_model(), None);
-    }
-
-    #[test]
-    fn aux_models_reflector_blank_is_none() {
-        let aux = AuxModels {
-            reflector: Some("  ".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(aux.reflector_model(), None);
-    }
-
-    #[test]
     fn aux_models_absent_yaml_defaults_to_none() {
         let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\n";
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(config.aux_models.compaction.is_none());
-    }
-
-    #[test]
-    fn aux_models_title_and_vision_default_none() {
-        let aux = AuxModels::default();
-        assert_eq!(aux.title_model(), None);
-        assert_eq!(aux.vision_model(), None);
-    }
-
-    #[test]
-    fn aux_models_title_and_vision_override_used() {
-        let aux = AuxModels {
-            title: Some("title-model".to_string()),
-            vision: Some("vision-model".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(aux.title_model(), Some("title-model"));
-        assert_eq!(aux.vision_model(), Some("vision-model"));
-    }
-
-    #[test]
-    fn aux_models_title_and_vision_blank_is_none() {
-        let aux = AuxModels {
-            title: Some("  ".to_string()),
-            vision: Some(String::new()),
-            ..Default::default()
-        };
-        assert_eq!(aux.title_model(), None);
-        assert_eq!(aux.vision_model(), None);
     }
 
     #[test]
@@ -4094,51 +2600,6 @@ voice_transcription_command: "whisper-mlx --file {file}"
         );
     }
 
-    pub fn test_config() -> Config {
-        Config::test_defaults()
-    }
-
-    #[test]
-    fn test_config_struct_clone_and_debug() {
-        let config = test_config();
-        let cloned = config.clone();
-        assert_eq!(cloned.telegram_bot_token, "tok");
-        assert_eq!(cloned.max_tokens, 8192);
-        assert_eq!(cloned.max_tool_iterations, 100);
-        assert_eq!(cloned.max_history_messages, 50);
-        assert_eq!(cloned.max_document_size_mb, 100);
-        assert_eq!(cloned.memory_token_budget, 1500);
-        assert!(cloned.openai_api_key.is_none());
-        assert_eq!(cloned.timezone, "UTC");
-        assert!(cloned.allowed_groups.is_empty());
-        assert!(cloned.control_chat_ids.is_empty());
-        assert_eq!(cloned.max_session_messages, 40);
-        assert_eq!(cloned.compact_keep_recent, 20);
-        assert_eq!(cloned.default_tool_timeout_secs, 30);
-        assert!(cloned.tool_timeout_overrides.is_empty());
-        assert_eq!(cloned.default_mcp_request_timeout_secs, 120);
-        assert!(cloned.discord_bot_token.is_none());
-        assert!(cloned.discord_allowed_channels.is_empty());
-        let _ = format!("{:?}", config);
-    }
-
-    #[test]
-    fn test_config_default_values() {
-        let mut config = test_config();
-        config.openai_api_key = Some("sk-test".into());
-        config.timezone = "US/Eastern".into();
-        config.allowed_groups = vec![123, 456];
-        config.control_chat_ids = vec![999];
-        assert_eq!(config.model, "claude-sonnet-4-5-20250929");
-        assert!(config.data_dir.ends_with(".microclaw"));
-        assert!(std::path::PathBuf::from(&config.working_dir)
-            .ends_with(std::path::Path::new(".microclaw").join("working_dir")));
-        assert_eq!(config.openai_api_key.as_deref(), Some("sk-test"));
-        assert_eq!(config.timezone, "US/Eastern");
-        assert_eq!(config.allowed_groups, vec![123, 456]);
-        assert_eq!(config.control_chat_ids, vec![999]);
-    }
-
     #[test]
     fn test_config_yaml_roundtrip() {
         let config = test_config();
@@ -4147,267 +2608,6 @@ voice_transcription_command: "whisper-mlx --file {file}"
         assert_eq!(parsed.telegram_bot_token, "tok");
         assert_eq!(parsed.max_tokens, 8192);
         assert_eq!(parsed.llm_provider, "anthropic");
-    }
-
-    #[test]
-    fn test_config_yaml_defaults() {
-        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\n";
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.llm_provider, "anthropic");
-        assert_eq!(config.max_tokens, 8192);
-        assert_eq!(config.max_tool_iterations, 100);
-        assert!(config.data_dir.ends_with(".microclaw"));
-        assert!(std::path::PathBuf::from(&config.working_dir)
-            .ends_with(std::path::Path::new(".microclaw").join("working_dir")));
-        assert_eq!(config.memory_token_budget, 1500);
-        assert!(matches!(
-            config.working_dir_isolation,
-            WorkingDirIsolation::Chat
-        ));
-        assert!(matches!(config.sandbox.mode, SandboxMode::Off));
-        assert_eq!(config.max_document_size_mb, 100);
-        assert_eq!(config.timezone, "auto");
-        assert_eq!(config.default_tool_timeout_secs, 30);
-        assert!(config.tool_timeout_overrides.is_empty());
-        assert_eq!(config.default_mcp_request_timeout_secs, 120);
-        assert!(config.web_fetch_validation.enabled);
-        assert!(config.web_fetch_validation.strict_mode);
-        assert_eq!(config.web_fetch_validation.max_scan_bytes, 100_000);
-        assert!(config.web_fetch_url_validation.enabled);
-        assert_eq!(
-            config.web_fetch_url_validation.allowed_schemes,
-            vec!["https".to_string(), "http".to_string()]
-        );
-        assert!(config.web_fetch_url_validation.allowlist_hosts.is_empty());
-        assert!(config.web_fetch_url_validation.denylist_hosts.is_empty());
-    }
-
-    #[test]
-    fn test_post_deserialize_timeout_defaults_and_overrides() {
-        let mut config = test_config();
-        config.default_tool_timeout_secs = 0;
-        config.default_mcp_request_timeout_secs = 0;
-        config.web_fetch_validation.max_scan_bytes = 0;
-        config.web_fetch_url_validation.allowed_schemes.clear();
-        config.web_fetch_url_validation.allowlist_hosts = vec!["  Example.COM  ".into()];
-        config.web_fetch_url_validation.denylist_hosts = vec![" .Bad.EXAMPLE ".into()];
-        config.tool_timeout_overrides = HashMap::from([
-            ("  bash ".to_string(), 90),
-            ("".to_string(), 5),
-            ("browser".to_string(), 0),
-        ]);
-        config.post_deserialize().unwrap();
-
-        assert_eq!(config.default_tool_timeout_secs, 30);
-        assert_eq!(config.default_mcp_request_timeout_secs, 120);
-        assert_eq!(config.web_fetch_validation.max_scan_bytes, 100_000);
-        assert_eq!(
-            config.web_fetch_url_validation.allowed_schemes,
-            vec!["https".to_string(), "http".to_string()]
-        );
-        assert_eq!(
-            config.web_fetch_url_validation.allowlist_hosts,
-            vec!["example.com".to_string()]
-        );
-        assert_eq!(
-            config.web_fetch_url_validation.denylist_hosts,
-            vec!["bad.example".to_string()]
-        );
-        assert_eq!(config.tool_timeout_overrides.len(), 1);
-        assert_eq!(config.tool_timeout_overrides.get("bash"), Some(&90));
-    }
-
-    #[test]
-    fn test_tool_timeout_lookup_prefers_override_then_default() {
-        let mut config = test_config();
-        config.default_tool_timeout_secs = 45;
-        config.tool_timeout_overrides.insert("bash".to_string(), 75);
-
-        assert_eq!(config.tool_timeout_secs("bash", 120), 75);
-        assert_eq!(config.tool_timeout_secs("browser", 120), 45);
-    }
-
-    #[test]
-    fn test_post_deserialize_merges_provider_presets_with_legacy_profiles() {
-        let yaml = r#"
-telegram_bot_token: tok
-bot_username: bot
-api_key: key
-provider_presets:
-  lab:
-    provider: OPENAI
-    api_key: preset-key
-    llm_base_url: https://preset.example/v1
-    llm_user_agent: preset-agent
-    default_model: preset-model
-    models: [preset-model, preset-model]
-    show_thinking: true
-llm_providers:
-  lab:
-    api_key: legacy-key
-    models: [legacy-model]
-"#;
-        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
-        config.post_deserialize().unwrap();
-
-        let profile = config.resolve_llm_provider_profile("lab").unwrap();
-        assert_eq!(profile.provider, "openai");
-        assert_eq!(profile.api_key, "legacy-key");
-        assert_eq!(
-            profile.llm_base_url.as_deref(),
-            Some("https://preset.example/v1")
-        );
-        assert_eq!(profile.llm_user_agent, "preset-agent");
-        assert_eq!(profile.default_model, "preset-model");
-        assert_eq!(
-            profile.models,
-            vec!["legacy-model".to_string(), "preset-model".to_string()]
-        );
-        assert!(profile.show_thinking);
-    }
-
-    #[test]
-    fn test_resolve_llm_provider_profile_ignores_wildcard_profile_model() {
-        let yaml = r#"
-telegram_bot_token: tok
-bot_username: bot
-api_key: key
-llm_provider: openai
-model: gpt-5.2
-llm_providers:
-  openai:
-    provider: openai
-    default_model: "*"
-    models: ["*", "gpt-5-mini"]
-"#;
-        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
-        config.post_deserialize().unwrap();
-
-        let profile = config.resolve_llm_provider_profile("openai").unwrap();
-        assert_eq!(profile.default_model, "gpt-5.2");
-        assert_eq!(
-            profile.models,
-            vec!["gpt-5-mini".to_string(), "gpt-5.2".to_string()]
-        );
-    }
-
-    #[test]
-    fn test_llm_provider_overrides_support_provider_preset_and_legacy_llm_provider_keys() {
-        let mut config = test_config();
-        config.channels = serde_yaml::from_str(
-            r#"
-telegram:
-  enabled: true
-  provider_preset: channel-default
-  default_account: sales
-  accounts:
-    sales:
-      enabled: true
-      bot_token: tg_sales
-      provider_preset: sales-preset
-    ops:
-      enabled: true
-      bot_token: tg_ops
-      llm_provider: ops-legacy
-discord:
-  enabled: true
-  llm_provider: discord-legacy
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            config.provider_override_for_channel("telegram").as_deref(),
-            Some("sales-preset")
-        );
-        assert_eq!(
-            config
-                .provider_override_for_channel("telegram.ops")
-                .as_deref(),
-            Some("ops-legacy")
-        );
-        assert_eq!(
-            config.provider_override_for_channel("discord").as_deref(),
-            Some("discord-legacy")
-        );
-
-        let overrides = config.llm_provider_overrides();
-        assert_eq!(
-            overrides.get("telegram").map(String::as_str),
-            Some("sales-preset")
-        );
-        assert_eq!(
-            overrides.get("telegram.ops").map(String::as_str),
-            Some("ops-legacy")
-        );
-        assert_eq!(
-            overrides.get("discord").map(String::as_str),
-            Some("discord-legacy")
-        );
-    }
-
-    #[test]
-    fn test_post_deserialize_migrates_profile_aliases_out_of_channel_model_fields() {
-        let yaml = r#"
-telegram_bot_token: tok
-bot_username: bot
-api_key: key
-provider_presets:
-  googlegemini:
-    provider: google
-    default_model: gemini-2.5-pro
-channels:
-  telegram:
-    enabled: true
-    model: googlegemini
-    default_account: sales
-    accounts:
-      sales:
-        enabled: true
-        bot_token: tg_sales
-        model: googlegemini
-  discord:
-    enabled: true
-    model: googlegemini
-    accounts:
-      default:
-        enabled: true
-        bot_token: dc_tok
-"#;
-        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
-        config.post_deserialize().unwrap();
-
-        assert_eq!(
-            config.provider_override_for_channel("telegram").as_deref(),
-            Some("googlegemini")
-        );
-        assert_eq!(
-            config.provider_override_for_channel("discord").as_deref(),
-            Some("googlegemini")
-        );
-
-        let telegram = config.channels.get("telegram").unwrap();
-        assert_eq!(
-            telegram
-                .get("provider_preset")
-                .and_then(|v| v.as_str())
-                .map(str::trim),
-            Some("googlegemini")
-        );
-        assert!(telegram.get("model").is_none());
-
-        let sales = telegram
-            .get("accounts")
-            .and_then(|v| v.get("sales"))
-            .unwrap();
-        assert_eq!(
-            sales
-                .get("provider_preset")
-                .and_then(|v| v.as_str())
-                .map(str::trim),
-            Some("googlegemini")
-        );
-        assert!(sales.get("model").is_none());
     }
 
     #[test]
@@ -4507,38 +2707,6 @@ channels:
         config.post_deserialize().unwrap();
         assert_eq!(config.llm_provider, "anthropic");
         assert_eq!(config.model, "claude-sonnet-4-5-20250929");
-    }
-
-    #[test]
-    fn test_runtime_and_skills_dirs_from_root_data_dir() {
-        let mut config = test_config();
-        config.data_dir = "./microclaw.data".into();
-
-        let runtime = std::path::PathBuf::from(config.runtime_data_dir());
-        let skills = std::path::PathBuf::from(config.skills_data_dir());
-
-        assert!(runtime.ends_with(std::path::Path::new("microclaw.data").join("runtime")));
-        assert!(skills.ends_with(std::path::Path::new("microclaw.data").join("skills")));
-    }
-
-    #[test]
-    fn test_runtime_and_skills_dirs_from_runtime_data_dir() {
-        let mut config = test_config();
-        config.data_dir = "./microclaw.data".into();
-
-        let runtime = std::path::PathBuf::from(config.runtime_data_dir());
-        let skills = std::path::PathBuf::from(config.skills_data_dir());
-
-        assert!(runtime.ends_with(std::path::Path::new("microclaw.data").join("runtime")));
-        assert!(skills.ends_with(std::path::Path::new("microclaw.data").join("skills")));
-    }
-
-    #[test]
-    fn test_skills_dir_uses_config_override() {
-        let mut config = test_config();
-        config.skills_dir = Some("./microclaw.data/skills".to_string());
-        let skills = std::path::PathBuf::from(config.skills_data_dir());
-        assert!(skills.ends_with(std::path::Path::new("microclaw.data").join("skills")));
     }
 
     #[test]
@@ -4935,66 +3103,6 @@ channels:
     }
 
     #[test]
-    fn test_post_deserialize_egress_policy_blocks_private_endpoint() {
-        let mut config = test_config();
-        config.llm_base_url = Some("http://127.0.0.1:11434/v1".into());
-        config.egress_policy.mode = EgressPolicyMode::Block;
-
-        let err = config.post_deserialize().unwrap_err().to_string();
-
-        assert!(err.contains("blocked by egress policy"), "{err}");
-        assert!(err.contains("127.0.0.1"), "{err}");
-    }
-
-    #[test]
-    fn test_post_deserialize_egress_allowlist_applies_to_configured_endpoint() {
-        let mut config = test_config();
-        config.llm_base_url = Some("https://api.example.test/v1".into());
-        config.clawhub.agent_tools_enabled = false;
-        config.egress_policy = EgressPolicyConfig {
-            mode: EgressPolicyMode::Block,
-            allow_hosts: vec!["api.example.test".into()],
-            block_private_ips: false,
-            ..Default::default()
-        };
-
-        config.post_deserialize().unwrap();
-    }
-
-    #[test]
-    fn test_post_deserialize_egress_ignores_non_endpoint_urls() {
-        let mut config = test_config();
-        config.clawhub.agent_tools_enabled = false;
-        config.soul_path = Some("https://docs.example.test/SOUL.md".into());
-        config.egress_policy = EgressPolicyConfig {
-            mode: EgressPolicyMode::Block,
-            allow_hosts: vec!["api.example.test".into()],
-            block_private_ips: false,
-            ..Default::default()
-        };
-
-        config.post_deserialize().unwrap();
-    }
-
-    #[test]
-    fn test_post_deserialize_egress_checks_enabled_channel_endpoint() {
-        let mut config = test_config();
-        config.clawhub.agent_tools_enabled = false;
-        config.channels.insert(
-            "matrix".into(),
-            serde_yaml::from_str(
-                "enabled: true\nhomeserver_url: http://127.0.0.1:8008\naccess_token: tok\nbot_user_id: '@bot:localhost'\n",
-            )
-            .unwrap(),
-        );
-        config.egress_policy.mode = EgressPolicyMode::Block;
-
-        let err = config.post_deserialize().unwrap_err().to_string();
-
-        assert!(err.contains("127.0.0.1"), "{err}");
-    }
-
-    #[test]
     fn test_post_deserialize_empty_llm_user_agent_uses_default() {
         let yaml =
             "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nllm_user_agent: '  '\n";
@@ -5121,59 +3229,6 @@ subagents:
     }
 
     #[test]
-    fn test_subagent_acp_resolve_named_target() {
-        let mut acp = SubagentAcpConfig::default();
-        acp.default_target.enabled = true;
-        acp.default_target.command = "codex".into();
-        acp.targets.insert(
-            "fast".into(),
-            SubagentAcpTargetConfig {
-                enabled: true,
-                command: "claude-code".into(),
-                args: vec!["--dangerously-skip-permissions".into()],
-                env: HashMap::new(),
-                auto_approve: false,
-            },
-        );
-        acp.normalize();
-
-        let resolved = acp.resolve_target(Some("fast")).unwrap();
-        assert_eq!(resolved.name.as_deref(), Some("fast"));
-        assert_eq!(resolved.command, "claude-code");
-        assert_eq!(
-            resolved.args,
-            vec!["--dangerously-skip-permissions".to_string()]
-        );
-        assert!(!resolved.auto_approve);
-    }
-
-    #[test]
-    fn test_subagent_acp_resolve_requires_target_when_multiple_named_workers() {
-        let mut acp = SubagentAcpConfig::default();
-        acp.default_target.command.clear();
-        acp.targets.insert(
-            "one".into(),
-            SubagentAcpTargetConfig {
-                enabled: true,
-                command: "codex".into(),
-                ..SubagentAcpTargetConfig::default()
-            },
-        );
-        acp.targets.insert(
-            "two".into(),
-            SubagentAcpTargetConfig {
-                enabled: true,
-                command: "claude-code".into(),
-                ..SubagentAcpTargetConfig::default()
-            },
-        );
-        acp.normalize();
-
-        let err = acp.resolve_target(None).unwrap_err();
-        assert!(err.contains("multiple enabled named targets"));
-    }
-
-    #[test]
     fn test_post_deserialize_web_non_local_no_token_required() {
         let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nweb_enabled: true\nweb_host: 0.0.0.0\n";
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
@@ -5192,42 +3247,6 @@ subagents:
             .map(|map| map.contains_key(serde_yaml::Value::String("auth_token".to_string())))
             .unwrap_or(false);
         assert!(!has_auth_token);
-    }
-
-    #[test]
-    fn test_post_deserialize_normalizes_a2a_config() {
-        let mut config = Config::test_defaults();
-        config.a2a.enabled = true;
-        config.a2a.public_base_url = Some(" https://mc.example.com/ ".into());
-        config.a2a.agent_name = Some(" Planner ".into());
-        config.a2a.agent_description = Some(" Plans ".into());
-        config.a2a.shared_tokens = vec!["  ".into(), " secret ".into()];
-        config.a2a.peers.insert(
-            " Worker ".into(),
-            A2APeerConfig {
-                enabled: true,
-                base_url: " https://worker.example.com/ ".into(),
-                bearer_token: Some(" token ".into()),
-                description: Some(" executes ".into()),
-                default_session_key: Some(" team/work ".into()),
-                trust: Default::default(),
-            },
-        );
-
-        config.post_deserialize().unwrap();
-
-        assert_eq!(
-            config.a2a.public_base_url.as_deref(),
-            Some("https://mc.example.com")
-        );
-        assert_eq!(config.a2a.agent_name.as_deref(), Some("Planner"));
-        assert_eq!(config.a2a.agent_description.as_deref(), Some("Plans"));
-        assert_eq!(config.a2a.shared_tokens, vec!["secret".to_string()]);
-        let peer = config.a2a.peers.get("worker").unwrap();
-        assert_eq!(peer.base_url, "https://worker.example.com");
-        assert_eq!(peer.bearer_token.as_deref(), Some("token"));
-        assert_eq!(peer.description.as_deref(), Some("executes"));
-        assert_eq!(peer.default_session_key.as_deref(), Some("team/work"));
     }
 
     #[test]
@@ -5294,17 +3313,6 @@ discord_allowed_channels: [111, 222]
     }
 
     #[test]
-    fn test_config_save_yaml() {
-        let config = test_config();
-        let dir = std::env::temp_dir();
-        let path = dir.join("microclaw_test_config.yaml");
-        config.save_yaml(path.to_str().unwrap()).unwrap();
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("telegram_bot_token"));
-        std::fs::remove_file(path).ok();
-    }
-
-    #[test]
     fn test_expand_path_with_tilde() {
         let home = PathBuf::from(shellexpand::tilde("~").as_ref());
         let path = "~/foo/bar";
@@ -5318,33 +3326,6 @@ discord_allowed_channels: [111, 222]
         let path = "/absolute/path";
         let expanded = expand_path(path);
         assert_eq!(expanded, std::path::PathBuf::from("/absolute/path"));
-    }
-
-    #[test]
-    fn test_post_deserialize_expands_paths() {
-        let mut config = test_config();
-        config.data_dir = "~/.microclaw".into();
-        config.working_dir = "~/workspace".into();
-        config.skills_dir = Some("~/skills".into());
-
-        config.post_deserialize().unwrap();
-
-        let home = PathBuf::from(shellexpand::tilde("~").as_ref());
-        // Use PathBuf comparison to handle separator differences on Windows
-        assert_eq!(PathBuf::from(&config.data_dir), home.join(".microclaw"));
-        assert_eq!(PathBuf::from(&config.working_dir), home.join("workspace"));
-        assert_eq!(
-            PathBuf::from(config.skills_dir.unwrap()),
-            home.join("skills")
-        );
-    }
-
-    fn mapping_of(yaml: &str) -> serde_yaml::Mapping {
-        serde_yaml::from_str::<serde_yaml::Value>(yaml)
-            .unwrap()
-            .as_mapping()
-            .unwrap()
-            .clone()
     }
 
     #[test]

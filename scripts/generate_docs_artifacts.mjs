@@ -57,7 +57,13 @@ function inferSerdeDefault(typeName) {
 }
 
 function parseConfigDefaults() {
-  const text = read('src/config.rs');
+  const configDir = path.join(ROOT, 'src/config');
+  const text = fs
+    .readdirSync(configDir)
+    .filter((f) => f.endsWith('.rs'))
+    .sort()
+    .map((f) => read(path.join('src/config', f)))
+    .join('\n');
 
   const fnDefaults = new Map();
   const fnRe = /fn\s+(default_[a-z0-9_]+)\s*\(\)\s*->[^\{]+\{\n\s*([^\n]+)\n\}/g;
@@ -113,7 +119,7 @@ function parseConfigDefaults() {
 }
 
 function parseProviderPresets() {
-  const text = read('src/setup.rs');
+  const text = read('src/setup/presets.rs');
   const arrMatch = text.match(/const\s+PROVIDER_PRESETS:\s*&\[ProviderPreset\]\s*=\s*&\[([\s\S]*?)\n\];/);
   if (!arrMatch) {
     throw new Error('Failed to parse PROVIDER_PRESETS');

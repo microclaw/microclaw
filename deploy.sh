@@ -60,7 +60,7 @@ fi
 echo "Deploy complete."
 
 
-cd website
+cd site
 sh ./deploy_pages.sh
 cd ..
 

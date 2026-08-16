@@ -74,7 +74,7 @@ These pages are generated from source. Do not hand-edit them.
 ## Design records and project status
 
 - [RFC index](rfcs/README.md)
-- [Implemented capability inventory](IMPLEMENTED.md)
+- [Humanlike-chat workstream implementation inventory](IMPLEMENTED.md) (scoped to that workstream, not a project-wide feature list)
 - [Roadmaps](roadmap/)
 - [Point-in-time reports](reports/)
 

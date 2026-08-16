@@ -88,7 +88,7 @@ fi
 
 cd "$REPO_DIR"
 
-# --- Build web assets (embedded via include_dir! in src/web.rs) ---
+# --- Build web assets (embedded via include_dir! in src/web) ---
 if [ -f "web/package.json" ]; then
   echo "Building web assets..."
   if [ -f "web/package-lock.json" ]; then

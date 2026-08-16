@@ -67,7 +67,7 @@ Last Updated: 2026-02-19
 
 - [ ] `cargo test -q`
 - [ ] `npm --prefix web run build`
-- [ ] `npm --prefix website run build`
+- [ ] `npm --prefix site run build`
 - [ ] `node scripts/generate_docs_artifacts.mjs --check`
 - [ ] Docs updated for behavior/config changes
 - [ ] Rollback note included

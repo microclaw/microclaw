@@ -15,7 +15,7 @@ Additional CI-equivalent quality checks:
 
 ```sh
 npm --prefix web run build
-npm --prefix website run build
+npm --prefix site run build
 node scripts/generate_docs_artifacts.mjs --check
 cargo audit
 cargo deny check advisories bans licenses
