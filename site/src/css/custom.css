@@ -18,14 +18,18 @@
   --ifm-link-hover-color: #6948b8;
   --ifm-toc-border-color: rgba(52, 95, 232, 0.16);
   --ifm-navbar-shadow: none;
-  --ifm-background-color: #f5f7ff;
-  --ifm-footer-background-color: #161722;
+  --ifm-background-color: #f8faff;
+  --ifm-footer-background-color: #12131d;
   --docusaurus-highlighted-code-line-bg: rgba(52, 95, 232, 0.12);
 
-  --mc-surface: #f5f7ff;
-  --mc-surface-alt: #edf1ff;
+  /* Keep a faint tint on the page so white cards still separate from it. */
+  --mc-surface: #f8faff;
+  --mc-surface-alt: #eaeffb;
   --mc-card: #ffffff;
   --mc-ink: #171927;
+  --mc-muted: rgba(23, 25, 39, 0.74);
+  --mc-hairline: rgba(52, 95, 232, 0.14);
+  --mc-card-shadow: 0 10px 26px rgba(22, 38, 77, 0.09);
   --mc-blue: #7aa2f7;
   --mc-cyan: #7dcfff;
   --mc-violet: #bb9af7;
@@ -41,19 +45,26 @@
   --ifm-color-primary-light: #91b3fa;
   --ifm-color-primary-lighter: #a6c2fb;
   --ifm-color-primary-lightest: #d1defd;
-  --ifm-background-color: #1a1b26;
-  --ifm-footer-background-color: #10111a;
-  --ifm-font-color-base: #c0caf5;
-  --ifm-heading-color: #f3f5ff;
+  /* Deliberate lightness ladder: page -> alt band -> card. Earlier revisions
+     kept all three within ~5% lightness, which read as one flat grey field. */
+  --ifm-background-color: #0f1017;
+  --ifm-footer-background-color: #0a0b11;
+  --ifm-font-color-base: #dce2f5;
+  --ifm-heading-color: #f8faff;
   --ifm-link-color: #7dcfff;
   --ifm-link-hover-color: #bb9af7;
-  --ifm-toc-border-color: rgba(122, 162, 247, 0.2);
-  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+  --ifm-toc-border-color: rgba(122, 162, 247, 0.22);
+  --docusaurus-highlighted-code-line-bg: rgba(125, 207, 255, 0.1);
 
-  --mc-surface: #1a1b26;
-  --mc-surface-alt: #202231;
-  --mc-card: #24283b;
-  --mc-ink: #c0caf5;
+  --mc-surface: #0f1017;
+  --mc-surface-alt: #161823;
+  --mc-card: #212640;
+  --mc-ink: #dce2f5;
+  --mc-muted: rgba(220, 226, 245, 0.84);
+  --mc-hairline: rgba(150, 185, 255, 0.24);
+  /* Inset top highlight is what actually reads as a card edge on a dark page;
+     a drop shadow alone is nearly invisible against near-black. */
+  --mc-card-shadow: 0 14px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 body {

@@ -1,12 +1,12 @@
 .hero {
   position: relative;
   overflow: hidden;
-  color: #c0caf5;
+  color: #dce2f5;
   padding: 6.5rem 0 5.5rem;
   background:
-    radial-gradient(circle at 16% 10%, rgba(187, 154, 247, 0.2), transparent 38%),
-    radial-gradient(circle at 84% 18%, rgba(125, 207, 255, 0.2), transparent 40%),
-    linear-gradient(155deg, #151620 0%, #1a1b26 52%, #17233d 100%);
+    radial-gradient(circle at 16% 10%, rgba(187, 154, 247, 0.26), transparent 40%),
+    radial-gradient(circle at 84% 18%, rgba(125, 207, 255, 0.26), transparent 42%),
+    linear-gradient(155deg, #0b0d18 0%, #101228 46%, #152047 100%);
 }
 
 .heroBackdrop {
@@ -26,7 +26,7 @@
     linear-gradient(rgba(122, 162, 247, 0.09) 1px, transparent 1px),
     linear-gradient(90deg, rgba(122, 162, 247, 0.09) 1px, transparent 1px);
   background-size: 48px 48px;
-  opacity: 0.42;
+  opacity: 0.24;
 }
 
 .heroLayout {
@@ -77,7 +77,7 @@
 .heroSubtext {
   margin-top: 1rem;
   margin-bottom: 0;
-  color: #a9b1d6;
+  color: rgba(220, 226, 245, 0.82);
   font-size: 1.05rem;
   line-height: 1.6;
   max-width: 64ch;
@@ -123,8 +123,8 @@
   border-radius: 6px;
   padding: 0.34rem 0.8rem;
   background: rgba(36, 40, 59, 0.72);
-  border: 1px solid rgba(122, 162, 247, 0.2);
-  color: #a9b1d6;
+  border: 1px solid rgba(122, 162, 247, 0.26);
+  color: rgba(220, 226, 245, 0.86);
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -310,9 +310,11 @@
 }
 
 .proofStrip {
-  background: #10111a;
-  color: rgba(230, 242, 255, 0.9);
+  background: #070810;
+  color: rgba(233, 240, 255, 0.92);
   padding: 1.4rem 0;
+  border-top: 1px solid rgba(138, 176, 255, 0.14);
+  border-bottom: 1px solid rgba(138, 176, 255, 0.1);
 }
 
 .proofGrid {
@@ -481,7 +483,7 @@
   background:
     radial-gradient(circle at 0% 0%, rgba(187, 154, 247, 0.22), transparent 45%),
     radial-gradient(circle at 100% 100%, rgba(125, 207, 255, 0.18), transparent 50%),
-    linear-gradient(150deg, #1a1b26, #16264d);
+    linear-gradient(150deg, #101228, #172350);
   color: #f3f5ff;
   border: 1px solid rgba(122, 162, 247, 0.32);
   display: flex;
@@ -493,7 +495,7 @@
 
 .ctaCard p {
   margin: 0.6rem 0 0;
-  color: #a9b1d6;
+  color: rgba(220, 226, 245, 0.82);
 }
 
 .ctaActions {
@@ -511,22 +513,22 @@
 
 :global([data-theme='dark']) .hero {
   background:
-    radial-gradient(circle at 12% 14%, rgba(187, 154, 247, 0.18), transparent 46%),
-    radial-gradient(circle at 84% 22%, rgba(125, 207, 255, 0.2), transparent 52%),
-    linear-gradient(160deg, #151620 0%, #1a1b26 52%, #17233d 100%);
+    radial-gradient(circle at 12% 14%, rgba(187, 154, 247, 0.24), transparent 48%),
+    radial-gradient(circle at 84% 22%, rgba(125, 207, 255, 0.26), transparent 54%),
+    linear-gradient(160deg, #0b0d18 0%, #101228 46%, #152047 100%);
 }
 
 :global([data-theme='dark']) .heroPattern {
   background-image:
-    linear-gradient(rgba(227, 247, 235, 0.1) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(227, 247, 235, 0.1) 1px, transparent 1px);
+    linear-gradient(rgba(170, 205, 255, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(170, 205, 255, 0.09) 1px, transparent 1px);
 }
 
 :global([data-theme='dark']) .eyebrow,
 :global([data-theme='dark']) .heroMetaRow span {
   background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.18);
-  color: #c0caf5;
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(220, 226, 245, 0.88);
 }
 
 :global([data-theme='dark']) .heroSubtext,
@@ -534,25 +536,27 @@
 :global([data-theme='dark']) .capabilityCard p,
 :global([data-theme='dark']) .stepCard p,
 :global([data-theme='dark']) .useCaseCard p {
-  color: rgba(192, 202, 245, 0.78);
+  color: var(--mc-muted);
 }
 
 :global([data-theme='dark']) .section,
 :global([data-theme='dark']) .finalCta {
-  background: #1a1b26;
+  background: var(--mc-surface);
 }
 
 :global([data-theme='dark']) .sectionAlt {
-  background: #202231;
+  background: var(--mc-surface-alt);
 }
 
+/* Cards need a visible lightness step above the page plus a real shadow.
+   Matching the page tone and dropping the shadow made them disappear. */
 :global([data-theme='dark']) .capabilityCard,
 :global([data-theme='dark']) .stepCard,
 :global([data-theme='dark']) .useCaseCard,
 :global([data-theme='dark']) .archVisualCard {
-  background: #24283b;
-  border-color: rgba(255, 255, 255, 0.1);
-  box-shadow: none;
+  background: var(--mc-card);
+  border-color: var(--mc-hairline);
+  box-shadow: var(--mc-card-shadow);
 }
 
 :global([data-theme='dark']) .capabilityCard h3,
@@ -562,7 +566,7 @@
 }
 
 :global([data-theme='dark']) .proofStrip {
-  background: #10111a;
+  background: #070810;
 }
 
 @media (max-width: 1120px) {

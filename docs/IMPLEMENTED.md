@@ -1,7 +1,11 @@
-# 已实现功能总览（branch: humanlike-chat-analysis）
+# 已实现功能总览：拟人化聊天 / 子代理 / 进度汇报
 
-把这个分支落地的代码改动汇总在一处，便于审阅。配套设计文档见
-`humanlike-chat-analysis.md`、`concurrent-tasks-progress-reporting.md`、
+> **范围说明**：本文是 `humanlike-chat-analysis` 工作线（已合并）的逐项实现清单，
+> **不是**整个项目的功能总览。项目级的能力列表见 [`README.md`](../README.md) 与
+> [`CHANGELOG.md`](../CHANGELOG.md)；当前计划见
+> [`roadmap/README.md`](./roadmap/README.md)。
+
+配套设计文档见 `humanlike-chat-analysis.md`、`concurrent-tasks-progress-reporting.md`、
 `being-more-human.md`、`builtin-skills-roster.md`。
 
 > 状态图例：✅ 已实现　·　⏳ 未做（可选）

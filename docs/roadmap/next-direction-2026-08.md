@@ -59,9 +59,8 @@ and any contributor on Node 22 LTS all failed.
 also stops the pin from breaking again when Node 25 and 26 land, which `24.x` would
 have.
 
-**Follow-up worth doing:** add a CI job on the *older* supported Node LTS. Pinning
-every job to one Node major is what hid this. A matrix of the oldest and newest
-supported LTS would have caught it on the commit that introduced it.
+**Follow-up applied:** the web/docs CI job now runs as a matrix over both supported
+Node LTS majors (22 and 24). Pinning every job to one Node major is what hid this.
 
 ## 3. P0 — the local quality gate was a no-op
 
@@ -130,22 +129,24 @@ Two release-hygiene notes found while checking this:
 | HIGH | `nanoid` | non-secure generator loops indefinitely on negative size |
 | MODERATE | `esbuild` | dev server accepts any origin's requests |
 
-All are build-time, not runtime in the shipped binary — the binary embeds static
-`dist/` output. That lowers severity but does not eliminate it: a compromised build
-step compromises the artifact. `postcss` and `nanoid` fix without a major bump and
-should go in now. `vite` is on `^5.4.10` against a current `8.x`, so that one is a
-deliberate migration, not an `audit fix`.
+All were build-time rather than runtime in the shipped binary — the binary embeds
+static `dist/` output. That lowers severity but does not eliminate it: a compromised
+build step compromises the artifact.
 
-React is on `18.3.1` while the ecosystem has moved to 19. Not urgent, but it pairs
-naturally with the vite migration.
+**All four are now closed.** `postcss` and `nanoid` took a plain `npm audit fix`; the
+remaining two needed the vite major, so the web UI moved to **vite 8 (rolldown) and
+React 19**. `npm audit` now reports 0 vulnerabilities, `tsc --noEmit` is clean, and the
+built bundle was loaded in Chromium to confirm the app mounts and renders with no
+runtime errors — not merely that it compiles.
 
-Bundle output is one chunk: **957 kB JS, 782 kB CSS**, with vite's own
-chunk-size warning firing. Since this is compiled into every binary, splitting it is
-size relief for every download and every Docker layer.
+Bundle output was one chunk: **957 kB JS, 782 kB CSS**, with vite's own chunk-size
+warning firing. It is now split into `react`, `markdown`, and `vendor` chunks, so the
+stable vendor code caches independently of app code. Note that rolldown requires the
+function form of `manualChunks`; the object-map form throws.
 
 `web/src/main.tsx` is **4,927 of 8,010** frontend lines — 61% of the web UI in one
 file. Splitting it is a precondition for anyone but the author working on the web UI
-comfortably.
+comfortably, and is left open.
 
 ## 6. P2 — structural debt in the Rust tree
 
@@ -192,23 +193,50 @@ schema-driven loop could generate from the config type.
 
 ## 8. Recommended order
 
-1. **Cut v0.5.0.** Write the `CHANGELOG` entry from the 21 commits, bump the version,
-   squash the duplicate commit, tag. Nothing else in this list delivers as much value
-   per hour spent.
-2. **Also cut v0.4.1** from `v0.4-lts` so released v0.4.x carries the hardening fixes.
-3. **Node LTS matrix in CI**, so the class of break in §2 cannot recur invisibly.
-4. **`postcss` + `nanoid` advisories** — a non-major `npm audit fix`.
-5. **Split `web/src/main.tsx` and chunk the bundle.** Unblocks frontend contribution
-   and shrinks every binary.
-6. **vite 5 → 8 and React 18 → 19** as one deliberate migration, closing the remaining
-   two advisories.
-7. **Roadmap index + archive, prune merged branches, retire `IMPLEMENTED.md`.** Cheap,
-   and it makes the project legible to newcomers.
-8. **Decompose `db.rs`** into domain modules behind the existing facade. Start only
-   after v0.5.0 is out.
+Status reflects what landed in the change that added this document.
 
-Items 1–4 are days. Items 5–7 are a week. Item 8 is the one that needs a plan of its
-own before anyone starts typing.
+| # | Item | Status |
+|---|---|---|
+| 1 | Node LTS matrix in CI, so the §2 class of break cannot recur invisibly | **Done** |
+| 2 | Frontend advisories: `postcss`, `nanoid`, then vite and esbuild | **Done** — 5 advisories to 0 |
+| 3 | vite 5 → 8 and React 18 → 19 | **Done** — typecheck, build, and runtime verified |
+| 4 | Chunk the embedded web bundle | **Done** — one 957 kB chunk to `react`/`markdown`/`vendor` |
+| 5 | Docs-site contrast (see §10) | **Done** |
+| 6 | Roadmap index; correct the misleading `IMPLEMENTED.md` scope | **Done** |
+| 7 | `CHANGELOG` entry for the unreleased work | **Done** — written as `Unreleased` |
+| 8 | **Cut the release**: pick the version, bump `Cargo.toml`, squash the duplicate commit, tag | **Open — maintainer call** |
+| 9 | **Cut v0.4.1** from `v0.4-lts` so released v0.4.x carries the hardening fixes | **Open — maintainer call** |
+| 10 | Split `web/src/main.tsx` (4,927 lines) | Open |
+| 11 | Prune the 79 remote branches | Open |
+| 12 | Decompose `db.rs` into domain modules behind the existing facade | Open — needs its own plan |
+
+Items 8 and 9 are deliberately left open: choosing a version number and creating a
+tag is a release decision, not a cleanup. The `CHANGELOG` is written and the tree is
+green, so both are a short step whenever the maintainer wants them.
+
+Item 12 is the one that needs a plan of its own before anyone starts typing.
+
+## 10. Docs-site contrast
+
+The public site defaulted to dark mode, and the dark palette was the source of a
+"flat grey" impression. Three measurable causes, all fixed:
+
+1. **No lightness ladder.** Page `#1a1b26`, alternating band `#202231`, and card
+   `#24283b` sat within roughly 5% lightness of each other, so sections and cards
+   melted into one field. They now step deliberately: `#0f1017` → `#161823` →
+   `#212640`.
+2. **No depth cues.** Every card carried `box-shadow: none` in dark mode. Cards now
+   get a drop shadow *and* an inset top highlight, which is what actually reads as an
+   edge against a near-black page — a drop shadow alone is nearly invisible there.
+3. **Washed text and a haze overlay.** Body text was `#c0caf5` with secondary text at
+   78% opacity, and the hero carried a grid overlay at `0.42` opacity. Text is now
+   `#dce2f5` with secondary at 84%, and the grid sits at `0.24`.
+
+The site's default color mode is now `light`; an explicit OS preference still wins, so
+this only changes what a visitor with no preference sees first.
+
+Verified by rendering the built site in Chromium at 1440×1000 in both themes, before
+and after.
 
 ## 9. What this review did not find
 

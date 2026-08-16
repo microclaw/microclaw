@@ -12,13 +12,20 @@ env:
 
 jobs:
   web:
-    name: Web And Docs Build
+    name: Web And Docs Build (node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both supported LTS majors. Pinning every job to a single Node major
+        # previously hid an engines pin that broke `cargo build` (and the snap
+        # build) on the older LTS while CI stayed green.
+        node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: |
             web/package-lock.json
