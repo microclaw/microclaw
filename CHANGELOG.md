@@ -69,6 +69,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   read as one flat grey field; they now form a deliberate lightness ladder with
   visible card edges. Site default color mode is `light` (an explicit OS
   preference still wins).
+- **Web operator UI visual system refreshed.** The embedded console now uses a
+  consistent surface, border, type, and elevation system across dark, light,
+  and accent themes. The session sidebar, active-session state, runtime header,
+  settings navigation, dialogs, forms, and mobile layout have clearer visual
+  hierarchy without changing their behavior or API contracts.
 
 ### Fixed
 

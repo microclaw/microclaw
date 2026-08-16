@@ -27,12 +27,202 @@ html:not(.dark) body {
 }
 
 :root {
-  --mc-bg-main: #02110d;
-  --mc-bg-sidebar: #03110d;
-  --mc-bg-panel: #071a14;
-  --mc-border-soft: #14382d;
+  --mc-bg-main: #06100d;
+  --mc-bg-sidebar: #081510;
+  --mc-bg-panel: #0b1813;
+  --mc-bg-elevated: #10211a;
+  --mc-border-soft: #1d3b30;
+  --mc-text: #e9f3ee;
+  --mc-text-muted: #91a79d;
   --mc-accent: #34d399;
   --mc-accent-hsl: 145 63% 52%;
+  --mc-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+}
+
+html:not(.dark) {
+  --mc-bg-main: #f3f7f5;
+  --mc-bg-sidebar: rgba(250, 252, 251, 0.92);
+  --mc-bg-panel: #ffffff;
+  --mc-bg-elevated: #ffffff;
+  --mc-border-soft: #dce7e1;
+  --mc-text: #17221d;
+  --mc-text-muted: #66776f;
+  --mc-shadow: 0 24px 80px rgba(15, 35, 25, 0.12);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--mc-accent) 32%, transparent) transparent;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--mc-accent) 30%, transparent);
+}
+
+.mc-app-shell {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background:
+    radial-gradient(900px 500px at 78% -20%, color-mix(in srgb, var(--mc-accent) 13%, transparent), transparent 70%),
+    var(--mc-bg-main);
+}
+
+.mc-main {
+  position: relative;
+  background: color-mix(in srgb, var(--mc-bg-panel) 96%, transparent);
+}
+
+.mc-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  min-height: 72px;
+  padding: 14px 24px;
+  border-bottom: 1px solid color-mix(in srgb, var(--mc-border-soft) 76%, transparent);
+  background: color-mix(in srgb, var(--mc-bg-panel) 86%, transparent);
+  backdrop-filter: blur(18px) saturate(130%);
+}
+
+.mc-eyebrow,
+.mc-brand-kicker {
+  color: var(--mc-text-muted);
+  font-size: 10px !important;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.mc-brand-kicker {
+  margin-top: 4px;
+  letter-spacing: 0.08em;
+}
+
+.mc-runtime-status {
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--mc-border-soft) 82%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mc-bg-elevated) 86%, transparent);
+  color: var(--mc-text-muted);
+}
+
+.mc-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mc-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mc-accent) 14%, transparent);
+}
+
+.mc-workspace {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--mc-accent) 3%, transparent), transparent 24%),
+    var(--mc-bg-main);
+}
+
+.mc-sidebar {
+  position: relative;
+  border-color: color-mix(in srgb, var(--mc-border-soft) 78%, transparent) !important;
+  background: var(--mc-bg-sidebar) !important;
+  box-shadow: inset -1px 0 rgba(255, 255, 255, 0.015);
+  backdrop-filter: blur(20px);
+}
+
+.mc-brand-row img {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mc-accent) 24%, transparent), 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+.mc-new-session {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--mc-accent) 94%, white), var(--mc-accent)) !important;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--mc-accent) 18%, transparent);
+}
+
+.mc-session-list {
+  border-color: color-mix(in srgb, var(--mc-border-soft) 72%, transparent) !important;
+  background: color-mix(in srgb, var(--mc-bg-main) 62%, transparent) !important;
+}
+
+.mc-session-item {
+  position: relative;
+  border-color: transparent !important;
+  background: transparent;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.mc-session-item:hover {
+  border-color: color-mix(in srgb, var(--mc-border-soft) 74%, transparent) !important;
+  background: color-mix(in srgb, var(--mc-bg-elevated) 70%, transparent);
+  transform: translateX(2px);
+}
+
+.mc-session-item.is-active {
+  border-color: color-mix(in srgb, var(--mc-accent) 44%, var(--mc-border-soft)) !important;
+  background: linear-gradient(100deg, color-mix(in srgb, var(--mc-accent) 13%, var(--mc-bg-elevated)), color-mix(in srgb, var(--mc-bg-elevated) 86%, transparent));
+  box-shadow: inset 3px 0 var(--mc-accent), 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.mc-sidebar-footer {
+  border-color: color-mix(in srgb, var(--mc-border-soft) 70%, transparent) !important;
+}
+
+.mc-sidebar-footer .rt-BaseButton {
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--mc-border-soft) 68%, transparent);
+  background: color-mix(in srgb, var(--mc-bg-elevated) 68%, transparent);
+}
+
+.rt-DialogOverlay {
+  background: rgba(2, 8, 6, 0.58) !important;
+  backdrop-filter: blur(10px);
+}
+
+.rt-DialogContent {
+  border: 1px solid color-mix(in srgb, var(--mc-border-soft) 88%, transparent);
+  border-radius: 18px !important;
+  background: color-mix(in srgb, var(--mc-bg-elevated) 97%, transparent) !important;
+  box-shadow: var(--mc-shadow) !important;
+}
+
+.rt-Card {
+  border-color: color-mix(in srgb, var(--mc-border-soft) 78%, transparent) !important;
+  background: color-mix(in srgb, var(--mc-bg-elevated) 82%, transparent);
+  box-shadow: none;
+}
+
+.rt-TextFieldRoot,
+.rt-TextAreaRoot,
+.rt-SelectTrigger {
+  border-radius: 9px !important;
+  background: color-mix(in srgb, var(--mc-bg-main) 80%, transparent) !important;
+}
+
+.rt-BaseButton {
+  font-weight: 620 !important;
+  letter-spacing: -0.005em;
+}
+
+.mc-settings-tab-trigger {
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.mc-settings-tab-trigger[data-state="active"] {
+  background: color-mix(in srgb, var(--mc-accent) 16%, transparent) !important;
+  color: color-mix(in srgb, var(--mc-accent) 72%, var(--mc-text)) !important;
+}
+
+.mc-settings-tab-trigger:hover {
+  transform: translateX(2px);
+}
+
+@media (max-width: 768px) {
+  .mc-topbar {
+    min-height: 64px;
+    padding: 11px 14px;
+  }
 }
 
 html:not(.dark)[data-ui-theme="green"] {

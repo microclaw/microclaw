@@ -1798,11 +1798,7 @@ function App() {
   return (
     <Theme appearance={appearance} accentColor={radixAccent as never} grayColor="slate" radius="medium" scaling="100%">
       <div
-        className={
-          appearance === 'dark'
-            ? 'h-screen w-screen bg-[var(--mc-bg-main)]'
-            : 'h-screen w-screen bg-[radial-gradient(1200px_560px_at_-8%_-10%,#d1fae5_0%,transparent_58%),radial-gradient(1200px_560px_at_108%_-12%,#e0f2fe_0%,transparent_58%),#f8fafc]'
-        }
+        className="mc-app-shell"
       >
         <div
           className={
@@ -1891,21 +1887,11 @@ function App() {
             </div>
           ) : null}
 
-          <main
-            className={
-              appearance === 'dark'
-                ? 'flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--mc-bg-panel)]'
-                : 'flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-white/95'
-            }
-          >
+          <main className="mc-main flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             <header
-              className={
-                appearance === 'dark'
-                  ? 'sticky top-0 z-10 border-b border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-panel)]/95 px-4 py-3 backdrop-blur-sm'
-                  : 'sticky top-0 z-10 border-b border-slate-200 bg-white/92 px-4 py-3 backdrop-blur-sm'
-              }
+              className="mc-topbar"
             >
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 items-center gap-3">
                 <button
                   type="button"
                   onClick={() => setMobileSidebarOpen(true)}
@@ -1932,19 +1918,20 @@ function App() {
                     ⟩
                   </button>
                 ) : null}
-                <Heading size="6" className="min-w-0 truncate">
-                  {selectedSessionLabel}
-                </Heading>
+                <div className="min-w-0">
+                  <Text size="1" className="mc-eyebrow">Active workspace</Text>
+                  <Heading size="5" className="min-w-0 truncate leading-tight">
+                    {selectedSessionLabel}
+                  </Heading>
+                </div>
+                <div className="mc-runtime-status ml-auto hidden items-center gap-2 sm:flex">
+                  <span className="mc-status-dot" aria-hidden="true" />
+                  <Text size="1">{sending ? 'Working' : statusText}</Text>
+                </div>
               </div>
             </header>
 
-            <div
-              className={
-                appearance === 'dark'
-                  ? 'flex min-h-0 flex-1 flex-col bg-[linear-gradient(to_bottom,var(--mc-bg-panel),var(--mc-bg-main)_28%)]'
-                  : 'flex min-h-0 flex-1 flex-col bg-[linear-gradient(to_bottom,#f8fafc,white_20%)]'
-              }
-            >
+            <div className="mc-workspace flex min-h-0 flex-1 flex-col">
               <div className="mx-auto w-full max-w-5xl px-3 pt-3">
                 {replayNotice ? (
                   <Callout.Root color="orange" size="1" variant="soft">

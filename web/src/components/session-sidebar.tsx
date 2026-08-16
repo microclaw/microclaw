@@ -102,10 +102,10 @@ export function SessionSidebar({
 
   return (
     <aside
-      className={isDark ? 'flex h-full min-h-0 flex-col border-r p-4' : 'flex h-full min-h-0 flex-col border-r border-slate-200 bg-white p-4'}
+      className={isDark ? 'mc-sidebar flex h-full min-h-0 flex-col border-r p-4' : 'mc-sidebar flex h-full min-h-0 flex-col border-r p-4'}
       style={isDark ? { borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-sidebar)' } : undefined}
     >
-      <Flex justify="between" align="center" className="mb-4">
+      <Flex justify="between" align="center" className="mc-brand-row mb-5">
         <div className="flex items-center gap-2">
           <img
             src="/icon.png"
@@ -114,9 +114,10 @@ export function SessionSidebar({
             loading="eager"
             decoding="async"
           />
-          <Text size="5" weight="bold">
-            MicroClaw
-          </Text>
+          <div className="flex flex-col">
+            <Text size="4" weight="bold" className="leading-none">MicroClaw</Text>
+            <Text size="1" className="mc-brand-kicker">Agent runtime</Text>
+          </div>
         </div>
         <div className="relative flex items-center gap-2">
           <button
@@ -216,10 +217,10 @@ export function SessionSidebar({
         <button
           type="button"
           onClick={onNewSession}
-          className="inline-flex h-9 w-full items-center justify-center rounded-md border border-transparent text-[15px] font-medium transition hover:brightness-110 active:brightness-95"
+          className="mc-new-session inline-flex h-10 w-full items-center justify-center rounded-lg border border-transparent text-[14px] font-semibold transition hover:brightness-110 active:brightness-95"
           style={isDark ? { backgroundColor: 'var(--mc-accent)', color: '#06110f' } : { backgroundColor: 'var(--mc-accent)', color: '#ffffff' }}
         >
-          New Session
+          <span aria-hidden="true" className="mr-2 text-lg leading-none">+</span> New session
         </button>
       </Flex>
 
@@ -233,10 +234,11 @@ export function SessionSidebar({
       </Flex>
 
       <div
+        data-testid="session-list"
         className={
           isDark
-            ? 'flex min-h-0 flex-1 flex-col rounded-xl border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-panel)] p-2'
-            : 'flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200 bg-slate-50/70 p-2'
+            ? 'mc-session-list flex min-h-0 flex-1 flex-col rounded-xl border p-2'
+            : 'mc-session-list flex min-h-0 flex-1 flex-col rounded-xl border p-2'
         }
       >
         <ScrollArea type="auto" className="min-h-0 flex-1">
@@ -258,11 +260,11 @@ export function SessionSidebar({
                 className={
                   selectedSessionKey === item.session_key
                     ? isDark
-                      ? 'flex w-full max-w-full flex-col items-start rounded-lg border border-[color:var(--mc-accent)] bg-[color:var(--mc-bg-panel)] px-3 py-2 text-left shadow-sm'
-                      : 'flex w-full max-w-full flex-col items-start rounded-lg border bg-white px-3 py-2 text-left shadow-sm'
+                      ? 'mc-session-item is-active flex w-full max-w-full flex-col items-start rounded-lg border px-3 py-2.5 text-left'
+                      : 'mc-session-item is-active flex w-full max-w-full flex-col items-start rounded-lg border px-3 py-2.5 text-left'
                     : isDark
-                      ? 'flex w-full max-w-full flex-col items-start rounded-lg border border-transparent px-3 py-2 text-left text-slate-300 hover:border-[color:var(--mc-border-soft)] hover:bg-[color:var(--mc-bg-panel)]'
-                      : 'flex w-full max-w-full flex-col items-start rounded-lg border border-transparent px-3 py-2 text-left text-slate-600 hover:border-slate-200 hover:bg-white'
+                      ? 'mc-session-item flex w-full max-w-full flex-col items-start rounded-lg border px-3 py-2.5 text-left text-slate-300'
+                      : 'mc-session-item flex w-full max-w-full flex-col items-start rounded-lg border px-3 py-2.5 text-left text-slate-600'
                 }
                 style={
                   !isDark && selectedSessionKey === item.session_key
@@ -286,7 +288,7 @@ export function SessionSidebar({
         </ScrollArea>
       </div>
 
-      <div className={isDark ? 'mt-4 border-t border-[color:var(--mc-border-soft)] pt-3' : 'mt-4 border-t border-slate-200 pt-3'}>
+      <div className="mc-sidebar-footer mt-4 border-t pt-3">
         <Button size="2" variant="soft" onClick={() => void onOpenUsage()} style={{ width: '100%' }}>
           Usage Panel
         </Button>
