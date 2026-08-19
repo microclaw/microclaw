@@ -155,7 +155,7 @@ Questions and ideas are welcome on [Discord](https://discord.gg/pvmezwkAk5) and 
 
 ## Star history
 
-[![Star History Chart](https://api.star-history.com/svg?repos=microclaw/microclaw&type=Date)](https://star-history.com/#microclaw/microclaw&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=microclaw/microclaw&type=Date)](https://star-history.dera.page/#microclaw/microclaw&Date)
 
 ## Contributors
 

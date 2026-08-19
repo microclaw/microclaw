@@ -155,7 +155,7 @@ Anthropic 使用原生 provider 通路。OpenAI、OpenAI Codex、OpenRouter、Ol
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=microclaw/microclaw&type=Date)](https://star-history.com/#microclaw/microclaw&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=microclaw/microclaw&type=Date)](https://star-history.dera.page/#microclaw/microclaw&Date)
 
 ## Contributors
 
