@@ -8,7 +8,9 @@ first.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`next-direction-2026-08.md`](./next-direction-2026-08.md) | **Active** | Full-tree health review and recommended order. |
+| [`product-direction-2026-08.md`](./product-direction-2026-08.md) | **Active** | Native GPUI-based `microclaw-work`, shared runtime/server boundaries, named agents, deployment, packaging tiers, and evidence gates. |
+| [`microclaw-work-proposal-cn.md`](./microclaw-work-proposal-cn.md) | Proposal | Chinese proposal for the next major Work/Server product boundary; discussion only, not implementation authorization. |
+| [`next-direction-2026-08.md`](./next-direction-2026-08.md) | Superseded | Full-tree health review; open maintenance findings remain useful inputs to the active product direction. |
 | [`db-decomposition-plan.md`](./db-decomposition-plan.md) | Delivered | Split `db.rs` (17k lines / 237 methods) into domain modules behind the same facade; shipped in 0.5.0. |
 | [`v0.4.0-plan.md`](./v0.4.0-plan.md) | Delivered | v0.4.0 shipped 2026-08-07; exit criteria met, `v0.4-lts` branch cut. |
 | [`v0.3.0-completion-and-v0.4.0-kickoff.md`](./v0.3.0-completion-and-v0.4.0-kickoff.md) | Delivered | Superseded by the v0.4.0 plan. |
