@@ -108,7 +108,32 @@ Server 继续长期维护，它不是被桌面端取代的旧产品。它负责�
 产物，并默认最小授权。ACP/A2A 可以作为底层协议，但产品语义由 MicroClaw
 自己定义。
 
-## 六、实施顺序
+## 六、大版本与兼容策略
+
+本提案按下一次大版本实施，允许主动打破以下兼容：
+
+- 重新设计配置结构，不保证旧 YAML 原样可用；
+- 重新命名 binary、子命令、环境变量和默认目录；
+- 调整 HTTP API、事件模型和 Work ↔ Server 协议；
+- 将低使用率渠道从默认构建移到 feature、独立包或插件；
+- 删除仅为旧内部结构保留的 Rust API 和临时 facade；
+- 不保证旧 Web UI 与新 Work UI 功能一一对应。
+
+不兼容不等于丢弃用户数据。以下内容仍是硬约束：
+
+- 会话、任务、记忆和审计数据提供一次性数据库迁移或只读导出；
+- 凭据不静默迁移到更宽的权限域，也不写入日志；
+- 工具安全、路径保护、审批和审计能力不因重构而降低；
+- 发布清楚的迁移指南、废弃列表和回退方式；
+- 大版本升级前可以导出用户数据，失败时不破坏旧数据目录。
+
+建议使用新的配置版本标识和数据目录 schema version。新版本可以拒绝启动旧
+配置并给出迁移命令，而不是在运行时长期维护多套兼容分支。
+
+## 七、六阶段开发计划
+
+整个开发建议拆成六个有独立验收标准的阶段。每个阶段合并前都必须有可运行的
+结果，不能以“后续阶段会补齐”为由留下不可用主干。
 
 ### Phase 0：提案和技术验证
 
@@ -118,28 +143,76 @@ Server 继续长期维护，它不是被桌面端取代的旧产品。它负责�
 - 固定 GPUI/GPUI Component revision，用适配 crate 隔离上游变化；
 - 统计 Server 集成的使用、体积和维护成本。
 
-### Phase 1：Work 纵向闭环
+验收标准：同一个原型可以在 macOS 和 Windows 打开 Workspace、流式显示假任务、
+请求审批、展示 Diff，并在重启后恢复；Linux CI 至少能够构建和启动窗口。
+
+### Phase 1：共享内核与新应用边界
+
+- 把根 crate 中可复用的 Agent Engine、LLM、工具执行和任务状态收敛到稳定的
+  application/runtime API；
+- 建立 `microclaw-server` 和 `microclaw-work` 两个 binary/application 入口；
+- 定义 Work Task、Plan、Progress、Approval、File Change、Artifact 等领域类型；
+- 建立 command + projection + bounded event stream，UI 不直接调用 Agent Engine；
+- 建立新配置 schema、数据迁移命令和 Server feature 分层骨架；
+- 保持现有安全、恢复和 completion contract 测试覆盖。
+
+验收标准：Server 通过新边界完成现有 headless prompt；无 GPUI 的 Work harness
+可以运行一个任务、订阅事件、暂停、取消并恢复，且没有复制 Agent Loop。
+
+### Phase 2：Work 纵向闭环
 
 - 完成“打开项目到交付产物”的单一闭环；
 - 建立 Work Application Service 和 UI projection，不复制 Agent Engine；
 - 完成 macOS 和 Windows 安装、升级、诊断与崩溃恢复；
 - Linux 提供开发预览和持续构建。
 
-### Phase 2：Server 大版本边界
+验收标准：新用户能够安装、配置模型、打开真实仓库、完成一次带审批和 Diff 的
+任务并看到验证结果；退出和崩溃后能够恢复。
+
+### Phase 3：Server 大版本边界
 
 - 拆分 Core、Standard 和 Optional adapters；
 - 产品化命名 Agent、隔离权限和少量团队模板；
 - 保持 Web 管理端，精简默认渠道和依赖；
 - 发布兼容、弃用和迁移说明。
 
-### Phase 3：Work ↔ Server 与自有 Cloud
+验收标准：Lite/Standard 构建边界真实生效；旧数据可迁移或导出；被移出默认包
+的渠道仍能按文档安装；Server 的调度、恢复、投递和 Web 管理可用。
+
+### Phase 4：Work ↔ Server 与自有 Cloud
 
 - 设备配对、远程任务和委派；
 - Docker Compose、一键部署、备份和升级；
 - PWA 的通知、状态、审批和聊天；
 - 根据实际数据决定是否需要托管控制面。
 
-## 七、关键决策门槛
+验收标准：Work 能把任务交给用户自有 Server、查看实时状态、取消并接收产物；
+权限、预算和凭据范围在委派过程中可见且可审计。
+
+### Phase 5：三端发布与稳定化
+
+- macOS 签名、公证、DMG 和升级；
+- Windows 签名安装、升级、Defender/SmartScreen 和高 DPI 验证；
+- Linux 根据 Phase 0–4 的维护证据决定正式支持或继续 Preview；
+- 完成安装、首次任务、恢复、升级和卸载的端到端测试；
+- 完成性能、内存、GPU、长任务和大事件流测试；
+- 发布大版本迁移指南和稳定版本。
+
+验收标准：macOS、Windows 达到正式发布质量；Linux 的支持等级有明确结论；
+Server 和 Work 均可独立安装运行，也能通过稳定协议协作。
+
+粗略周期：Phase 0 约 2 周，Phase 1 约 4–6 周，Phase 2 约 6–8 周，Phase 3
+约 4–6 周，Phase 4 约 4–6 周，Phase 5 约 3–4 周。阶段可以部分重叠，但不能
+绕过各自验收门槛。实际周期取决于 GPUI 的 Windows/IME 成熟度和现有 Agent
+Engine 从根 crate 抽离的复杂度。
+
+## 八、第一阶段之后暂不承诺的内容
+
+在 Work 纵向闭环完成前，暂不开发完整 IDE、任意 Multi-Agent 画布、插件商城、
+原生移动运行时、多租户 SaaS 和新增低频渠道。允许在大版本中删除旧 API，并不
+意味着可以同时扩大产品范围。
+
+## 九、关键决策门槛
 
 在进入开发前，需要先回答：
 

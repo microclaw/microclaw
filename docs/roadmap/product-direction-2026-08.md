@@ -504,6 +504,19 @@ Until Phase 1 is complete and measured, do not prioritize:
 - rewriting the Rust runtime for binary-size optics;
 - competing on total feature count.
 
+### Major-version compatibility policy
+
+This direction may ship as a breaking major version. It may replace the config
+schema, binary/subcommand names, environment variables, API/event contracts,
+default feature set, and internal Rust facades instead of preserving parallel
+legacy paths. Low-use adapters may move out of the standard build.
+
+Breaking compatibility does not authorize data loss or weaker safety. Existing
+sessions, tasks, memories, and audit data require a one-time migration or a
+read-only export path; credentials must not silently gain scope; old data must
+remain recoverable after a failed upgrade; and the release must publish an
+explicit migration, deprecation, and rollback guide.
+
 ## 10. Decision gates
 
 The roadmap should be adjusted using product evidence rather than competitor
