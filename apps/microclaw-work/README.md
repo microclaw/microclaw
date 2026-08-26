@@ -153,9 +153,23 @@ MICROCLAW_WORK_SIGNING_IDENTITY='Developer ID Application: <name> (<team-id>)' \
   scripts/build_work_macos_dmg.sh work-release
 ```
 
-The signing path enables Hardened Runtime and requests a trusted timestamp for
-both the application and disk image. Apple notarization and stapling remain
-required before public distribution; auto-update remains later release work.
+For a public distribution candidate, also provide a `notarytool` keychain
+profile created with `xcrun notarytool store-credentials`:
+
+```sh
+MICROCLAW_WORK_SIGNING_IDENTITY='Developer ID Application: <name> (<team-id>)' \
+MICROCLAW_WORK_NOTARY_PROFILE='microclaw-work-notary' \
+  scripts/build_work_macos_dmg.sh work-release
+```
+
+The release path enables Hardened Runtime, requests trusted timestamps,
+submits both the application and disk image to Apple, staples their tickets,
+and validates the finished DMG. Auto-update remains later release work.
+
+macOS is the current product and release-acceptance target. Windows and Linux
+remain useful engineering previews, but their packaging, IME, accessibility,
+and physical GPU matrices are intentionally deferred until the macOS desktop
+has enough sustained daily-use evidence.
 
 On Windows, Inno Setup 6 produces a per-user installer with the website brand
 icon, Start menu entry, optional desktop shortcut, and an uninstaller:
@@ -213,9 +227,10 @@ Pinned upstream revisions:
   resolved by GPUI Component's own lockfile)
 - GPUI Component: `d5821f270317754f2a311a0bb148ec32cbb0ced4`
 
-Phase 0 still requires real-machine validation for Chinese IME, accessibility,
-Windows/Linux rendering, GPU compatibility, release packaging, and a real
-provider first-response journey.
+The current macOS milestone still requires real-machine validation for Chinese
+IME composition, VoiceOver navigation, GPU compatibility, notarized release
+packaging, and a real provider first-response journey. Windows and Linux
+release validation belongs to a later milestone.
 
 The workspace uses Rust 1.95 because the pinned GPUI revision relies on stable
 standard-library APIs that are unavailable in Rust 1.93.

@@ -5,6 +5,7 @@ work_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 work_repo_root="$(cd "$work_script_dir/.." && pwd)"
 work_profile="${1:-release}"
 work_signing_identity="${MICROCLAW_WORK_SIGNING_IDENTITY:--}"
+work_notary_profile="${MICROCLAW_WORK_NOTARY_PROFILE:-}"
 
 case "$work_profile" in
   debug|release|work-release) ;;
@@ -27,6 +28,21 @@ work_dmg="$work_output_root/MicroClaw-Work-$work_version-macos.dmg"
 
 "$work_script_dir/build_work_macos_app.sh" "$work_profile"
 
+if [[ -n "$work_notary_profile" ]]; then
+  if [[ "$work_signing_identity" == "-" ]]; then
+    echo "MICROCLAW_WORK_NOTARY_PROFILE requires a Developer ID signing identity" >&2
+    exit 2
+  fi
+  work_notary_archive="$(mktemp /tmp/microclaw-work-notary.XXXXXX.zip)"
+  trap 'rm -f "$work_notary_archive"' EXIT
+  ditto -c -k --keepParent "$work_bundle" "$work_notary_archive"
+  xcrun notarytool submit "$work_notary_archive" \
+    --keychain-profile "$work_notary_profile" \
+    --wait
+  xcrun stapler staple "$work_bundle"
+  xcrun stapler validate "$work_bundle"
+fi
+
 if [[ "$work_output_root" != "$work_repo_root/target/microclaw-work-installer/$work_profile" ]]; then
   echo "refusing to replace unexpected output path: $work_output_root" >&2
   exit 1
@@ -47,6 +63,15 @@ hdiutil create \
 if [[ "$work_signing_identity" != "-" ]]; then
   codesign --force --sign "$work_signing_identity" --timestamp "$work_dmg"
   codesign --verify --verbose=2 "$work_dmg"
+fi
+
+if [[ -n "$work_notary_profile" ]]; then
+  xcrun notarytool submit "$work_dmg" \
+    --keychain-profile "$work_notary_profile" \
+    --wait
+  xcrun stapler staple "$work_dmg"
+  xcrun stapler validate "$work_dmg"
+  spctl --assess --type open --context context:primary-signature --verbose=2 "$work_dmg"
 fi
 
 hdiutil verify "$work_dmg"

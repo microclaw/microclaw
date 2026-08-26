@@ -20,10 +20,10 @@ installable and understandable product:
 
 The recommended sequence is:
 
-1. Build `microclaw-work`, a native, pure-Rust macOS, Windows, and Linux work
-   companion using GPUI and GPUI Component, with its own foreground,
-   interactive loop. Hold macOS and Windows to release quality first while
-   Linux begins as a continuously built preview.
+1. Build `microclaw-work` as a native, pure-Rust macOS work companion using
+   GPUI and GPUI Component, with its own foreground, interactive loop. Make
+   macOS excellent through sustained daily use before promoting the existing
+   Windows and Linux engineering previews to supported products.
 2. Productize existing subagent and orchestration primitives as persistent,
    named agent profiles and bounded team templates.
 3. Make local, VPS, and third-party cloud deployment easy to connect and
@@ -114,8 +114,8 @@ The implementation principles are:
 
 ### 4.1 Desktop work companion
 
-The highest-value product investment is `microclaw-work`, a native desktop work
-companion for macOS, Windows, and Linux. Its application and UI should be pure Rust,
+The highest-value product investment is `microclaw-work`, initially a native
+macOS work companion. Its application and UI should be pure Rust,
 using GPUI plus GPUI Component rather than Tauri or an embedded browser. The
 product has its own foreground task loop rather than serving only as a control
 center for `microclaw-server`.
@@ -135,9 +135,8 @@ open a workspace
 A first release should provide:
 
 - signed and notarized macOS installation;
-- signed Windows installer;
-- a continuously built Linux preview, promoted to an equal release tier only
-  after packaging and platform QA are sustainable;
+- Windows and Linux engineering previews that remain buildable but are not
+  current release blockers;
 - guided provider/model and credential onboarding;
 - workspace selection and local project context;
 - foreground tasks with plan, progress, interruption, and resume;
@@ -219,8 +218,8 @@ to the existing runtime. They are also fast-moving dependencies currently
 consumed from Git, so this choice needs an explicit technical gate before the
 team commits the whole desktop roadmap to it.
 
-Run a two-week spike that pins exact revisions and verifies on real macOS and
-Windows machines:
+Run a focused spike that pins exact revisions and verifies the complete journey
+on real macOS machines:
 
 - Chinese and English input, IME composition, selection, clipboard, shortcuts,
   and accessibility;
@@ -231,15 +230,15 @@ Windows machines:
 - code/diff rendering for realistically large files;
 - process cancellation, crash recovery, and task continuation after a window
   closes;
-- signed `.app`/DMG and signed Windows installer production;
+- signed, notarized, and stapled `.app`/DMG production;
 - GPU/renderer behavior on the oldest supported hardware and remote desktops.
 
-Exit the spike only when the same vertical prototype can open a workspace,
-stream an agent task, request approval, show a diff, and recover it after
-restart on both operating systems. Keep the framework behind the adapter crate,
+Exit the spike only when the vertical prototype can open a workspace, stream an
+agent task, request approval, show a diff, and recover it after restart on
+macOS. Keep the framework behind the adapter crate,
 pin revisions in the lockfile, schedule deliberate upgrades, and run the
-cross-platform smoke suite on every dependency update. If critical Windows,
-IME, or accessibility behavior cannot be made reliable within the spike, make
+macOS smoke suite on every dependency update. If critical IME or accessibility
+behavior cannot be made reliable within the spike, make
 the fallback decision before building the full UI rather than carrying an
 indefinite native-framework rewrite.
 

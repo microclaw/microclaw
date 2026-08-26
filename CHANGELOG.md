@@ -8,6 +8,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **macOS-first Work release path.** MicroClaw Work now treats macOS daily-use
+  quality as the first desktop milestone while retaining Windows and Linux as
+  non-blocking engineering previews. The DMG builder can submit Developer
+  ID-signed application and disk-image artifacts with a named `notarytool`
+  keychain profile, then staple and validate both artifacts for distribution.
+
 - **Explicit Work accessibility semantics.** Model fields and the chat composer
   now expose stable accessible names; completed conversation messages are
   paragraphs, streamed assistant output is a status region, and inline tool
