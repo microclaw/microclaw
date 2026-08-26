@@ -113,22 +113,22 @@ jobs:
       - run: cargo clippy -p microclaw-work-headless --all-targets --no-deps --locked -- -D warnings
       - name: Build release desktop binary
         if: runner.os != 'macOS'
-        run: cargo build -p microclaw-work --release --locked
+        run: cargo build -p microclaw-work --profile work-release --locked
       - name: Launch-smoke Linux desktop binary
         if: runner.os == 'Linux'
-        run: xvfb-run -a scripts/smoke_work_linux_app.sh release
+        run: xvfb-run -a scripts/smoke_work_linux_app.sh work-release
       - name: Build release macOS DMG preview
         if: runner.os == 'macOS'
-        run: scripts/build_work_macos_dmg.sh release
+        run: scripts/build_work_macos_dmg.sh work-release
       - name: Launch-smoke macOS app bundle
         if: runner.os == 'macOS'
-        run: scripts/smoke_work_macos_app.sh release
+        run: scripts/smoke_work_macos_app.sh work-release
       - name: Package Linux preview
         if: runner.os == 'Linux'
         shell: bash
         run: |
           mkdir -p target/microclaw-work-preview
-          cp target/release/microclaw-work target/microclaw-work-preview/
+          cp target/work-release/microclaw-work target/microclaw-work-preview/
           cp LICENSE apps/microclaw-work/README.md target/microclaw-work-preview/
           tar -czf microclaw-work-linux-x86_64.tar.gz -C target microclaw-work-preview
       - name: Install Inno Setup
@@ -138,7 +138,7 @@ jobs:
       - name: Build Windows installer preview
         if: runner.os == 'Windows'
         shell: pwsh
-        run: scripts/build_work_windows_installer.ps1 -Configuration release -SkipBuild
+        run: scripts/build_work_windows_installer.ps1 -Configuration work-release -SkipBuild
       - name: Smoke Windows installer preview
         if: runner.os == 'Windows'
         shell: pwsh
@@ -159,7 +159,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: microclaw-work-macos-dmg
-          path: target/microclaw-work-installer/release/*.dmg
+          path: target/microclaw-work-installer/work-release/*.dmg
           if-no-files-found: error
           retention-days: 14
       - name: Upload Windows preview

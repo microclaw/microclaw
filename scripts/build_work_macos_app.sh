@@ -13,8 +13,11 @@ case "$work_profile" in
   release)
     work_cargo_args=(build -p microclaw-work --release --locked)
     ;;
+  work-release)
+    work_cargo_args=(build -p microclaw-work --profile work-release --locked)
+    ;;
   *)
-    echo "usage: $0 [debug|release]" >&2
+    echo "usage: $0 [debug|release|work-release]" >&2
     exit 2
     ;;
 esac

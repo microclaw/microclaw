@@ -8,6 +8,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Dedicated desktop release profile.** `work-release` keeps optimized,
+  stripped binaries while dropping Server-oriented Thin LTO and enabling
+  parallel code generation. All Work installers and preview launch gates use
+  this canonical profile, making Windows release builds predictable without
+  changing MicroClaw Server release characteristics.
 - **Linux Work launch gate.** Extended CI now starts the release GPUI desktop
   under Xvfb with Mesa Vulkan support and requires the process to remain alive,
   complementing the existing Linux compile, test, Clippy, and preview artifact

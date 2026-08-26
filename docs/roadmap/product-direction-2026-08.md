@@ -482,7 +482,9 @@ and stapling are still required for public distribution. Windows now has a
 separate branded per-user Inno Setup package, optional Authenticode signing for
 both the application and installer, and a CI silent-install/launch/uninstall
 smoke gate. A production Windows certificate is still required before public
-distribution. The repository also has
+distribution. Work installers use a dedicated optimized `work-release` Cargo
+profile so the Server's Thin LTO policy does not impose disproportionate Windows
+link times on the desktop product. The repository also has
 a Linux/macOS/Windows release-build matrix that runs the headless recovery harness
 and publishes unsigned preview artifacts. Hosted Linux and macOS jobs have completed successfully and produced
 non-expired preview artifacts; Windows hosted completion is still required

@@ -8,9 +8,9 @@ work_binary="$work_repo_root/target/$work_profile/microclaw-work"
 work_log="$work_repo_root/target/$work_profile/microclaw-work-linux-launch-smoke.log"
 
 case "$work_profile" in
-  debug|release) ;;
+  debug|release|work-release) ;;
   *)
-    echo "usage: $0 [debug|release]" >&2
+    echo "usage: $0 [debug|release|work-release]" >&2
     exit 2
     ;;
 esac

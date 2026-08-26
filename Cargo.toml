@@ -20,6 +20,13 @@ strip = true
 lto = "thin"
 codegen-units = 1
 
+# Native desktop distribution favors predictable cross-platform build times.
+# Server releases keep the size/throughput-oriented Thin LTO profile above.
+[profile.work-release]
+inherits = "release"
+lto = "off"
+codegen-units = 16
+
 [package]
 name = "microclaw"
 version = "0.5.0"

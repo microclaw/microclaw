@@ -136,20 +136,21 @@ scripts/build_work_macos_app.sh debug
 
 The validated bundle is written to
 `target/microclaw-work-app/debug/MicroClaw Work.app`. Use `release` instead of
-`debug` for an optimized bundle. Development bundles are ad-hoc signed for
+`debug` for a Server-style LTO build, or `work-release` for the official desktop
+distribution profile. Development bundles are ad-hoc signed for
 local execution. The bundle icon is generated from the same `logo.png` used by
 the documentation website. Build and verify an ad-hoc signed DMG preview with:
 
 ```sh
-scripts/build_work_macos_dmg.sh release
-scripts/smoke_work_macos_app.sh release
+scripts/build_work_macos_dmg.sh work-release
+scripts/smoke_work_macos_app.sh work-release
 ```
 
 For a Developer ID-signed local release candidate, set an installed identity:
 
 ```sh
 MICROCLAW_WORK_SIGNING_IDENTITY='Developer ID Application: <name> (<team-id>)' \
-  scripts/build_work_macos_dmg.sh release
+  scripts/build_work_macos_dmg.sh work-release
 ```
 
 The signing path enables Hardened Runtime and requests a trusted timestamp for
@@ -160,7 +161,7 @@ On Windows, Inno Setup 6 produces a per-user installer with the website brand
 icon, Start menu entry, optional desktop shortcut, and an uninstaller:
 
 ```powershell
-scripts/build_work_windows_installer.ps1 -Configuration release
+scripts/build_work_windows_installer.ps1 -Configuration work-release
 $installer = Get-ChildItem target/microclaw-work-windows-installer/out/*.exe |
   Select-Object -First 1
 scripts/smoke_work_windows_installer.ps1 -InstallerPath $installer.FullName
@@ -171,6 +172,11 @@ code-signing certificate with `-CodeSigningCertificateSha1`. The script signs
 and verifies both `microclaw-work.exe` and the finished installer with SHA-256
 and an RFC 3161 timestamp. CI deliberately publishes an unsigned preview until
 a repository signing identity is provisioned.
+
+`work-release` is the canonical desktop distribution profile. It keeps release
+optimization and symbol stripping but disables Thin LTO and uses parallel code
+generation, avoiding the Server profile's disproportionate Windows link time.
+This is a deliberate product boundary, not a debug or compatibility build.
 
 Extended CI continuously checks the Work application on `ubuntu-24.04`, the
 current GitHub-hosted macOS runner, and `windows-latest`. Each platform runs the

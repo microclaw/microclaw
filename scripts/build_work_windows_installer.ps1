@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$InnoSetupCompilerPath = '',
-  [ValidateSet('release', 'debug')]
-  [string]$Configuration = 'release',
+  [ValidateSet('work-release', 'release', 'debug')]
+  [string]$Configuration = 'work-release',
   [string]$StageDir = '',
   [string]$OutputDir = '',
   [string]$OutputBaseFilename = '',
@@ -77,6 +77,7 @@ if ([string]::IsNullOrWhiteSpace($OutputBaseFilename)) { $OutputBaseFilename = "
 if (-not $SkipBuild) {
   $cargoArgs = @('build', '-p', 'microclaw-work', '--locked')
   if ($Configuration -eq 'release') { $cargoArgs += '--release' }
+  if ($Configuration -eq 'work-release') { $cargoArgs += @('--profile', 'work-release') }
   & cargo @cargoArgs
   if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
 }

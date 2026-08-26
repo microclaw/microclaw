@@ -7,9 +7,9 @@ work_profile="${1:-release}"
 work_signing_identity="${MICROCLAW_WORK_SIGNING_IDENTITY:--}"
 
 case "$work_profile" in
-  debug|release) ;;
+  debug|release|work-release) ;;
   *)
-    echo "usage: $0 [debug|release]" >&2
+    echo "usage: $0 [debug|release|work-release]" >&2
     exit 2
     ;;
 esac
