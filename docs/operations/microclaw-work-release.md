@@ -53,8 +53,13 @@ For a local signed candidate outside GitHub Actions, install a Developer ID
 Application identity and configure a `notarytool` keychain profile:
 
 ```sh
+xcrun notarytool store-credentials "microclaw-work-notary" \
+  --apple-id "APPLE_ID" \
+  --team-id "APPLE_TEAM_ID" \
+  --password "APP_SPECIFIC_PASSWORD"
+
 MICROCLAW_WORK_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
-MICROCLAW_WORK_NOTARY_PROFILE="microclaw-work" \
+MICROCLAW_WORK_NOTARY_PROFILE="microclaw-work-notary" \
 MICROCLAW_WORK_VERSION_OVERRIDE="0.6.0" \
 scripts/build_work_macos_dmg.sh work-release
 MICROCLAW_WORK_REQUIRE_NOTARIZATION=1 \
