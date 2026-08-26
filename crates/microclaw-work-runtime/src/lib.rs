@@ -6,6 +6,8 @@
 
 use microclaw::config::Config;
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
+use microclaw::llm::create_provider;
+use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,6 +30,14 @@ pub struct RuntimeConfigSummary {
     pub provider: String,
     pub model: String,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderConnectionReport {
+    pub provider: String,
+    pub model: String,
+    pub latency_ms: u64,
+    pub response_preview: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +171,77 @@ impl WorkRuntimeService {
 
     pub fn config_summary(&self) -> RuntimeConfigSummary {
         load_runtime_config_summary(&self.config_path)
+    }
+
+    /// Sends a minimal provider request on a background thread. This validates
+    /// endpoint, authentication, model routing, and response decoding without
+    /// starting an Agent Engine session or exposing the saved credential.
+    pub fn test_provider_connection(&self) -> Receiver<Result<ProviderConnectionReport, String>> {
+        let (result_tx, result_rx) = mpsc::channel();
+        let config_path = self.config_path.clone();
+        let worker_tx = result_tx.clone();
+        let spawn = std::thread::Builder::new()
+            .name("microclaw-work-provider-test".into())
+            .spawn(move || {
+                let result = (|| -> Result<ProviderConnectionReport, String> {
+                    let config = Config::load_from_path_for_headless(&config_path)
+                        .map_err(|error| error.to_string())?;
+                    let provider_name = config.llm_provider.clone();
+                    let model = config.model.clone();
+                    let runtime = tokio::runtime::Runtime::new()
+                        .map_err(|error| format!("could not create diagnostic runtime: {error}"))?;
+                    let started = std::time::Instant::now();
+                    let response = runtime.block_on(async {
+                        let provider = create_provider(&config);
+                        tokio::time::timeout(
+                            Duration::from_secs(20),
+                            provider.send_message(
+                                "Reply with exactly: connection ok",
+                                vec![Message {
+                                    role: "user".into(),
+                                    content: MessageContent::Text(
+                                        "MicroClaw Work connection test".into(),
+                                    ),
+                                }],
+                                None,
+                            ),
+                        )
+                        .await
+                        .map_err(|_| "provider connection timed out after 20 seconds".to_string())?
+                        .map_err(|error| {
+                            let error = error.to_string();
+                            if config.api_key.is_empty() {
+                                error
+                            } else {
+                                error.replace(&config.api_key, "<redacted>")
+                            }
+                        })
+                    })?;
+                    let response_preview = response
+                        .content
+                        .iter()
+                        .find_map(|block| match block {
+                            ResponseContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .unwrap_or("Provider returned no visible text");
+                    Ok(ProviderConnectionReport {
+                        provider: provider_name,
+                        model,
+                        latency_ms: u64::try_from(started.elapsed().as_millis())
+                            .unwrap_or(u64::MAX),
+                        response_preview: microclaw_core::redact::redact_secrets(
+                            &response_preview.chars().take(240).collect::<String>(),
+                        ),
+                    })
+                })()
+                .map_err(|error| microclaw_core::redact::redact_secrets(&error));
+                let _ = worker_tx.send(result);
+            });
+        if let Err(error) = spawn {
+            let _ = result_tx.send(Err(format!("could not start provider diagnostic: {error}")));
+        }
+        result_rx
     }
 
     pub fn model_settings(&self) -> Result<ModelSettings, ModelSettingsError> {
@@ -458,6 +539,32 @@ fn next_run_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn provider_fixture(status: &str, body: &'static str) -> (String, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let status = status.to_string();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = vec![0; 16 * 1024];
+            let count = stream.read(&mut bytes).unwrap_or(0);
+            let request = String::from_utf8_lossy(&bytes[..count]).to_string();
+            let _ = request_tx.send(request);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+        (format!("http://{address}/v1"), request_rx)
+    }
 
     #[test]
     fn generated_run_ids_are_unique() {
@@ -567,6 +674,72 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(error, ModelSettingsError::MissingApiKey { .. }));
+    }
+
+    #[test]
+    fn provider_connection_test_exercises_endpoint_auth_model_and_response() {
+        let (base_url, request_rx) = provider_fixture(
+            "200 OK",
+            r#"{"choices":[{"message":{"content":"connection ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#,
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let service = WorkRuntimeService::new(directory.path().join("config.yaml"));
+        service
+            .save_model_settings(ModelSettingsDraft {
+                provider: "openai".into(),
+                model: "fixture-model".into(),
+                base_url,
+                api_key: Some("fixture-secret".into()),
+            })
+            .unwrap();
+
+        let report = service
+            .test_provider_connection()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        let request = request_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(request.starts_with("POST /v1/chat/completions "));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer fixture-secret")
+        );
+        assert!(request.contains("fixture-model"));
+        assert!(request.contains("MicroClaw Work connection test"));
+        assert_eq!(report.provider, "openai");
+        assert_eq!(report.model, "fixture-model");
+        assert_eq!(report.response_preview, "connection ok");
+    }
+
+    #[test]
+    fn provider_connection_test_returns_redacted_provider_errors() {
+        let (base_url, _) = provider_fixture(
+            "401 Unauthorized",
+            r#"{"error":{"message":"bad credential fixture-secret"}}"#,
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let service = WorkRuntimeService::new(directory.path().join("config.yaml"));
+        service
+            .save_model_settings(ModelSettingsDraft {
+                provider: "openai".into(),
+                model: "fixture-model".into(),
+                base_url,
+                api_key: Some("fixture-secret".into()),
+            })
+            .unwrap();
+
+        let error = service
+            .test_provider_connection()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap_err();
+        assert!(!error.contains("fixture-secret"));
+        assert!(
+            error.contains("LLM API error"),
+            "unexpected provider error: {error}"
+        );
+        assert!(error.contains("<redacted>"));
     }
 
     #[test]

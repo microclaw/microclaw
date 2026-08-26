@@ -41,6 +41,8 @@ struct WorkApp {
     base_url_input: Entity<InputState>,
     api_key_input: Entity<InputState>,
     last_run_was_demo: bool,
+    connection_test_active: bool,
+    connection_test_message: String,
     draft_revision: u64,
     _subscriptions: Vec<Subscription>,
 }
@@ -201,6 +203,8 @@ impl WorkApp {
             base_url_input,
             api_key_input,
             last_run_was_demo: false,
+            connection_test_active: false,
+            connection_test_message: "Save settings, then test the provider connection.".into(),
             draft_revision: 0,
             _subscriptions,
         }
@@ -381,12 +385,75 @@ impl WorkApp {
                 self.settings_has_api_key = settings.has_api_key;
                 self.runtime_config = self.runtime_service.config_summary();
                 self.persistence_message = "Model configuration saved for MicroClaw Work.".into();
-                self.settings_open = false;
+                self.connection_test_message =
+                    "Settings saved. Test the connection before starting work.".into();
             }
             Err(error) => {
                 self.persistence_message = format!("Could not save model settings: {error}");
             }
         }
+        cx.notify();
+    }
+
+    fn test_provider_connection(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.connection_test_active {
+            return;
+        }
+        self.runtime_config = self.runtime_service.config_summary();
+        if !self.runtime_config.ready {
+            self.connection_test_message =
+                "Save a complete model configuration before testing.".into();
+            cx.notify();
+            return;
+        }
+        self.connection_test_active = true;
+        self.connection_test_message = format!(
+            "Testing {} / {}…",
+            self.runtime_config.provider, self.runtime_config.model
+        );
+        let receiver = self.runtime_service.test_provider_connection();
+        cx.spawn(async move |this, cx| {
+            loop {
+                match receiver.try_recv() {
+                    Ok(Ok(report)) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.connection_test_active = false;
+                            this.connection_test_message = format!(
+                                "Connected to {} / {} in {} ms. Response: {}",
+                                report.provider,
+                                report.model,
+                                report.latency_ms,
+                                report.response_preview
+                            );
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Ok(Err(error)) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.connection_test_active = false;
+                            this.connection_test_message =
+                                format!("Connection test failed: {error}");
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => {
+                        Timer::after(Duration::from_millis(50)).await;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.connection_test_active = false;
+                            this.connection_test_message =
+                                "Connection test worker exited unexpectedly.".into();
+                            cx.notify();
+                        });
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -987,6 +1054,7 @@ impl WorkApp {
                     .child(
                         Button::new("close-model-settings")
                             .outline()
+                            .disabled(self.connection_test_active)
                             .label("Back to Work")
                             .on_click(cx.listener(Self::close_model_settings)),
                     ),
@@ -1022,11 +1090,41 @@ impl WorkApp {
                             }),
                     )
                     .child(
-                        Button::new("save-model-settings")
-                            .primary()
-                            .label("Save Model Settings")
-                            .on_click(cx.listener(Self::save_model_settings)),
+                        h_flex()
+                            .gap_3()
+                            .child(
+                                Button::new("save-model-settings")
+                                    .primary()
+                                    .disabled(self.connection_test_active)
+                                    .label("Save Model Settings")
+                                    .on_click(cx.listener(Self::save_model_settings)),
+                            )
+                            .child(
+                                Button::new("test-provider-connection")
+                                    .outline()
+                                    .disabled(
+                                        self.connection_test_active || !self.runtime_config.ready,
+                                    )
+                                    .label(if self.connection_test_active {
+                                        "Testing…"
+                                    } else {
+                                        "Test Connection"
+                                    })
+                                    .on_click(cx.listener(Self::test_provider_connection)),
+                            ),
                     ),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(if self.connection_test_message.starts_with("Connected") {
+                        cx.theme().success
+                    } else if self.connection_test_message.contains("failed") {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(self.connection_test_message.clone()),
             )
             .child(div().text_sm().child(self.persistence_message.clone()))
             .child(

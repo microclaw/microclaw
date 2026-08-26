@@ -23,6 +23,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   list, addition/removal and truncation metadata, a bounded scrollable unified
   diff with added/removed line highlighting, safe file opening, and the
   existing accept/revert decision in one review surface.
+- **Provider connection diagnostics.** Model Settings now stays open after a
+  save and offers an asynchronous Test Connection action. The shared Work
+  runtime sends a minimal provider request with a 20-second bound, verifies
+  endpoint/auth/model/response handling, reports latency and a bounded response
+  preview, and redacts the configured credential from errors.
 
 - **MicroClaw Work post-task review.** Foreground Work runs emit a pre-task
   checkpoint and completed file changes can be accepted, continued in the same

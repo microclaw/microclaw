@@ -43,6 +43,13 @@ network probe. **Demo** remains available for UI testing without credentials.
 Provider/runtime failures are shown as a terminal Work state instead of
 crashing the window.
 
+Saving Model Settings keeps onboarding open and enables **Test Connection**.
+The test runs off the GPUI thread, sends a minimal request through the same
+provider implementation used by the Agent Engine, times out after 20 seconds,
+and reports provider, model, latency, and a bounded visible response. Saved
+credentials are never loaded into the UI and are explicitly removed from
+diagnostic errors before display.
+
 A packaged installation falls back to
 `<platform data directory>/microclaw-work/microclaw.config.yaml`, while an
 explicit `MICROCLAW_WORK_CONFIG` or discoverable shared Server config takes

@@ -501,3 +501,21 @@ with red/green line treatment, then activated the Markdown entry through its
 accessible button and immediately replaced the selected styling, filename, and
 diff body. The focused persistence test additionally proves invalid paths are
 rejected and a valid selection restores after reload.
+
+## Provider connection diagnostics
+
+The first-run settings path previously proved only that YAML parsed. The Work
+runtime now owns an asynchronous provider diagnostic that creates the same
+provider abstraction as the Agent Engine and sends one minimal, tool-free
+request. A 20-second timeout bounds the operation. The result reports provider,
+model, latency, and a bounded visible response; errors pass through both an
+explicit configured-credential replacement and the shared secret redactor.
+GPUI only starts the application-service operation and polls its result channel.
+
+Two loopback HTTP tests exercise the actual OpenAI-compatible boundary. The
+success fixture verifies the `/v1/chat/completions` path, Bearer header, model,
+prompt, and response decoding. The 401 fixture verifies an error returns to the
+caller without the configured credential. Computer Use verified the English
+native settings page, masked API-key field, save-first disabled state, and the
+new accessible Test Connection action. No live credential was read or sent
+during this validation.
