@@ -39,6 +39,23 @@ if [[ "$work_reclaim_build_artifacts" == "1" ]]; then
       ;;
   esac
   rm -rf "$work_cargo_profile_dir"
+
+  if [[ "${CI:-}" == "true" && -n "${CARGO_HOME:-}" ]]; then
+    work_cargo_home="$(cd "$CARGO_HOME" && pwd -P)"
+    case "$work_cargo_home" in
+      /|"$work_repo_root"|"$work_repo_root"/*)
+        echo "refusing to remove caches from unexpected Cargo home: $work_cargo_home" >&2
+        exit 1
+        ;;
+    esac
+    rm -rf \
+      "$work_cargo_home/registry/cache" \
+      "$work_cargo_home/registry/src" \
+      "$work_cargo_home/git/checkouts" \
+      "$work_cargo_home/git/db"
+  fi
+
+  df -h "$work_repo_root"
 fi
 
 if [[ -n "$work_notary_profile" ]]; then
