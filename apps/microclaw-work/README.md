@@ -242,7 +242,9 @@ is in progress). It is an auto-growing native textarea: Return invokes Send or
 sends steering to the active run, while Shift-Return inserts a new line.
 Persisted messages are paragraphs, streamed output is a status region, and
 approvals are alerts. macOS release acceptance still requires direct VoiceOver
-traversal and real Pinyin IME composition evidence.
+and real Pinyin IME composition evidence. Forward Tab traversal has been
+visually verified from the composer through enabled actions, including skipping
+disabled controls, and Shift-Tab reverses that path.
 
 The composer receives focus after the first window frame is mounted, so a new
 macOS launch can accept typing immediately instead of leaving focus on the
@@ -252,7 +254,10 @@ The native application menu provides standard Edit commands and a real
 **Quit MicroClaw Work** action. Command-Q exits the GPUI process on macOS rather
 than leaving an old desktop process alive. Closing the last window keeps the
 application available in the Dock; launching the running app again recreates
-the conversation window from durable state.
+the conversation window from durable state. Command-N creates a chat,
+Command-L returns focus to the active composer, Command-Comma opens Model
+Settings, and Command-Shift-D opens Diagnostics; the same actions are available
+from the native menu bar.
 
 The UI remains a workflow projection rather than an IDE. Conversation is the
 primary surface, with approvals rendered inline at the point where work pauses.
@@ -270,8 +275,10 @@ Pinned upstream revisions:
 
 The current macOS milestone still requires real-machine validation for Chinese
 IME composition, VoiceOver navigation, GPU compatibility, notarized release
-packaging, and a real provider first-response journey. Windows and Linux
-release validation belongs to a later milestone.
+packaging, and sustained daily use. Real provider first response, cancellation,
+retry, restart recovery, selected-project tools, diff/revert, and high-risk
+approval already have dated live evidence in the macOS smoke report. Windows
+and Linux release validation belongs to a later milestone.
 
 The workspace uses Rust 1.95 because the pinned GPUI revision relies on stable
 standard-library APIs that are unavailable in Rust 1.93.
