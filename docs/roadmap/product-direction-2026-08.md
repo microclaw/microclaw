@@ -489,10 +489,13 @@ installers use a dedicated optimized `work-release` Cargo profile so desktop
 iteration remains practical without changing Server release characteristics.
 Windows and Linux builds, installers, and CI previews remain in the repository
 as non-blocking engineering work, but their release gates are deferred. The
-next macOS gates are real-provider end-to-end onboarding, native Chinese IME,
-VoiceOver and keyboard traversal, the physical GPU/display matrix, and a live
-Apple notarization run. Phase 1 is not complete until those macOS gates have
-direct evidence from sustained daily use.
+real-provider path now also has live cancellation, same-session retry, visible
+completion, and process-restart persistence evidence, recorded in
+[`../reports/microclaw-work-macos-smoke-2026-08-26.md`](../reports/microclaw-work-macos-smoke-2026-08-26.md).
+The next macOS gates are native Chinese IME, VoiceOver and keyboard traversal,
+real workspace tool/approval/checkpoint review, the physical GPU/display
+matrix, sustained daily use, and a live Apple notarization run. Phase 1 is not
+complete until those macOS gates have direct evidence.
 
 Accessibility note (2026-08-25): primary controls are present in the macOS
 AccessKit tree after activation, and model fields, composer, messages, streaming

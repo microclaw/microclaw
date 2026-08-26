@@ -112,6 +112,12 @@ for the versioned `Cancelled` event; it is not a UI-only state change. A small
 registration retry closes the race where a user stops immediately after
 launching a run.
 
+The packaged macOS path has been exercised against a real Codex account through
+cancel, same-session retry, visible completion, Command-Q termination, and
+relaunch persistence. See the dated
+[macOS smoke report](../../docs/reports/microclaw-work-macos-smoke-2026-08-26.md)
+for the evidence and remaining acceptance work.
+
 High-risk tool requests remain in the approval state even when the Agent's
 current turn ends with explanatory text. **Allow and Continue** submits the approve-once
 reply into the same persisted runtime session and projects the resumed run.
