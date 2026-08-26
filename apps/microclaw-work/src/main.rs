@@ -13,7 +13,7 @@ use microclaw_work_app::session::{
 };
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
 use microclaw_work_runtime::{
-    ModelSettingsDraft, RuntimeConfigSummary, WorkRunCancellation, WorkRunRequest,
+    ModelSettingsDraft, RuntimeConfigSummary, WorkRunCancellation, WorkRunRequest, WorkRunSteering,
     WorkRuntimeMessage, WorkRuntimeService,
 };
 use smol::Timer;
@@ -27,9 +27,11 @@ struct WorkApp {
     recent_sessions: Vec<WorkSessionSummary>,
     persistence_message: String,
     task_input: Entity<InputState>,
+    steer_input: Entity<InputState>,
     active_run_id: u64,
     runtime_active: bool,
     runtime_cancellation: Option<WorkRunCancellation>,
+    runtime_steering: Option<WorkRunSteering>,
     runtime_service: WorkRuntimeService,
     runtime_config: RuntimeConfigSummary,
     settings_open: bool,
@@ -113,6 +115,9 @@ impl WorkApp {
                 .default_value(session.task.clone())
                 .placeholder("Describe what you want MicroClaw Work to do…")
         });
+        let steer_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Add guidance while the Agent is working…")
+        });
         let provider_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(settings_provider)
@@ -137,32 +142,44 @@ impl WorkApp {
                     "API key"
                 })
         });
-        let _subscriptions = vec![cx.subscribe_in(&task_input, window, {
-            let task_input = task_input.clone();
-            move |this, _, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let _ = this.session.apply(WorkCommand::SetTaskDraft {
-                        task: task_input.read(cx).value().to_string(),
-                    });
-                    this.draft_revision = this.draft_revision.saturating_add(1);
-                    let revision = this.draft_revision;
-                    cx.spawn(async move |this, cx| {
-                        Timer::after(Duration::from_millis(350)).await;
-                        let _ = this.update(cx, |this, cx| {
-                            if this.draft_revision != revision || this.runtime_active {
-                                return;
-                            }
-                            if let Err(error) = this.save_session() {
-                                this.persistence_message = format!("Draft save failed: {error}");
-                            }
-                            cx.notify();
+        let _subscriptions = vec![
+            cx.subscribe_in(&task_input, window, {
+                let task_input = task_input.clone();
+                move |this, _, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let _ = this.session.apply(WorkCommand::SetTaskDraft {
+                            task: task_input.read(cx).value().to_string(),
                         });
-                    })
-                    .detach();
-                    cx.notify();
+                        this.draft_revision = this.draft_revision.saturating_add(1);
+                        let revision = this.draft_revision;
+                        cx.spawn(async move |this, cx| {
+                            Timer::after(Duration::from_millis(350)).await;
+                            let _ = this.update(cx, |this, cx| {
+                                if this.draft_revision != revision || this.runtime_active {
+                                    return;
+                                }
+                                if let Err(error) = this.save_session() {
+                                    this.persistence_message =
+                                        format!("Draft save failed: {error}");
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                        cx.notify();
+                    }
                 }
-            }
-        })];
+            }),
+            cx.subscribe_in(
+                &steer_input,
+                window,
+                move |_, _, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            ),
+        ];
 
         Self {
             session,
@@ -170,9 +187,11 @@ impl WorkApp {
             recent_sessions,
             persistence_message,
             task_input,
+            steer_input,
             active_run_id: 0,
             runtime_active: false,
             runtime_cancellation: None,
+            runtime_steering: None,
             runtime_service,
             runtime_config,
             settings_open: false,
@@ -570,6 +589,49 @@ impl WorkApp {
         self.launch_runtime_prompt(task, cx);
     }
 
+    fn primary_action(&mut self, event: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.runtime_active {
+            self.send_steering(event, window, cx);
+        } else {
+            self.start_runtime(event, window, cx);
+        }
+    }
+
+    fn send_steering(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let update = self.steer_input.read(cx).value().to_string();
+        if self.last_run_was_demo {
+            match self.session.apply(WorkCommand::RecordSteering {
+                message: update.clone(),
+            }) {
+                Ok(_) => {
+                    self.steer_input.update(cx, |input, cx| {
+                        input.set_value("", window, cx);
+                    });
+                    self.persistence_message = "Demo Agent accepted the guidance.".into();
+                    self.persist();
+                }
+                Err(error) => self.persistence_message = error.to_string(),
+            }
+            cx.notify();
+            return;
+        }
+        let Some(steering) = &self.runtime_steering else {
+            self.persistence_message = "The active runtime cannot receive updates.".into();
+            cx.notify();
+            return;
+        };
+        match steering.steer(&update) {
+            Ok(()) => {
+                self.steer_input.update(cx, |input, cx| {
+                    input.set_value("", window, cx);
+                });
+                self.persistence_message = "Sending guidance to the active Agent…".into();
+            }
+            Err(message) => self.persistence_message = message.into(),
+        }
+        cx.notify();
+    }
+
     fn launch_runtime_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         self.active_run_id = self.active_run_id.saturating_add(1);
         self.runtime_active = true;
@@ -581,6 +643,7 @@ impl WorkApp {
         });
         let receiver = handle.messages;
         self.runtime_cancellation = Some(handle.cancellation);
+        self.runtime_steering = Some(handle.steering);
         self.persistence_message = "Connecting to the MicroClaw runtime…".into();
         cx.notify();
 
@@ -607,9 +670,33 @@ impl WorkApp {
                                             this.persistence_message = error.to_string();
                                         }
                                     }
+                                    WorkRuntimeMessage::SteeringResult {
+                                        run_id,
+                                        accepted,
+                                        message,
+                                    } => {
+                                        if accepted {
+                                            if let Err(error) =
+                                                this.session.apply(WorkCommand::RecordSteering {
+                                                    message: message.clone(),
+                                                })
+                                            {
+                                                this.persistence_message = error.to_string();
+                                            } else {
+                                                this.persistence_message = format!(
+                                                    "Runtime {run_id} accepted the guidance."
+                                                );
+                                            }
+                                        } else {
+                                            this.persistence_message = format!(
+                                                "Runtime {run_id} rejected the guidance: {message}"
+                                            );
+                                        }
+                                    }
                                     WorkRuntimeMessage::Completed { run_id } => {
                                         this.runtime_active = false;
                                         this.runtime_cancellation = None;
+                                        this.runtime_steering = None;
                                         this.persistence_message = match this.session.status {
                                             WorkStatus::AwaitingApproval => {
                                                 format!("Runtime {run_id} paused for approval.")
@@ -623,6 +710,7 @@ impl WorkApp {
                                     WorkRuntimeMessage::Failed { run_id, message } => {
                                         this.runtime_active = false;
                                         this.runtime_cancellation = None;
+                                        this.runtime_steering = None;
                                         let display = format!("Runtime {run_id} failed: {message}");
                                         let _ = this.session.apply(WorkCommand::FailRun {
                                             message: message.clone(),
@@ -653,6 +741,7 @@ impl WorkApp {
                             }
                             this.runtime_active = false;
                             this.runtime_cancellation = None;
+                            this.runtime_steering = None;
                             let message = "The runtime message channel disconnected.".to_string();
                             let _ = this.session.apply(WorkCommand::FailRun {
                                 message: message.clone(),
@@ -691,6 +780,7 @@ impl WorkApp {
             self.active_run_id = self.active_run_id.saturating_add(1);
             self.runtime_active = false;
             self.runtime_cancellation = None;
+            self.runtime_steering = None;
         } else if let Some(cancellation) = &self.runtime_cancellation
             && let Err(message) = cancellation.cancel()
         {
@@ -937,6 +1027,11 @@ impl Render for WorkApp {
         let subagents = self.session.subagents.clone();
         let final_response = self.session.final_response.clone();
         let review_status = self.session.review_status;
+        let composer_input = if self.runtime_active {
+            &self.steer_input
+        } else {
+            &self.task_input
+        };
 
         h_flex()
             .size_full()
@@ -1058,28 +1153,31 @@ impl Render for WorkApp {
                     .child(
                         h_flex()
                             .gap_3()
-                            .child(div().flex_1().child(Input::new(&self.task_input)))
+                            .child(div().flex_1().child(Input::new(composer_input)))
                             .child(
                                 Button::new("run-runtime")
                                     .primary()
                                     .disabled(
-                                        self.runtime_active
-                                            || !self.runtime_config.ready
-                                            || self.session.workspace.is_empty(),
+                                        if self.runtime_active {
+                                            self.steer_input.read(cx).value().trim().is_empty()
+                                        } else {
+                                            !self.runtime_config.ready
+                                                || self.session.workspace.is_empty()
+                                        },
                                     )
-                                    .label(
-                                        if matches!(
+                                    .label(if self.runtime_active {
+                                        "Send Update"
+                                    } else if matches!(
                                             self.session.status,
                                             WorkStatus::Failed
                                                 | WorkStatus::Cancelled
                                                 | WorkStatus::Interrupted
                                         ) {
-                                            "Retry Task"
-                                        } else {
-                                            "Run Task"
-                                        },
-                                    )
-                                    .on_click(cx.listener(Self::start_runtime)),
+                                        "Retry Task"
+                                    } else {
+                                        "Run Task"
+                                    })
+                                    .on_click(cx.listener(Self::primary_action)),
                             )
                             .child(
                                 Button::new("run-demo")

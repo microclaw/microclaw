@@ -83,13 +83,24 @@ fn load_runtime_config_summary(path: &Path) -> RuntimeConfigSummary {
 #[derive(Debug)]
 pub enum WorkRuntimeMessage {
     Envelope(RuntimeEventEnvelope),
-    Completed { run_id: String },
-    Failed { run_id: String, message: String },
+    SteeringResult {
+        run_id: String,
+        accepted: bool,
+        message: String,
+    },
+    Completed {
+        run_id: String,
+    },
+    Failed {
+        run_id: String,
+        message: String,
+    },
 }
 
 pub struct WorkRunHandle {
     pub messages: Receiver<WorkRuntimeMessage>,
     pub cancellation: WorkRunCancellation,
+    pub steering: WorkRunSteering,
 }
 
 #[derive(Clone)]
@@ -102,6 +113,23 @@ impl WorkRunCancellation {
         self.cancel_tx
             .send(())
             .map_err(|_| "The runtime has already exited; the stop request was not sent.")
+    }
+}
+
+#[derive(Clone)]
+pub struct WorkRunSteering {
+    steer_tx: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+impl WorkRunSteering {
+    pub fn steer(&self, message: &str) -> Result<(), &'static str> {
+        let message = message.trim();
+        if message.is_empty() {
+            return Err("Describe the update before sending it.");
+        }
+        self.steer_tx
+            .send(message.to_string())
+            .map_err(|_| "The runtime has already exited; the update was not sent.")
     }
 }
 
@@ -203,6 +231,7 @@ impl WorkRuntimeService {
     pub fn start(&self, request: WorkRunRequest) -> WorkRunHandle {
         let (message_tx, message_rx) = mpsc::channel();
         let (cancel_tx, cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (steer_tx, steer_rx) = tokio::sync::mpsc::unbounded_channel();
         let run_id = next_run_id();
         let thread_name = format!("microclaw-work-{run_id}");
         let worker_run_id = run_id.clone();
@@ -216,6 +245,7 @@ impl WorkRuntimeService {
                     worker_run_id,
                     worker_message_tx,
                     cancel_rx,
+                    steer_rx,
                 )
             }
         });
@@ -228,6 +258,7 @@ impl WorkRuntimeService {
         WorkRunHandle {
             messages: message_rx,
             cancellation: WorkRunCancellation { cancel_tx },
+            steering: WorkRunSteering { steer_tx },
         }
     }
 
@@ -278,6 +309,7 @@ fn run_worker(
     run_id: String,
     message_tx: Sender<WorkRuntimeMessage>,
     mut cancel_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    mut steer_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
     let tokio_runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
@@ -315,26 +347,40 @@ fn run_worker(
             Some(event_tx),
         );
         tokio::pin!(run);
-        let result = tokio::select! {
-            result = &mut run => result,
-            signal = cancel_rx.recv() => {
-                if signal.is_some() {
-                    let completed_while_waiting = loop {
-                        let aborted = runtime.cancel_session(&session).await?;
-                        if aborted > 0 {
-                            break None;
-                        }
-                        tokio::select! {
-                            result = &mut run => break Some(result),
-                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        }
-                    };
-                    match completed_while_waiting {
-                        Some(result) => result,
-                        None => run.await,
+        let result = loop {
+            tokio::select! {
+                result = &mut run => break result,
+                signal = cancel_rx.recv() => {
+                    if signal.is_some() {
+                        let completed_while_waiting = loop {
+                            let aborted = runtime.cancel_session(&session).await?;
+                            if aborted > 0 {
+                                break None;
+                            }
+                            tokio::select! {
+                                result = &mut run => break Some(result),
+                                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                            }
+                        };
+                        break match completed_while_waiting {
+                            Some(result) => result,
+                            None => run.await,
+                        };
                     }
-                } else {
-                    run.await
+                }
+                update = steer_rx.recv() => {
+                    if let Some(update) = update {
+                        let (accepted, message) = match runtime.steer_session(&session, &update).await {
+                            Ok(true) => (true, update),
+                            Ok(false) => (false, "The task finished before the update could be queued.".into()),
+                            Err(error) => (false, error.to_string()),
+                        };
+                        let _ = message_tx.send(WorkRuntimeMessage::SteeringResult {
+                            run_id: run_id.clone(),
+                            accepted,
+                            message,
+                        });
+                    }
                 }
             }
         };
@@ -425,6 +471,16 @@ mod tests {
 
         cancellation.cancel().unwrap();
         assert_eq!(cancel_rx.try_recv(), Ok(()));
+    }
+
+    #[test]
+    fn steering_signal_is_runtime_independent_and_validated() {
+        let (steer_tx, mut steer_rx) = tokio::sync::mpsc::unbounded_channel();
+        let steering = WorkRunSteering { steer_tx };
+
+        assert!(steering.steer("  ").is_err());
+        steering.steer("Focus on tests").unwrap();
+        assert_eq!(steer_rx.try_recv(), Ok("Focus on tests".into()));
     }
 
     #[test]

@@ -107,6 +107,9 @@ pub enum WorkCommand {
         message: String,
         completed_step: Option<usize>,
     },
+    RecordSteering {
+        message: String,
+    },
     RequestApproval {
         reason: String,
     },
@@ -134,6 +137,8 @@ pub struct CommandOutcome {
 pub enum WorkCommandError {
     #[error("task must not be empty")]
     EmptyTask,
+    #[error("steering update must not be empty")]
+    EmptySteering,
     #[error("workspace is not an accessible directory: {path}")]
     InvalidWorkspace { path: String },
     #[error("cannot {command} while Work status is {actual:?}")]
@@ -320,6 +325,7 @@ impl WorkSessionSnapshot {
                 self.require_status("record progress", WorkStatus::Running)?;
                 self.record_progress(kind, message, completed_step);
             }
+            WorkCommand::RecordSteering { message } => self.record_steering(message)?,
             WorkCommand::RequestApproval { reason } => {
                 self.require_status("request approval", WorkStatus::Running)?;
                 self.request_approval(reason);
@@ -430,6 +436,25 @@ impl WorkSessionSnapshot {
             WorkEventKind::Approval,
             "Waiting for approval to modify files",
         );
+    }
+
+    fn record_steering(&mut self, message: String) -> Result<(), WorkCommandError> {
+        if !matches!(self.status, WorkStatus::Running | WorkStatus::Verifying) {
+            return Err(WorkCommandError::InvalidStatus {
+                command: "steer task",
+                actual: self.status,
+            });
+        }
+        let message = message.trim();
+        if message.is_empty() {
+            return Err(WorkCommandError::EmptySteering);
+        }
+        let end = microclaw_core::text::floor_char_boundary(message, message.len().min(2_000));
+        self.push_event(
+            WorkEventKind::System,
+            format!("Steering update: {}", &message[..end]),
+        );
+        Ok(())
     }
 
     fn approve(&mut self) {
@@ -953,6 +978,44 @@ mod tests {
         assert_eq!(restored.plan[1].title, "Implement the feature");
         assert_eq!(restored.plan[1].status, RuntimePlanStepStatus::InProgress);
         assert_eq!(restored.events.last().unwrap().kind, WorkEventKind::Plan);
+    }
+
+    #[test]
+    fn steering_is_accepted_only_for_an_active_task_and_persists() {
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let path = directory.path().join("session.json");
+        let mut snapshot = WorkSessionSnapshot::new("");
+        assert!(matches!(
+            snapshot.apply(WorkCommand::RecordSteering {
+                message: "Too early".into(),
+            }),
+            Err(WorkCommandError::InvalidStatus { .. })
+        ));
+
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "Refactor the parser".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            snapshot.apply(WorkCommand::RecordSteering {
+                message: "   ".into(),
+            }),
+            Err(WorkCommandError::EmptySteering)
+        );
+        snapshot
+            .apply(WorkCommand::RecordSteering {
+                message: "Keep the public API small".into(),
+            })
+            .unwrap();
+        snapshot.save(&path).unwrap();
+        let restored = WorkSessionSnapshot::load(&path).unwrap();
+
+        assert_eq!(restored.events.last().unwrap().kind, WorkEventKind::System);
+        assert_eq!(
+            restored.events.last().unwrap().message,
+            "Steering update: Keep the public API small"
+        );
     }
 
     #[test]

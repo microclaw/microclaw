@@ -18,6 +18,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   provider-neutral structured plan event. The GPUI desktop projects pending,
   active, and completed steps durably and no longer invents a fixed four-step
   plan before the Agent has planned the task.
+- **In-run Work steering.** The native composer switches to `Send Update` while
+  a foreground task is active. Guidance enters the existing Agent Engine
+  mid-turn queue, is acknowledged only when the active session accepts it, and
+  remains visible in the durable Work timeline.
 
 ## 0.5.0 - 2026-08-16
 

@@ -5,6 +5,10 @@ Work. It owns the worker thread and Tokio runtime, loads the normal MicroClaw
 configuration, calls the shared `HeadlessRuntime`, forwards versioned runtime
 events, and routes cancellation through the shared run-control registry.
 
+An active run also exposes a steering control. It delegates updates to the
+shared headless session queue, so guidance enters the same Agent Engine turn
+instead of creating a desktop-specific loop.
+
 It also owns Work's explicit model-configuration path and the minimal native
 settings service. Work can use a channel-free config without weakening model,
 tool, path, or security validation. New configs are atomic and private on Unix;

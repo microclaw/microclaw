@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
 use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
+use crate::chat_turn_queue::PendingMessage;
 use crate::config::Config;
 use crate::hooks::HookManager;
 use crate::memory::MemoryManager;
@@ -226,6 +227,46 @@ impl HeadlessRuntime {
         Ok(crate::run_control::abort_runs(HEADLESS_CHANNEL, chat_id).await)
     }
 
+    /// Add a user update to an active named session.
+    ///
+    /// The shared Agent Engine drains this queue at its normal tool/end-turn
+    /// breakpoints. Returning `false` means the run ended before the update
+    /// could be queued; callers must not report it as accepted.
+    pub async fn steer_session(&self, session: &str, content: &str) -> anyhow::Result<bool> {
+        let content = content.trim();
+        if content.is_empty() {
+            anyhow::bail!("steering update must not be empty");
+        }
+        let chat_id = self.resolve_session_chat_id(session).await?;
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let pending = PendingMessage {
+            sender_name: "work".into(),
+            content: content.to_string(),
+            message_id: message_id.clone(),
+            timestamp: timestamp.clone(),
+        };
+        if !self
+            .state
+            .chat_turn_queue
+            .enqueue_if_busy(HEADLESS_CHANNEL, chat_id, pending)
+            .await
+        {
+            return Ok(false);
+        }
+
+        let stored = StoredMessage {
+            id: message_id,
+            chat_id,
+            sender_name: "work".into(),
+            content: content.to_string(),
+            is_from_bot: false,
+            timestamp,
+        };
+        call_blocking(self.state.db.clone(), move |db| db.store_message(&stored)).await?;
+        Ok(true)
+    }
+
     async fn resolve_session_chat_id(&self, session: &str) -> anyhow::Result<i64> {
         let external_chat_id = format!("headless:{session}");
         let title = format!("headless-{session}");
@@ -325,6 +366,12 @@ mod tests {
 
     struct SlowLlm;
 
+    struct SteeringLlm {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        first_call_started: Arc<tokio::sync::Notify>,
+        saw_update: Arc<std::sync::atomic::AtomicBool>,
+    }
+
     #[async_trait::async_trait]
     impl LlmProvider for FakeLlm {
         async fn send_message(
@@ -353,6 +400,44 @@ mod tests {
         ) -> Result<MessagesResponse, MicroClawError> {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             unreachable!("the cancellation test must stop the pending model call")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for SteeringLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                self.first_call_started.notify_one();
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                return Ok(MessagesResponse {
+                    content: vec![ResponseContentBlock::ToolUse {
+                        id: "todo-read-1".into(),
+                        name: "todo_read".into(),
+                        input: serde_json::json!({}),
+                        thought_signature: None,
+                    }],
+                    stop_reason: Some("tool_use".into()),
+                    usage: None,
+                });
+            }
+            let rendered = format!("{messages:?}");
+            self.saw_update.store(
+                rendered.contains("Focus on the parser first"),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text {
+                    text: "steering applied".into(),
+                }],
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            })
         }
     }
 
@@ -498,5 +583,84 @@ mod tests {
             cancelled |= matches!(envelope.event, RuntimeEvent::Cancelled { .. });
         }
         assert!(cancelled);
+    }
+
+    #[tokio::test]
+    async fn steering_uses_the_active_agent_turn_queue() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime_with_fake_llm(directory.path());
+        let chat_id = runtime.resolve_session_chat_id("steer-test").await.unwrap();
+        let turn = runtime
+            .state
+            .chat_turn_queue
+            .acquire(HEADLESS_CHANNEL, chat_id)
+            .await
+            .unwrap();
+
+        assert!(runtime
+            .steer_session("steer-test", "Focus on the parser first")
+            .await
+            .unwrap());
+        let pending = runtime
+            .state
+            .chat_turn_queue
+            .drain_pending(HEADLESS_CHANNEL, chat_id)
+            .await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].sender_name, "work");
+        assert_eq!(pending[0].content, "Focus on the parser first");
+        drop(turn);
+
+        assert!(!runtime
+            .steer_session("steer-test", "This run is already idle")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn steering_reaches_the_real_agent_loop_after_a_tool_breakpoint() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let first_call_started = Arc::new(tokio::sync::Notify::new());
+        let saw_update = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runtime = Arc::new(runtime_with_llm(
+            directory.path(),
+            Box::new(SteeringLlm {
+                calls: calls.clone(),
+                first_call_started: first_call_started.clone(),
+                saw_update: saw_update.clone(),
+            }),
+        ));
+        let running_runtime = runtime.clone();
+        let run = tokio::spawn(async move {
+            running_runtime
+                .run(
+                    HeadlessRunRequest::work(
+                        "Start with the whole task".into(),
+                        Some("live-steer".into()),
+                        "live-steer-run".into(),
+                    ),
+                    None,
+                )
+                .await
+        });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            first_call_started.notified(),
+        )
+        .await
+        .expect("first model call should start");
+        assert!(runtime
+            .steer_session("live-steer", "Focus on the parser first")
+            .await
+            .unwrap());
+        let result = run.await.unwrap().unwrap();
+
+        assert_eq!(result.response, "steering applied");
+        assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        assert!(saw_update.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

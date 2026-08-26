@@ -247,6 +247,37 @@ one completed step (`✓`), one active step (`●`), and two pending steps (`○
 alongside the matching plan-update timeline and approval state. This is a
 passing native visual/click claim for the live-plan surface.
 
+## In-run steering
+
+The foreground loop is now user-steerable without starting another run. While
+a task is active, the native task composer becomes an English guidance field
+with a `Send Update` action. `WorkRunSteering` carries the update to the
+background runtime worker, which calls `HeadlessRuntime::steer_session` for the
+same durable session. That method uses the existing `ChatTurnQueue`; the shared
+Agent Engine absorbs the message at its established tool-completion or
+end-turn breakpoint and emits the existing `MidTurnInjection` event.
+
+The desktop records guidance in its durable timeline only after the active
+runtime reports that the queue accepted it. Empty updates, idle sessions, and
+runs that finish during the send race are rejected rather than displayed as
+accepted. The Demo uses the same Work application command so the native state
+can be exercised without a provider credential.
+
+A root integration test runs the real Agent Engine with a deterministic model:
+the first model call requests a real built-in tool, Work queues guidance while
+that call is active, and the second model call proves the guidance is present
+in the provider-neutral message context. Focused runtime tests separately cover
+control-channel validation, and the Work application test proves accepted
+guidance survives snapshot reload.
+
+The updated macOS bundle builds, lints its property list, signs, and passes
+strict signature verification. The restored GPUI window launched successfully,
+but its semantic controls were again absent from the accessibility snapshot and
+coordinate clicks stopped dispatching reliably in the existing Approval state.
+Accordingly, this increment claims native build/render coverage and the real
+Agent Engine integration test above, but does not claim a passing automated
+native `Send Update` click.
+
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing
 side effects in the background, so parallel starts remain rejected. The Stop
