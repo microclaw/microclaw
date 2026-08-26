@@ -1826,6 +1826,12 @@ async fn process_with_agent_logic(
                     commit = %commit,
                     "checkpoint snapshot taken"
                 );
+                if let Some(tx) = event_tx {
+                    let _ = tx.send(AgentEvent::CheckpointCreated {
+                        commit,
+                        label: label.clone(),
+                    });
+                }
             }
             Ok(None) => {} // no changes; skip
             Err(e) => warn!(chat_id, "checkpoint snapshot failed: {e}"),

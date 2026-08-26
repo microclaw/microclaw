@@ -271,6 +271,16 @@ async fn start_stream_run_internal(
                                 )
                                 .await;
                         }
+                        AgentEvent::CheckpointCreated { commit, label } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "checkpoint_created",
+                                    json!({"commit": commit, "label": label}).to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                     }
                 }
             });

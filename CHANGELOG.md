@@ -4,6 +4,17 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Added
+
+- **MicroClaw Work post-task review.** Foreground Work runs emit a pre-task
+  checkpoint and completed file changes can be accepted, continued in the same
+  runtime session, or reverted through a native confirmation and background
+  shadow-git restore. Empty workspaces, later tracked files, and new unignored
+  files are restored correctly while ignored secrets and nested repositories
+  remain protected.
+
 ## 0.5.0 - 2026-08-16
 
 ### Added

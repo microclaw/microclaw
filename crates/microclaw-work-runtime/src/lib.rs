@@ -230,6 +230,46 @@ impl WorkRuntimeService {
             cancellation: WorkRunCancellation { cancel_tx },
         }
     }
+
+    /// Restore a completed Work task's pre-run checkpoint on a background
+    /// thread. The returned channel resolves once filesystem restoration has
+    /// succeeded or failed.
+    pub fn restore_workspace(
+        &self,
+        workspace: PathBuf,
+        commit: String,
+    ) -> Receiver<Result<(), String>> {
+        let (result_tx, result_rx) = mpsc::channel();
+        let config_path = self.config_path.clone();
+        let spawn = std::thread::Builder::new()
+            .name("microclaw-work-restore".into())
+            .spawn(move || {
+                let result = (|| -> Result<(), String> {
+                    let config = Config::load_from_path_for_headless(&config_path)
+                        .map_err(|error| error.to_string())?;
+                    let workspace = workspace
+                        .canonicalize()
+                        .map_err(|error| format!("workspace is unavailable: {error}"))?;
+                    let shadow_root = PathBuf::from(config.runtime_data_dir()).join("checkpoints");
+                    let shadow_repo =
+                        microclaw::checkpoint::shadow_repo_path(&shadow_root, &workspace);
+                    let runtime = tokio::runtime::Runtime::new()
+                        .map_err(|error| format!("could not create restore runtime: {error}"))?;
+                    runtime.block_on(microclaw::checkpoint::restore(
+                        &shadow_repo,
+                        &workspace,
+                        &commit,
+                    ))
+                })();
+                let _ = result_tx.send(result);
+            });
+        if let Err(error) = spawn {
+            let (fallback_tx, fallback_rx) = mpsc::channel();
+            let _ = fallback_tx.send(Err(format!("could not start restore worker: {error}")));
+            return fallback_rx;
+        }
+        result_rx
+    }
 }
 
 fn run_worker(
@@ -254,6 +294,7 @@ fn run_worker(
     let result = tokio_runtime.block_on(async {
         let mut config = Config::load_from_path_for_headless(&config_path)?;
         config.working_dir = request.workspace;
+        config.checkpoints_enabled = true;
         let runtime = HeadlessRuntime::load(config).await?;
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let event_message_tx = message_tx.clone();
@@ -470,5 +511,50 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(error, ModelSettingsError::MissingApiKey { .. }));
+    }
+
+    #[test]
+    fn restore_port_restores_modified_and_removes_created_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().join("workspace");
+        let data_dir = directory.path().join("data");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("tracked.txt"), "before").unwrap();
+        let config_path = directory.path().join("microclaw.config.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "llm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\ndata_dir: '{}'\n",
+                data_dir.display()
+            ),
+        )
+        .unwrap();
+        let config = Config::load_from_path_for_headless(&config_path).unwrap();
+        let shadow_root = PathBuf::from(config.runtime_data_dir()).join("checkpoints");
+        let shadow_repo = microclaw::checkpoint::shadow_repo_path(&shadow_root, &workspace);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let commit = runtime
+            .block_on(microclaw::checkpoint::snapshot(
+                &shadow_repo,
+                &workspace,
+                "before task",
+            ))
+            .unwrap()
+            .unwrap();
+        fs::write(workspace.join("tracked.txt"), "after").unwrap();
+        fs::write(workspace.join("created.txt"), "created").unwrap();
+
+        let service = WorkRuntimeService::new(config_path);
+        service
+            .restore_workspace(workspace.clone(), commit)
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(workspace.join("tracked.txt")).unwrap(),
+            "before"
+        );
+        assert!(!workspace.join("created.txt").exists());
     }
 }

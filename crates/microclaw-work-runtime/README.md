@@ -10,6 +10,11 @@ settings service. Work can use a channel-free config without weakening model,
 tool, path, or security validation. New configs are atomic and private on Unix;
 existing YAML comments and API keys are preserved during model-only edits.
 
+The service also exposes the background workspace-restore port used by native
+post-task review. It resolves the same runtime data root as the Agent Engine,
+computes the shadow repository from the canonical workspace, validates the
+checkpoint hash in shared code, and reports completion without blocking GPUI.
+
 Desktop, headless, and future remote projections should depend on this service
 instead of calling the Agent Engine or creating their own worker lifecycle.
 The provider-neutral Agent Loop remains in the root runtime and is not copied

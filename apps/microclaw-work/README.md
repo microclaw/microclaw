@@ -75,6 +75,16 @@ results, and diffs are secret-redacted. Artifact buttons canonicalize their
 target and open it only when it exists inside the explicitly selected
 workspace; missing files, absolute escapes, and symlink escapes are rejected.
 
+Real Work runs automatically create a pre-task filesystem checkpoint through
+the shared shadow-git implementation, even when Server channel configuration
+has checkpoints disabled. A completed task with file changes enters explicit
+review: **Accept Changes** keeps the workspace, **Revert Changes** presents a
+native destructive-action confirmation and restores the checkpoint, and
+**Continue Task** opens a follow-up prompt in the same Agent Engine session.
+Restore handles empty workspaces, modified/deleted tracked files, and new
+non-ignored files. Existing ignored files such as `.env` and nested repositories
+remain protected. Checkpoint and restore work runs off the GPUI thread.
+
 Build a development macOS application bundle:
 
 ```sh

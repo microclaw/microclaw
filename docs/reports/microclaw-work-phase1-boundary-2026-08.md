@@ -54,7 +54,7 @@ Transport and replay use `RuntimeEventEnvelope`, which carries:
 - the provider-neutral runtime event.
 
 The Work reducer accepts the envelope through
-`WorkCommand::ApplyRuntimeEvent`. Protocol v2 carries the runtime tool call ID,
+`WorkCommand::ApplyRuntimeEvent`. Starting with protocol v2, the runtime tool call ID
 so tool starts and results pair deterministically even when execution is
 parallel. It projects structured tool activity, approval, file
 diffs, subagents, cancellation, and completion into UI-independent Work state.
@@ -100,8 +100,8 @@ It contains no GPUI, platform, channel, provider, or Server dependency.
 
 ```text
 cargo test -p microclaw-core --locked                            51 passed
-cargo test -p microclaw-work-app --locked                        22 passed
-cargo test -p microclaw-work-runtime --locked                     5 passed
+cargo test -p microclaw-work-app --locked                        24 passed
+cargo test -p microclaw-work-runtime --locked                     6 passed
 cargo test -p microclaw-work --locked                             0 tests; build passed
 cargo test -p microclaw-work-headless --locked                    1 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
@@ -193,6 +193,37 @@ readiness, mode `0600`, preservation of a saved key after a blank edit, and
 provider/model restoration after a full native process restart. The isolated
 run did not read or modify the user's production model configuration.
 
+## Post-task review and recovery
+
+Runtime Event protocol v3 adds `CheckpointCreated`. Work forces the existing
+shadow-git checkpoint mechanism on for foreground runs and durably records only
+the first checkpoint of a task as its baseline; approval-continuation turns
+cannot replace it. Session schema v7 adds the baseline, an explicit Pending /
+Accepted / Reverted review state, and a stable title so a same-session follow-up
+composer does not erase the recent-task label.
+
+A completed task with both a baseline and file diffs now requires an explicit
+review decision. Accept is a durable projection command. Continue clears the
+composer, preserves the title, and uses the same runtime session on the next
+run. Revert presents a native critical confirmation and calls a background
+runtime port rather than running Git on the GPUI thread.
+
+The shared restore implementation now uses `git read-tree --reset -u` plus a
+single-force clean. This fixes two correctness gaps in the previous `/rewind`:
+empty baselines are restorable, and files tracked only by a later checkpoint
+are removed. New non-ignored files are also removed, while standard excludes
+such as `.env` and nested repositories remain protected. Five checkpoint tests
+cover empty and populated baselines, later tracked files, new untracked files,
+ignored secrets, listing, and hash injection guards; the runtime-service test
+proves the UI port restores modified files and removes created files.
+
+Computer Use visually verified the English Review panel at 1180×760, including
+the pre-task checkpoint timeline event and non-overflowing vertical Accept,
+Revert, and Continue controls. The macOS accessibility cache stopped exposing
+semantic controls after the direct test-process restart, so button transition
+claims come from the focused projection/runtime tests rather than an unreliable
+semantic click; no passing native-click claim is made for that portion.
+
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing
 side effects in the background, so parallel starts remain rejected. The Stop
@@ -209,8 +240,9 @@ a Finder-launched macOS app can have `/` as its process directory, making an
 automatic launch-directory fallback dangerously broad. A new install and a
 missing saved path now enter a safe unselected state and real execution is
 blocked until the user explicitly chooses a directory. The Work snapshot schema
-was raised to v6. Newly added structured projection fields default safely when
-loading v5 snapshots, which are upgraded without losing the task. Earlier
+was first raised to v6 for structured artifacts and is now v7 for durable
+review state. Newly added fields default safely when loading v5/v6 snapshots,
+which are upgraded without losing the task. Earlier
 Phase 0 and transitional single-session snapshots migrate to a blank English
 local Work session with stable identity and timestamps.
 The sidebar exposes only the shared Config's provider, model, and

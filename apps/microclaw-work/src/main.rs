@@ -8,7 +8,8 @@ use gpui_component::{
 };
 use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
 use microclaw_work_app::session::{
-    ToolActivityStatus, WorkCommand, WorkEventKind, WorkSessionSnapshot, WorkStatus,
+    ToolActivityStatus, WorkCommand, WorkEventKind, WorkReviewStatus, WorkSessionSnapshot,
+    WorkStatus,
 };
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
 use microclaw_work_runtime::{
@@ -387,6 +388,126 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn accept_changes(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        match self.session.apply(WorkCommand::AcceptChanges) {
+            Ok(_) => {
+                self.persistence_message = "Accepted the completed workspace changes.".into();
+                self.persist();
+            }
+            Err(error) => self.persistence_message = error.to_string(),
+        }
+        cx.notify();
+    }
+
+    fn continue_task(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match self.session.apply(WorkCommand::PrepareFollowUp) {
+            Ok(_) => {
+                self.task_input.update(cx, |input, cx| {
+                    input.set_value("", window, cx);
+                    input.focus(window, cx);
+                });
+                self.persistence_message =
+                    "Describe the follow-up. It will continue in the same runtime session.".into();
+                self.persist();
+            }
+            Err(error) => self.persistence_message = error.to_string(),
+        }
+        cx.notify();
+    }
+
+    fn request_revert_changes(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.runtime_active || self.session.review_status != WorkReviewStatus::Pending {
+            self.persistence_message = "No completed change set is awaiting review.".into();
+            cx.notify();
+            return;
+        }
+        let Some(commit) = self.session.baseline_checkpoint.clone() else {
+            self.persistence_message = "No pre-task checkpoint is available.".into();
+            cx.notify();
+            return;
+        };
+        let confirmation = window.prompt(
+            PromptLevel::Critical,
+            "Revert this task's workspace changes?",
+            Some("Tracked files return to the pre-task checkpoint. New non-ignored files created after it are removed. Ignored files and nested repositories are preserved."),
+            &["Revert Changes", "Cancel"],
+            cx,
+        );
+        let view = cx.entity();
+        cx.spawn_in(window, async move |_, window| {
+            let confirmed = matches!(confirmation.await, Ok(0));
+            if !confirmed {
+                return;
+            }
+            window
+                .update(|_, cx| {
+                    view.update(cx, |this, cx| {
+                        if this.last_run_was_demo {
+                            let _ = this.session.apply(WorkCommand::MarkReverted);
+                            this.persistence_message = "Demo changes marked as reverted.".into();
+                            this.persist();
+                            cx.notify();
+                            return;
+                        }
+                        let workspace = PathBuf::from(&this.session.workspace);
+                        let receiver = this.runtime_service.restore_workspace(workspace, commit);
+                        this.runtime_active = true;
+                        this.persistence_message = "Restoring the pre-task checkpoint…".into();
+                        cx.notify();
+                        cx.spawn(async move |this, cx| {
+                            loop {
+                                match receiver.try_recv() {
+                                    Ok(result) => {
+                                        let _ = this.update(cx, |this, cx| {
+                                            this.runtime_active = false;
+                                            match result {
+                                                Ok(()) => {
+                                                    let _ = this
+                                                        .session
+                                                        .apply(WorkCommand::MarkReverted);
+                                                    this.persistence_message =
+                                                    "Restored the pre-task workspace checkpoint."
+                                                        .into();
+                                                    this.persist();
+                                                }
+                                                Err(error) => {
+                                                    this.persistence_message = format!(
+                                                        "Could not revert changes: {error}"
+                                                    );
+                                                }
+                                            }
+                                            cx.notify();
+                                        });
+                                        return;
+                                    }
+                                    Err(TryRecvError::Empty) => {
+                                        Timer::after(Duration::from_millis(40)).await;
+                                    }
+                                    Err(TryRecvError::Disconnected) => {
+                                        let _ = this.update(cx, |this, cx| {
+                                            this.runtime_active = false;
+                                            this.persistence_message =
+                                                "The restore worker disconnected.".into();
+                                            cx.notify();
+                                        });
+                                        return;
+                                    }
+                                }
+                            }
+                        })
+                        .detach();
+                    });
+                })
+                .ok();
+        })
+        .detach();
+    }
+
     fn approve(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         if !self.last_run_was_demo
             && (self.session.workspace.is_empty()
@@ -649,6 +770,10 @@ impl WorkApp {
                 }
                 let demo_runtime_id = format!("demo-{run_id}");
                 let structured_events = [
+                    RuntimeEvent::CheckpointCreated {
+                        commit: "deadbeef".into(),
+                        label: "demo pre-task checkpoint".into(),
+                    },
                     RuntimeEvent::ToolStart {
                         call_id: "demo-read".into(),
                         name: "read_file".into(),
@@ -792,6 +917,7 @@ impl Render for WorkApp {
         let file_changes = self.session.file_changes.clone();
         let subagents = self.session.subagents.clone();
         let final_response = self.session.final_response.clone();
+        let review_status = self.session.review_status;
 
         h_flex()
             .size_full()
@@ -962,7 +1088,11 @@ impl Render for WorkApp {
                                 v_flex()
                                     .gap_1()
                                     .child(div().text_2xl().font_bold().child("Work Task"))
-                                    .child(self.session.task.clone()),
+                                    .child(if self.session.title.trim().is_empty() {
+                                        self.session.task.clone()
+                                    } else {
+                                        self.session.title.clone()
+                                    }),
                             )
                             .child(
                                 div()
@@ -1139,6 +1269,73 @@ impl Render for WorkApp {
                                                             .unwrap_or("No final response yet."),
                                                         1200,
                                                     )),
+                                            )
+                                            .child(
+                                                v_flex()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .font_bold()
+                                                            .child("Review"),
+                                                    )
+                                                    .child(match review_status {
+                                                        WorkReviewStatus::None => {
+                                                            "No change review is pending."
+                                                        }
+                                                        WorkReviewStatus::Pending => {
+                                                            "Accept these changes or restore the pre-task checkpoint."
+                                                        }
+                                                        WorkReviewStatus::Accepted => {
+                                                            "Changes accepted."
+                                                        }
+                                                        WorkReviewStatus::Reverted => {
+                                                            "Changes reverted."
+                                                        }
+                                                    })
+                                                    .child(
+                                                        v_flex()
+                                                            .gap_2()
+                                                            .child(
+                                                                Button::new("accept-changes")
+                                                                    .primary()
+                                                                    .disabled(
+                                                                        review_status
+                                                                            != WorkReviewStatus::Pending
+                                                                            || self.runtime_active,
+                                                                    )
+                                                                    .label("Accept Changes")
+                                                                    .on_click(cx.listener(
+                                                                        Self::accept_changes,
+                                                                    )),
+                                                            )
+                                                            .child(
+                                                                Button::new("revert-changes")
+                                                                    .outline()
+                                                                    .disabled(
+                                                                        review_status
+                                                                            != WorkReviewStatus::Pending
+                                                                            || self.runtime_active,
+                                                                    )
+                                                                    .label("Revert Changes")
+                                                                    .on_click(cx.listener(
+                                                                        Self::request_revert_changes,
+                                                                    )),
+                                                            )
+                                                            .child(
+                                                                Button::new("continue-task")
+                                                                    .outline()
+                                                                    .disabled(
+                                                                        self.session.status
+                                                                            != WorkStatus::Completed
+                                                                            || self.runtime_active,
+                                                                    )
+                                                                    .label("Continue Task")
+                                                                    .on_click(cx.listener(
+                                                                        Self::continue_task,
+                                                                    )),
+                                                            ),
+                                                    ),
                                             ),
                                     ),
                             ),

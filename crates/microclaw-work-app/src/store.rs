@@ -17,7 +17,11 @@ impl From<&WorkSessionSnapshot> for WorkSessionSummary {
     fn from(snapshot: &WorkSessionSnapshot) -> Self {
         Self {
             session_id: snapshot.session_id.clone(),
-            task: snapshot.task.clone(),
+            task: if snapshot.title.trim().is_empty() {
+                snapshot.task.clone()
+            } else {
+                snapshot.title.clone()
+            },
             workspace: snapshot.workspace.clone(),
             status: snapshot.status,
             updated_at_ms: snapshot.updated_at_ms,

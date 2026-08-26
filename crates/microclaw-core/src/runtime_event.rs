@@ -69,6 +69,10 @@ pub enum RuntimeEvent {
         options: Vec<String>,
         advisory: Option<String>,
     },
+    CheckpointCreated {
+        commit: String,
+        label: String,
+    },
 }
 
 /// Versioned transport envelope for replayable runtime event streams.
@@ -81,7 +85,7 @@ pub struct RuntimeEventEnvelope {
 }
 
 impl RuntimeEventEnvelope {
-    pub const SCHEMA_VERSION: u32 = 2;
+    pub const SCHEMA_VERSION: u32 = 3;
 
     pub fn new(run_id: impl Into<String>, sequence: u64, event: RuntimeEvent) -> Self {
         Self {

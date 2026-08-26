@@ -51,6 +51,16 @@ pub enum ToolActivityStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkReviewStatus {
+    #[default]
+    None,
+    Pending,
+    Accepted,
+    Reverted,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolActivity {
     pub call_id: String,
@@ -106,6 +116,9 @@ pub enum WorkCommand {
     },
     CancelRun,
     MarkInterrupted,
+    AcceptChanges,
+    MarkReverted,
+    PrepareFollowUp,
     ResetDemo,
 }
 
@@ -154,6 +167,8 @@ pub struct WorkSessionSnapshot {
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub workspace: String,
+    #[serde(default)]
+    pub title: String,
     pub task: String,
     pub status: WorkStatus,
     pub plan: Vec<PlanStep>,
@@ -168,6 +183,10 @@ pub struct WorkSessionSnapshot {
     #[serde(default)]
     pub final_response: Option<String>,
     #[serde(default)]
+    pub baseline_checkpoint: Option<String>,
+    #[serde(default)]
+    pub review_status: WorkReviewStatus,
+    #[serde(default)]
     pub runtime_run_id: Option<String>,
     #[serde(default)]
     pub last_runtime_sequence: u64,
@@ -176,7 +195,7 @@ pub struct WorkSessionSnapshot {
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 6;
+    pub const SCHEMA_VERSION: u32 = 7;
     pub const MAX_EVENTS: usize = 200;
     pub const MAX_TOOL_ACTIVITIES: usize = 100;
     pub const MAX_FILE_CHANGES: usize = 50;
@@ -190,6 +209,7 @@ impl WorkSessionSnapshot {
             created_at_ms: now,
             updated_at_ms: now,
             workspace: workspace.into(),
+            title: String::new(),
             task: String::new(),
             status: WorkStatus::Planning,
             plan: vec![
@@ -216,6 +236,8 @@ impl WorkSessionSnapshot {
             file_changes: Vec::new(),
             subagents: Vec::new(),
             final_response: None,
+            baseline_checkpoint: None,
+            review_status: WorkReviewStatus::None,
             runtime_run_id: None,
             last_runtime_sequence: 0,
             events: Vec::new(),
@@ -230,6 +252,7 @@ impl WorkSessionSnapshot {
             created_at_ms: now,
             updated_at_ms: now,
             workspace: String::new(),
+            title: "Build a native desktop workflow for MicroClaw Work".into(),
             task: "Build a native desktop workflow for MicroClaw Work".into(),
             status: WorkStatus::AwaitingApproval,
             plan: vec![
@@ -267,6 +290,8 @@ impl WorkSessionSnapshot {
             file_changes: Vec::new(),
             subagents: Vec::new(),
             final_response: None,
+            baseline_checkpoint: None,
+            review_status: WorkReviewStatus::None,
             runtime_run_id: None,
             last_runtime_sequence: 0,
             events: vec![
@@ -323,6 +348,9 @@ impl WorkSessionSnapshot {
             WorkCommand::FailRun { message } => self.fail_run(message),
             WorkCommand::CancelRun => self.cancel_run()?,
             WorkCommand::MarkInterrupted => self.mark_interrupted()?,
+            WorkCommand::AcceptChanges => self.finish_review(WorkReviewStatus::Accepted)?,
+            WorkCommand::MarkReverted => self.finish_review(WorkReviewStatus::Reverted)?,
+            WorkCommand::PrepareFollowUp => self.prepare_follow_up()?,
             WorkCommand::ResetDemo => self.reset_demo(),
         }
         self.touch();
@@ -353,6 +381,9 @@ impl WorkSessionSnapshot {
             return Err(WorkCommandError::EmptyTask);
         }
         self.task = task;
+        if self.title.trim().is_empty() {
+            self.title = self.task.clone();
+        }
         self.status = WorkStatus::Running;
         self.approval_reason = None;
         self.runtime_run_id = None;
@@ -362,6 +393,8 @@ impl WorkSessionSnapshot {
         self.file_changes.clear();
         self.subagents.clear();
         self.final_response = None;
+        self.baseline_checkpoint = None;
+        self.review_status = WorkReviewStatus::None;
         self.diff_summary.clear();
         for step in &mut self.plan {
             step.completed = false;
@@ -473,6 +506,46 @@ impl WorkSessionSnapshot {
         self.push_event(
             WorkEventKind::System,
             "The previous desktop process exited before this task finished",
+        );
+        Ok(())
+    }
+
+    fn finish_review(&mut self, status: WorkReviewStatus) -> Result<(), WorkCommandError> {
+        if self.status != WorkStatus::Completed || self.review_status != WorkReviewStatus::Pending {
+            return Err(WorkCommandError::InvalidStatus {
+                command: match status {
+                    WorkReviewStatus::Accepted => "accept changes",
+                    WorkReviewStatus::Reverted => "mark changes reverted",
+                    _ => "finish review",
+                },
+                actual: self.status,
+            });
+        }
+        self.review_status = status;
+        self.push_event(
+            WorkEventKind::System,
+            match status {
+                WorkReviewStatus::Accepted => "Accepted the completed workspace changes",
+                WorkReviewStatus::Reverted => "Restored the pre-task workspace checkpoint",
+                _ => unreachable!(),
+            },
+        );
+        Ok(())
+    }
+
+    fn prepare_follow_up(&mut self) -> Result<(), WorkCommandError> {
+        if self.status != WorkStatus::Completed {
+            return Err(WorkCommandError::InvalidStatus {
+                command: "continue task",
+                actual: self.status,
+            });
+        }
+        self.status = WorkStatus::Planning;
+        self.task.clear();
+        self.review_status = WorkReviewStatus::None;
+        self.push_event(
+            WorkEventKind::System,
+            "Prepared a follow-up in the same Agent Engine session",
         );
         Ok(())
     }
@@ -608,6 +681,12 @@ impl WorkSessionSnapshot {
                 } else {
                     self.status = WorkStatus::Completed;
                     self.final_response = Some(text.clone());
+                    self.review_status =
+                        if self.baseline_checkpoint.is_some() && !self.file_changes.is_empty() {
+                            WorkReviewStatus::Pending
+                        } else {
+                            WorkReviewStatus::None
+                        };
                     self.approval_reason = None;
                     for step in &mut self.plan {
                         step.completed = true;
@@ -681,6 +760,15 @@ impl WorkSessionSnapshot {
                     format!("Awaiting approval {approval_id}: {reason}"),
                 );
             }
+            RuntimeEvent::CheckpointCreated { commit, label } => {
+                if self.baseline_checkpoint.is_none() {
+                    self.baseline_checkpoint = Some(commit.clone());
+                    self.push_event(
+                        WorkEventKind::System,
+                        format!("Created pre-task checkpoint {commit}: {label}"),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -734,7 +822,7 @@ impl WorkSessionSnapshot {
     pub fn load(path: impl AsRef<Path>) -> io::Result<Self> {
         let bytes = fs::read(path)?;
         let mut snapshot: Self = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        if snapshot.schema_version == 5 {
+        if (5..Self::SCHEMA_VERSION).contains(&snapshot.schema_version) {
             snapshot.schema_version = Self::SCHEMA_VERSION;
         } else if snapshot.schema_version != Self::SCHEMA_VERSION {
             return Err(io::Error::new(
@@ -745,6 +833,9 @@ impl WorkSessionSnapshot {
                     Self::SCHEMA_VERSION
                 ),
             ));
+        }
+        if snapshot.title.trim().is_empty() {
+            snapshot.title = snapshot.task.clone();
         }
         Ok(snapshot)
     }
@@ -1225,6 +1316,74 @@ mod tests {
             snapshot.final_response.as_deref(),
             Some("Implemented and verified")
         );
+    }
+
+    #[test]
+    fn completed_file_changes_require_explicit_review() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "change a file".into(),
+            })
+            .unwrap();
+        for (sequence, event) in [
+            RuntimeEvent::CheckpointCreated {
+                commit: "deadbeef".into(),
+                label: "before task".into(),
+            },
+            RuntimeEvent::FileDiff {
+                path: "src/main.rs".into(),
+                diff: "+change".into(),
+                added: 1,
+                removed: 0,
+                truncated: false,
+            },
+            RuntimeEvent::FinalResponse {
+                text: "done".into(),
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            snapshot
+                .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                    "run-review",
+                    sequence as u64 + 1,
+                    event,
+                )))
+                .unwrap();
+        }
+
+        assert_eq!(snapshot.review_status, WorkReviewStatus::Pending);
+        assert_eq!(snapshot.baseline_checkpoint.as_deref(), Some("deadbeef"));
+        snapshot.apply(WorkCommand::AcceptChanges).unwrap();
+        assert_eq!(snapshot.review_status, WorkReviewStatus::Accepted);
+        assert!(snapshot.apply(WorkCommand::MarkReverted).is_err());
+    }
+
+    #[test]
+    fn reverted_review_is_durable_and_new_task_resets_it() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot.status = WorkStatus::Completed;
+        snapshot.review_status = WorkReviewStatus::Pending;
+        snapshot.baseline_checkpoint = Some("deadbeef".into());
+
+        snapshot.apply(WorkCommand::MarkReverted).unwrap();
+        assert_eq!(snapshot.review_status, WorkReviewStatus::Reverted);
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "follow-up".into(),
+            })
+            .unwrap();
+        assert_eq!(snapshot.title, "follow-up");
+        assert_eq!(snapshot.review_status, WorkReviewStatus::None);
+        assert!(snapshot.baseline_checkpoint.is_none());
+
+        snapshot.status = WorkStatus::Completed;
+        snapshot.apply(WorkCommand::PrepareFollowUp).unwrap();
+        assert_eq!(snapshot.status, WorkStatus::Planning);
+        assert!(snapshot.task.is_empty());
+        assert_eq!(snapshot.title, "follow-up");
     }
 
     #[test]
