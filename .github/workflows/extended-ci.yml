@@ -111,9 +111,12 @@ jobs:
       - name: Build release desktop binary
         if: runner.os != 'macOS'
         run: cargo build -p microclaw-work --release --locked
-      - name: Build release macOS app bundle
+      - name: Build release macOS DMG preview
         if: runner.os == 'macOS'
-        run: scripts/build_work_macos_app.sh release
+        run: scripts/build_work_macos_dmg.sh release
+      - name: Launch-smoke macOS app bundle
+        if: runner.os == 'macOS'
+        run: scripts/smoke_work_macos_app.sh release
       - name: Package Linux preview
         if: runner.os == 'Linux'
         shell: bash
@@ -122,12 +125,6 @@ jobs:
           cp target/release/microclaw-work target/microclaw-work-preview/
           cp LICENSE apps/microclaw-work/README.md target/microclaw-work-preview/
           tar -czf microclaw-work-linux-x86_64.tar.gz -C target microclaw-work-preview
-      - name: Package macOS preview
-        if: runner.os == 'macOS'
-        run: |
-          ditto -c -k --keepParent \
-            'target/microclaw-work-app/release/MicroClaw Work.app' \
-            microclaw-work-macos-runner.zip
       - name: Package Windows preview
         if: runner.os == 'Windows'
         shell: pwsh
@@ -149,8 +146,8 @@ jobs:
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: microclaw-work-macos-runner
-          path: microclaw-work-macos-runner.zip
+          name: microclaw-work-macos-dmg
+          path: target/microclaw-work-installer/release/*.dmg
           if-no-files-found: error
           retention-days: 14
       - name: Upload Windows preview

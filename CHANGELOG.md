@@ -8,6 +8,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Branded macOS Work installer preview.** The native bundle now derives its
+  complete `.icns` set from the same blue MicroClaw logo used by the website.
+  New packaging and launch-smoke scripts create and verify a DMG, ad-hoc sign
+  development previews, or enable Hardened Runtime and trusted timestamps for
+  a supplied Developer ID identity. Extended CI now publishes the DMG preview
+  and proves the packaged application stays alive after launch.
 - **Agent Engine first-response proof.** Work Diagnostics can now run a fixed,
   explicit end-to-end probe through provider streaming, the shared Agent
   Engine, durable runtime assembly, versioned Work events, and visible final

@@ -474,13 +474,17 @@ Engine first-response probes, a refined conversation/sidebar/composer visual
 language, live plans, in-run steering, structured inline approvals, bounded process
 evidence, native multi-file diff review, visible subagent activity, checkpoint
 review, process-level crash/retry tests, and macOS development-bundle
-verification. The repository also has a Linux/macOS/Windows release-build
-matrix that runs the headless recovery harness and publishes unsigned preview
-archives. Hosted Linux and macOS jobs have completed successfully and produced
+verification. The macOS bundle uses the website brand icon; local packaging has
+also produced a Developer ID-signed, Hardened Runtime application and signed,
+checksum-verified DMG that Gatekeeper accepts. CI builds the equivalent ad-hoc
+signed DMG preview and launch-smokes the packaged application. Apple notarization
+and stapling are still required for public distribution. The repository also has
+a Linux/macOS/Windows release-build matrix that runs the headless recovery harness
+and publishes unsigned preview artifacts. Hosted Linux and macOS jobs have completed successfully and produced
 non-expired preview artifacts; Windows hosted completion is still required
 before treating the three-platform gate as passed. The next gates remain real-provider end-to-end onboarding,
-platform launch smoke tests, accessibility/IME testing, and signed
-release installers. Phase 1 is not complete until those gates have direct
+Windows/Linux launch smoke tests, accessibility/IME testing, Apple notarization,
+and a signed Windows release installer. Phase 1 is not complete until those gates have direct
 evidence.
 
 ### Phase 2 — persistent agents and teams

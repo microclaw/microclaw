@@ -137,15 +137,32 @@ scripts/build_work_macos_app.sh debug
 The validated bundle is written to
 `target/microclaw-work-app/debug/MicroClaw Work.app`. Use `release` instead of
 `debug` for an optimized bundle. Development bundles are ad-hoc signed for
-local execution. Developer ID signing, notarization, DMG creation, and
-auto-update are later Phase 0/5 work.
+local execution. The bundle icon is generated from the same `logo.png` used by
+the documentation website. Build and verify an ad-hoc signed DMG preview with:
+
+```sh
+scripts/build_work_macos_dmg.sh release
+scripts/smoke_work_macos_app.sh release
+```
+
+For a Developer ID-signed local release candidate, set an installed identity:
+
+```sh
+MICROCLAW_WORK_SIGNING_IDENTITY='Developer ID Application: <name> (<team-id>)' \
+  scripts/build_work_macos_dmg.sh release
+```
+
+The signing path enables Hardened Runtime and requests a trusted timestamp for
+both the application and disk image. Apple notarization and stapling remain
+required before public distribution; auto-update remains later release work.
 
 Extended CI continuously checks the Work application on `ubuntu-24.04`, the
 current GitHub-hosted macOS runner, and `windows-latest`. Each platform runs the
 framework-independent session and process-recovery tests, runs Cargo check and
 Clippy for the native GPUI application, produces a release build, and uploads a
-14-day preview archive. These archives are unsigned engineering previews, not release
-installers. A platform is not promoted to release quality until its native
+14-day preview artifact. macOS additionally builds a branded ad-hoc signed DMG
+and launch-smokes its packaged application. CI artifacts are unsigned engineering
+previews, not release installers. A platform is not promoted to release quality until its native
 installer, signing, launch smoke test, IME/accessibility checks, and GPU/display
 matrix have direct evidence.
 
