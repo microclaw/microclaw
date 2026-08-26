@@ -26,6 +26,12 @@ Event envelopes into the Work projection. **演示** remains available for UI
 testing without credentials. Provider/configuration failures are shown as a
 terminal Work state instead of crashing the window.
 
+**停止** sends a cancellation request through the shared run-control registry.
+It interrupts the real Agent Engine, including a pending model call, and waits
+for the versioned `Cancelled` event; it is not a UI-only state change. A small
+registration retry closes the race where a user stops immediately after
+launching a run.
+
 High-risk tool requests remain in the approval state even when the Agent's
 current turn ends with explanatory text. **允许并继续** submits the approve-once
 reply into the same persisted runtime session and projects the resumed run.

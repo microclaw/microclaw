@@ -9,7 +9,7 @@ use gpui_component::{
     v_flex,
 };
 use microclaw_work_app::session::{WorkCommand, WorkEventKind, WorkSessionSnapshot, WorkStatus};
-use runtime_worker::{RuntimeMessage, RuntimeRunSpec, spawn_runtime};
+use runtime_worker::{RuntimeCancellation, RuntimeMessage, RuntimeRunSpec, spawn_runtime};
 use smol::Timer;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
@@ -22,6 +22,7 @@ struct WorkApp {
     task_input: Entity<InputState>,
     active_run_id: u64,
     runtime_active: bool,
+    runtime_cancellation: Option<RuntimeCancellation>,
     last_run_was_demo: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -94,6 +95,7 @@ impl WorkApp {
             task_input,
             active_run_id: 0,
             runtime_active: false,
+            runtime_cancellation: None,
             last_run_was_demo: false,
             _subscriptions,
         }
@@ -141,11 +143,13 @@ impl WorkApp {
         self.active_run_id = self.active_run_id.saturating_add(1);
         self.runtime_active = true;
         let generation = self.active_run_id;
-        let receiver = spawn_runtime(RuntimeRunSpec {
+        let handle = spawn_runtime(RuntimeRunSpec {
             task: prompt,
             workspace: self.session.workspace.clone(),
             session: "desktop-default".into(),
         });
+        let receiver = handle.messages;
+        self.runtime_cancellation = Some(handle.cancellation);
         self.persistence_message = "正在连接 MicroClaw Runtime…".into();
         cx.notify();
 
@@ -173,16 +177,20 @@ impl WorkApp {
                                     }
                                     RuntimeMessage::Completed { run_id } => {
                                         this.runtime_active = false;
-                                        this.persistence_message = if this.session.status
-                                            == WorkStatus::AwaitingApproval
-                                        {
-                                            format!("Runtime {run_id} 已暂停，等待审批")
-                                        } else {
-                                            format!("Runtime {run_id} 已完成")
+                                        this.runtime_cancellation = None;
+                                        this.persistence_message = match this.session.status {
+                                            WorkStatus::AwaitingApproval => {
+                                                format!("Runtime {run_id} 已暂停，等待审批")
+                                            }
+                                            WorkStatus::Cancelled => {
+                                                format!("Runtime {run_id} 已停止")
+                                            }
+                                            _ => format!("Runtime {run_id} 已完成"),
                                         };
                                     }
                                     RuntimeMessage::Failed { run_id, message } => {
                                         this.runtime_active = false;
+                                        this.runtime_cancellation = None;
                                         let display = format!("Runtime {run_id} 失败：{message}");
                                         let _ = this.session.apply(WorkCommand::FailRun {
                                             message: message.clone(),
@@ -212,6 +220,7 @@ impl WorkApp {
                                 return;
                             }
                             this.runtime_active = false;
+                            this.runtime_cancellation = None;
                             let message = "Runtime 消息通道意外断开".to_string();
                             let _ = this.session.apply(WorkCommand::FailRun {
                                 message: message.clone(),
@@ -228,6 +237,43 @@ impl WorkApp {
             }
         })
         .detach();
+    }
+
+    fn stop_runtime(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.runtime_active {
+            if self.session.status == WorkStatus::AwaitingApproval {
+                if let Err(error) = self.session.apply(WorkCommand::CancelRun) {
+                    self.persistence_message = error.to_string();
+                } else {
+                    self.persistence_message = "已取消等待审批的任务".into();
+                    self.persist();
+                }
+            } else {
+                self.persistence_message = "当前没有正在运行或等待审批的任务".into();
+            }
+            cx.notify();
+            return;
+        }
+
+        if self.last_run_was_demo {
+            self.active_run_id = self.active_run_id.saturating_add(1);
+            self.runtime_active = false;
+            self.runtime_cancellation = None;
+        } else if let Some(cancellation) = &self.runtime_cancellation
+            && let Err(message) = cancellation.cancel()
+        {
+            self.persistence_message = message.into();
+            cx.notify();
+            return;
+        }
+
+        if let Err(error) = self.session.apply(WorkCommand::CancelRun) {
+            self.persistence_message = error.to_string();
+        } else {
+            self.persistence_message = "停止请求已发送，正在等待 Runtime 结束…".into();
+        }
+        self.persist();
+        cx.notify();
     }
 
     fn start_demo(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -385,6 +431,12 @@ impl Render for WorkApp {
                                     .outline()
                                     .label("演示")
                                     .on_click(cx.listener(Self::start_demo)),
+                            )
+                            .child(
+                                Button::new("stop-runtime")
+                                    .outline()
+                                    .label("停止")
+                                    .on_click(cx.listener(Self::stop_runtime)),
                             ),
                     )
                     .child(

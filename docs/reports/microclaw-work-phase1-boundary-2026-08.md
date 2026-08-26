@@ -97,8 +97,8 @@ It contains no GPUI, platform, channel, provider, or Server dependency.
 
 ```text
 cargo test -p microclaw-core --locked                            51 passed
-cargo test -p microclaw-work-app --locked                         9 passed
-cargo test -p microclaw-work --locked                             1 passed
+cargo test -p microclaw-work-app --locked                        11 passed
+cargo test -p microclaw-work --locked                             2 passed
 cargo test -p microclaw-work-headless --locked                    1 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
 cargo clippy -p microclaw-work-headless --all-targets --no-deps  passed
@@ -156,8 +156,12 @@ without a separate desktop-only approval implementation.
 
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing
-side effects in the background, so parallel starts are rejected until an
-explicit cancellation control is implemented.
+side effects in the background, so parallel starts remain rejected. The Stop
+action now sends a control message to the worker, which delegates to the same
+`run_control` registry used by Web, chat, and scheduler adapters. The worker
+retries across the short run-registration race, and an integration test proves
+that a pending model call is interrupted and emits the shared `Cancelled`
+event. Demo cancellation invalidates its local event generation separately.
 
 ## Packaging evidence after runtime linkage
 

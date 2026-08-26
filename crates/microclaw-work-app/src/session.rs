@@ -57,6 +57,7 @@ pub enum WorkCommand {
     FailRun {
         message: String,
     },
+    CancelRun,
     ResetDemo,
 }
 
@@ -218,6 +219,7 @@ impl WorkSessionSnapshot {
             }
             WorkCommand::ApplyRuntimeEvent(envelope) => self.apply_runtime_event(envelope)?,
             WorkCommand::FailRun { message } => self.fail_run(message),
+            WorkCommand::CancelRun => self.cancel_run()?,
             WorkCommand::ResetDemo => *self = Self::spike_demo(),
         }
         Ok(CommandOutcome {
@@ -297,6 +299,22 @@ impl WorkSessionSnapshot {
             WorkEventKind::System,
             format!("任务失败：{}", message.into()),
         );
+    }
+
+    fn cancel_run(&mut self) -> Result<(), WorkCommandError> {
+        if !matches!(
+            self.status,
+            WorkStatus::Running | WorkStatus::AwaitingApproval | WorkStatus::Verifying
+        ) {
+            return Err(WorkCommandError::InvalidStatus {
+                command: "cancel run",
+                actual: self.status,
+            });
+        }
+        self.status = WorkStatus::Cancelled;
+        self.approval_reason = None;
+        self.push_event(WorkEventKind::System, "已请求停止当前任务");
+        Ok(())
     }
 
     fn apply_runtime_event(
@@ -690,5 +708,39 @@ mod tests {
                 .message
                 .contains("provider rejected model")
         );
+    }
+
+    #[test]
+    fn active_run_can_be_cancelled_but_completed_run_cannot() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "long task".into(),
+            })
+            .unwrap();
+
+        snapshot.apply(WorkCommand::CancelRun).unwrap();
+        assert_eq!(snapshot.status, WorkStatus::Cancelled);
+        assert!(snapshot.approval_reason.is_none());
+        assert!(snapshot.apply(WorkCommand::CancelRun).is_err());
+    }
+
+    #[test]
+    fn pending_approval_can_be_cancelled_without_resuming_the_runtime() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "dangerous task".into(),
+            })
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::RequestApproval {
+                reason: "write file".into(),
+            })
+            .unwrap();
+
+        snapshot.apply(WorkCommand::CancelRun).unwrap();
+        assert_eq!(snapshot.status, WorkStatus::Cancelled);
+        assert!(snapshot.approval_reason.is_none());
     }
 }

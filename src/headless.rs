@@ -158,20 +158,7 @@ impl HeadlessRuntime {
             .session
             .clone()
             .unwrap_or_else(|| "default".to_string());
-        let external_chat_id = format!("headless:{session_name}");
-        let title = format!("headless-{session_name}");
-        let chat_id = call_blocking(self.state.db.clone(), {
-            let external_chat_id = external_chat_id.clone();
-            move |db| {
-                db.resolve_or_create_chat_id(
-                    HEADLESS_CHANNEL,
-                    &external_chat_id,
-                    Some(&title),
-                    "headless",
-                )
-            }
-        })
-        .await?;
+        let chat_id = self.resolve_session_chat_id(&session_name).await?;
 
         let stored = StoredMessage {
             id: uuid::Uuid::new_v4().to_string(),
@@ -227,6 +214,30 @@ impl HeadlessRuntime {
             chat_id,
             response,
         })
+    }
+
+    /// Cancel active work for a named headless session.
+    ///
+    /// This delegates to the same run-control registry used by chat, Web, and
+    /// scheduler adapters, so callers stop the real Agent Engine rather than
+    /// merely hiding its output.
+    pub async fn cancel_session(&self, session: &str) -> anyhow::Result<usize> {
+        let chat_id = self.resolve_session_chat_id(session).await?;
+        Ok(crate::run_control::abort_runs(HEADLESS_CHANNEL, chat_id).await)
+    }
+
+    async fn resolve_session_chat_id(&self, session: &str) -> anyhow::Result<i64> {
+        let external_chat_id = format!("headless:{session}");
+        let title = format!("headless-{session}");
+        Ok(call_blocking(self.state.db.clone(), move |db| {
+            db.resolve_or_create_chat_id(
+                HEADLESS_CHANNEL,
+                &external_chat_id,
+                Some(&title),
+                "headless",
+            )
+        })
+        .await?)
     }
 }
 
@@ -307,7 +318,12 @@ mod tests {
     };
     use microclaw_core::runtime_event::RuntimeEvent;
 
+    static RUNTIME_TEST_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
     struct FakeLlm;
+
+    struct SlowLlm;
 
     #[async_trait::async_trait]
     impl LlmProvider for FakeLlm {
@@ -327,7 +343,24 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl LlmProvider for SlowLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            _messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            unreachable!("the cancellation test must stop the pending model call")
+        }
+    }
+
     fn runtime_with_fake_llm(base: &Path) -> HeadlessRuntime {
+        runtime_with_llm(base, Box::new(FakeLlm))
+    }
+
+    fn runtime_with_llm(base: &Path, llm: Box<dyn LlmProvider>) -> HeadlessRuntime {
         let runtime_dir = base.join("runtime");
         std::fs::create_dir_all(&runtime_dir).unwrap();
         let mut config = Config::test_defaults();
@@ -346,7 +379,7 @@ mod tests {
                 memory: MemoryManager::new(&runtime_dir),
                 skills: SkillManager::from_skills_dir(&config.skills_data_dir()),
                 hooks: Arc::new(HookManager::from_config(&config)),
-                llm: Box::new(FakeLlm),
+                llm,
                 llm_provider_overrides: Arc::new(RwLock::new(HashMap::new())),
                 llm_model_overrides: Arc::new(RwLock::new(HashMap::new())),
                 embedding: None,
@@ -389,6 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn reusable_runtime_executes_real_agent_loop_and_emits_envelopes() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
         let directory = tempfile::tempdir().unwrap();
         let runtime = runtime_with_fake_llm(directory.path());
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -419,5 +453,50 @@ mod tests {
             envelope.event,
             RuntimeEvent::FinalResponse { ref text } if text == "real agent loop response"
         )));
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_headless_session_stops_the_real_agent_loop() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Arc::new(runtime_with_llm(directory.path(), Box::new(SlowLlm)));
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let running_runtime = runtime.clone();
+        let run = tokio::spawn(async move {
+            running_runtime
+                .run(
+                    HeadlessRunRequest::work(
+                        "wait for cancellation".into(),
+                        Some("cancel-test".into()),
+                        "cancel-run-test".into(),
+                    ),
+                    Some(event_tx),
+                )
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if runtime.cancel_session("cancel-test").await.unwrap() > 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("run should register for cancellation");
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+            .await
+            .expect("cancelled run should finish promptly")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.response, crate::run_control::STOPPED_TEXT);
+
+        let mut cancelled = false;
+        while let Some(envelope) = event_rx.recv().await {
+            cancelled |= matches!(envelope.event, RuntimeEvent::Cancelled { .. });
+        }
+        assert!(cancelled);
     }
 }
