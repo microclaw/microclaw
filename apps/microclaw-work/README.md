@@ -20,20 +20,30 @@ Run the framework-independent session tests:
 cargo test -p microclaw-work-app
 ```
 
-The main action, **运行真实任务**, loads the normal MicroClaw configuration,
-uses the current directory as the workspace, and streams versioned Runtime
-Event envelopes into the Work projection. **演示** remains available for UI
-testing without credentials. Provider/configuration failures are shown as a
-terminal Work state instead of crashing the window.
+The main action, **Run Task**, loads the normal MicroClaw configuration,
+uses the selected workspace, and streams versioned Runtime Event envelopes into
+the Work projection. The native **Select Workspace** action is backed by GPUI's
+cross-platform directory prompt; the canonical path survives restart. A new
+install has no implicit workspace and cannot run until the user selects one.
+Missing workspaces return to this safe unselected state instead of falling back
+to the process launch directory (which can be `/` for a packaged application).
 
-**停止** sends a cancellation request through the shared run-control registry.
+The sidebar reports the configured provider, model, and config path without
+showing credentials. Missing or invalid configuration blocks real launch with
+an instruction to run `microclaw setup`; **Refresh Configuration** re-reads the shared Config
+after setup. This is an offline configuration check, not a provider network
+probe. **Demo** remains available for UI testing without credentials.
+Provider/runtime failures are shown as a terminal Work state instead of
+crashing the window.
+
+**Stop** sends a cancellation request through the shared run-control registry.
 It interrupts the real Agent Engine, including a pending model call, and waits
 for the versioned `Cancelled` event; it is not a UI-only state change. A small
 registration retry closes the race where a user stops immediately after
 launching a run.
 
 High-risk tool requests remain in the approval state even when the Agent's
-current turn ends with explanatory text. **允许并继续** submits the approve-once
+current turn ends with explanatory text. **Allow and Continue** submits the approve-once
 reply into the same persisted runtime session and projects the resumed run.
 
 Build a development macOS application bundle:

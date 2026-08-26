@@ -97,7 +97,7 @@ It contains no GPUI, platform, channel, provider, or Server dependency.
 
 ```text
 cargo test -p microclaw-core --locked                            51 passed
-cargo test -p microclaw-work-app --locked                        11 passed
+cargo test -p microclaw-work-app --locked                        12 passed
 cargo test -p microclaw-work --locked                             2 passed
 cargo test -p microclaw-work-headless --locked                    1 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
@@ -107,7 +107,7 @@ cargo clippy -p microclaw-work --all-targets --no-deps          passed
 cargo check -p microclaw --lib --locked                          passed
 cargo test -p microclaw event_tap --lib --locked                 12 passed
 cargo test -p microclaw agent_engine::tests --lib --locked       43 passed
-cargo test -p microclaw headless::tests --lib --locked            2 passed
+cargo test -p microclaw headless::tests --lib --locked            3 passed
 cargo run -p microclaw-work-headless -- demo ...                 completed
 microclaw config check                                           passed
 ```
@@ -163,6 +163,20 @@ retries across the short run-registration race, and an integration test proves
 that a pending model call is interrupted and emits the shared `Cancelled`
 event. Demo cancellation invalidates its local event generation separately.
 
+Workspace selection uses GPUI's native cross-platform directory prompt rather
+than a new dialog dependency. The canonical path is validated by the pure Work
+application layer and persisted across restarts. Visual inspection caught that
+a Finder-launched macOS app can have `/` as its process directory, making an
+automatic launch-directory fallback dangerously broad. A new install and a
+missing saved path now enter a safe unselected state and real execution is
+blocked until the user explicitly chooses a directory. The Work snapshot schema
+was raised to v4 so Phase 0 and transitional mixed-language snapshots migrate
+to a blank English local Work session.
+The sidebar exposes only the shared Config's provider, model, and
+path/error state, never credentials. Real launch is blocked until the offline
+configuration loads successfully; online model compatibility remains a
+separate validation concern.
+
 ## Packaging evidence after runtime linkage
 
 The native bundle now includes the production runtime rather than only the
@@ -184,6 +198,13 @@ assembly into a smaller crate while preserving the same application-service
 API. This is a build-boundary optimization, not permission to duplicate the
 Agent Engine.
 
-Visual and accessibility inspection is still not verified because the test Mac
-was locked and Computer Use could not unlock it. Compilation, signing, bundle
-validation, and process launch do not substitute for that remaining UI gate.
+Visual and accessibility inspection passed after the test Mac was unlocked.
+Computer Use verified the v4 blank English session, safe `Not selected`
+workspace state, English status/plan/action text, and disabled Run/Stop/Approval
+actions. It also activated `Select Workspace` and confirmed that GPUI opened the
+native macOS directory picker with an English confirmation action. The first
+visual pass directly exposed and drove removal of the unsafe `/` launch-directory
+fallback and a transitional mixed-language snapshot. A scripted Demo run then
+verified English task, plan, event, status, and artifact projections and exposed
+one remaining fake `~/github/microclaw` workspace; the demo fixture no longer
+claims a workspace the user did not select.

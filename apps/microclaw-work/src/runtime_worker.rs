@@ -14,6 +14,37 @@ pub struct RuntimeRunSpec {
     pub session: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct RuntimeConfigSummary {
+    pub ready: bool,
+    pub provider: String,
+    pub model: String,
+    pub detail: String,
+}
+
+pub fn load_runtime_config_summary() -> RuntimeConfigSummary {
+    match Config::load() {
+        Ok(config) => {
+            let path = Config::resolve_config_path()
+                .ok()
+                .flatten()
+                .unwrap_or_else(Config::config_path_for_setup);
+            RuntimeConfigSummary {
+                ready: true,
+                provider: config.llm_provider,
+                model: config.model,
+                detail: path.display().to_string(),
+            }
+        }
+        Err(error) => RuntimeConfigSummary {
+            ready: false,
+            provider: "Not configured".into(),
+            model: "—".into(),
+            detail: format!("{error} Run `microclaw setup` first."),
+        },
+    }
+}
+
 #[derive(Debug)]
 pub enum RuntimeMessage {
     Envelope(RuntimeEventEnvelope),
@@ -35,7 +66,7 @@ impl RuntimeCancellation {
     pub fn cancel(&self) -> Result<(), &'static str> {
         self.cancel_tx
             .send(())
-            .map_err(|_| "Runtime 已经结束，无法发送停止请求")
+            .map_err(|_| "The runtime has already exited; the stop request was not sent.")
     }
 }
 
@@ -52,7 +83,7 @@ pub fn spawn_runtime(spec: RuntimeRunSpec) -> RuntimeHandle {
     if let Err(error) = spawn_result {
         let _ = message_tx.send(RuntimeMessage::Failed {
             run_id,
-            message: format!("无法启动 Runtime 后台线程：{error}"),
+            message: format!("Could not start the runtime worker thread: {error}"),
         });
     }
     RuntimeHandle {
@@ -73,7 +104,7 @@ fn run_worker(
             send_failure(
                 &message_tx,
                 &run_id,
-                format!("无法创建 Tokio Runtime：{error}"),
+                format!("Could not create the Tokio runtime: {error}"),
             );
             return;
         }

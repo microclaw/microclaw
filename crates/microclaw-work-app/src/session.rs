@@ -44,6 +44,9 @@ pub enum WorkCommand {
     StartTask {
         task: String,
     },
+    SetWorkspace {
+        path: String,
+    },
     RecordProgress {
         kind: WorkEventKind,
         message: String,
@@ -72,6 +75,8 @@ pub struct CommandOutcome {
 pub enum WorkCommandError {
     #[error("task must not be empty")]
     EmptyTask,
+    #[error("workspace is not an accessible directory: {path}")]
+    InvalidWorkspace { path: String },
     #[error("cannot {command} while Work status is {actual:?}")]
     InvalidStatus {
         command: &'static str,
@@ -105,7 +110,7 @@ pub struct WorkSessionSnapshot {
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 2;
+    pub const SCHEMA_VERSION: u32 = 4;
     pub const MAX_EVENTS: usize = 200;
 
     pub fn new(workspace: impl Into<String>) -> Self {
@@ -116,19 +121,19 @@ impl WorkSessionSnapshot {
             status: WorkStatus::Planning,
             plan: vec![
                 PlanStep {
-                    title: "理解任务与工作区".into(),
+                    title: "Understand the task and workspace".into(),
                     completed: false,
                 },
                 PlanStep {
-                    title: "执行任务".into(),
+                    title: "Execute the task".into(),
                     completed: false,
                 },
                 PlanStep {
-                    title: "处理审批".into(),
+                    title: "Handle approvals".into(),
                     completed: false,
                 },
                 PlanStep {
-                    title: "验证并交付结果".into(),
+                    title: "Verify and deliver results".into(),
                     completed: false,
                 },
             ],
@@ -143,28 +148,28 @@ impl WorkSessionSnapshot {
     pub fn spike_demo() -> Self {
         Self {
             schema_version: Self::SCHEMA_VERSION,
-            workspace: "~/github/microclaw".into(),
-            task: "为 MicroClaw Work 建立原生桌面工作流".into(),
+            workspace: String::new(),
+            task: "Build a native desktop workflow for MicroClaw Work".into(),
             status: WorkStatus::AwaitingApproval,
             plan: vec![
                 PlanStep {
-                    title: "理解 Workspace 和任务目标".into(),
+                    title: "Understand the workspace and task".into(),
                     completed: true,
                 },
                 PlanStep {
-                    title: "建立 GPUI 工作界面".into(),
+                    title: "Build the GPUI work interface".into(),
                     completed: true,
                 },
                 PlanStep {
-                    title: "审批文件修改".into(),
+                    title: "Approve file changes".into(),
                     completed: false,
                 },
                 PlanStep {
-                    title: "运行验证并交付 Artifact".into(),
+                    title: "Run verification and deliver artifacts".into(),
                     completed: false,
                 },
             ],
-            approval_reason: Some("允许写入 apps/microclaw-work 并运行 cargo check".into()),
+            approval_reason: Some("Allow writes to apps/microclaw-work and run cargo check".into()),
             diff_summary: "+ GPUI app shell\n+ resumable session projection\n+ approval surface"
                 .into(),
             runtime_run_id: None,
@@ -173,12 +178,12 @@ impl WorkSessionSnapshot {
                 WorkEvent {
                     id: 1,
                     kind: WorkEventKind::System,
-                    message: "已恢复 Work Session".into(),
+                    message: "Restored the Work session".into(),
                 },
                 WorkEvent {
                     id: 2,
                     kind: WorkEventKind::Approval,
-                    message: "工具请求写入桌面原型文件".into(),
+                    message: "A tool requested access to write desktop prototype files".into(),
                 },
             ],
         }
@@ -201,6 +206,7 @@ impl WorkSessionSnapshot {
         let previous_status = self.status;
         match command {
             WorkCommand::StartTask { task } => self.start_task(task)?,
+            WorkCommand::SetWorkspace { path } => self.set_workspace(path)?,
             WorkCommand::RecordProgress {
                 kind,
                 message,
@@ -257,7 +263,23 @@ impl WorkSessionSnapshot {
         for step in &mut self.plan {
             step.completed = false;
         }
-        self.push_event(WorkEventKind::System, "已创建前台 Work Task");
+        self.push_event(WorkEventKind::System, "Created a foreground Work task");
+        Ok(())
+    }
+
+    fn set_workspace(&mut self, path: String) -> Result<(), WorkCommandError> {
+        let candidate = Path::new(&path);
+        let canonical = candidate
+            .canonicalize()
+            .map_err(|_| WorkCommandError::InvalidWorkspace { path: path.clone() })?;
+        if !canonical.is_dir() {
+            return Err(WorkCommandError::InvalidWorkspace { path });
+        }
+        self.workspace = canonical.display().to_string();
+        self.push_event(
+            WorkEventKind::System,
+            format!("Workspace changed to {}", self.workspace),
+        );
         Ok(())
     }
 
@@ -276,7 +298,10 @@ impl WorkSessionSnapshot {
     fn request_approval(&mut self, reason: impl Into<String>) {
         self.status = WorkStatus::AwaitingApproval;
         self.approval_reason = Some(reason.into());
-        self.push_event(WorkEventKind::Approval, "等待用户批准文件修改");
+        self.push_event(
+            WorkEventKind::Approval,
+            "Waiting for approval to modify files",
+        );
     }
 
     fn approve(&mut self) {
@@ -285,10 +310,13 @@ impl WorkSessionSnapshot {
         if let Some(step) = self.plan.get_mut(2) {
             step.completed = true;
         }
-        self.push_event(WorkEventKind::Approval, "用户允许写入，开始验证");
+        self.push_event(
+            WorkEventKind::Approval,
+            "Write access approved; starting verification",
+        );
         self.push_event(
             WorkEventKind::Verification,
-            "cargo check -p microclaw-work 已加入验证队列",
+            "Queued cargo check -p microclaw-work for verification",
         );
     }
 
@@ -297,7 +325,7 @@ impl WorkSessionSnapshot {
         self.approval_reason = None;
         self.push_event(
             WorkEventKind::System,
-            format!("任务失败：{}", message.into()),
+            format!("Task failed: {}", message.into()),
         );
     }
 
@@ -313,7 +341,10 @@ impl WorkSessionSnapshot {
         }
         self.status = WorkStatus::Cancelled;
         self.approval_reason = None;
-        self.push_event(WorkEventKind::System, "已请求停止当前任务");
+        self.push_event(
+            WorkEventKind::System,
+            "Requested cancellation of the current task",
+        );
         Ok(())
     }
 
@@ -353,7 +384,7 @@ impl WorkSessionSnapshot {
             }
             RuntimeEvent::ToolStart { name, .. } => {
                 self.status = WorkStatus::Running;
-                self.push_event(WorkEventKind::Tool, format!("开始执行工具：{name}"));
+                self.push_event(WorkEventKind::Tool, format!("Started tool: {name}"));
             }
             RuntimeEvent::ToolResult {
                 name,
@@ -361,10 +392,10 @@ impl WorkSessionSnapshot {
                 preview,
                 ..
             } => {
-                let outcome = if is_error { "失败" } else { "完成" };
+                let outcome = if is_error { "failed" } else { "completed" };
                 self.push_event(
                     WorkEventKind::Tool,
-                    format!("工具 {name} {outcome}：{preview}"),
+                    format!("Tool {name} {outcome}: {preview}"),
                 );
             }
             RuntimeEvent::TextDelta { delta } => {
@@ -374,15 +405,18 @@ impl WorkSessionSnapshot {
             }
             RuntimeEvent::ToolWaveStart { wave, tool_count } => self.push_event(
                 WorkEventKind::Tool,
-                format!("开始工具批次 {wave}（{tool_count} 个工具）"),
+                format!("Started tool wave {wave} ({tool_count} tools)"),
             ),
             RuntimeEvent::ToolWaveComplete { wave } => {
-                self.push_event(WorkEventKind::Tool, format!("工具批次 {wave} 已完成"))
+                self.push_event(WorkEventKind::Tool, format!("Tool wave {wave} completed"))
             }
             RuntimeEvent::Cancelled { final_text } => {
                 self.status = WorkStatus::Cancelled;
                 self.approval_reason = None;
-                self.push_event(WorkEventKind::System, format!("任务已取消：{final_text}"));
+                self.push_event(
+                    WorkEventKind::System,
+                    format!("Task cancelled: {final_text}"),
+                );
             }
             RuntimeEvent::FinalResponse { text } => {
                 if self.status == WorkStatus::AwaitingApproval {
@@ -393,12 +427,12 @@ impl WorkSessionSnapshot {
                     for step in &mut self.plan {
                         step.completed = true;
                     }
-                    self.push_event(WorkEventKind::System, format!("任务已完成：{text}"));
+                    self.push_event(WorkEventKind::System, format!("Task completed: {text}"));
                 }
             }
             RuntimeEvent::MidTurnInjection { count } => self.push_event(
                 WorkEventKind::System,
-                format!("已接收 {count} 条任务补充信息"),
+                format!("Received {count} task updates"),
             ),
             RuntimeEvent::FileDiff {
                 path,
@@ -409,17 +443,17 @@ impl WorkSessionSnapshot {
             } => {
                 self.diff_summary = format!(
                     "{path}: +{added} -{removed}{}",
-                    if truncated { "（已截断）" } else { "" }
+                    if truncated { " (truncated)" } else { "" }
                 );
-                self.push_event(WorkEventKind::Tool, format!("文件已修改：{path}"));
+                self.push_event(WorkEventKind::Tool, format!("File changed: {path}"));
             }
             RuntimeEvent::SubagentStarted { run_id, label } => self.push_event(
                 WorkEventKind::System,
-                format!("子 Agent {label} 已启动（{run_id}）"),
+                format!("Subagent {label} started ({run_id})"),
             ),
             RuntimeEvent::SubagentFinished { run_id, status } => self.push_event(
                 WorkEventKind::System,
-                format!("子 Agent {run_id} 已结束：{status}"),
+                format!("Subagent {run_id} finished: {status}"),
             ),
             RuntimeEvent::ApprovalRequired {
                 approval_id,
@@ -428,11 +462,11 @@ impl WorkSessionSnapshot {
                 ..
             } => {
                 self.status = WorkStatus::AwaitingApproval;
-                let reason = preview.unwrap_or_else(|| format!("工具 {tool} 请求执行权限"));
+                let reason = preview.unwrap_or_else(|| format!("Tool {tool} requested permission"));
                 self.approval_reason = Some(reason.clone());
                 self.push_event(
                     WorkEventKind::Approval,
-                    format!("等待审批 {approval_id}：{reason}"),
+                    format!("Awaiting approval {approval_id}: {reason}"),
                 );
             }
         }
@@ -515,26 +549,26 @@ mod tests {
 
         snapshot
             .apply(WorkCommand::StartTask {
-                task: "实现中文任务输入".into(),
+                task: "Implement task input".into(),
             })
             .unwrap();
         snapshot
             .apply(WorkCommand::RecordProgress {
                 kind: WorkEventKind::Plan,
-                message: "已生成计划".into(),
+                message: "Generated a plan".into(),
                 completed_step: Some(0),
             })
             .unwrap();
         snapshot
             .apply(WorkCommand::RequestApproval {
-                reason: "允许修改 Workspace".into(),
+                reason: "Allow workspace changes".into(),
             })
             .unwrap();
 
         assert_eq!(snapshot.status, WorkStatus::AwaitingApproval);
         assert_eq!(
             snapshot.approval_reason.as_deref(),
-            Some("允许修改 Workspace")
+            Some("Allow workspace changes")
         );
 
         snapshot.apply(WorkCommand::Approve).unwrap();
@@ -553,7 +587,7 @@ mod tests {
         let mut snapshot = WorkSessionSnapshot::spike_demo();
         snapshot
             .apply(WorkCommand::StartTask {
-                task: "仍在运行的任务".into(),
+                task: "A task that is still running".into(),
             })
             .unwrap();
 
@@ -742,5 +776,30 @@ mod tests {
         snapshot.apply(WorkCommand::CancelRun).unwrap();
         assert_eq!(snapshot.status, WorkStatus::Cancelled);
         assert!(snapshot.approval_reason.is_none());
+    }
+
+    #[test]
+    fn workspace_change_is_canonicalized_and_rejects_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("not-a-workspace.txt");
+        std::fs::write(&file, "file").unwrap();
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+
+        snapshot
+            .apply(WorkCommand::SetWorkspace {
+                path: directory.path().display().to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            Path::new(&snapshot.workspace),
+            directory.path().canonicalize().unwrap()
+        );
+        assert!(
+            snapshot
+                .apply(WorkCommand::SetWorkspace {
+                    path: file.display().to_string(),
+                })
+                .is_err()
+        );
     }
 }
