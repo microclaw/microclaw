@@ -29,7 +29,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   sensitivity and presents an explicit empty-result state.
 - **Stable and pinnable Work conversations.** The desktop rail now keeps
   conversations in creation order regardless of opens, drafts, or new turns;
-  pinned conversations remain above unpinned history until explicitly unpinned.
+  pinned conversations remain above unpinned history until explicitly unpinned
+  from the conversation's compact right-click menu.
+- **Named Work conversation controls.** Conversation rows now expose their
+  titles to macOS Accessibility instead of appearing as numbered anonymous
+  buttons, with a repeatable local accessibility-tree audit.
 - **Responsive long Work sessions.** The desktop progressively renders older
   messages, bounds persisted diff payloads, and limits native diff previews so
   long conversations and generated files do not make every frame expensive. A

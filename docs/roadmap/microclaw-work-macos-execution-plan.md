@@ -57,7 +57,9 @@ Delivered:
   and same-thread follow-up;
 - Settings for local `SOUL.md` identity and project-context directory;
 - searchable durable conversation history by title or Workspace;
-- stable creation-time conversation ordering with explicit Pin / Unpin;
+- stable creation-time conversation ordering with Pin / Unpin in each row's
+  right-click menu;
+- named conversation controls and a repeatable macOS Accessibility-tree audit;
 - progressive long-conversation rendering and bounded large-diff persistence
   and previews;
 - a reproducible maximum-size session benchmark with local save/load budgets

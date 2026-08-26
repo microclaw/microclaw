@@ -5,6 +5,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputContentType, InputEvent, InputState, Textarea, TextareaState},
+    menu::{ContextMenuExt, PopupMenuItem},
     scroll::ScrollableElement,
     v_flex,
 };
@@ -2259,6 +2260,7 @@ impl Render for WorkApp {
         } else {
             self.session.workspace.clone()
         };
+        let work_view = cx.entity();
 
         h_flex()
             .size_full()
@@ -2353,7 +2355,6 @@ impl Render for WorkApp {
                             }))
                             .children(recent_sessions.into_iter().map(|summary| {
                                 let session_id = summary.session_id.clone();
-                                let pin_session_id = session_id.clone();
                                 let pinned = summary.pinned;
                                 let is_active = session_id == self.session.session_id;
                                 let title = if summary.task.trim().is_empty() {
@@ -2376,48 +2377,22 @@ impl Render for WorkApp {
                                     | WorkStatus::AwaitingApproval
                                     | WorkStatus::Verifying => cx.theme().warning,
                                 };
-                                let row = h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .size(px(6.))
-                                            .flex_shrink_0()
-                                            .rounded_full()
-                                            .bg(summary_status_color.opacity(if is_active {
-                                                1.0
-                                            } else {
-                                                0.62
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .whitespace_nowrap()
-                                            .text_size(px(12.))
-                                            .font_weight(if is_active {
-                                                FontWeight::SEMIBOLD
-                                            } else {
-                                                FontWeight::NORMAL
-                                            })
-                                            .child(title),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .text_size(px(10.))
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(summary_status),
-                                    );
+                                let conversation_label = title.clone();
+                                let status_indicator = div()
+                                    .size(px(6.))
+                                    .flex_shrink_0()
+                                    .rounded_full()
+                                    .bg(summary_status_color.opacity(if is_active {
+                                        1.0
+                                    } else {
+                                        0.62
+                                    }));
                                 h_flex()
                                     .w_full()
                                     .min_w_0()
                                     .gap_1()
+                                    .items_center()
+                                    .child(status_indicator)
                                     .child(
                                         Button::new(format!("session-{session_id}"))
                                             .ghost()
@@ -2427,31 +2402,50 @@ impl Render for WorkApp {
                                             .min_w_0()
                                             .justify_start()
                                             .disabled(self.runtime_active)
+                                            .label(conversation_label)
+                                            .tooltip(format!("{title} · {summary_status}"))
                                             .when(is_active, |button| {
                                                 button
                                                     .bg(cx.theme().accent.opacity(0.12))
                                                     .text_color(cx.theme().foreground)
+                                                    .font_weight(FontWeight::SEMIBOLD)
                                             })
-                                            .child(row)
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.open_session(&session_id, window, cx);
-                                            })),
+                                            }))
+                                            .context_menu({
+                                                let work_view = work_view.clone();
+                                                let pin_session_id = summary.session_id.clone();
+                                                move |menu, window, _| {
+                                                    let pin_session_id = pin_session_id.clone();
+                                                    menu.item(
+                                                        PopupMenuItem::new(if pinned {
+                                                            "Unpin conversation"
+                                                        } else {
+                                                            "Pin conversation"
+                                                        })
+                                                        .on_click(window.listener_for(
+                                                            &work_view,
+                                                            move |this, _, _, cx| {
+                                                                this.set_session_pinned(
+                                                                    &pin_session_id,
+                                                                    !pinned,
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        )),
+                                                    )
+                                                }
+                                            }),
                                     )
-                                    .child(
-                                        Button::new(format!("pin-session-{pin_session_id}"))
-                                            .ghost()
-                                            .xsmall()
-                                            .compact()
-                                            .disabled(self.runtime_active)
-                                            .label(if pinned { "Unpin" } else { "Pin" })
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.set_session_pinned(
-                                                    &pin_session_id,
-                                                    !pinned,
-                                                    cx,
-                                                );
-                                            })),
-                                    )
+                                    .children(pinned.then(|| {
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_size(px(9.))
+                                            .font_semibold()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("PIN")
+                                    }))
                             })),
                     )
                     .child(

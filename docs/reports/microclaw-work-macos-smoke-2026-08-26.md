@@ -65,7 +65,10 @@ event does not repeat the accumulated text.
   **Stop** action, and then focuses **Send**; Shift-Tab reverses the path. The
   accessibility snapshot did not expose the focused attribute, so the visible
   native focus ring is the authoritative evidence for this check. VoiceOver
-  still requires a direct manual pass.
+  still requires a direct manual speech pass. A later Accessibility-tree audit
+  found and fixed unnamed conversation buttons; conversation rows now expose
+  their durable titles, and the regression check is reproducible with
+  `scripts/audit_work_macos_accessibility.sh`.
 - Unicode Chinese text, persistence, Return-to-send, and Shift-Return multiline
   input are verified. Native Pinyin candidate composition is not yet proven.
 - A signed build exists, but a live Apple notarization and stapling run still
