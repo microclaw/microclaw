@@ -55,6 +55,8 @@ The repository pins Rust in `rust-toolchain.toml`. Use that toolchain rather tha
 - `microclaw-tools`: tool runtime primitives, sandboxing, path/URL guards, caching, and web helpers
 - `microclaw-channels`: channel traits, adapters, and delivery boundary
 - `microclaw-app`: logging, bundled skills, and transcription support
+- `microclaw-work-app`: UI-independent Work commands, projections, and session persistence
+- `microclaw-work-runtime`: foreground Work runtime lifecycle and Agent Engine event bridge
 - `microclaw-clawhub`: registry client, installation, gates, types, and lockfile support
 - `microclaw-observability`: metrics, traces, logs, SDK, and external adapters
 

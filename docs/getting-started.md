@@ -42,6 +42,15 @@ brew install microclaw
 
 Use `brew install microclaw-full` when Matrix support is required.
 
+Install the native MicroClaw Work desktop application with Homebrew Cask:
+
+```sh
+brew install --cask microclaw-work
+```
+
+Stable releases provide separate signed and notarized DMGs for Apple Silicon
+and Intel Macs. Homebrew selects the matching artifact automatically.
+
 ### Build from source
 
 The repository pins its Rust toolchain in `rust-toolchain.toml`.

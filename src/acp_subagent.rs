@@ -265,17 +265,15 @@ impl Client for AcpSessionClient {
                     .await;
                 }
             }
-            acp::SessionUpdate::Plan(plan) => {
-                if !plan.entries.is_empty() {
-                    let items = plan
-                        .entries
-                        .iter()
-                        .map(|entry| entry.content.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" | ");
-                    self.append_note(format!("[acp] plan: {items}")).await;
-                    self.log_event("acp_plan", Some(items)).await;
-                }
+            acp::SessionUpdate::Plan(plan) if !plan.entries.is_empty() => {
+                let items = plan
+                    .entries
+                    .iter()
+                    .map(|entry| entry.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                self.append_note(format!("[acp] plan: {items}")).await;
+                self.log_event("acp_plan", Some(items)).await;
             }
             _ => {}
         }

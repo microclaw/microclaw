@@ -135,7 +135,26 @@ pub async fn snapshot(
     let exit =
         run_git_status_only(&["diff", "--cached", "--quiet"], shadow_repo, working_dir).await?;
     if exit == 0 {
-        return Ok(None);
+        let (has_head, _, _) =
+            capture_git(&["rev-parse", "--verify", "HEAD"], shadow_repo, working_dir).await?;
+        if has_head {
+            return Ok(None);
+        }
+        run_git(
+            &[
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "--allow-empty-message",
+                "-m",
+                label,
+            ],
+            shadow_repo,
+            working_dir,
+        )
+        .await?;
+        let (_, stdout, _) = capture_git(&["rev-parse", "HEAD"], shadow_repo, working_dir).await?;
+        return Ok(Some(stdout.trim().to_string()));
     }
 
     run_git(
@@ -217,15 +236,19 @@ pub async fn restore(
     if !shadow_repo.join("HEAD").exists() {
         return Err("no checkpoint repo exists for this chat".into());
     }
-    // `git checkout <hash> -- :/` overlays every tracked file in the working
-    // tree from the commit, leaving HEAD where it is so subsequent snapshots
-    // are still children of the active branch.
+    // Reset the shadow index and work tree to the checkpoint without moving
+    // HEAD. Unlike `git checkout <hash> -- :/`, this also handles an empty
+    // baseline and removes paths tracked only by a later checkpoint.
     run_git(
-        &["checkout", commit_hash, "--", ":/"],
+        &["read-tree", "--reset", "-u", commit_hash],
         shadow_repo,
         working_dir,
     )
     .await?;
+    // Remove files created after the checkpoint. Standard excludes remain
+    // protected, and nested repositories require an additional force flag
+    // that we intentionally do not provide.
+    run_git(&["clean", "-fd"], shadow_repo, working_dir).await?;
     Ok(())
 }
 
@@ -335,6 +358,7 @@ mod tests {
 
         // Round 2
         std::fs::write(workdir.join("a.txt"), "v2").unwrap();
+        std::fs::write(workdir.join("added-in-round-2.txt"), "round 2").unwrap();
         let c2 = snapshot(&shadow, &workdir, "round 2").await.unwrap();
         assert!(c2.is_some());
         let c2_hash = c2.unwrap();
@@ -356,12 +380,26 @@ mod tests {
             std::fs::read_to_string(workdir.join("a.txt")).unwrap(),
             "v1"
         );
+        assert!(!workdir.join("added-in-round-2.txt").exists());
+
+        std::fs::write(workdir.join("created-after-checkpoint.txt"), "new").unwrap();
+        std::fs::write(workdir.join(".env"), "preserved-secret").unwrap();
+        restore(&shadow, &workdir, &c1_hash).await.unwrap();
+        assert!(!workdir.join("created-after-checkpoint.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(workdir.join(".env")).unwrap(),
+            "preserved-secret"
+        );
 
         // Restore round 2.
         restore(&shadow, &workdir, &c2_hash).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(workdir.join("a.txt")).unwrap(),
             "v2"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workdir.join("added-in-round-2.txt")).unwrap(),
+            "round 2"
         );
 
         // Cleanup.
@@ -388,6 +426,26 @@ mod tests {
         // Too short.
         let err = restore(&shadow, &workdir, "abc").await.unwrap_err();
         assert!(err.contains("invalid commit hash"));
+
+        let _ = std::fs::remove_dir_all(&workdir);
+        let _ = std::fs::remove_dir_all(shadow.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn empty_workspace_gets_a_restorable_baseline() {
+        if !git_available().await {
+            return;
+        }
+        let workdir = tmp_dir();
+        let shadow = tmp_dir().join("shadow");
+        let baseline = snapshot(&shadow, &workdir, "empty baseline")
+            .await
+            .unwrap()
+            .expect("first snapshot should create an empty commit");
+        std::fs::write(workdir.join("created.txt"), "created later").unwrap();
+
+        restore(&shadow, &workdir, &baseline).await.unwrap();
+        assert!(!workdir.join("created.txt").exists());
 
         let _ = std::fs::remove_dir_all(&workdir);
         let _ = std::fs::remove_dir_all(shadow.parent().unwrap());

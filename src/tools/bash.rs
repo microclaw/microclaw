@@ -103,7 +103,7 @@ fn redact_env_secrets(output: &str, env_files: &[PathBuf]) -> String {
     if secrets.is_empty() {
         return output.to_string();
     }
-    secrets.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    secrets.sort_by_key(|secret| std::cmp::Reverse(secret.1.len()));
     let mut redacted = output.to_string();
     for (key, value) in &secrets {
         redacted = redacted.replace(value, &format!("[REDACTED:{key}]"));

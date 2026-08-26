@@ -11,10 +11,7 @@ pub struct SearchItem {
 fn strip_block(mut html: String, tag: &str) -> String {
     let open = format!("<{}", tag);
     let close = format!("</{}>", tag);
-    loop {
-        let Some(start) = find_case_insensitive(&html, &open, 0) else {
-            break;
-        };
+    while let Some(start) = find_case_insensitive(&html, &open, 0) {
         let Some(end) = find_case_insensitive(&html, &close, start) else {
             html.truncate(start);
             break;

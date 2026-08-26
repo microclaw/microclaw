@@ -126,6 +126,7 @@ Anthropic has a native provider path. OpenAI, OpenAI Codex, OpenRouter, Ollama, 
 | Installer | Fastest macOS/Linux setup | `curl -fsSL https://microclaw.org/install.sh \| bash` |
 | PowerShell | Fastest Windows setup | `iwr https://microclaw.org/install.ps1 -UseBasicParsing \| iex` |
 | Homebrew | Managed macOS upgrades | `brew tap microclaw/tap && brew install microclaw` |
+| Homebrew Cask | Native MicroClaw Work desktop | `brew tap microclaw/tap && brew install --cask microclaw-work` |
 | Container | Isolated deployment | `ghcr.io/microclaw/microclaw:latest` |
 | Source | Development or custom features | `cargo build --release` |
 

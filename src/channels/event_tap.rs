@@ -87,11 +87,9 @@ pub fn estimate_percent(
     max_iterations: usize,
     floor: u8,
 ) -> u8 {
-    let estimated = if max_iterations > 0 {
-        ((iteration.min(max_iterations) * 90) / max_iterations) as u8
-    } else {
-        0
-    };
+    let estimated = (iteration.min(max_iterations) * 90)
+        .checked_div(max_iterations)
+        .unwrap_or(0) as u8;
     explicit.map(|p| p.min(100)).unwrap_or(estimated).max(floor)
 }
 
@@ -197,7 +195,7 @@ impl EventTap {
                             cb(*count).await;
                         }
                     }
-                    AgentEvent::ToolStart { name, input } => {
+                    AgentEvent::ToolStart { name, input, .. } => {
                         if name == "send_message" {
                             result.used_send_message_tool = true;
                         }
@@ -392,6 +390,7 @@ mod tests {
 
         tx.send(AgentEvent::Iteration { iteration: 1 }).unwrap();
         tx.send(AgentEvent::ToolStart {
+            call_id: "read-1".into(),
             name: "read_file".into(),
             input: serde_json::json!({}),
         })
@@ -416,6 +415,7 @@ mod tests {
         let mut tap = EventTap::spawn(rx, None);
 
         tx.send(AgentEvent::ToolStart {
+            call_id: "send-1".into(),
             name: "send_message".into(),
             input: serde_json::json!({}),
         })
@@ -483,6 +483,7 @@ mod tests {
         let mut tap = EventTap::spawn_with_progress(rx, None, Some((cfg, emit)));
         tx.send(AgentEvent::Iteration { iteration: 1 }).unwrap();
         tx.send(AgentEvent::ToolStart {
+            call_id: "search-1".into(),
             name: "web_search".into(),
             input: serde_json::json!({}),
         })

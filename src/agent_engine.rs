@@ -17,6 +17,7 @@ use crate::tools::ToolAuthContext;
 use microclaw_core::llm_types::{
     ContentBlock, ImageSource, Message, MessageContent, ResponseContentBlock,
 };
+pub use microclaw_core::runtime_event::RuntimeEvent as AgentEvent;
 use microclaw_core::text::floor_char_boundary;
 use microclaw_observability::traces::{
     kv, kv_int, new_span_id, new_trace_id, now_unix_nano, SpanData,
@@ -57,81 +58,6 @@ fn experience_environment_fingerprint(
         state.config.model,
         state.config.working_dir_isolation,
     )
-}
-
-#[derive(Debug, Clone)]
-pub enum AgentEvent {
-    Iteration {
-        iteration: usize,
-    },
-    ToolStart {
-        name: String,
-        input: serde_json::Value,
-    },
-    ToolResult {
-        name: String,
-        is_error: bool,
-        preview: String,
-        duration_ms: u128,
-        status_code: Option<i32>,
-        bytes: usize,
-        error_type: Option<String>,
-    },
-    TextDelta {
-        delta: String,
-    },
-    /// Emitted when a tool execution wave starts (parallel mode).
-    ToolWaveStart {
-        wave: usize,
-        tool_count: usize,
-    },
-    /// Emitted when a tool execution wave completes (parallel mode).
-    ToolWaveComplete {
-        wave: usize,
-    },
-    /// Emitted when the agent run was cancelled (via run_control interrupt).
-    /// Carries the final text accumulated before cancellation.
-    Cancelled {
-        final_text: String,
-    },
-    FinalResponse {
-        text: String,
-    },
-    /// Emitted when pending user messages are injected mid-turn.
-    MidTurnInjection {
-        count: usize,
-    },
-    /// Emitted after a successful file-modifying tool call, carrying the
-    /// rendered unified diff so channels/web can show what changed.
-    FileDiff {
-        path: String,
-        diff: String,
-        added: usize,
-        removed: usize,
-        truncated: bool,
-    },
-    /// Emitted when a sub-agent run is spawned from this turn.
-    SubagentStarted {
-        run_id: String,
-        label: String,
-    },
-    /// Emitted when a sub-agent run reaches a terminal state.
-    SubagentFinished {
-        run_id: String,
-        status: String,
-    },
-    /// Emitted when a high-risk tool call pauses the turn waiting for
-    /// operator approval. Carries the structured option card so richer
-    /// clients (web) can render buttons instead of parsing the text.
-    ApprovalRequired {
-        approval_id: String,
-        tool: String,
-        preview: Option<String>,
-        /// Ordered option labels: approve once / always allow / deny.
-        options: Vec<String>,
-        /// Optional advisory verdict from the aux-model risk reviewer.
-        advisory: Option<String>,
-    },
 }
 
 /// Default prompt for the opt-in post-edit self-recheck pass.
@@ -1386,8 +1312,9 @@ async fn process_with_agent_logic(
     if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
         if let MessageContent::Text(text) = messages[idx].content.clone() {
             if text.contains('@') {
-                let chat_cwd = microclaw_tools::runtime::chat_working_dir(
+                let chat_cwd = microclaw_tools::runtime::working_dir_for_context(
                     std::path::Path::new(&state.config.working_dir),
+                    state.config.working_dir_isolation,
                     context.caller_channel,
                     chat_id,
                 );
@@ -1870,8 +1797,9 @@ async fn process_with_agent_logic(
     // directory itself is excluded (its hint file is already in the system
     // prompt via `load_project_context`).
     let mut subdir_hints = crate::subdirectory_hints::SubdirectoryHintTracker::new(
-        microclaw_tools::runtime::chat_working_dir(
+        microclaw_tools::runtime::working_dir_for_context(
             std::path::Path::new(&state.config.working_dir),
+            state.config.working_dir_isolation,
             context.caller_channel,
             chat_id,
         ),
@@ -1882,8 +1810,9 @@ async fn process_with_agent_logic(
     // /rewind. Failure here is logged and ignored; checkpoints must never
     // block the agent loop.
     if state.config.checkpoints_enabled {
-        let working_dir = microclaw_tools::runtime::chat_working_dir(
+        let working_dir = microclaw_tools::runtime::working_dir_for_context(
             std::path::Path::new(&state.config.working_dir),
+            state.config.working_dir_isolation,
             context.caller_channel,
             chat_id,
         );
@@ -1900,6 +1829,12 @@ async fn process_with_agent_logic(
                     commit = %commit,
                     "checkpoint snapshot taken"
                 );
+                if let Some(tx) = event_tx {
+                    let _ = tx.send(AgentEvent::CheckpointCreated {
+                        commit,
+                        label: label.clone(),
+                    });
+                }
             }
             Ok(None) => {} // no changes; skip
             Err(e) => warn!(chat_id, "checkpoint snapshot failed: {e}"),
@@ -2772,8 +2707,7 @@ async fn process_with_agent_logic(
             // Inject iteration budget warning if approaching the limit
             let max_iter = state.config.max_tool_iterations;
             let current_iter = iteration + 1; // 1-based
-            let budget_warning = if max_iter > 0 {
-                let pct = (current_iter * 100) / max_iter;
+            let budget_warning = (current_iter * 100).checked_div(max_iter).and_then(|pct| {
                 let remaining = max_iter.saturating_sub(current_iter);
                 if pct >= 90 {
                     Some(format!(
@@ -2786,9 +2720,7 @@ async fn process_with_agent_logic(
                 } else {
                     None
                 }
-            } else {
-                None
-            };
+            });
             if let Some(warning) = budget_warning {
                 tool_results.push(ContentBlock::Text { text: warning });
             }
@@ -2879,9 +2811,24 @@ async fn process_with_agent_logic(
                         tool: tool_name.clone(),
                         preview: batch_ctx.waiting_approval_preview.clone(),
                         options: vec![
-                            "Approve once".to_string(),
-                            format!("Always allow '{tool_name}' in this chat"),
-                            "Deny".to_string(),
+                            microclaw_core::runtime_event::RuntimeApprovalOption {
+                                value: "1".into(),
+                                label: "Approve once".into(),
+                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Primary,
+                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Approve,
+                            },
+                            microclaw_core::runtime_event::RuntimeApprovalOption {
+                                value: "2".into(),
+                                label: format!("Always allow '{tool_name}' in this chat"),
+                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Secondary,
+                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Approve,
+                            },
+                            microclaw_core::runtime_event::RuntimeApprovalOption {
+                                value: "3".into(),
+                                label: "Deny".into(),
+                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Danger,
+                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Deny,
+                            },
                         ],
                         advisory: advisory.clone(),
                     });

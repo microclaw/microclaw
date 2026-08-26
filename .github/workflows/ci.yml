@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -57,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.93.1
+          toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-audit --locked
       - run: cargo install cargo-deny --locked
@@ -80,7 +81,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.93.1
+          toolchain: 1.95.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
@@ -100,7 +101,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.93.1
+          toolchain: 1.95.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
@@ -119,7 +120,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.93.1
+          toolchain: 1.95.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: scripts/ci/stability_smoke.sh
@@ -150,6 +151,6 @@ jobs:
       - run: npm --prefix site run build
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.93.1
+          toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release

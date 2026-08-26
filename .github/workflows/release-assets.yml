@@ -247,6 +247,98 @@ jobs:
           path: ${{ env.ASSET_NAME }}
           if-no-files-found: error
 
+  build-work-macos-assets:
+    name: Build MicroClaw Work (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: verify-ci
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+      MICROCLAW_WORK_NOTARY_PROFILE: microclaw-work-ci
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+          - arch: x86_64
+            runner: macos-15-intel
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: microclaw-work-release-${{ matrix.arch }}
+
+      - name: Require Apple release credentials
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          for value in APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD; do
+            if [[ -z "${!value:-}" ]]; then
+              echo "Missing required release secret: ${value}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Import Developer ID certificate
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Configure Apple notarization
+        shell: bash
+        run: |
+          SIGNING_IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n1)"
+          if [[ -z "${SIGNING_IDENTITY}" ]]; then
+            echo "Developer ID Application identity was not imported" >&2
+            exit 1
+          fi
+          xcrun notarytool store-credentials "${MICROCLAW_WORK_NOTARY_PROFILE}" \
+            --apple-id "${APPLE_ID}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --password "${APPLE_APP_PASSWORD}"
+          echo "MICROCLAW_WORK_SIGNING_IDENTITY=${SIGNING_IDENTITY}" >> "${GITHUB_ENV}"
+          echo "MICROCLAW_WORK_VERSION_OVERRIDE=${RELEASE_TAG#v}" >> "${GITHUB_ENV}"
+
+      - name: Build signed and notarized DMG
+        shell: bash
+        run: scripts/build_work_macos_dmg.sh work-release
+
+      - name: Verify signed and notarized Work release
+        shell: bash
+        env:
+          MICROCLAW_WORK_REQUIRE_NOTARIZATION: "1"
+        run: scripts/verify_work_macos_release.sh work-release
+
+      - name: Stage release asset
+        shell: bash
+        run: |
+          mkdir -p work-release-assets
+          cp "target/microclaw-work-installer/work-release/MicroClaw-Work-${MICROCLAW_WORK_VERSION_OVERRIDE}-macos.dmg" \
+            "work-release-assets/microclaw-work-${MICROCLAW_WORK_VERSION_OVERRIDE}-${{ matrix.arch }}-macos.dmg"
+
+      - name: Upload Work release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: microclaw-work-macos-${{ matrix.arch }}
+          path: work-release-assets/*.dmg
+          if-no-files-found: error
+
   publish-container:
     name: Publish Container Image
     runs-on: ubuntu-latest
@@ -374,7 +466,7 @@ jobs:
   publish-assets:
     name: Upload to GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-assets, reliability-scorecard]
+    needs: [build-assets, build-work-macos-assets, reliability-scorecard]
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 

@@ -339,8 +339,9 @@ async fn handle_rewind_command(
             .into();
     }
 
-    let working_dir = microclaw_tools::runtime::chat_working_dir(
+    let working_dir = microclaw_tools::runtime::working_dir_for_context(
         std::path::Path::new(&state.config.working_dir),
+        state.config.working_dir_isolation,
         caller_channel,
         chat_id,
     );

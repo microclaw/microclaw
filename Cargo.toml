@@ -1,10 +1,14 @@
 [workspace]
 members = [
     ".",
+    "apps/microclaw-work",
+    "apps/microclaw-work-headless",
     "crates/microclaw-core",
     "crates/microclaw-clawhub",
     "crates/microclaw-storage",
     "crates/microclaw-tools",
+    "crates/microclaw-work-app",
+    "crates/microclaw-work-runtime",
     "crates/microclaw-channels",
     "crates/microclaw-app",
     "crates/microclaw-observability",
@@ -15,6 +19,13 @@ resolver = "2"
 strip = true
 lto = "thin"
 codegen-units = 1
+
+# Native desktop distribution favors predictable cross-platform build times.
+# Server releases keep the size/throughput-oriented Thin LTO profile above.
+[profile.work-release]
+inherits = "release"
+lto = "off"
+codegen-units = 16
 
 [package]
 name = "microclaw"
@@ -100,6 +111,7 @@ typst-pdf = "0.15"
 typst-layout = "0.15"
 
 [dev-dependencies]
+tempfile = "3"
 tower = "0.5"
 
 [target.'cfg(windows)'.dependencies]

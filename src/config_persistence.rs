@@ -78,7 +78,7 @@ pub fn save_config_delta_preserving_comments(
 fn collect_changes(before: &serde_yaml::Value, after: &serde_yaml::Value) -> Vec<YamlChange> {
     let mut out = Vec::new();
     collect_changes_rec(&mut out, Vec::new(), Some(before), Some(after));
-    out.sort_by(|left, right| left.path.len().cmp(&right.path.len()));
+    out.sort_by_key(|item| item.path.len());
     out
 }
 

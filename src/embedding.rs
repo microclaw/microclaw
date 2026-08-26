@@ -58,13 +58,8 @@ struct OllamaEmbeddingResponse {
 #[cfg(feature = "sqlite-vec")]
 fn infer_default_dim(provider: &str, model: &str) -> usize {
     match provider {
-        "openai" => {
-            if model.contains("3-large") {
-                3072
-            } else {
-                1536
-            }
-        }
+        "openai" if model.contains("3-large") => 3072,
+        "openai" => 1536,
         "ollama" => 1024,
         _ => 1536,
     }

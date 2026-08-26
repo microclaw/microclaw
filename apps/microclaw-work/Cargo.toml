@@ -1,0 +1,23 @@
+[package]
+name = "microclaw-work"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+build = "build.rs"
+
+[dependencies]
+dirs = "6"
+gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "d5821f270317754f2a311a0bb148ec32cbb0ced4" }
+gpui-base = { git = "https://github.com/longbridge/gpui-component", rev = "d5821f270317754f2a311a0bb148ec32cbb0ced4" }
+microclaw-core = { version = "0.1.0", path = "../../crates/microclaw-core" }
+microclaw-work-app = { version = "0.1.0", path = "../../crates/microclaw-work-app" }
+microclaw-work-runtime = { version = "0.1.0", path = "../../crates/microclaw-work-runtime" }
+serde_json = "1"
+smol = "2"
+url = "2"
+
+[build-dependencies]
+embed-resource = "3.0"
