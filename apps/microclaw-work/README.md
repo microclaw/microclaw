@@ -67,12 +67,13 @@ button, the empty home offers small starter prompts, status badges use semantic
 colors, and supporting setup/diagnostic surfaces use consistent cards, spacing,
 and hierarchy instead of exposing a dense engineering dashboard.
 
-Saving Model Settings keeps onboarding open and enables **Test Connection**.
-The test runs off the GPUI thread, sends a minimal request through the same
+Model onboarding uses one **Save & Test** action. It persists the settings and
+runs a connection test off the GPUI thread through the same
 provider implementation used by the Agent Engine, times out after 20 seconds,
 and reports provider, model, latency, and a bounded visible response. Saved
 credentials are never loaded into the UI and are explicitly removed from
-diagnostic errors before display.
+diagnostic errors before display. A successful response exposes **Start
+Chatting** so the first-use journey returns directly to the composer.
 
 A packaged installation falls back to
 `<platform data directory>/microclaw-work/microclaw.config.yaml`, while an
@@ -217,6 +218,10 @@ traversal and real Pinyin IME composition evidence.
 The composer receives focus after the first window frame is mounted, so a new
 macOS launch can accept typing immediately instead of leaving focus on the
 window root.
+
+The native application menu provides standard Edit commands and a real
+**Quit MicroClaw Work** action. Command-Q exits the GPUI process on macOS rather
+than leaving an old desktop process alive.
 
 The UI remains a workflow projection rather than an IDE. Conversation is the
 primary surface, with approvals rendered inline at the point where work pauses.

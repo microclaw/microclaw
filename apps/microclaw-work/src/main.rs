@@ -1,3 +1,4 @@
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
     ActiveTheme, Disableable, Root, StyledExt,
@@ -20,6 +21,39 @@ use smol::Timer;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
+
+actions!(microclaw_work, [Quit]);
+
+fn configure_native_application(cx: &mut App) {
+    cx.activate(true);
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+
+    cx.set_menus(vec![
+        Menu {
+            name: "MicroClaw Work".into(),
+            items: vec![MenuItem::action("Quit MicroClaw Work", Quit)],
+            disabled: false,
+        },
+        Menu {
+            name: "Edit".into(),
+            items: vec![
+                MenuItem::action("Undo", gpui_component::input::Undo),
+                MenuItem::action("Redo", gpui_component::input::Redo),
+                MenuItem::separator(),
+                MenuItem::action("Cut", gpui_component::input::Cut),
+                MenuItem::action("Copy", gpui_component::input::Copy),
+                MenuItem::action("Paste", gpui_component::input::Paste),
+                MenuItem::separator(),
+                MenuItem::action("Select All", gpui_component::input::SelectAll),
+            ],
+            disabled: false,
+        },
+    ]);
+}
 
 struct WorkApp {
     session: WorkSessionSnapshot,
@@ -476,7 +510,7 @@ impl WorkApp {
         cx.notify();
     }
 
-    fn save_model_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn save_model_settings(&mut self, cx: &mut Context<Self>) -> bool {
         let api_key = self.api_key_input.read(cx).value().trim().to_string();
         let draft = ModelSettingsDraft {
             provider: self.provider_input.read(cx).value().to_string(),
@@ -499,15 +533,33 @@ impl WorkApp {
                     Path::new(&self.session.workspace),
                     self.session_store.root(),
                 );
+                cx.notify();
+                true
             }
             Err(error) => {
                 self.persistence_message = format!("Could not save model settings: {error}");
+                cx.notify();
+                false
             }
         }
-        cx.notify();
+    }
+
+    fn save_and_test_model_settings(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.save_model_settings(cx) {
+            self.start_provider_connection_test(cx);
+        }
     }
 
     fn test_provider_connection(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.start_provider_connection_test(cx);
+    }
+
+    fn start_provider_connection_test(&mut self, cx: &mut Context<Self>) {
         if self.connection_test_active || self.first_response_active {
             return;
         }
@@ -1288,28 +1340,17 @@ impl WorkApp {
                             }),
                     )
                     .child(
-                        h_flex()
-                            .gap_3()
-                            .child(
-                                Button::new("save-model-settings")
-                                    .primary()
-                                    .disabled(self.connection_test_active)
-                                    .label("Save Model Settings")
-                                    .on_click(cx.listener(Self::save_model_settings)),
-                            )
-                            .child(
-                                Button::new("test-provider-connection")
-                                    .outline()
-                                    .disabled(
-                                        self.connection_test_active || !self.runtime_config.ready,
-                                    )
-                                    .label(if self.connection_test_active {
-                                        "Testing…"
-                                    } else {
-                                        "Test Connection"
-                                    })
-                                    .on_click(cx.listener(Self::test_provider_connection)),
-                            ),
+                        h_flex().gap_3().child(
+                            Button::new("save-and-test-model-settings")
+                                .primary()
+                                .disabled(self.connection_test_active)
+                                .label(if self.connection_test_active {
+                                    "Saving & Testing…"
+                                } else {
+                                    "Save & Test"
+                                })
+                                .on_click(cx.listener(Self::save_and_test_model_settings)),
+                        ),
                     ),
             )
             .child(
@@ -1323,6 +1364,17 @@ impl WorkApp {
                         cx.theme().muted_foreground
                     })
                     .child(self.connection_test_message.clone()),
+            )
+            .when(
+                self.connection_test_message.starts_with("Connected"),
+                |this| {
+                    this.child(
+                        Button::new("model-settings-start-chatting")
+                            .primary()
+                            .label("Start Chatting")
+                            .on_click(cx.listener(Self::close_model_settings)),
+                    )
+                },
             )
             .child(div().text_sm().child(self.persistence_message.clone()))
             .child(
@@ -2457,6 +2509,7 @@ fn trim_text(text: &str, limit: usize) -> String {
 fn main() {
     gpui_platform::application().run(move |cx| {
         gpui_component::init(cx);
+        configure_native_application(cx);
 
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1180.), px(760.)), cx)),

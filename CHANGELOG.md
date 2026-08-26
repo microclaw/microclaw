@@ -8,6 +8,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Native Work application lifecycle.** The macOS application now activates
+  itself, installs standard Edit menu actions, and handles Command-Q through a
+  real Quit action. Model onboarding is reduced to **Save & Test**, followed by
+  a clear **Start Chatting** action after the provider responds successfully.
 - **Keyboard-first Work composer.** Pressing Return in the native chat composer
   now invokes the same primary action as Send, while Return in the active-run
   guidance field sends steering through the existing Work runtime boundary.
@@ -92,9 +96,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   list, addition/removal and truncation metadata, a bounded scrollable unified
   diff with added/removed line highlighting, safe file opening, and the
   existing accept/revert decision in one review surface.
-- **Provider connection diagnostics.** Model Settings now stays open after a
-  save and offers an asynchronous Test Connection action. The shared Work
-  runtime sends a minimal provider request with a 20-second bound, verifies
+- **Provider connection diagnostics.** Model Settings now performs save and an
+  asynchronous connection test as one first-use action. The shared Work runtime
+  sends a minimal provider request with a 20-second bound, verifies
   endpoint/auth/model/response handling, reports latency and a bounded response
   preview, and redacts the configured credential from errors.
 - **Retryable recovered Work threads.** Interrupted, failed, and cancelled
