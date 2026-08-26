@@ -214,6 +214,10 @@ persisted messages are paragraphs, streamed output is a status region, and
 approvals are alerts. macOS release acceptance still requires direct VoiceOver
 traversal and real Pinyin IME composition evidence.
 
+The composer receives focus after the first window frame is mounted, so a new
+macOS launch can accept typing immediately instead of leaving focus on the
+window root.
+
 The UI remains a workflow projection rather than an IDE. Conversation is the
 primary surface, with approvals rendered inline at the point where work pauses.
 Workspace, Plan, Tool Activity, bounded and redacted Process Output, File Changes,

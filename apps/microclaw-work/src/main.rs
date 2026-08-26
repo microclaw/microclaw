@@ -213,7 +213,10 @@ impl WorkApp {
             || !session.process_activities.is_empty()
             || !session.file_changes.is_empty()
             || !session.subagents.is_empty();
-        task_input.update(cx, |input, cx| input.focus(window, cx));
+        let initial_input = task_input.clone();
+        window.defer(cx, move |window, cx| {
+            initial_input.update(cx, |input, cx| input.focus(window, cx));
+        });
 
         Self {
             session,

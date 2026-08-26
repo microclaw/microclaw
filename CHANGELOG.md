@@ -11,7 +11,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - **Keyboard-first Work composer.** Pressing Return in the native chat composer
   now invokes the same primary action as Send, while Return in the active-run
   guidance field sends steering through the existing Work runtime boundary.
-  GPUI still owns composition handling before emitting the submit event.
+  GPUI still owns composition handling before emitting the submit event. Initial
+  composer focus is deferred until the native window has mounted, making a new
+  macOS launch immediately ready for keyboard input.
 - **macOS-first Work release path.** MicroClaw Work now treats macOS daily-use
   quality as the first desktop milestone while retaining Windows and Linux as
   non-blocking engineering previews. The DMG builder can submit Developer
