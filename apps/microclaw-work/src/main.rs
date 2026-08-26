@@ -9,6 +9,7 @@ use gpui_component::{
     v_flex,
 };
 use microclaw_work_app::session::{WorkCommand, WorkEventKind, WorkSessionSnapshot, WorkStatus};
+use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
 use runtime_worker::{
     RuntimeCancellation, RuntimeConfigSummary, RuntimeMessage, RuntimeRunSpec,
     load_runtime_config_summary, spawn_runtime,
@@ -20,7 +21,8 @@ use std::time::Duration;
 
 struct WorkApp {
     session: WorkSessionSnapshot,
-    session_path: PathBuf,
+    session_store: WorkSessionStore,
+    recent_sessions: Vec<WorkSessionSummary>,
     persistence_message: String,
     task_input: Entity<InputState>,
     active_run_id: u64,
@@ -28,6 +30,7 @@ struct WorkApp {
     runtime_cancellation: Option<RuntimeCancellation>,
     runtime_config: RuntimeConfigSummary,
     last_run_was_demo: bool,
+    draft_revision: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -47,30 +50,21 @@ impl WorkApp {
     }
 
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let session_path = dirs::data_local_dir()
+        let session_root = dirs::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("microclaw-work")
-            .join("spike-session.json");
-        let (mut session, persistence_message) = match WorkSessionSnapshot::load(&session_path) {
+            .join("work-sessions");
+        let session_store = WorkSessionStore::new(session_root);
+        let (mut session, persistence_message) = match session_store.load_active_or_create() {
+            Ok(session) if session.status == WorkStatus::Interrupted => (
+                session,
+                "Recovered an interrupted task. Review it before retrying.".into(),
+            ),
             Ok(session) => (session, "Restored the previous session.".into()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let session = WorkSessionSnapshot::new("");
-                let message = match session.save(&session_path) {
-                    Ok(()) => "Select a workspace to get started.".into(),
-                    Err(error) => format!("Could not save the Work session: {error}"),
-                };
-                (session, message)
-            }
-            Err(error) => {
-                let session = WorkSessionSnapshot::new("");
-                let message = match session.save(&session_path) {
-                    Ok(()) => format!("Recovery failed; created a new local session: {error}"),
-                    Err(save_error) => {
-                        format!("Recovery failed: {error}; saving new state failed: {save_error}")
-                    }
-                };
-                (session, message)
-            }
+            Err(error) => (
+                WorkSessionSnapshot::new(""),
+                format!("Could not open the session store: {error}"),
+            ),
         };
         let workspace_is_valid =
             !session.workspace.is_empty() && PathBuf::from(&session.workspace).is_dir();
@@ -85,8 +79,9 @@ impl WorkApp {
             }
         };
         if !workspace_is_valid {
-            let _ = session.save(&session_path);
+            let _ = session_store.save(&session);
         }
+        let recent_sessions = session_store.list().unwrap_or_default();
 
         let task_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -97,7 +92,24 @@ impl WorkApp {
             let task_input = task_input.clone();
             move |this, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
-                    this.session.task = task_input.read(cx).value().to_string();
+                    let _ = this.session.apply(WorkCommand::SetTaskDraft {
+                        task: task_input.read(cx).value().to_string(),
+                    });
+                    this.draft_revision = this.draft_revision.saturating_add(1);
+                    let revision = this.draft_revision;
+                    cx.spawn(async move |this, cx| {
+                        Timer::after(Duration::from_millis(350)).await;
+                        let _ = this.update(cx, |this, cx| {
+                            if this.draft_revision != revision || this.runtime_active {
+                                return;
+                            }
+                            if let Err(error) = this.save_session() {
+                                this.persistence_message = format!("Draft save failed: {error}");
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .detach();
                     cx.notify();
                 }
             }
@@ -105,7 +117,8 @@ impl WorkApp {
 
         Self {
             session,
-            session_path,
+            session_store,
+            recent_sessions,
             persistence_message,
             task_input,
             active_run_id: 0,
@@ -113,15 +126,85 @@ impl WorkApp {
             runtime_cancellation: None,
             runtime_config: load_runtime_config_summary(),
             last_run_was_demo: false,
+            draft_revision: 0,
             _subscriptions,
         }
     }
 
     fn persist(&mut self) {
-        self.persistence_message = match self.session.save(&self.session_path) {
+        self.persistence_message = match self.save_session() {
             Ok(()) => "Session saved.".into(),
             Err(error) => format!("Save failed: {error}"),
         };
+    }
+
+    fn save_session(&mut self) -> std::io::Result<()> {
+        self.session_store.save(&self.session)?;
+        self.recent_sessions = self.session_store.list()?;
+        Ok(())
+    }
+
+    fn replace_session(
+        &mut self,
+        session: WorkSessionSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.session = session;
+        let task = self.session.task.clone();
+        self.task_input.update(cx, |input, cx| {
+            input.set_value(task, window, cx);
+        });
+        self.last_run_was_demo = false;
+        self.draft_revision = self.draft_revision.saturating_add(1);
+        self.runtime_active = false;
+        self.runtime_cancellation = None;
+    }
+
+    fn new_session(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_if_runtime_busy(cx) {
+            return;
+        }
+        if let Err(error) = self.save_session() {
+            self.persistence_message = format!("Could not save the current session: {error}");
+            cx.notify();
+            return;
+        }
+        let workspace = self.session.workspace.clone();
+        match self.session_store.create(workspace) {
+            Ok(session) => {
+                self.replace_session(session, window, cx);
+                self.recent_sessions = self.session_store.list().unwrap_or_default();
+                self.persistence_message = "Created a new Work session.".into();
+            }
+            Err(error) => self.persistence_message = format!("Could not create session: {error}"),
+        }
+        cx.notify();
+    }
+
+    fn open_session(&mut self, session_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_if_runtime_busy(cx) || self.session.session_id == session_id {
+            return;
+        }
+        if let Err(error) = self.save_session() {
+            self.persistence_message = format!("Could not save the current session: {error}");
+            cx.notify();
+            return;
+        }
+        match self.session_store.open(session_id) {
+            Ok(session) => {
+                let interrupted = session.status == WorkStatus::Interrupted;
+                self.replace_session(session, window, cx);
+                self.recent_sessions = self.session_store.list().unwrap_or_default();
+                self.persistence_message = if interrupted {
+                    "Opened an interrupted session. Review it before retrying.".into()
+                } else {
+                    "Opened Work session.".into()
+                };
+            }
+            Err(error) => self.persistence_message = format!("Could not open session: {error}"),
+        }
+        cx.notify();
     }
 
     fn choose_workspace(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -230,7 +313,7 @@ impl WorkApp {
         let handle = spawn_runtime(RuntimeRunSpec {
             task: prompt,
             workspace: self.session.workspace.clone(),
-            session: "desktop-default".into(),
+            session: self.session.session_id.clone(),
         });
         let receiver = handle.messages;
         self.runtime_cancellation = Some(handle.cancellation);
@@ -282,7 +365,7 @@ impl WorkApp {
                                         this.persistence_message = display;
                                     }
                                 }
-                                if let Err(error) = this.session.save(&this.session_path) {
+                                if let Err(error) = this.save_session() {
                                     this.persistence_message = format!("Save failed: {error}");
                                 }
                                 cx.notify();
@@ -310,7 +393,7 @@ impl WorkApp {
                                 message: message.clone(),
                             });
                             this.persistence_message = message;
-                            if let Err(error) = this.session.save(&this.session_path) {
+                            if let Err(error) = this.save_session() {
                                 this.persistence_message = format!("Save failed: {error}");
                             }
                             cx.notify();
@@ -442,7 +525,9 @@ impl Render for WorkApp {
             WorkStatus::Completed => "Completed",
             WorkStatus::Cancelled => "Cancelled",
             WorkStatus::Failed => "Failed",
+            WorkStatus::Interrupted => "Interrupted",
         };
+        let recent_sessions = self.recent_sessions.clone();
 
         h_flex()
             .size_full()
@@ -457,6 +542,13 @@ impl Render for WorkApp {
                     .border_r_1()
                     .border_color(cx.theme().border)
                     .child(div().text_xl().font_bold().child("MicroClaw Work"))
+                    .child(
+                        Button::new("new-session")
+                            .primary()
+                            .disabled(self.runtime_active)
+                            .label("New Task")
+                            .on_click(cx.listener(Self::new_session)),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -508,22 +600,36 @@ impl Render for WorkApp {
                             .mt_4()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Recent task"),
+                            .child("Recent tasks"),
                     )
-                    .child(
-                        div()
-                            .p_3()
-                            .rounded(cx.theme().radius)
-                            .bg(cx.theme().accent)
-                            .child(self.session.task.clone()),
-                    )
+                    .children(recent_sessions.into_iter().take(6).map(|summary| {
+                        let session_id = summary.session_id.clone();
+                        let is_active = session_id == self.session.session_id;
+                        let title = if summary.task.trim().is_empty() {
+                            "Untitled task".to_string()
+                        } else {
+                            summary.task.chars().take(42).collect()
+                        };
+                        let label = format!("{title} · {}", work_status_label(summary.status));
+                        Button::new(format!("session-{session_id}"))
+                            .outline()
+                            .disabled(self.runtime_active || is_active)
+                            .label(label)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_session(&session_id, window, cx);
+                            }))
+                    }))
                     .child(
                         div()
                             .mt_auto()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(self.persistence_message.clone())
-                            .child(div().mt_1().child(self.session_path.display().to_string())),
+                            .child(
+                                div()
+                                    .mt_1()
+                                    .child(self.session_store.root().display().to_string()),
+                            ),
                     ),
             )
             .child(
@@ -545,7 +651,18 @@ impl Render for WorkApp {
                                             || !self.runtime_config.ready
                                             || self.session.workspace.is_empty(),
                                     )
-                                    .label("Run Task")
+                                    .label(
+                                        if matches!(
+                                            self.session.status,
+                                            WorkStatus::Failed
+                                                | WorkStatus::Cancelled
+                                                | WorkStatus::Interrupted
+                                        ) {
+                                            "Retry Task"
+                                        } else {
+                                            "Run Task"
+                                        },
+                                    )
                                     .on_click(cx.listener(Self::start_runtime)),
                             )
                             .child(
@@ -682,6 +799,19 @@ impl Render for WorkApp {
                             ),
                     ),
             )
+    }
+}
+
+fn work_status_label(status: WorkStatus) -> &'static str {
+    match status {
+        WorkStatus::Planning => "Planning",
+        WorkStatus::Running => "Running",
+        WorkStatus::AwaitingApproval => "Awaiting approval",
+        WorkStatus::Verifying => "Verifying",
+        WorkStatus::Completed => "Completed",
+        WorkStatus::Cancelled => "Cancelled",
+        WorkStatus::Failed => "Failed",
+        WorkStatus::Interrupted => "Interrupted",
     }
 }
 

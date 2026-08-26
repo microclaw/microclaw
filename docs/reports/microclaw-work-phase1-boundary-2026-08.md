@@ -97,7 +97,7 @@ It contains no GPUI, platform, channel, provider, or Server dependency.
 
 ```text
 cargo test -p microclaw-core --locked                            51 passed
-cargo test -p microclaw-work-app --locked                        12 passed
+cargo test -p microclaw-work-app --locked                        18 passed
 cargo test -p microclaw-work --locked                             2 passed
 cargo test -p microclaw-work-headless --locked                    1 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
@@ -170,8 +170,8 @@ a Finder-launched macOS app can have `/` as its process directory, making an
 automatic launch-directory fallback dangerously broad. A new install and a
 missing saved path now enter a safe unselected state and real execution is
 blocked until the user explicitly chooses a directory. The Work snapshot schema
-was raised to v4 so Phase 0 and transitional mixed-language snapshots migrate
-to a blank English local Work session.
+was raised to v5 so Phase 0 and transitional single-session snapshots migrate
+to a blank English local Work session with stable identity and timestamps.
 The sidebar exposes only the shared Config's provider, model, and
 path/error state, never credentials. Real launch is blocked until the offline
 configuration loads successfully; online model compatibility remains a
@@ -208,3 +208,30 @@ fallback and a transitional mixed-language snapshot. A scripted Demo run then
 verified English task, plan, event, status, and artifact projections and exposed
 one remaining fake `~/github/microclaw` workspace; the demo fixture no longer
 claims a workspace the user did not select.
+
+## Multi-session history and recovery
+
+The desktop no longer writes one `spike-session.json` or sends every task to
+`desktop-default`. `WorkSessionStore` owns an atomic index and one versioned
+snapshot per stable session ID. The ID is also the Headless Runtime session key,
+so recent tasks restore the matching Agent Engine conversation without leaking
+history between desktop tasks. IDs are validated before becoming paths, the
+index is capped at 100 entries, and recent tasks are ordered by durable update
+time.
+
+The GPUI sidebar exposes New Task and recent-session actions with status labels.
+Draft edits persist after a 350 ms debounce; switching sessions first saves the
+current draft. A snapshot left Running or Verifying after process exit is
+projected to the explicit Interrupted state on reopen and can be retried through
+the normal shared runtime. AwaitingApproval is not incorrectly marked
+Interrupted because its Agent turn has already paused at a durable boundary.
+
+Computer Use exercised the multi-session flow with two named drafts: debounce
+save updated Recent Tasks, New Task created a distinct entry, selecting the
+older entry restored its input and projection, and a full process restart
+restored the active session plus both indexed tasks. Attempts to visually hit
+the short Demo's Running crash window were overtaken by its durable approval
+pause because desktop-exit/system-approval latency exceeded the demo interval;
+therefore Interrupted recovery is claimed from the focused store integration
+test, not from that visual run. The visual restart did confirm that an approval
+pause remains AwaitingApproval rather than being mislabeled Interrupted.

@@ -36,6 +36,14 @@ probe. **Demo** remains available for UI testing without credentials.
 Provider/runtime failures are shown as a terminal Work state instead of
 crashing the window.
 
+Work sessions are stored as separate versioned snapshots under the application
+data directory, with an atomic bounded index for the recent-task list. **New
+Task** creates an independent Agent Engine conversation, and opening a recent
+task restores its matching runtime session rather than sharing a global desktop
+conversation. Draft input is persisted after a short debounce. If the desktop
+process exits while a task is Running or Verifying, restart projects it as
+**Interrupted** and offers **Retry Task**; approval pauses remain resumable.
+
 **Stop** sends a cancellation request through the shared run-control registry.
 It interrupts the real Agent Engine, including a pending model call, and waits
 for the versioned `Cancelled` event; it is not a UI-only state change. A small

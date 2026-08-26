@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -14,6 +17,7 @@ pub enum WorkStatus {
     Completed,
     Cancelled,
     Failed,
+    Interrupted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +48,9 @@ pub enum WorkCommand {
     StartTask {
         task: String,
     },
+    SetTaskDraft {
+        task: String,
+    },
     SetWorkspace {
         path: String,
     },
@@ -61,6 +68,7 @@ pub enum WorkCommand {
         message: String,
     },
     CancelRun,
+    MarkInterrupted,
     ResetDemo,
 }
 
@@ -95,6 +103,9 @@ pub enum WorkCommandError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkSessionSnapshot {
     pub schema_version: u32,
+    pub session_id: String,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
     pub workspace: String,
     pub task: String,
     pub status: WorkStatus,
@@ -110,12 +121,16 @@ pub struct WorkSessionSnapshot {
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 4;
+    pub const SCHEMA_VERSION: u32 = 5;
     pub const MAX_EVENTS: usize = 200;
 
     pub fn new(workspace: impl Into<String>) -> Self {
+        let now = current_time_ms();
         Self {
             schema_version: Self::SCHEMA_VERSION,
+            session_id: new_session_id(now),
+            created_at_ms: now,
+            updated_at_ms: now,
             workspace: workspace.into(),
             task: String::new(),
             status: WorkStatus::Planning,
@@ -146,8 +161,12 @@ impl WorkSessionSnapshot {
     }
 
     pub fn spike_demo() -> Self {
+        let now = current_time_ms();
         Self {
             schema_version: Self::SCHEMA_VERSION,
+            session_id: new_session_id(now),
+            created_at_ms: now,
+            updated_at_ms: now,
             workspace: String::new(),
             task: "Build a native desktop workflow for MicroClaw Work".into(),
             status: WorkStatus::AwaitingApproval,
@@ -206,6 +225,7 @@ impl WorkSessionSnapshot {
         let previous_status = self.status;
         match command {
             WorkCommand::StartTask { task } => self.start_task(task)?,
+            WorkCommand::SetTaskDraft { task } => self.task = task,
             WorkCommand::SetWorkspace { path } => self.set_workspace(path)?,
             WorkCommand::RecordProgress {
                 kind,
@@ -226,8 +246,10 @@ impl WorkSessionSnapshot {
             WorkCommand::ApplyRuntimeEvent(envelope) => self.apply_runtime_event(envelope)?,
             WorkCommand::FailRun { message } => self.fail_run(message),
             WorkCommand::CancelRun => self.cancel_run()?,
-            WorkCommand::ResetDemo => *self = Self::spike_demo(),
+            WorkCommand::MarkInterrupted => self.mark_interrupted()?,
+            WorkCommand::ResetDemo => self.reset_demo(),
         }
+        self.touch();
         Ok(CommandOutcome {
             previous_status,
             current_status: self.status,
@@ -265,6 +287,16 @@ impl WorkSessionSnapshot {
         }
         self.push_event(WorkEventKind::System, "Created a foreground Work task");
         Ok(())
+    }
+
+    fn reset_demo(&mut self) {
+        let session_id = self.session_id.clone();
+        let workspace = self.workspace.clone();
+        let created_at_ms = self.created_at_ms;
+        *self = Self::spike_demo();
+        self.session_id = session_id;
+        self.workspace = workspace;
+        self.created_at_ms = created_at_ms;
     }
 
     fn set_workspace(&mut self, path: String) -> Result<(), WorkCommandError> {
@@ -344,6 +376,22 @@ impl WorkSessionSnapshot {
         self.push_event(
             WorkEventKind::System,
             "Requested cancellation of the current task",
+        );
+        Ok(())
+    }
+
+    fn mark_interrupted(&mut self) -> Result<(), WorkCommandError> {
+        if !matches!(self.status, WorkStatus::Running | WorkStatus::Verifying) {
+            return Err(WorkCommandError::InvalidStatus {
+                command: "mark interrupted",
+                actual: self.status,
+            });
+        }
+        self.status = WorkStatus::Interrupted;
+        self.approval_reason = None;
+        self.push_event(
+            WorkEventKind::System,
+            "The previous desktop process exited before this task finished",
         );
         Ok(())
     }
@@ -484,6 +532,10 @@ impl WorkSessionSnapshot {
         fs::rename(temporary, path)
     }
 
+    pub(crate) fn touch(&mut self) {
+        self.updated_at_ms = current_time_ms().max(self.updated_at_ms.saturating_add(1));
+    }
+
     pub fn load(path: impl AsRef<Path>) -> io::Result<Self> {
         let bytes = fs::read(path)?;
         let snapshot: Self = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
@@ -499,6 +551,17 @@ impl WorkSessionSnapshot {
         }
         Ok(snapshot)
     }
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64)
+}
+
+fn new_session_id(now: u64) -> String {
+    let counter = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+    format!("session-{now}-{}-{counter}", std::process::id())
 }
 
 #[cfg(test)]
@@ -801,5 +864,40 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn active_status_can_be_recovered_as_interrupted() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "long task".into(),
+            })
+            .unwrap();
+
+        snapshot.apply(WorkCommand::MarkInterrupted).unwrap();
+        assert_eq!(snapshot.status, WorkStatus::Interrupted);
+        assert!(
+            snapshot
+                .events
+                .last()
+                .unwrap()
+                .message
+                .contains("previous desktop process")
+        );
+    }
+
+    #[test]
+    fn demo_reset_preserves_session_identity_and_selected_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut snapshot = WorkSessionSnapshot::new(directory.path().display().to_string());
+        let session_id = snapshot.session_id.clone();
+        let created_at_ms = snapshot.created_at_ms;
+
+        snapshot.apply(WorkCommand::ResetDemo).unwrap();
+
+        assert_eq!(snapshot.session_id, session_id);
+        assert_eq!(snapshot.created_at_ms, created_at_ms);
+        assert_eq!(snapshot.workspace, directory.path().display().to_string());
     }
 }
