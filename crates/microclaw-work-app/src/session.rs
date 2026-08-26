@@ -1040,7 +1040,8 @@ impl WorkSessionSnapshot {
 
     pub fn load(path: impl AsRef<Path>) -> io::Result<Self> {
         let bytes = fs::read(path)?;
-        let mut snapshot: Self = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        let mut snapshot: Self = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if (5..Self::SCHEMA_VERSION).contains(&snapshot.schema_version) {
             if snapshot.schema_version < 8 {
                 snapshot.plan.clear();

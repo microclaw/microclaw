@@ -229,12 +229,24 @@ impl WorkApp {
         );
         let codex_account_available = runtime_service.codex_account_available();
         let session_store = WorkSessionStore::new(session_root);
-        let (mut session, persistence_message) = match session_store.load_active_or_create() {
-            Ok(session) if session.status == WorkStatus::Interrupted => (
-                session,
-                "Recovered an interrupted task. Review it before retrying.".into(),
-            ),
-            Ok(session) => (session, "Restored the previous session.".into()),
+        let (mut session, persistence_message) = match session_store.load_active_or_recover() {
+            Ok(loaded) if loaded.snapshot.status == WorkStatus::Interrupted => {
+                let message = loaded.recovery_message.map_or_else(
+                    || "Recovered an interrupted task. Review it before retrying.".into(),
+                    |recovery| {
+                        format!(
+                            "{recovery} The restored task was interrupted; review it before retrying."
+                        )
+                    },
+                );
+                (loaded.snapshot, message)
+            }
+            Ok(loaded) => {
+                let message = loaded
+                    .recovery_message
+                    .unwrap_or_else(|| "Restored the previous session.".into());
+                (loaded.snapshot, message)
+            }
             Err(error) => (
                 WorkSessionSnapshot::new(""),
                 format!("Could not open the session store: {error}"),

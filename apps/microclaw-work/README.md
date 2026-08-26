@@ -121,6 +121,12 @@ reuses the last submitted turn and Agent Engine session, retains the readable
 conversation without inserting a duplicate user message, and discards stale
 partial-run projections before relaunch.
 
+If the active session or conversation index contains invalid JSON, Work keeps
+the original file beside the store with a `.corrupt-*` suffix, rebuilds the
+index from valid snapshots, and opens the newest recoverable conversation (or
+a fresh one). The sidebar reports the recovery instead of trapping the app in
+an unusable startup state.
+
 **Stop** sends a cancellation request through the shared run-control registry.
 It interrupts the real Agent Engine, including a pending model call, and waits
 for the versioned `Cancelled` event; it is not a UI-only state change. A small

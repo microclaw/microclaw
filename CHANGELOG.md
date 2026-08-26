@@ -27,6 +27,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - **Conversation search for MicroClaw Work.** The native recent-conversation
   rail now filters durable thread titles and Workspace paths without case
   sensitivity and presents an explicit empty-result state.
+- **Recoverable Work conversation storage.** A damaged desktop session or
+  index is preserved with a `.corrupt-*` suffix while Work rebuilds valid
+  history and opens a usable conversation with an explicit recovery notice.
 - **Agent identity settings for MicroClaw Work.** The native Settings page now
   edits the active local `SOUL.md`, its file location, and the shared project
   context directory alongside appearance and model configuration. Updates use

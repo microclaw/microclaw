@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Resolve the safe workspace used when Work opens. An available selected
 /// project wins; otherwise Work creates and returns its private Work Home.
@@ -74,6 +75,12 @@ pub struct WorkSessionStore {
     root: PathBuf,
 }
 
+#[derive(Debug)]
+pub struct WorkSessionLoad {
+    pub snapshot: WorkSessionSnapshot,
+    pub recovery_message: Option<String>,
+}
+
 impl WorkSessionStore {
     pub const MAX_SESSIONS: usize = 100;
 
@@ -82,7 +89,26 @@ impl WorkSessionStore {
     }
 
     pub fn load_active_or_create(&self) -> io::Result<WorkSessionSnapshot> {
-        let index = self.load_index()?;
+        Ok(self.load_active_or_recover()?.snapshot)
+    }
+
+    pub fn load_active_or_recover(&self) -> io::Result<WorkSessionLoad> {
+        let (mut index, mut recovery_message) = match self.load_index() {
+            Ok(index) => (index, None),
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                let backup = quarantine_file(&self.index_path())?;
+                let rebuilt = self.rebuild_index()?;
+                self.save_index(&rebuilt)?;
+                (
+                    rebuilt,
+                    Some(format!(
+                        "Recovered a damaged conversation index. The original was preserved at {}.",
+                        backup.display()
+                    )),
+                )
+            }
+            Err(error) => return Err(error),
+        };
         if let Some(session_id) = index.active_session_id {
             match self.load(&session_id) {
                 Ok(mut snapshot) => {
@@ -92,16 +118,38 @@ impl WorkSessionStore {
                             .map_err(io::Error::other)?;
                         self.save(&snapshot)?;
                     }
-                    return Ok(snapshot);
+                    return Ok(WorkSessionLoad {
+                        snapshot,
+                        recovery_message,
+                    });
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                    let backup = quarantine_file(&self.session_path(&session_id))?;
+                    index = self.rebuild_index()?;
+                    self.save_index(&index)?;
+                    recovery_message = Some(format!(
+                        "Recovered from a damaged conversation. The original was preserved at {}.",
+                        backup.display()
+                    ));
+                    if let Some(next_id) = index.active_session_id.as_deref() {
+                        let snapshot = self.open(next_id)?;
+                        return Ok(WorkSessionLoad {
+                            snapshot,
+                            recovery_message,
+                        });
+                    }
+                }
                 Err(error) => return Err(error),
             }
         }
 
         let snapshot = WorkSessionSnapshot::new("");
         self.save(&snapshot)?;
-        Ok(snapshot)
+        Ok(WorkSessionLoad {
+            snapshot,
+            recovery_message,
+        })
     }
 
     pub fn create(&self, workspace: impl Into<String>) -> io::Result<WorkSessionSnapshot> {
@@ -164,7 +212,8 @@ impl WorkSessionStore {
             }
             Err(error) => return Err(error),
         };
-        let index: WorkSessionIndex = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        let index: WorkSessionIndex = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if index.schema_version != WorkSessionIndex::SCHEMA_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -182,6 +231,45 @@ impl WorkSessionStore {
         fs::create_dir_all(&self.root)?;
         let bytes = serde_json::to_vec_pretty(index).map_err(io::Error::other)?;
         atomic_write(&self.index_path(), &bytes)
+    }
+
+    fn rebuild_index(&self) -> io::Result<WorkSessionIndex> {
+        let mut sessions = Vec::new();
+        let entries = match fs::read_dir(self.sessions_dir()) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(WorkSessionIndex::default());
+            }
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(snapshot) = WorkSessionSnapshot::load(&path) {
+                let matching_file = path.file_stem().and_then(|value| value.to_str())
+                    == Some(snapshot.session_id.as_str());
+                if matching_file && validate_session_id(&snapshot.session_id).is_ok() {
+                    sessions.push(WorkSessionSummary::from(&snapshot));
+                }
+            }
+        }
+        sessions.sort_by(|a, b| {
+            b.updated_at_ms
+                .cmp(&a.updated_at_ms)
+                .then_with(|| b.session_id.cmp(&a.session_id))
+        });
+        sessions.truncate(Self::MAX_SESSIONS);
+        Ok(WorkSessionIndex {
+            schema_version: WorkSessionIndex::SCHEMA_VERSION,
+            active_session_id: sessions.first().map(|entry| entry.session_id.clone()),
+            sessions,
+        })
     }
 
     fn sessions_dir(&self) -> PathBuf {
@@ -215,6 +303,28 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = path.with_extension("tmp");
     fs::write(&temporary, bytes)?;
     fs::rename(temporary, path)
+}
+
+fn quarantine_file(path: &Path) -> io::Result<PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("data");
+    for attempt in 0..100_u8 {
+        let backup = path.with_file_name(format!("{file_name}.corrupt-{timestamp}-{attempt}"));
+        if !backup.exists() {
+            fs::rename(path, &backup)?;
+            return Ok(backup);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a recovery backup path",
+    ))
 }
 
 #[cfg(test)]
@@ -344,5 +454,55 @@ mod tests {
         assert!(summary.matches_query(" MICROCLAW "));
         assert!(summary.matches_query(""));
         assert!(!summary.matches_query("server migration"));
+    }
+
+    #[test]
+    fn damaged_index_is_preserved_and_rebuilt_from_sessions() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = WorkSessionStore::new(directory.path());
+        let mut session = store.create("/tmp/project").unwrap();
+        session.task = "recover me".into();
+        session.updated_at_ms = 42;
+        store.save(&session).unwrap();
+        fs::write(store.index_path(), b"not json").unwrap();
+
+        let loaded = store.load_active_or_recover().unwrap();
+
+        assert_eq!(loaded.snapshot.session_id, session.session_id);
+        assert!(loaded.recovery_message.unwrap().contains("index"));
+        assert!(fs::read_dir(directory.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("index.json.corrupt-")
+        }));
+    }
+
+    #[test]
+    fn damaged_active_session_is_preserved_and_falls_back_to_valid_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = WorkSessionStore::new(directory.path());
+        let mut older = store.create("/tmp/project").unwrap();
+        older.task = "valid conversation".into();
+        older.updated_at_ms = 10;
+        store.save(&older).unwrap();
+        let mut active = store.create("/tmp/project").unwrap();
+        active.task = "damaged conversation".into();
+        active.updated_at_ms = 20;
+        store.save(&active).unwrap();
+        fs::write(store.session_path(&active.session_id), b"not json").unwrap();
+
+        let loaded = store.load_active_or_recover().unwrap();
+
+        assert_eq!(loaded.snapshot.session_id, older.session_id);
+        assert!(loaded.recovery_message.unwrap().contains("conversation"));
+        assert!(fs::read_dir(store.sessions_dir()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{}.json.corrupt-", active.session_id))
+        }));
     }
 }
