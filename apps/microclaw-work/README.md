@@ -202,46 +202,21 @@ The release path enables Hardened Runtime, requests trusted timestamps,
 submits both the application and disk image to Apple, staples their tickets,
 and validates the finished DMG. Auto-update remains later release work.
 
-macOS is the current product and release-acceptance target. Windows and Linux
-remain useful engineering previews, but their packaging, IME, accessibility,
-and physical GPU matrices are intentionally deferred until the macOS desktop
-has enough sustained daily-use evidence.
-
-On Windows, Inno Setup 6 produces a per-user installer with the website brand
-icon, Start menu entry, optional desktop shortcut, and an uninstaller:
-
-```powershell
-scripts/build_work_windows_installer.ps1 -Configuration work-release
-$installer = Get-ChildItem target/microclaw-work-windows-installer/out/*.exe |
-  Select-Object -First 1
-scripts/smoke_work_windows_installer.ps1 -InstallerPath $installer.FullName
-```
-
-To create a public release candidate, pass the SHA-1 thumbprint of an installed
-code-signing certificate with `-CodeSigningCertificateSha1`. The script signs
-and verifies both `microclaw-work.exe` and the finished installer with SHA-256
-and an RFC 3161 timestamp. CI deliberately publishes an unsigned preview until
-a repository signing identity is provisioned.
+macOS is the only current product, CI, packaging, and release-acceptance target.
+Windows and Linux support is deferred; dormant experimental build helpers do
+not represent supported products or release commitments.
 
 `work-release` is the canonical desktop distribution profile. It keeps release
 optimization and symbol stripping but disables Thin LTO and uses parallel code
-generation, avoiding the Server profile's disproportionate Windows link time.
+generation without changing the Server release profile.
 This is a deliberate product boundary, not a debug or compatibility build.
 
-Extended CI continuously checks the Work application on `ubuntu-24.04`, the
-current GitHub-hosted macOS runner, and `windows-latest`. Each platform runs the
-framework-independent session and process-recovery tests, runs Cargo check and
-Clippy for the native GPUI application, produces a release build, and uploads a
-14-day preview artifact. macOS builds a branded ad-hoc signed DMG, while Windows
-builds a branded per-user installer; both jobs perform a real packaged-app launch
-smoke. CI artifacts are unsigned engineering previews, not public release
-installers. A platform is not promoted to release quality until its native
-installer, signing, launch smoke test, IME/accessibility checks, and GPU/display
-matrix have direct evidence.
-
-The Linux preview job launches the release binary under Xvfb with Mesa's Vulkan
-software path and requires it to remain alive. This is a deterministic CI smoke,
-not yet evidence for the broader physical GPU/display matrix.
+Extended CI checks Work only on the current GitHub-hosted macOS runner. It runs
+the framework-independent session and process-recovery tests, Cargo check and
+Clippy for the GPUI application, builds the branded DMG, launch-smokes the
+packaged application, and uploads a short-lived preview. Stable releases add
+Developer ID signing, notarization, stapling, and Homebrew Cask publication.
+Server CI remains independent and continues to cover Ubuntu, macOS, and Windows.
 
 Primary controls expose native AccessKit roles and stable labels. The chat
 composer is named `Message MicroClaw Work` (or active-task guidance while a run

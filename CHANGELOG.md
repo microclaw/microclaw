@@ -70,8 +70,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   composer focus is deferred until the native window has mounted, making a new
   macOS launch immediately ready for keyboard input.
 - **macOS-first Work release path.** MicroClaw Work now treats macOS daily-use
-  quality as the first desktop milestone while retaining Windows and Linux as
-  non-blocking engineering previews. The DMG builder can submit Developer
+  quality as the desktop milestone; Windows and Linux Work support is deferred
+  outside the current CI and release commitment. The DMG builder can submit Developer
   ID-signed application and disk-image artifacts with a named `notarytool`
   keychain profile, then staple and validate both artifacts for distribution.
 
@@ -84,19 +84,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   platform-specific UI code.
 - **Dedicated desktop release profile.** `work-release` keeps optimized,
   stripped binaries while dropping Server-oriented Thin LTO and enabling
-  parallel code generation. All Work installers and preview launch gates use
-  this canonical profile, making Windows release builds predictable without
-  changing MicroClaw Server release characteristics.
-- **Linux Work launch gate.** Extended CI now starts the release GPUI desktop
-  under Xvfb with Mesa Vulkan support and requires the process to remain alive,
-  complementing the existing Linux compile, test, Clippy, and preview artifact
-  checks without overstating it as physical GPU coverage.
-- **Native MicroClaw Work Windows installer.** A dedicated Inno Setup package
-  now installs the GPUI desktop per user with the website brand icon, Start menu
-  entry, optional desktop shortcut, and clean uninstall. Its build path can
-  Authenticode-sign and verify both the application and installer; Windows CI
-  builds the unsigned preview, silently installs it, launch-smokes the packaged
-  application, uninstalls it, and publishes the resulting setup executable.
+  parallel code generation. The macOS Work build and release gates use this
+  canonical profile without changing MicroClaw Server release characteristics.
 - **Branded macOS Work installer preview.** The native bundle now derives its
   complete `.icns` set from the same blue MicroClaw logo used by the website.
   New packaging and launch-smoke scripts create and verify a DMG, ad-hoc sign
@@ -120,11 +109,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   the empty chat canvas, and allow the first conversation without forcing the
   user through a project-folder picker. Missing external projects safely fall
   back to Work Home.
-- **Cross-platform Work preview gate.** Extended CI now compiles and tests the
-  shared Work session/runtime/recovery path on Linux, macOS, and Windows, builds
-  the native GPUI desktop in release mode on every platform, and uploads
-  short-lived Linux, macOS, and Windows preview archives. The Linux job installs
-  the native dependencies required by the repository's pinned GPUI/Zed revision.
+- **macOS Work release gate.** Extended CI compiles and tests the shared Work
+  session/runtime/recovery path on macOS, builds the native GPUI desktop and DMG,
+  launch-smokes the packaged app, and uploads a short-lived preview artifact.
 - **Chat-first MicroClaw Work home.** The GPUI desktop now opens into a
   conversation workspace instead of a task dashboard: New Chat and durable
   conversation history lead the sidebar, setup state is compact and secondary,

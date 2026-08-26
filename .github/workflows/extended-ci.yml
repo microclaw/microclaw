@@ -46,7 +46,7 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-llvm-cov --locked
-      - run: cargo llvm-cov --workspace --all-features --lcov --output-path target/llvm-cov.lcov
+      - run: cargo llvm-cov -p microclaw --all-features --lcov --output-path target/llvm-cov.lcov
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov
@@ -63,110 +63,31 @@ jobs:
       - run: nix build .#microclaw
 
   work-desktop:
-    name: MicroClaw Work (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-latest, windows-latest]
+    name: MicroClaw Work (macos-latest)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux GPUI dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            clang \
-            cmake \
-            gcc \
-            g++ \
-            libasound2-dev \
-            libfontconfig-dev \
-            libgit2-dev \
-            libglib2.0-dev \
-            libssl-dev \
-            libstdc++-14-dev \
-            libva-dev \
-            libvulkan1 \
-            libwayland-dev \
-            libx11-xcb-dev \
-            libxkbcommon-x11-dev \
-            libzstd-dev \
-            mesa-vulkan-drivers \
-            pipewire \
-            xauth \
-            xdg-desktop-portal \
-            xvfb
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: microclaw-work-${{ matrix.os }}
+          shared-key: microclaw-work-macos
       - run: cargo check -p microclaw-work --locked
       - run: cargo test -p microclaw-work-app --locked
       - run: cargo test -p microclaw-work-headless --locked
       - run: cargo clippy -p microclaw-work-app --all-targets --locked -- -D warnings
       - run: cargo clippy -p microclaw-work --all-targets --no-deps --locked -- -D warnings
       - run: cargo clippy -p microclaw-work-headless --all-targets --no-deps --locked -- -D warnings
-      - name: Build release desktop binary
-        if: runner.os != 'macOS'
-        run: cargo build -p microclaw-work --profile work-release --locked
-      - name: Launch-smoke Linux desktop binary
-        if: runner.os == 'Linux'
-        run: xvfb-run -a scripts/smoke_work_linux_app.sh work-release
       - name: Build release macOS DMG preview
-        if: runner.os == 'macOS'
         run: scripts/build_work_macos_dmg.sh work-release
       - name: Launch-smoke macOS app bundle
-        if: runner.os == 'macOS'
         run: scripts/smoke_work_macos_app.sh work-release
-      - name: Package Linux preview
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          mkdir -p target/microclaw-work-preview
-          cp target/work-release/microclaw-work target/microclaw-work-preview/
-          cp LICENSE apps/microclaw-work/README.md target/microclaw-work-preview/
-          tar -czf microclaw-work-linux-x86_64.tar.gz -C target microclaw-work-preview
-      - name: Install Inno Setup
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: choco install innosetup --no-progress --yes
-      - name: Build Windows installer preview
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: scripts/build_work_windows_installer.ps1 -Configuration work-release -SkipBuild
-      - name: Smoke Windows installer preview
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $installer = Get-ChildItem target/microclaw-work-windows-installer/out/*.exe | Select-Object -First 1
-          if ($null -eq $installer) { throw 'MicroClaw Work installer was not produced' }
-          scripts/smoke_work_windows_installer.ps1 -InstallerPath $installer.FullName
-      - name: Upload Linux preview
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: microclaw-work-linux-x86_64
-          path: microclaw-work-linux-x86_64.tar.gz
-          if-no-files-found: error
-          retention-days: 14
       - name: Upload macOS preview
-        if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: microclaw-work-macos-dmg
           path: target/microclaw-work-installer/work-release/*.dmg
-          if-no-files-found: error
-          retention-days: 14
-      - name: Upload Windows preview
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: microclaw-work-windows-installer-x64
-          path: target/microclaw-work-windows-installer/out/*.exe
           if-no-files-found: error
           retention-days: 14

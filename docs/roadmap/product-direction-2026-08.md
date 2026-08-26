@@ -22,8 +22,8 @@ The recommended sequence is:
 
 1. Build `microclaw-work` as a native, pure-Rust macOS work companion using
    GPUI and GPUI Component, with its own foreground, interactive loop. Make
-   macOS excellent through sustained daily use before promoting the existing
-   Windows and Linux engineering previews to supported products.
+   macOS excellent through sustained daily use. Windows and Linux Work support
+   is deferred and is not part of the current CI or release commitment.
 2. Productize existing subagent and orchestration primitives as persistent,
    named agent profiles and bounded team templates.
 3. Make local, VPS, and third-party cloud deployment easy to connect and
@@ -135,8 +135,7 @@ open a workspace
 A first release should provide:
 
 - signed and notarized macOS installation;
-- Windows and Linux engineering previews that remain buildable but are not
-  current release blockers;
+- no Windows or Linux Work release commitment during the macOS-first phase;
 - guided provider/model and credential onboarding;
 - workspace selection and local project context;
 - foreground tasks with plan, progress, interruption, and resume;
@@ -487,8 +486,8 @@ script now supports Apple notarization and stapling through a keychain profile;
 live credentialed evidence is still required before public distribution. Work
 installers use a dedicated optimized `work-release` Cargo profile so desktop
 iteration remains practical without changing Server release characteristics.
-Windows and Linux builds, installers, and CI previews remain in the repository
-as non-blocking engineering work, but their release gates are deferred. The
+Dormant Windows and Linux helpers may remain in the repository as experimental
+engineering work, but CI and release acceptance are macOS-only. The
 real-provider path now also has live cancellation, same-session retry, visible
 completion, and process-restart persistence evidence, recorded in
 [`../reports/microclaw-work-macos-smoke-2026-08-26.md`](../reports/microclaw-work-macos-smoke-2026-08-26.md).
