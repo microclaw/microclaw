@@ -8,6 +8,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Native MicroClaw Work Windows installer.** A dedicated Inno Setup package
+  now installs the GPUI desktop per user with the website brand icon, Start menu
+  entry, optional desktop shortcut, and clean uninstall. Its build path can
+  Authenticode-sign and verify both the application and installer; Windows CI
+  builds the unsigned preview, silently installs it, launch-smokes the packaged
+  application, uninstalls it, and publishes the resulting setup executable.
 - **Branded macOS Work installer preview.** The native bundle now derives its
   complete `.icns` set from the same blue MicroClaw logo used by the website.
   New packaging and launch-smoke scripts create and verify a DMG, ad-hoc sign

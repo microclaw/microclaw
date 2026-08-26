@@ -156,13 +156,30 @@ The signing path enables Hardened Runtime and requests a trusted timestamp for
 both the application and disk image. Apple notarization and stapling remain
 required before public distribution; auto-update remains later release work.
 
+On Windows, Inno Setup 6 produces a per-user installer with the website brand
+icon, Start menu entry, optional desktop shortcut, and an uninstaller:
+
+```powershell
+scripts/build_work_windows_installer.ps1 -Configuration release
+$installer = Get-ChildItem target/microclaw-work-windows-installer/out/*.exe |
+  Select-Object -First 1
+scripts/smoke_work_windows_installer.ps1 -InstallerPath $installer.FullName
+```
+
+To create a public release candidate, pass the SHA-1 thumbprint of an installed
+code-signing certificate with `-CodeSigningCertificateSha1`. The script signs
+and verifies both `microclaw-work.exe` and the finished installer with SHA-256
+and an RFC 3161 timestamp. CI deliberately publishes an unsigned preview until
+a repository signing identity is provisioned.
+
 Extended CI continuously checks the Work application on `ubuntu-24.04`, the
 current GitHub-hosted macOS runner, and `windows-latest`. Each platform runs the
 framework-independent session and process-recovery tests, runs Cargo check and
 Clippy for the native GPUI application, produces a release build, and uploads a
-14-day preview artifact. macOS additionally builds a branded ad-hoc signed DMG
-and launch-smokes its packaged application. CI artifacts are unsigned engineering
-previews, not release installers. A platform is not promoted to release quality until its native
+14-day preview artifact. macOS builds a branded ad-hoc signed DMG, while Windows
+builds a branded per-user installer; both jobs perform a real packaged-app launch
+smoke. CI artifacts are unsigned engineering previews, not public release
+installers. A platform is not promoted to release quality until its native
 installer, signing, launch smoke test, IME/accessibility checks, and GPU/display
 matrix have direct evidence.
 

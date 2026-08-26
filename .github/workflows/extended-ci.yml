@@ -125,15 +125,21 @@ jobs:
           cp target/release/microclaw-work target/microclaw-work-preview/
           cp LICENSE apps/microclaw-work/README.md target/microclaw-work-preview/
           tar -czf microclaw-work-linux-x86_64.tar.gz -C target microclaw-work-preview
-      - name: Package Windows preview
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+      - name: Build Windows installer preview
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/build_work_windows_installer.ps1 -Configuration release -SkipBuild
+      - name: Smoke Windows installer preview
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path target/microclaw-work-preview | Out-Null
-          Copy-Item target/release/microclaw-work.exe target/microclaw-work-preview/
-          Copy-Item LICENSE target/microclaw-work-preview/
-          Copy-Item apps/microclaw-work/README.md target/microclaw-work-preview/
-          Compress-Archive -Path target/microclaw-work-preview/* -DestinationPath microclaw-work-windows-x86_64.zip -Force
+          $installer = Get-ChildItem target/microclaw-work-windows-installer/out/*.exe | Select-Object -First 1
+          if ($null -eq $installer) { throw 'MicroClaw Work installer was not produced' }
+          scripts/smoke_work_windows_installer.ps1 -InstallerPath $installer.FullName
       - name: Upload Linux preview
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
@@ -154,7 +160,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: microclaw-work-windows-x86_64
-          path: microclaw-work-windows-x86_64.zip
+          name: microclaw-work-windows-installer-x64
+          path: target/microclaw-work-windows-installer/out/*.exe
           if-no-files-found: error
           retention-days: 14

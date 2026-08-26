@@ -6196,6 +6196,7 @@ name = "microclaw-work"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "embed-resource",
  "gpui",
  "gpui-component",
  "gpui_platform",

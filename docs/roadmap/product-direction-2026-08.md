@@ -478,13 +478,17 @@ verification. The macOS bundle uses the website brand icon; local packaging has
 also produced a Developer ID-signed, Hardened Runtime application and signed,
 checksum-verified DMG that Gatekeeper accepts. CI builds the equivalent ad-hoc
 signed DMG preview and launch-smokes the packaged application. Apple notarization
-and stapling are still required for public distribution. The repository also has
+and stapling are still required for public distribution. Windows now has a
+separate branded per-user Inno Setup package, optional Authenticode signing for
+both the application and installer, and a CI silent-install/launch/uninstall
+smoke gate. A production Windows certificate is still required before public
+distribution. The repository also has
 a Linux/macOS/Windows release-build matrix that runs the headless recovery harness
 and publishes unsigned preview artifacts. Hosted Linux and macOS jobs have completed successfully and produced
 non-expired preview artifacts; Windows hosted completion is still required
 before treating the three-platform gate as passed. The next gates remain real-provider end-to-end onboarding,
-Windows/Linux launch smoke tests, accessibility/IME testing, Apple notarization,
-and a signed Windows release installer. Phase 1 is not complete until those gates have direct
+Linux launch smoke, accessibility/IME testing, Apple notarization, and production
+Windows Authenticode evidence. Phase 1 is not complete until those gates have direct
 evidence.
 
 ### Phase 2 — persistent agents and teams
