@@ -3,6 +3,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePlanStepStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimePlanStep {
+    pub title: String,
+    pub status: RuntimePlanStepStatus,
+}
+
 /// An observable event emitted by the shared agent runtime.
 ///
 /// Keep provider-specific payloads behind the runtime boundary. Consumers
@@ -73,6 +88,9 @@ pub enum RuntimeEvent {
         commit: String,
         label: String,
     },
+    PlanUpdated {
+        steps: Vec<RuntimePlanStep>,
+    },
 }
 
 /// Versioned transport envelope for replayable runtime event streams.
@@ -85,7 +103,7 @@ pub struct RuntimeEventEnvelope {
 }
 
 impl RuntimeEventEnvelope {
-    pub const SCHEMA_VERSION: u32 = 3;
+    pub const SCHEMA_VERSION: u32 = 4;
 
     pub fn new(run_id: impl Into<String>, sequence: u64, event: RuntimeEvent) -> Self {
         Self {
@@ -117,6 +135,30 @@ mod tests {
         assert!(json.contains("\"type\":\"tool_start\""));
         let actual: RuntimeEventEnvelope =
             serde_json::from_str(&json).expect("deserialize runtime event");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn plan_update_round_trips_with_step_statuses() {
+        let expected = RuntimeEventEnvelope::new(
+            "run-plan",
+            2,
+            RuntimeEvent::PlanUpdated {
+                steps: vec![
+                    RuntimePlanStep {
+                        title: "Inspect the workspace".into(),
+                        status: RuntimePlanStepStatus::Completed,
+                    },
+                    RuntimePlanStep {
+                        title: "Implement the change".into(),
+                        status: RuntimePlanStepStatus::InProgress,
+                    },
+                ],
+            },
+        );
+        let json = serde_json::to_string(&expected).expect("serialize plan update");
+        let actual: RuntimeEventEnvelope =
+            serde_json::from_str(&json).expect("deserialize plan update");
         assert_eq!(actual, expected);
     }
 }

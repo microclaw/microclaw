@@ -14,6 +14,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   shadow-git restore. Empty workspaces, later tracked files, and new unignored
   files are restored correctly while ignored secrets and nested repositories
   remain protected.
+- **Live native Work plans.** Successful shared `todo_write` calls now emit a
+  provider-neutral structured plan event. The GPUI desktop projects pending,
+  active, and completed steps durably and no longer invents a fixed four-step
+  plan before the Agent has planned the task.
 
 ## 0.5.0 - 2026-08-16
 

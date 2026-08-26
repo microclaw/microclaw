@@ -1,4 +1,4 @@
-use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
+use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope, RuntimePlanStepStatus};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -23,7 +23,8 @@ pub enum WorkStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanStep {
     pub title: String,
-    pub completed: bool,
+    #[serde(default)]
+    pub status: RuntimePlanStepStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,7 +196,7 @@ pub struct WorkSessionSnapshot {
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 7;
+    pub const SCHEMA_VERSION: u32 = 8;
     pub const MAX_EVENTS: usize = 200;
     pub const MAX_TOOL_ACTIVITIES: usize = 100;
     pub const MAX_FILE_CHANGES: usize = 50;
@@ -212,24 +213,7 @@ impl WorkSessionSnapshot {
             title: String::new(),
             task: String::new(),
             status: WorkStatus::Planning,
-            plan: vec![
-                PlanStep {
-                    title: "Understand the task and workspace".into(),
-                    completed: false,
-                },
-                PlanStep {
-                    title: "Execute the task".into(),
-                    completed: false,
-                },
-                PlanStep {
-                    title: "Handle approvals".into(),
-                    completed: false,
-                },
-                PlanStep {
-                    title: "Verify and deliver results".into(),
-                    completed: false,
-                },
-            ],
+            plan: Vec::new(),
             approval_reason: None,
             diff_summary: String::new(),
             tool_activities: Vec::new(),
@@ -258,19 +242,19 @@ impl WorkSessionSnapshot {
             plan: vec![
                 PlanStep {
                     title: "Understand the workspace and task".into(),
-                    completed: true,
+                    status: RuntimePlanStepStatus::Completed,
                 },
                 PlanStep {
                     title: "Build the GPUI work interface".into(),
-                    completed: true,
+                    status: RuntimePlanStepStatus::InProgress,
                 },
                 PlanStep {
                     title: "Approve file changes".into(),
-                    completed: false,
+                    status: RuntimePlanStepStatus::Pending,
                 },
                 PlanStep {
                     title: "Run verification and deliver artifacts".into(),
-                    completed: false,
+                    status: RuntimePlanStepStatus::Pending,
                 },
             ],
             approval_reason: Some("Allow writes to apps/microclaw-work and run cargo check".into()),
@@ -396,9 +380,7 @@ impl WorkSessionSnapshot {
         self.baseline_checkpoint = None;
         self.review_status = WorkReviewStatus::None;
         self.diff_summary.clear();
-        for step in &mut self.plan {
-            step.completed = false;
-        }
+        self.plan.clear();
         self.push_event(WorkEventKind::System, "Created a foreground Work task");
         Ok(())
     }
@@ -436,7 +418,7 @@ impl WorkSessionSnapshot {
         completed_step: Option<usize>,
     ) {
         if let Some(step) = completed_step.and_then(|index| self.plan.get_mut(index)) {
-            step.completed = true;
+            step.status = RuntimePlanStepStatus::Completed;
         }
         self.push_event(kind, message);
     }
@@ -453,9 +435,6 @@ impl WorkSessionSnapshot {
     fn approve(&mut self) {
         self.status = WorkStatus::Verifying;
         self.approval_reason = None;
-        if let Some(step) = self.plan.get_mut(2) {
-            step.completed = true;
-        }
         self.push_event(
             WorkEventKind::Approval,
             "Write access approved; starting verification",
@@ -688,9 +667,6 @@ impl WorkSessionSnapshot {
                             WorkReviewStatus::None
                         };
                     self.approval_reason = None;
-                    for step in &mut self.plan {
-                        step.completed = true;
-                    }
                     self.push_event(WorkEventKind::System, format!("Task completed: {text}"));
                 }
             }
@@ -769,6 +745,20 @@ impl WorkSessionSnapshot {
                     );
                 }
             }
+            RuntimeEvent::PlanUpdated { steps } => {
+                self.plan = steps
+                    .into_iter()
+                    .take(100)
+                    .map(|step| PlanStep {
+                        title: step.title,
+                        status: step.status,
+                    })
+                    .collect();
+                self.push_event(
+                    WorkEventKind::Plan,
+                    format!("Agent updated the plan ({} steps)", self.plan.len()),
+                );
+            }
         }
         Ok(())
     }
@@ -823,6 +813,9 @@ impl WorkSessionSnapshot {
         let bytes = fs::read(path)?;
         let mut snapshot: Self = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
         if (5..Self::SCHEMA_VERSION).contains(&snapshot.schema_version) {
+            if snapshot.schema_version < 8 {
+                snapshot.plan.clear();
+            }
             snapshot.schema_version = Self::SCHEMA_VERSION;
         } else if snapshot.schema_version != Self::SCHEMA_VERSION {
             return Err(io::Error::new(
@@ -929,6 +922,40 @@ mod tests {
     }
 
     #[test]
+    fn runtime_plan_replaces_placeholder_free_projection_and_is_durable() {
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let path = directory.path().join("session.json");
+        let mut snapshot = WorkSessionSnapshot::new("");
+        assert!(snapshot.plan.is_empty());
+
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "plan-run",
+                1,
+                RuntimeEvent::PlanUpdated {
+                    steps: vec![
+                        microclaw_core::runtime_event::RuntimePlanStep {
+                            title: "Inspect the workspace".into(),
+                            status: RuntimePlanStepStatus::Completed,
+                        },
+                        microclaw_core::runtime_event::RuntimePlanStep {
+                            title: "Implement the feature".into(),
+                            status: RuntimePlanStepStatus::InProgress,
+                        },
+                    ],
+                },
+            )))
+            .unwrap();
+        snapshot.save(&path).unwrap();
+        let restored = WorkSessionSnapshot::load(&path).unwrap();
+
+        assert_eq!(restored.plan.len(), 2);
+        assert_eq!(restored.plan[1].title, "Implement the feature");
+        assert_eq!(restored.plan[1].status, RuntimePlanStepStatus::InProgress);
+        assert_eq!(restored.events.last().unwrap().kind, WorkEventKind::Plan);
+    }
+
+    #[test]
     fn foreground_lifecycle_pauses_for_approval_and_resumes_verification() {
         let mut snapshot = WorkSessionSnapshot::spike_demo();
 
@@ -960,7 +987,7 @@ mod tests {
 
         assert_eq!(snapshot.status, WorkStatus::Verifying);
         assert!(snapshot.approval_reason.is_none());
-        assert!(snapshot.plan[2].completed);
+        assert!(snapshot.plan.is_empty());
         assert_eq!(
             snapshot.events.last().unwrap().kind,
             WorkEventKind::Verification

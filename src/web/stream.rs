@@ -281,6 +281,16 @@ async fn start_stream_run_internal(
                                 )
                                 .await;
                         }
+                        AgentEvent::PlanUpdated { steps } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "plan_updated",
+                                    json!({"steps": steps}).to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                     }
                 }
             });

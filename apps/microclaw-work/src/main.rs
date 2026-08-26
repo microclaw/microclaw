@@ -736,7 +736,6 @@ impl WorkApp {
         cx.spawn(async move |this, cx| {
             let events = [
                 (WorkEventKind::Plan, "Analyzing the workspace and task"),
-                (WorkEventKind::Plan, "Generated a four-step plan"),
                 (
                     WorkEventKind::Tool,
                     "Reading the Cargo workspace and desktop code",
@@ -744,7 +743,7 @@ impl WorkApp {
                 (WorkEventKind::Tool, "Preparing the Work projection update"),
             ];
 
-            for (index, (kind, message)) in events.into_iter().enumerate() {
+            for (kind, message) in events {
                 Timer::after(Duration::from_millis(650)).await;
                 let result = this.update(cx, |this, cx| {
                     if this.active_run_id != run_id {
@@ -753,7 +752,7 @@ impl WorkApp {
                     let _ = this.session.apply(WorkCommand::RecordProgress {
                         kind,
                         message: message.into(),
-                        completed_step: Some(index.min(1)),
+                        completed_step: None,
                     });
                     this.persist();
                     cx.notify();
@@ -770,6 +769,26 @@ impl WorkApp {
                 }
                 let demo_runtime_id = format!("demo-{run_id}");
                 let structured_events = [
+                    RuntimeEvent::PlanUpdated {
+                        steps: vec![
+                            microclaw_core::runtime_event::RuntimePlanStep {
+                                title: "Inspect the workspace and task".into(),
+                                status: microclaw_core::runtime_event::RuntimePlanStepStatus::Completed,
+                            },
+                            microclaw_core::runtime_event::RuntimePlanStep {
+                                title: "Build the GPUI workflow".into(),
+                                status: microclaw_core::runtime_event::RuntimePlanStepStatus::InProgress,
+                            },
+                            microclaw_core::runtime_event::RuntimePlanStep {
+                                title: "Review workspace changes".into(),
+                                status: microclaw_core::runtime_event::RuntimePlanStepStatus::Pending,
+                            },
+                            microclaw_core::runtime_event::RuntimePlanStep {
+                                title: "Verify and deliver results".into(),
+                                status: microclaw_core::runtime_event::RuntimePlanStepStatus::Pending,
+                            },
+                        ],
+                    },
                     RuntimeEvent::CheckpointCreated {
                         commit: "deadbeef".into(),
                         label: "demo pre-task checkpoint".into(),
@@ -1117,11 +1136,22 @@ impl Render for WorkApp {
                                     .border_1()
                                     .border_color(cx.theme().border)
                                     .child(div().text_lg().font_bold().child("Plan"))
+                                    .children((self.session.plan.is_empty()).then(|| {
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Waiting for the Agent to publish a plan…")
+                                    }))
                                     .children(self.session.plan.iter().enumerate().map(
                                         |(index, step)| {
+                                            let marker = match step.status {
+                                                microclaw_core::runtime_event::RuntimePlanStepStatus::Completed => "✓",
+                                                microclaw_core::runtime_event::RuntimePlanStepStatus::InProgress => "●",
+                                                microclaw_core::runtime_event::RuntimePlanStepStatus::Pending => "○",
+                                            };
                                             h_flex()
                                                 .gap_3()
-                                                .child(if step.completed { "✓" } else { "○" })
+                                                .child(marker)
                                                 .child(format!("{}. {}", index + 1, step.title))
                                         },
                                     ))

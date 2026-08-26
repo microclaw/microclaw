@@ -224,6 +224,29 @@ semantic controls after the direct test-process restart, so button transition
 claims come from the focused projection/runtime tests rather than an unreliable
 semantic click; no passing native-click claim is made for that portion.
 
+## Agent-owned live plans
+
+Runtime Event protocol v4 adds `PlanUpdated`, a provider-neutral list of titled
+steps with Pending, In Progress, or Completed status. The shared tool executor
+publishes this event only after `todo_write` succeeds, using the effective input
+that passed policy hooks. Failed writes never update a client projection. Web
+also forwards the same structured event, so the protocol is not desktop-only.
+
+Work session schema v8 removes the fixed four-step placeholder plan. A new task
+starts with no plan and the native UI says it is waiting for the Agent. Each
+subsequent full plan replaces the prior projection, is bounded to 100 steps,
+and persists with the session. Older v5-v7 snapshots discard their synthetic
+plan during migration rather than presenting it as Agent-authored state. The
+demo exercises the same `PlanUpdated` projection path with explicit completed,
+active, and pending statuses.
+
+After rebuilding and ad-hoc signing the macOS bundle, Computer Use launched the
+unlocked native app and activated Demo by screen coordinate because GPUI still
+did not expose semantic controls. The resulting 1180×760 view visibly showed
+one completed step (`✓`), one active step (`●`), and two pending steps (`○`),
+alongside the matching plan-update timeline and approval state. This is a
+passing native visual/click claim for the live-plan surface.
+
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing
 side effects in the background, so parallel starts remain rejected. The Stop

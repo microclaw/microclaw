@@ -21,6 +21,7 @@ use microclaw_tools::runtime::{
 use opentelemetry_proto::tonic::trace::v1::Status;
 
 use crate::agent_engine::AgentEvent;
+use microclaw_core::runtime_event::{RuntimePlanStep, RuntimePlanStepStatus};
 use microclaw_observability::traces::OtlpTraceExporter;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -550,6 +551,7 @@ async fn execute_single_tool(
             error_type: result.error_type.clone(),
         });
         emit_file_diff_event(tx, &result);
+        emit_plan_update_event(tx, name, &executed_input, result.is_error);
     }
     if result.is_error {
         metrics.tool_errors += 1;
@@ -763,7 +765,7 @@ async fn execute_wave_parallel(
     }
 
     // Process parallel results
-    for (idx, name, _input, result, _duration) in parallel_results {
+    for (idx, name, input, result, _duration) in parallel_results {
         let call_id = &calls[idx].id;
         metrics.tool_calls += 1;
         if result.is_error {
@@ -788,6 +790,7 @@ async fn execute_wave_parallel(
                 error_type: result.error_type.clone(),
             });
             emit_file_diff_event(tx, &result);
+            emit_plan_update_event(tx, &name, &input, result.is_error);
         }
 
         results.push((
@@ -801,6 +804,40 @@ async fn execute_wave_parallel(
     }
 
     results
+}
+
+fn emit_plan_update_event(
+    tx: &UnboundedSender<AgentEvent>,
+    tool_name: &str,
+    input: &Value,
+    is_error: bool,
+) {
+    if tool_name != "todo_write" || is_error {
+        return;
+    }
+    let Some(todos) = input.get("todos").and_then(Value::as_array) else {
+        return;
+    };
+    let steps = todos
+        .iter()
+        .filter_map(|todo| {
+            let title = todo.get("task")?.as_str()?.trim();
+            if title.is_empty() {
+                return None;
+            }
+            let status = match todo.get("status")?.as_str()? {
+                "pending" => RuntimePlanStepStatus::Pending,
+                "in_progress" => RuntimePlanStepStatus::InProgress,
+                "completed" => RuntimePlanStepStatus::Completed,
+                _ => return None,
+            };
+            Some(RuntimePlanStep {
+                title: title.to_string(),
+                status,
+            })
+        })
+        .collect();
+    let _ = tx.send(AgentEvent::PlanUpdated { steps });
 }
 
 /// Forward a `file_diff` metadata payload (attached by edit_file/write_file)
@@ -1060,5 +1097,55 @@ mod tests {
         let calls: Vec<PendingToolCall> = vec![];
         let waves = partition_into_waves(&calls, &HashMap::new());
         assert!(waves.is_empty());
+    }
+
+    #[test]
+    fn successful_todo_write_emits_structured_plan() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        emit_plan_update_event(
+            &tx,
+            "todo_write",
+            &serde_json::json!({
+                "chat_id": 42,
+                "todos": [
+                    {"task": "Inspect", "status": "completed"},
+                    {"task": "Implement", "status": "in_progress"},
+                    {"task": "Verify", "status": "pending"}
+                ]
+            }),
+            false,
+        );
+
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            AgentEvent::PlanUpdated {
+                steps: vec![
+                    RuntimePlanStep {
+                        title: "Inspect".into(),
+                        status: RuntimePlanStepStatus::Completed,
+                    },
+                    RuntimePlanStep {
+                        title: "Implement".into(),
+                        status: RuntimePlanStepStatus::InProgress,
+                    },
+                    RuntimePlanStep {
+                        title: "Verify".into(),
+                        status: RuntimePlanStepStatus::Pending,
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn failed_todo_write_does_not_publish_a_plan() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        emit_plan_update_event(
+            &tx,
+            "todo_write",
+            &serde_json::json!({"todos": [{"task": "Nope", "status": "pending"}]}),
+            true,
+        );
+        assert!(rx.try_recv().is_err());
     }
 }
