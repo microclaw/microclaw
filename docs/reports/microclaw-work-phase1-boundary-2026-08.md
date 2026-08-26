@@ -53,7 +53,9 @@ Transport and replay use `RuntimeEventEnvelope`, which carries:
 - the provider-neutral runtime event.
 
 The Work reducer accepts the envelope through
-`WorkCommand::ApplyRuntimeEvent`. It projects tool activity, approval, file
+`WorkCommand::ApplyRuntimeEvent`. Protocol v2 carries the runtime tool call ID,
+so tool starts and results pair deterministically even when execution is
+parallel. It projects structured tool activity, approval, file
 diffs, subagents, cancellation, and completion into UI-independent Work state.
 Sequence gaps and unsupported protocol versions are rejected before the
 projection is mutated.
@@ -97,7 +99,7 @@ It contains no GPUI, platform, channel, provider, or Server dependency.
 
 ```text
 cargo test -p microclaw-core --locked                            51 passed
-cargo test -p microclaw-work-app --locked                        18 passed
+cargo test -p microclaw-work-app --locked                        22 passed
 cargo test -p microclaw-work --locked                             2 passed
 cargo test -p microclaw-work-headless --locked                    1 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
@@ -170,8 +172,10 @@ a Finder-launched macOS app can have `/` as its process directory, making an
 automatic launch-directory fallback dangerously broad. A new install and a
 missing saved path now enter a safe unselected state and real execution is
 blocked until the user explicitly chooses a directory. The Work snapshot schema
-was raised to v5 so Phase 0 and transitional single-session snapshots migrate
-to a blank English local Work session with stable identity and timestamps.
+was raised to v6. Newly added structured projection fields default safely when
+loading v5 snapshots, which are upgraded without losing the task. Earlier
+Phase 0 and transitional single-session snapshots migrate to a blank English
+local Work session with stable identity and timestamps.
 The sidebar exposes only the shared Config's provider, model, and
 path/error state, never credentials. Real launch is blocked until the offline
 configuration loads successfully; online model compatibility remains a
@@ -235,3 +239,21 @@ pause because desktop-exit/system-approval latency exceeded the demo interval;
 therefore Interrupted recovery is claimed from the focused store integration
 test, not from that visual run. The visual restart did confirm that an approval
 pause remains AwaitingApproval rather than being mislabeled Interrupted.
+
+## Structured activity and artifacts
+
+The desktop now renders Tool Activity, File Changes / Artifacts, subagent
+lifecycle, and Final Response from dedicated bounded fields rather than parsing
+the human-readable event timeline. Tool input/result previews and persisted
+diffs pass through the shared secret redactor. Artifact opening canonicalizes
+both workspace and target and rejects unavailable paths, absolute escapes, and
+symlink escapes outside the selected workspace.
+
+Computer Use exercised the complete English Demo flow on macOS: the task
+paused at approval with a call-ID-paired successful `read_file` activity and a
+standalone `demo-output.md` diff, then completed all four plan steps and showed
+the final response after approval. Clicking the synthetic artifact without a
+selected workspace did not open an external path. The same run exposed a v5
+snapshot deserialization regression; defaulted v6 fields plus the focused v5
+migration fixed it, and the existing recent sessions loaded cleanly after
+restart.

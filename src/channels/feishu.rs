@@ -2928,7 +2928,7 @@ async fn handle_feishu_message(
                 let event = tokio::time::timeout(debounce, event_rx.recv()).await;
 
                 match event {
-                    Ok(Some(AgentEvent::ToolStart { name, input })) => {
+                    Ok(Some(AgentEvent::ToolStart { name, input, .. })) => {
                         let summary = format_tool_input_summary(&name, &input);
                         lines.push(format!("▶ Executing tool: {}", summary));
                         dirty = true;

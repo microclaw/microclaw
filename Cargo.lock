@@ -6202,8 +6202,10 @@ dependencies = [
  "microclaw",
  "microclaw-core",
  "microclaw-work-app",
+ "serde_json",
  "smol",
  "tokio",
+ "url",
 ]
 
 [[package]]

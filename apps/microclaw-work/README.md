@@ -54,6 +54,13 @@ High-risk tool requests remain in the approval state even when the Agent's
 current turn ends with explanatory text. **Allow and Continue** submits the approve-once
 reply into the same persisted runtime session and projects the resumed run.
 
+The task view keeps structured, bounded projections for tool activity, file
+changes, subagents, and the final response. Tool starts and results are paired
+by the shared runtime call ID instead of display order. Persisted tool inputs,
+results, and diffs are secret-redacted. Artifact buttons canonicalize their
+target and open it only when it exists inside the explicitly selected
+workspace; missing files, absolute escapes, and symlink escapes are rejected.
+
 Build a development macOS application bundle:
 
 ```sh
@@ -67,7 +74,7 @@ local execution. Developer ID signing, notarization, DMG creation, and
 auto-update are later Phase 0/5 work.
 
 The UI remains a workflow projection rather than an IDE. Workspace, Plan,
-Approval, Diff, Artifact, runtime failures, and bounded events are persisted
+Approval, Tool Activity, File Changes, Artifacts, runtime failures, and bounded events are persisted
 under the platform-local data directory so restart recovery can be exercised.
 The desktop does not contain a second Agent Loop.
 

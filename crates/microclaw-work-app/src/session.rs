@@ -43,6 +43,43 @@ pub struct WorkEvent {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolActivityStatus {
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolActivity {
+    pub call_id: String,
+    pub name: String,
+    pub input_preview: String,
+    pub status: ToolActivityStatus,
+    pub result_preview: Option<String>,
+    pub duration_ms: Option<u128>,
+    pub status_code: Option<i32>,
+    pub bytes: Option<usize>,
+    pub error_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileChange {
+    pub path: String,
+    pub diff: String,
+    pub added: usize,
+    pub removed: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubagentActivity {
+    pub run_id: String,
+    pub label: String,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkCommand {
     StartTask {
@@ -100,6 +137,16 @@ pub enum WorkCommandError {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WorkArtifactError {
+    #[error("no workspace is selected")]
+    WorkspaceNotSelected,
+    #[error("artifact is unavailable: {path}")]
+    Unavailable { path: String },
+    #[error("artifact is outside the selected workspace: {path}")]
+    OutsideWorkspace { path: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkSessionSnapshot {
     pub schema_version: u32,
@@ -113,6 +160,14 @@ pub struct WorkSessionSnapshot {
     pub approval_reason: Option<String>,
     pub diff_summary: String,
     #[serde(default)]
+    pub tool_activities: Vec<ToolActivity>,
+    #[serde(default)]
+    pub file_changes: Vec<FileChange>,
+    #[serde(default)]
+    pub subagents: Vec<SubagentActivity>,
+    #[serde(default)]
+    pub final_response: Option<String>,
+    #[serde(default)]
     pub runtime_run_id: Option<String>,
     #[serde(default)]
     pub last_runtime_sequence: u64,
@@ -121,8 +176,11 @@ pub struct WorkSessionSnapshot {
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 5;
+    pub const SCHEMA_VERSION: u32 = 6;
     pub const MAX_EVENTS: usize = 200;
+    pub const MAX_TOOL_ACTIVITIES: usize = 100;
+    pub const MAX_FILE_CHANGES: usize = 50;
+    pub const MAX_SUBAGENTS: usize = 50;
 
     pub fn new(workspace: impl Into<String>) -> Self {
         let now = current_time_ms();
@@ -154,6 +212,10 @@ impl WorkSessionSnapshot {
             ],
             approval_reason: None,
             diff_summary: String::new(),
+            tool_activities: Vec::new(),
+            file_changes: Vec::new(),
+            subagents: Vec::new(),
+            final_response: None,
             runtime_run_id: None,
             last_runtime_sequence: 0,
             events: Vec::new(),
@@ -191,6 +253,20 @@ impl WorkSessionSnapshot {
             approval_reason: Some("Allow writes to apps/microclaw-work and run cargo check".into()),
             diff_summary: "+ GPUI app shell\n+ resumable session projection\n+ approval surface"
                 .into(),
+            tool_activities: vec![ToolActivity {
+                call_id: "demo-read".into(),
+                name: "read_file".into(),
+                input_preview: "{\"path\":\"Cargo.toml\"}".into(),
+                status: ToolActivityStatus::Succeeded,
+                result_preview: Some("Read Cargo workspace configuration".into()),
+                duration_ms: Some(18),
+                status_code: None,
+                bytes: Some(2048),
+                error_type: None,
+            }],
+            file_changes: Vec::new(),
+            subagents: Vec::new(),
+            final_response: None,
             runtime_run_id: None,
             last_runtime_sequence: 0,
             events: vec![
@@ -282,6 +358,11 @@ impl WorkSessionSnapshot {
         self.runtime_run_id = None;
         self.last_runtime_sequence = 0;
         self.events.clear();
+        self.tool_activities.clear();
+        self.file_changes.clear();
+        self.subagents.clear();
+        self.final_response = None;
+        self.diff_summary.clear();
         for step in &mut self.plan {
             step.completed = false;
         }
@@ -430,16 +511,71 @@ impl WorkSessionSnapshot {
                     format!("Agent iteration {iteration}"),
                 );
             }
-            RuntimeEvent::ToolStart { name, .. } => {
+            RuntimeEvent::ToolStart {
+                call_id,
+                name,
+                input,
+            } => {
                 self.status = WorkStatus::Running;
+                self.tool_activities.push(ToolActivity {
+                    call_id,
+                    name: name.clone(),
+                    input_preview: tool_input_preview(&input),
+                    status: ToolActivityStatus::Running,
+                    result_preview: None,
+                    duration_ms: None,
+                    status_code: None,
+                    bytes: None,
+                    error_type: None,
+                });
+                trim_front(&mut self.tool_activities, Self::MAX_TOOL_ACTIVITIES);
                 self.push_event(WorkEventKind::Tool, format!("Started tool: {name}"));
             }
             RuntimeEvent::ToolResult {
+                call_id,
                 name,
                 is_error,
                 preview,
-                ..
+                duration_ms,
+                status_code,
+                bytes,
+                error_type,
             } => {
+                if let Some(activity) = self
+                    .tool_activities
+                    .iter_mut()
+                    .rev()
+                    .find(|activity| activity.call_id == call_id)
+                {
+                    activity.status = if is_error {
+                        ToolActivityStatus::Failed
+                    } else {
+                        ToolActivityStatus::Succeeded
+                    };
+                    activity.result_preview =
+                        Some(microclaw_core::redact::redact_secrets(&preview));
+                    activity.duration_ms = Some(duration_ms);
+                    activity.status_code = status_code;
+                    activity.bytes = Some(bytes);
+                    activity.error_type = error_type;
+                } else {
+                    self.tool_activities.push(ToolActivity {
+                        call_id,
+                        name: name.clone(),
+                        input_preview: String::new(),
+                        status: if is_error {
+                            ToolActivityStatus::Failed
+                        } else {
+                            ToolActivityStatus::Succeeded
+                        },
+                        result_preview: Some(microclaw_core::redact::redact_secrets(&preview)),
+                        duration_ms: Some(duration_ms),
+                        status_code,
+                        bytes: Some(bytes),
+                        error_type,
+                    });
+                    trim_front(&mut self.tool_activities, Self::MAX_TOOL_ACTIVITIES);
+                }
                 let outcome = if is_error { "failed" } else { "completed" };
                 self.push_event(
                     WorkEventKind::Tool,
@@ -471,6 +607,7 @@ impl WorkSessionSnapshot {
                     self.push_event(WorkEventKind::System, text);
                 } else {
                     self.status = WorkStatus::Completed;
+                    self.final_response = Some(text.clone());
                     self.approval_reason = None;
                     for step in &mut self.plan {
                         step.completed = true;
@@ -484,25 +621,52 @@ impl WorkSessionSnapshot {
             ),
             RuntimeEvent::FileDiff {
                 path,
+                diff,
                 added,
                 removed,
                 truncated,
-                ..
             } => {
                 self.diff_summary = format!(
                     "{path}: +{added} -{removed}{}",
                     if truncated { " (truncated)" } else { "" }
                 );
+                self.file_changes.retain(|change| change.path != path);
+                self.file_changes.push(FileChange {
+                    path: path.clone(),
+                    diff: microclaw_core::redact::redact_secrets(&diff),
+                    added,
+                    removed,
+                    truncated,
+                });
+                trim_front(&mut self.file_changes, Self::MAX_FILE_CHANGES);
                 self.push_event(WorkEventKind::Tool, format!("File changed: {path}"));
             }
-            RuntimeEvent::SubagentStarted { run_id, label } => self.push_event(
-                WorkEventKind::System,
-                format!("Subagent {label} started ({run_id})"),
-            ),
-            RuntimeEvent::SubagentFinished { run_id, status } => self.push_event(
-                WorkEventKind::System,
-                format!("Subagent {run_id} finished: {status}"),
-            ),
+            RuntimeEvent::SubagentStarted { run_id, label } => {
+                self.subagents.push(SubagentActivity {
+                    run_id: run_id.clone(),
+                    label: label.clone(),
+                    status: "running".into(),
+                });
+                trim_front(&mut self.subagents, Self::MAX_SUBAGENTS);
+                self.push_event(
+                    WorkEventKind::System,
+                    format!("Subagent {label} started ({run_id})"),
+                );
+            }
+            RuntimeEvent::SubagentFinished { run_id, status } => {
+                if let Some(activity) = self
+                    .subagents
+                    .iter_mut()
+                    .rev()
+                    .find(|activity| activity.run_id == run_id)
+                {
+                    activity.status = status.clone();
+                }
+                self.push_event(
+                    WorkEventKind::System,
+                    format!("Subagent {run_id} finished: {status}"),
+                );
+            }
             RuntimeEvent::ApprovalRequired {
                 approval_id,
                 tool,
@@ -536,10 +700,43 @@ impl WorkSessionSnapshot {
         self.updated_at_ms = current_time_ms().max(self.updated_at_ms.saturating_add(1));
     }
 
+    pub fn resolve_artifact_path(
+        &self,
+        path: &str,
+    ) -> Result<std::path::PathBuf, WorkArtifactError> {
+        if self.workspace.is_empty() {
+            return Err(WorkArtifactError::WorkspaceNotSelected);
+        }
+        let workspace = Path::new(&self.workspace).canonicalize().map_err(|_| {
+            WorkArtifactError::Unavailable {
+                path: self.workspace.clone(),
+            }
+        })?;
+        let candidate = Path::new(path);
+        let candidate = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            workspace.join(candidate)
+        };
+        let canonical = candidate
+            .canonicalize()
+            .map_err(|_| WorkArtifactError::Unavailable {
+                path: path.to_string(),
+            })?;
+        if !canonical.starts_with(&workspace) {
+            return Err(WorkArtifactError::OutsideWorkspace {
+                path: path.to_string(),
+            });
+        }
+        Ok(canonical)
+    }
+
     pub fn load(path: impl AsRef<Path>) -> io::Result<Self> {
         let bytes = fs::read(path)?;
-        let snapshot: Self = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        if snapshot.schema_version != Self::SCHEMA_VERSION {
+        let mut snapshot: Self = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        if snapshot.schema_version == 5 {
+            snapshot.schema_version = Self::SCHEMA_VERSION;
+        } else if snapshot.schema_version != Self::SCHEMA_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -562,6 +759,19 @@ fn current_time_ms() -> u64 {
 fn new_session_id(now: u64) -> String {
     let counter = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     format!("session-{now}-{}-{counter}", std::process::id())
+}
+
+fn tool_input_preview(input: &serde_json::Value) -> String {
+    let serialized = serde_json::to_string(input).unwrap_or_else(|_| "{}".into());
+    let redacted = microclaw_core::redact::redact_secrets(&serialized);
+    redacted.chars().take(240).collect()
+}
+
+fn trim_front<T>(items: &mut Vec<T>, limit: usize) {
+    let overflow = items.len().saturating_sub(limit);
+    if overflow > 0 {
+        items.drain(..overflow);
+    }
 }
 
 #[cfg(test)]
@@ -590,6 +800,27 @@ mod tests {
 
         let error = WorkSessionSnapshot::load(&path).expect_err("schema should be rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn loads_v5_snapshot_with_defaulted_structured_fields() {
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let path = directory.path().join("session.json");
+        let mut value = serde_json::to_value(WorkSessionSnapshot::spike_demo()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert("schema_version".into(), 5.into());
+        object.remove("tool_activities");
+        object.remove("file_changes");
+        object.remove("subagents");
+        object.remove("final_response");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let snapshot = WorkSessionSnapshot::load(&path).expect("v5 should migrate");
+        assert_eq!(snapshot.schema_version, WorkSessionSnapshot::SCHEMA_VERSION);
+        assert!(snapshot.tool_activities.is_empty());
+        assert!(snapshot.file_changes.is_empty());
+        assert!(snapshot.subagents.is_empty());
+        assert!(snapshot.final_response.is_none());
     }
 
     #[test]
@@ -899,5 +1130,126 @@ mod tests {
         assert_eq!(snapshot.session_id, session_id);
         assert_eq!(snapshot.created_at_ms, created_at_ms);
         assert_eq!(snapshot.workspace, directory.path().display().to_string());
+    }
+
+    #[test]
+    fn tool_activity_pairs_by_call_id_and_redacts_secrets() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "run tools".into(),
+            })
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "run-tools",
+                1,
+                RuntimeEvent::ToolStart {
+                    call_id: "call-a".into(),
+                    name: "web_fetch".into(),
+                    input: serde_json::json!({
+                        "authorization": "Bearer abcdefghijklmnopqrstuvwxyz"
+                    }),
+                },
+            )))
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "run-tools",
+                2,
+                RuntimeEvent::ToolResult {
+                    call_id: "call-a".into(),
+                    name: "web_fetch".into(),
+                    is_error: false,
+                    preview: "used sk-abcdefghijklmnopqrstuvwxyz".into(),
+                    duration_ms: 42,
+                    status_code: Some(200),
+                    bytes: 512,
+                    error_type: None,
+                },
+            )))
+            .unwrap();
+
+        let activity = &snapshot.tool_activities[0];
+        assert_eq!(activity.call_id, "call-a");
+        assert_eq!(activity.status, ToolActivityStatus::Succeeded);
+        assert_eq!(activity.duration_ms, Some(42));
+        assert!(
+            !activity
+                .input_preview
+                .contains("abcdefghijklmnopqrstuvwxyz")
+        );
+        assert!(
+            !activity
+                .result_preview
+                .as_deref()
+                .unwrap()
+                .contains("abcdefghijklmnopqrstuvwxyz")
+        );
+    }
+
+    #[test]
+    fn file_changes_and_final_response_are_structured_artifacts() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "edit file".into(),
+            })
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "run-artifacts",
+                1,
+                RuntimeEvent::FileDiff {
+                    path: "src/main.rs".into(),
+                    diff: "+fn main() {}".into(),
+                    added: 1,
+                    removed: 0,
+                    truncated: false,
+                },
+            )))
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "run-artifacts",
+                2,
+                RuntimeEvent::FinalResponse {
+                    text: "Implemented and verified".into(),
+                },
+            )))
+            .unwrap();
+
+        assert_eq!(snapshot.file_changes[0].path, "src/main.rs");
+        assert_eq!(snapshot.file_changes[0].added, 1);
+        assert_eq!(
+            snapshot.final_response.as_deref(),
+            Some("Implemented and verified")
+        );
+    }
+
+    #[test]
+    fn artifact_paths_must_resolve_inside_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let inside = workspace.path().join("artifact.txt");
+        std::fs::write(&inside, "artifact").unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let outside = outside_dir.path().join("secret.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        let snapshot = WorkSessionSnapshot::new(workspace.path().display().to_string());
+
+        assert_eq!(
+            snapshot.resolve_artifact_path("artifact.txt").unwrap(),
+            inside.canonicalize().unwrap()
+        );
+        assert!(matches!(
+            snapshot
+                .resolve_artifact_path(outside.to_str().unwrap())
+                .unwrap_err(),
+            WorkArtifactError::OutsideWorkspace { .. }
+        ));
+        assert!(matches!(
+            snapshot.resolve_artifact_path("missing.txt").unwrap_err(),
+            WorkArtifactError::Unavailable { .. }
+        ));
     }
 }

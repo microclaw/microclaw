@@ -113,10 +113,11 @@ async fn start_stream_run_internal(
                                 )
                                 .await;
                         }
-                        AgentEvent::ToolStart { name, .. } => {
+                        AgentEvent::ToolStart { call_id, name, .. } => {
                             super::metrics_apply_agent_event(
                                 &state_for_events,
                                 &AgentEvent::ToolStart {
+                                    call_id: call_id.clone(),
                                     name: name.clone(),
                                     input: serde_json::Value::Null,
                                 },
@@ -126,12 +127,13 @@ async fn start_stream_run_internal(
                                 .publish(
                                     &run_id_for_events,
                                     "tool_start",
-                                    json!({"name": name}).to_string(),
+                                    json!({"call_id": call_id, "name": name}).to_string(),
                                     run_history_limit,
                                 )
                                 .await;
                         }
                         AgentEvent::ToolResult {
+                            call_id,
                             name,
                             is_error,
                             preview,
@@ -143,6 +145,7 @@ async fn start_stream_run_internal(
                             super::metrics_apply_agent_event(
                                 &state_for_events,
                                 &AgentEvent::ToolResult {
+                                    call_id: call_id.clone(),
                                     name: name.clone(),
                                     is_error,
                                     preview: preview.clone(),
@@ -158,6 +161,7 @@ async fn start_stream_run_internal(
                                     &run_id_for_events,
                                     "tool_result",
                                     json!({
+                                        "call_id": call_id,
                                         "name": name,
                                         "is_error": is_error,
                                         "preview": preview,

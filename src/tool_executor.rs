@@ -362,6 +362,7 @@ async fn execute_single_tool(
     // Emit ToolStart event
     if let Some(tx) = event_tx {
         let _ = tx.send(AgentEvent::ToolStart {
+            call_id: id.clone(),
             name: name.clone(),
             input: effective_input.clone(),
         });
@@ -537,6 +538,7 @@ async fn execute_single_tool(
     if let Some(tx) = event_tx {
         let preview = truncate_for_log(&result.content, 160);
         let _ = tx.send(AgentEvent::ToolResult {
+            call_id: id.clone(),
             name: name.clone(),
             is_error: result.is_error,
             preview,
@@ -684,6 +686,7 @@ async fn execute_wave_parallel(
 
         if let Some(tx) = event_tx {
             let _ = tx.send(AgentEvent::ToolStart {
+                call_id: call.id.clone(),
                 name: name.clone(),
                 input: effective_input.clone(),
             });
@@ -775,6 +778,7 @@ async fn execute_wave_parallel(
         if let Some(tx) = event_tx {
             let preview = truncate_for_log(&result.content, 160);
             let _ = tx.send(AgentEvent::ToolResult {
+                call_id: call_id.clone(),
                 name: name.clone(),
                 is_error: result.is_error,
                 preview,

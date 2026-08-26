@@ -14,10 +14,12 @@ pub enum RuntimeEvent {
         iteration: usize,
     },
     ToolStart {
+        call_id: String,
         name: String,
         input: Value,
     },
     ToolResult {
+        call_id: String,
         name: String,
         is_error: bool,
         preview: String,
@@ -79,7 +81,7 @@ pub struct RuntimeEventEnvelope {
 }
 
 impl RuntimeEventEnvelope {
-    pub const SCHEMA_VERSION: u32 = 1;
+    pub const SCHEMA_VERSION: u32 = 2;
 
     pub fn new(run_id: impl Into<String>, sequence: u64, event: RuntimeEvent) -> Self {
         Self {
@@ -101,6 +103,7 @@ mod tests {
             "run-1",
             7,
             RuntimeEvent::ToolStart {
+                call_id: "call-1".into(),
                 name: "read_file".into(),
                 input: serde_json::json!({"path": "README.md"}),
             },

@@ -13,5 +13,7 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 microclaw = { path = "../.." }
 microclaw-core = { version = "0.1.0", path = "../../crates/microclaw-core" }
 microclaw-work-app = { version = "0.1.0", path = "../../crates/microclaw-work-app" }
+serde_json = "1"
 smol = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+url = "2"

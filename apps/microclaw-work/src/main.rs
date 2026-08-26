@@ -8,7 +8,10 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
-use microclaw_work_app::session::{WorkCommand, WorkEventKind, WorkSessionSnapshot, WorkStatus};
+use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
+use microclaw_work_app::session::{
+    ToolActivityStatus, WorkCommand, WorkEventKind, WorkSessionSnapshot, WorkStatus,
+};
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
 use runtime_worker::{
     RuntimeCancellation, RuntimeConfigSummary, RuntimeMessage, RuntimeRunSpec,
@@ -263,16 +266,53 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn open_artifact(&mut self, path: &str, cx: &mut Context<Self>) {
+        match self.session.resolve_artifact_path(path) {
+            Ok(path) => match url::Url::from_file_path(&path) {
+                Ok(url) => {
+                    cx.open_url(url.as_str());
+                    self.persistence_message = format!("Opened artifact: {}", path.display());
+                }
+                Err(()) => {
+                    self.persistence_message =
+                        format!("Could not create an artifact URL for {}", path.display());
+                }
+            },
+            Err(error) => self.persistence_message = error.to_string(),
+        }
+        cx.notify();
+    }
+
     fn approve(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.last_run_was_demo
+            && (self.session.workspace.is_empty()
+                || !PathBuf::from(&self.session.workspace).is_dir())
+        {
+            self.persistence_message = "Select an available workspace first.".into();
+            cx.notify();
+            return;
+        }
         if let Err(error) = self.session.apply(WorkCommand::Approve) {
             self.persistence_message = error.to_string();
             cx.notify();
             return;
         }
-        if self.session.workspace.is_empty() || !PathBuf::from(&self.session.workspace).is_dir() {
-            self.persistence_message = "Select an available workspace first.".into();
-            cx.notify();
-            return;
+        if self.last_run_was_demo {
+            let run_id = self
+                .session
+                .runtime_run_id
+                .clone()
+                .unwrap_or_else(|| format!("demo-{}", self.active_run_id));
+            let sequence = self.session.last_runtime_sequence.saturating_add(1);
+            let _ = self
+                .session
+                .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                    run_id,
+                    sequence,
+                    RuntimeEvent::FinalResponse {
+                        text: "Demo task completed with structured activity and artifacts.".into(),
+                    },
+                )));
         }
         self.persist();
         cx.notify();
@@ -503,6 +543,41 @@ impl WorkApp {
                 if this.active_run_id != run_id {
                     return;
                 }
+                let demo_runtime_id = format!("demo-{run_id}");
+                let structured_events = [
+                    RuntimeEvent::ToolStart {
+                        call_id: "demo-read".into(),
+                        name: "read_file".into(),
+                        input: serde_json::json!({"path": "Cargo.toml"}),
+                    },
+                    RuntimeEvent::ToolResult {
+                        call_id: "demo-read".into(),
+                        name: "read_file".into(),
+                        is_error: false,
+                        preview: "Read the Cargo workspace configuration".into(),
+                        duration_ms: 18,
+                        status_code: None,
+                        bytes: 2048,
+                        error_type: None,
+                    },
+                    RuntimeEvent::FileDiff {
+                        path: "demo-output.md".into(),
+                        diff: "+# MicroClaw Work demo artifact\n+Structured runtime projection verified."
+                            .into(),
+                        added: 2,
+                        removed: 0,
+                        truncated: false,
+                    },
+                ];
+                for (index, event) in structured_events.into_iter().enumerate() {
+                    let _ = this.session.apply(WorkCommand::ApplyRuntimeEvent(
+                        RuntimeEventEnvelope::new(
+                            &demo_runtime_id,
+                            index as u64 + 1,
+                            event,
+                        ),
+                    ));
+                }
                 let _ = this.session.apply(WorkCommand::RequestApproval {
                     reason: "Allow the demo to write to the workspace and run checks".into(),
                 });
@@ -528,6 +603,10 @@ impl Render for WorkApp {
             WorkStatus::Interrupted => "Interrupted",
         };
         let recent_sessions = self.recent_sessions.clone();
+        let tool_activities = self.session.tool_activities.clone();
+        let file_changes = self.session.file_changes.clone();
+        let subagents = self.session.subagents.clone();
+        let final_response = self.session.final_response.clone();
 
         h_flex()
             .size_full()
@@ -735,13 +814,56 @@ impl Render for WorkApp {
                                             .child("Live events"),
                                     )
                                     .child(v_flex().gap_2().children(
-                                        self.session.events.iter().rev().take(8).map(|event| {
+                                        self.session.events.iter().rev().take(5).map(|event| {
                                             h_flex()
                                                 .gap_2()
                                                 .text_sm()
                                                 .child(format!("#{:03}", event.id))
                                                 .child(event.message.clone())
                                         }),
+                                    ))
+                                    .child(
+                                        div()
+                                            .mt_3()
+                                            .pt_3()
+                                            .border_t_1()
+                                            .border_color(cx.theme().border)
+                                            .text_sm()
+                                            .font_bold()
+                                            .child("Tool activity"),
+                                    )
+                                    .children(tool_activities.into_iter().rev().take(4).map(
+                                        |activity| {
+                                            let status = match activity.status {
+                                                ToolActivityStatus::Running => "Running",
+                                                ToolActivityStatus::Succeeded => "Succeeded",
+                                                ToolActivityStatus::Failed => "Failed",
+                                            };
+                                            v_flex()
+                                                .gap_1()
+                                                .text_sm()
+                                                .child(format!("{} · {status}", activity.name))
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .child(trim_text(
+                                                            activity
+                                                                .result_preview
+                                                                .as_deref()
+                                                                .unwrap_or(&activity.input_preview),
+                                                            120,
+                                                        )),
+                                                )
+                                        },
+                                    ))
+                                    .children(subagents.into_iter().rev().take(3).map(
+                                        |subagent| {
+                                            div().text_sm().child(format!(
+                                                "Subagent {} · {}",
+                                                subagent.label, subagent.status
+                                            ))
+                                        },
                                     )),
                             )
                             .child(
@@ -788,12 +910,43 @@ impl Render for WorkApp {
                                                 div()
                                                     .text_lg()
                                                     .font_bold()
-                                                    .child("Diff / Artifact"),
+                                                    .child("Files / Artifacts"),
+                                            )
+                                            .children(file_changes.iter().map(|change| {
+                                                let path = change.path.clone();
+                                                Button::new(format!("artifact-{path}"))
+                                                    .outline()
+                                                    .label(format!(
+                                                        "{}  +{} -{}",
+                                                        change.path, change.added, change.removed
+                                                    ))
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.open_artifact(&path, cx);
+                                                    }))
+                                            }))
+                                            .child(
+                                                div().font_family("monospace").text_xs().child(
+                                                    file_changes
+                                                        .last()
+                                                        .map(|change| trim_text(&change.diff, 1800))
+                                                        .unwrap_or_default(),
+                                                ),
                                             )
                                             .child(
-                                                div()
-                                                    .font_family("monospace")
-                                                    .child(self.session.diff_summary.clone()),
+                                                v_flex()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .font_bold()
+                                                            .child("Final response"),
+                                                    )
+                                                    .child(trim_text(
+                                                        final_response
+                                                            .as_deref()
+                                                            .unwrap_or("No final response yet."),
+                                                        1200,
+                                                    )),
                                             ),
                                     ),
                             ),
@@ -812,6 +965,16 @@ fn work_status_label(status: WorkStatus) -> &'static str {
         WorkStatus::Cancelled => "Cancelled",
         WorkStatus::Failed => "Failed",
         WorkStatus::Interrupted => "Interrupted",
+    }
+}
+
+fn trim_text(text: &str, limit: usize) -> String {
+    let mut chars = text.chars();
+    let trimmed: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{trimmed}…")
+    } else {
+        trimmed
     }
 }
 
