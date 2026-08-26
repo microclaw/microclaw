@@ -493,6 +493,14 @@ accessibility/IME testing, the physical GPU/display matrix, Apple notarization,
 and production Windows Authenticode evidence. Phase 1 is not complete until those gates have direct
 evidence.
 
+Accessibility note (2026-08-25): primary controls are present in the macOS
+AccessKit tree after activation, and model fields, composer, messages, streaming
+status, and approvals now have explicit names or roles. A Unicode Chinese
+composer value was set through the accessibility value action and survived an
+application restart. That does not prove native IME composition: consistent
+fresh-process AccessKit activation, keyboard traversal, VoiceOver/Narrator/Orca,
+and real macOS/Windows/Linux IME sessions remain open acceptance work.
+
 ### Phase 2 — persistent agents and teams
 
 Estimated scope: 6–10 weeks after Phase 1 proves the control surface.

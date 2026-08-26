@@ -207,6 +207,7 @@ impl WorkApp {
             || !session.process_activities.is_empty()
             || !session.file_changes.is_empty()
             || !session.subagents.is_empty();
+        task_input.update(cx, |input, cx| input.focus(window, cx));
 
         Self {
             session,
@@ -426,8 +427,10 @@ impl WorkApp {
         self.refresh_diagnostics(event, window, cx);
     }
 
-    fn close_diagnostics(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn close_diagnostics(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.diagnostics_open = false;
+        self.task_input
+            .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -452,8 +455,15 @@ impl WorkApp {
         cx.notify();
     }
 
-    fn close_model_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn close_model_settings(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.settings_open = false;
+        self.task_input
+            .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -1238,14 +1248,19 @@ impl WorkApp {
                     .border_1()
                     .border_color(cx.theme().border)
                     .child(div().text_sm().font_bold().child("Provider"))
-                    .child(Input::new(&self.provider_input))
+                    .child(Input::new(&self.provider_input).aria_label("Model provider"))
                     .child(div().text_sm().font_bold().child("Model ID"))
-                    .child(Input::new(&self.model_input))
+                    .child(Input::new(&self.model_input).aria_label("Model ID"))
                     .child(div().text_sm().font_bold().child("Base URL (optional)"))
-                    .child(Input::new(&self.base_url_input).content_type(InputContentType::Url))
+                    .child(
+                        Input::new(&self.base_url_input)
+                            .aria_label("Provider base URL")
+                            .content_type(InputContentType::Url),
+                    )
                     .child(div().text_sm().font_bold().child("API key"))
                     .child(
                         Input::new(&self.api_key_input)
+                            .aria_label("Provider API key")
                             .content_type(InputContentType::Password)
                             .mask_toggle(),
                     )
@@ -1891,12 +1906,19 @@ impl Render for WorkApp {
                                                     ),
                                             )
                                     }))
-                                    .children(messages.into_iter().map(|message| {
+                                    .children(messages.into_iter().enumerate().map(
+                                        |(message_index, message)| {
                                         let is_user = message.role == ConversationRole::User;
+                                        let speaker = if is_user { "You" } else { "MicroClaw" };
+                                        let accessibility_label =
+                                            format!("{speaker}: {}", message.content);
                                         let row = h_flex().w_full();
                                         let row = if is_user { row.justify_end() } else { row };
                                         row.child(
                                                 v_flex()
+                                                    .id(("conversation-message", message_index))
+                                                    .role(Role::Paragraph)
+                                                    .aria_label(accessibility_label)
                                                     .max_w(px(if is_user { 620. } else { 760. }))
                                                     .gap_1()
                                                     .px_4()
@@ -1913,16 +1935,18 @@ impl Render for WorkApp {
                                                     } else {
                                                         cx.theme().border
                                                     })
-                                                    .child(div().text_xs().font_bold().child(if is_user {
-                                                        "You"
-                                                    } else {
-                                                        "MicroClaw"
-                                                    }))
+                                                    .child(div().text_xs().font_bold().child(speaker))
                                                     .child(message.content),
                                             )
-                                    }))
+                                        },
+                                    ))
                                     .children((!assistant_draft.is_empty()).then(|| {
+                                        let accessibility_label =
+                                            format!("MicroClaw working: {assistant_draft}");
                                         v_flex()
+                                            .id("assistant-draft")
+                                            .role(Role::Status)
+                                            .aria_label(accessibility_label)
                                             .max_w(px(720.))
                                             .gap_1()
                                             .p_3()
@@ -1938,6 +1962,12 @@ impl Render for WorkApp {
                                     }))
                                     .children(inline_approval.map(|approval| {
                                         v_flex()
+                                            .id("inline-approval")
+                                            .role(Role::Alert)
+                                            .aria_label(format!(
+                                                "Approval required for {}: {}",
+                                                approval.tool, approval.reason
+                                            ))
                                             .gap_3()
                                             .p_4()
                                             .rounded(cx.theme().radius)
@@ -2274,7 +2304,14 @@ impl Render for WorkApp {
                             .child(
                                 div()
                                     .min_h(px(44.))
-                                    .child(Input::new(composer_input)),
+                                    .child(
+                                        Input::new(composer_input)
+                                            .aria_label(if self.runtime_active {
+                                                "Guidance for the active Work task"
+                                            } else {
+                                                "Message MicroClaw Work"
+                                            }),
+                                    ),
                             )
                             .child(
                                 h_flex()

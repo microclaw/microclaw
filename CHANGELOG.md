@@ -8,6 +8,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Explicit Work accessibility semantics.** Model fields and the chat composer
+  now expose stable accessible names; completed conversation messages are
+  paragraphs, streamed assistant output is a status region, and inline tool
+  approval is an alert. The composer receives focus at launch and regains it
+  after closing Model Settings or Diagnostics. This improves keyboard and
+  VoiceOver/AccessKit navigation without coupling the desktop loop to
+  platform-specific UI code.
 - **Dedicated desktop release profile.** `work-release` keeps optimized,
   stripped binaries while dropping Server-oriented Thin LTO and enabling
   parallel code generation. All Work installers and preview launch gates use
