@@ -704,7 +704,7 @@ fn run_worker(
                 signal = cancel_rx.recv() => {
                     if signal.is_some() {
                         let completed_while_waiting = loop {
-                            let aborted = runtime.cancel_session(&session).await?;
+                            let aborted = runtime.cancel_work_session(&session).await?;
                             if aborted > 0 {
                                 break None;
                             }
@@ -721,7 +721,7 @@ fn run_worker(
                 }
                 update = steer_rx.recv() => {
                     if let Some(update) = update {
-                        let (accepted, message) = match runtime.steer_session(&session, &update).await {
+                        let (accepted, message) = match runtime.steer_work_session(&session, &update).await {
                             Ok(true) => (true, update),
                             Ok(false) => (false, "The task finished before the update could be queued.".into()),
                             Err(error) => (false, error.to_string()),

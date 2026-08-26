@@ -27,6 +27,7 @@ use microclaw_core::runtime_event::RuntimeEventEnvelope;
 use microclaw_storage::db::{call_blocking, Database, StoredMessage};
 
 pub const HEADLESS_CHANNEL: &str = "headless";
+pub const WORK_CHANNEL: &str = "work";
 
 #[derive(Debug, Clone)]
 pub struct HeadlessRunRequest {
@@ -34,6 +35,7 @@ pub struct HeadlessRunRequest {
     pub session: Option<String>,
     pub sender_name: String,
     pub run_id: Option<String>,
+    pub caller_channel: String,
 }
 
 impl HeadlessRunRequest {
@@ -43,6 +45,7 @@ impl HeadlessRunRequest {
             session,
             sender_name: "cli".into(),
             run_id: None,
+            caller_channel: HEADLESS_CHANNEL.into(),
         }
     }
 
@@ -52,6 +55,7 @@ impl HeadlessRunRequest {
             session,
             sender_name: "work".into(),
             run_id: Some(run_id),
+            caller_channel: WORK_CHANNEL.into(),
         }
     }
 }
@@ -160,6 +164,7 @@ impl HeadlessRuntime {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let chat_id = self.resolve_session_chat_id(&session_name).await?;
+        let caller_channel = request.caller_channel;
 
         let stored = StoredMessage {
             id: uuid::Uuid::new_v4().to_string(),
@@ -185,7 +190,7 @@ impl HeadlessRuntime {
         let response = process_with_agent_with_events(
             &self.state,
             AgentRequestContext {
-                caller_channel: HEADLESS_CHANNEL,
+                caller_channel: &caller_channel,
                 chat_id,
                 chat_type: "private",
             },
@@ -223,8 +228,21 @@ impl HeadlessRuntime {
     /// scheduler adapters, so callers stop the real Agent Engine rather than
     /// merely hiding its output.
     pub async fn cancel_session(&self, session: &str) -> anyhow::Result<usize> {
+        self.cancel_session_for_channel(HEADLESS_CHANNEL, session)
+            .await
+    }
+
+    pub async fn cancel_work_session(&self, session: &str) -> anyhow::Result<usize> {
+        self.cancel_session_for_channel(WORK_CHANNEL, session).await
+    }
+
+    async fn cancel_session_for_channel(
+        &self,
+        channel: &str,
+        session: &str,
+    ) -> anyhow::Result<usize> {
         let chat_id = self.resolve_session_chat_id(session).await?;
-        Ok(crate::run_control::abort_runs(HEADLESS_CHANNEL, chat_id).await)
+        Ok(crate::run_control::abort_runs(channel, chat_id).await)
     }
 
     /// Add a user update to an active named session.
@@ -233,6 +251,21 @@ impl HeadlessRuntime {
     /// breakpoints. Returning `false` means the run ended before the update
     /// could be queued; callers must not report it as accepted.
     pub async fn steer_session(&self, session: &str, content: &str) -> anyhow::Result<bool> {
+        self.steer_session_for_channel(HEADLESS_CHANNEL, session, content)
+            .await
+    }
+
+    pub async fn steer_work_session(&self, session: &str, content: &str) -> anyhow::Result<bool> {
+        self.steer_session_for_channel(WORK_CHANNEL, session, content)
+            .await
+    }
+
+    async fn steer_session_for_channel(
+        &self,
+        channel: &str,
+        session: &str,
+        content: &str,
+    ) -> anyhow::Result<bool> {
         let content = content.trim();
         if content.is_empty() {
             anyhow::bail!("steering update must not be empty");
@@ -249,7 +282,7 @@ impl HeadlessRuntime {
         if !self
             .state
             .chat_turn_queue
-            .enqueue_if_busy(HEADLESS_CHANNEL, chat_id, pending)
+            .enqueue_if_busy(channel, chat_id, pending)
             .await
         {
             return Ok(false);
@@ -562,7 +595,7 @@ mod tests {
 
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if runtime.cancel_session("cancel-test").await.unwrap() > 0 {
+                if runtime.cancel_work_session("cancel-test").await.unwrap() > 0 {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -654,7 +687,7 @@ mod tests {
         .await
         .expect("first model call should start");
         assert!(runtime
-            .steer_session("live-steer", "Focus on the parser first")
+            .steer_work_session("live-steer", "Focus on the parser first")
             .await
             .unwrap());
         let result = run.await.unwrap().unwrap();

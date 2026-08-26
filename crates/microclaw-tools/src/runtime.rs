@@ -410,7 +410,8 @@ pub fn resolve_tool_working_dir(
 }
 
 fn requires_high_risk_approval(risk: ToolRisk, auth: &ToolAuthContext) -> bool {
-    risk == ToolRisk::High && (auth.caller_channel == "web" || auth.is_control_chat())
+    risk == ToolRisk::High
+        && (auth.caller_channel == "web" || auth.caller_channel == "work" || auth.is_control_chat())
 }
 
 /// Input marker injected after explicit operator approval so a high-risk
@@ -492,5 +493,19 @@ mod tests {
     fn test_validate_execution_policy_dual_allows_fallback() {
         let ok = validate_execution_policy("bash", SandboxMode::All, false);
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn work_requires_high_risk_approval_but_cli_headless_remains_noninteractive() {
+        let auth = |channel: &str| ToolAuthContext {
+            caller_channel: channel.into(),
+            caller_chat_id: 42,
+            principal: "main".into(),
+            control_chat_ids: Vec::new(),
+            env_files: Vec::new(),
+        };
+
+        assert!(require_high_risk_approval("bash", &auth("work"), &json!({})).is_some());
+        assert!(require_high_risk_approval("bash", &auth("headless"), &json!({})).is_none());
     }
 }

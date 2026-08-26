@@ -113,8 +113,8 @@ registration retry closes the race where a user stops immediately after
 launching a run.
 
 The packaged macOS path has been exercised against a real Codex account through
-cancel, same-session retry, visible completion, Command-Q termination, and
-relaunch persistence. See the dated
+cancel, same-session retry, visible completion, a real high-risk approval and
+same-session resume, Command-Q termination, and relaunch persistence. See the dated
 [macOS smoke report](../../docs/reports/microclaw-work-macos-smoke-2026-08-26.md)
 for the evidence and remaining acceptance work.
 
@@ -124,9 +124,12 @@ and completion verification all resolve to the project folder explicitly
 selected in the desktop conversation. Server retains its configured shared or
 per-chat directory behavior.
 
-High-risk tool requests remain in the approval state even when the Agent's
-current turn ends with explanatory text. **Allow and Continue** submits the approve-once
-reply into the same persisted runtime session and projects the resumed run.
+High-risk tool requests carry a dedicated Work caller context and remain in the
+approval state even when the Agent's current turn ends with explanatory text.
+**Approve once** submits the one-time approval into the same persisted runtime
+session and projects the resumed run. **Always allow** remains an explicit,
+separate per-chat choice; CLI headless execution keeps its non-interactive
+behavior.
 
 The conversation view keeps structured, bounded projections for tool activity,
 file changes, subagents, and the final response. The collapsible Details

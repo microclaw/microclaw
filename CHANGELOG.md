@@ -24,6 +24,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Enforced native Work tool approval.** Desktop runs now carry a dedicated
+  `work` caller context through the shared Agent Engine. High-risk tools pause
+  on the inline approval card, and **Approve once** resumes the same persisted
+  conversation without granting standing access. CLI headless runs retain
+  their existing non-interactive behavior.
 - **One-click Codex account onboarding.** Work detects an existing local Codex
   login without reading its credential payload and offers **Use Codex Account**.
   It reuses the non-secret model selected by the Codex client, clears
