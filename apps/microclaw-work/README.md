@@ -4,6 +4,10 @@ This crate is the Phase 0 desktop technology spike. It validates a pure-Rust
 GPUI + GPUI Component application boundary before the shared agent runtime is
 connected.
 
+Work lifecycle and persistence live in the framework-independent
+`microclaw-work-app` crate. This desktop package owns only GPUI/platform
+adaptation and must not duplicate the provider-neutral Agent Engine.
+
 Run on a supported desktop host:
 
 ```sh

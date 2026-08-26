@@ -6,7 +6,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
-use microclaw_work::session::{WorkEventKind, WorkSessionSnapshot, WorkStatus};
+use microclaw_work_app::session::{WorkEventKind, WorkSessionSnapshot, WorkStatus};
 use smol::Timer;
 use std::path::PathBuf;
 use std::time::Duration;

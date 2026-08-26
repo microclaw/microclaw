@@ -6194,14 +6194,20 @@ dependencies = [
 name = "microclaw-work"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "dirs",
  "gpui",
  "gpui-component",
  "gpui_platform",
+ "microclaw-work-app",
+ "smol",
+]
+
+[[package]]
+name = "microclaw-work-app"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
- "smol",
  "tempfile",
 ]
 

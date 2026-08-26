@@ -83,7 +83,8 @@ jobs:
         with:
           shared-key: microclaw-work-${{ matrix.os }}
       - run: cargo check -p microclaw-work --locked
-      - run: cargo test -p microclaw-work --lib --locked
+      - run: cargo test -p microclaw-work-app --locked
+      - run: cargo clippy -p microclaw-work-app --all-targets --locked -- -D warnings
       - run: cargo clippy -p microclaw-work --all-targets --locked -- -D warnings
       - name: Build development macOS app bundle
         if: runner.os == 'macOS'

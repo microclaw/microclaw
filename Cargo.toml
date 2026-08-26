@@ -6,6 +6,7 @@ members = [
     "crates/microclaw-clawhub",
     "crates/microclaw-storage",
     "crates/microclaw-tools",
+    "crates/microclaw-work-app",
     "crates/microclaw-channels",
     "crates/microclaw-app",
     "crates/microclaw-observability",
