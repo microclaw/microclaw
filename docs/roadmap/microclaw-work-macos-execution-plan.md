@@ -60,8 +60,8 @@ Delivered:
 - stable creation-time conversation ordering with Pin / Unpin in each row's
   right-click menu;
 - named conversation controls and a repeatable macOS Accessibility-tree audit;
-- left-aligned conversation rows and a compact equal-width Workspace utility
-  toolbar;
+- left-aligned conversation rows and a compact, hierarchical Workspace action
+  area with full-width primary entries and paired secondary utilities;
 - native macOS IME marked-text, candidate selection, draft persistence, and
   relaunch recovery verified in an isolated Work data directory;
 - progressive long-conversation rendering and bounded large-diff persistence

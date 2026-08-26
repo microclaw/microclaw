@@ -33,7 +33,7 @@ the task; project-tool checks used a disposable fixture under `/private/tmp`.
 6. Command-Q terminated the process. Relaunch restored the same single user
    message, assistant response, conversation title, and completed state.
 7. The rebuilt DMG passed `hdiutil verify`. Its SHA-256 is
-   `ddcb5a00ee7e67609821ddbe273e946f63fa8ee383990425011cdebcba1bfa58`.
+   `98d8f3ec1b0ae1ef38884a1770e3c2d0d9598063b802c0a89703b1b84e324edc`.
 8. A selected project fixture containing `README.md` and `TASK.md` was opened
    in a fresh conversation. Codex published a three-step plan, read `TASK.md`
    with the native file tool, created `RESULT.md`, re-read the result, and
@@ -57,6 +57,28 @@ the task; project-tool checks used a disposable fixture under `/private/tmp`.
 This exercise also confirms the provider-level SSE normalization added for
 Codex responses: streamed output remains visible when the terminal response
 event does not repeat the accumulated text.
+
+## Local release regression
+
+The final local pass after the sidebar refinement produced and checked the
+optimized `work-release` bundle and DMG:
+
+- `codesign --verify --deep --strict` accepted the application bundle.
+- The bundle identifier is `org.microclaw.work`, the application version is
+  `0.1.0`, and the minimum macOS version is `13.0`.
+- `hdiutil verify` accepted
+  `target/microclaw-work-installer/work-release/MicroClaw-Work-0.1.0-macos.dmg`.
+- A read-only mount of that DMG contained `MicroClaw Work.app` and the expected
+  `/Applications` installation link, and detached cleanly after inspection.
+- `cargo test -p microclaw --lib --locked` passed 1,180 Server tests, with five
+  explicitly ignored tests and no failures. Network tests were run with local
+  loopback access; the A2A POST test that cannot bind inside the filesystem
+  sandbox passed in that environment.
+- `npm --prefix web run build` completed its production Vite build.
+
+This evidence covers local source, Server, Web, application-bundle, and disk
+image regressions. It does not replace Apple notarization or a clean-machine
+Homebrew installation test.
 
 ## Open acceptance work
 
