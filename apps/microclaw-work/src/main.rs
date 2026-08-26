@@ -73,6 +73,7 @@ struct WorkApp {
     diagnostics_report: WorkDiagnosticsReport,
     settings_open: bool,
     settings_has_api_key: bool,
+    codex_account_available: bool,
     provider_input: Entity<InputState>,
     model_input: Entity<InputState>,
     base_url_input: Entity<InputState>,
@@ -124,6 +125,7 @@ impl WorkApp {
         let settings_has_api_key = model_settings
             .as_ref()
             .is_some_and(|value| value.has_api_key);
+        let codex_account_available = runtime_service.codex_account_available();
         let session_store = WorkSessionStore::new(session_root);
         let (mut session, persistence_message) = match session_store.load_active_or_create() {
             Ok(session) if session.status == WorkStatus::Interrupted => (
@@ -275,6 +277,7 @@ impl WorkApp {
             diagnostics_report,
             settings_open: false,
             settings_has_api_key,
+            codex_account_available,
             provider_input,
             model_input,
             base_url_input,
@@ -555,6 +558,22 @@ impl WorkApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.save_model_settings(cx) {
+            self.start_provider_connection_test(cx);
+        }
+    }
+
+    fn use_codex_account(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let model = self.runtime_service.codex_default_model();
+        self.provider_input
+            .update(cx, |input, cx| input.set_value("openai-codex", window, cx));
+        self.model_input
+            .update(cx, |input, cx| input.set_value(model, window, cx));
+        self.base_url_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.api_key_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.settings_has_api_key = false;
         if self.save_model_settings(cx) {
             self.start_provider_connection_test(cx);
         }
@@ -1317,6 +1336,35 @@ impl WorkApp {
                     .rounded(cx.theme().radius)
                     .border_1()
                     .border_color(cx.theme().border)
+                    .when(self.codex_account_available, |this| {
+                        this.child(
+                            h_flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_4()
+                                .p_4()
+                                .rounded(cx.theme().radius)
+                                .bg(cx.theme().accent.opacity(0.45))
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .child(div().font_bold().child("Codex login found"))
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Use the existing account on this Mac. No API key is copied into Work."),
+                                        ),
+                                )
+                                .child(
+                                    Button::new("use-codex-account")
+                                        .primary()
+                                        .disabled(self.connection_test_active)
+                                        .label("Use Codex Account")
+                                        .on_click(cx.listener(Self::use_codex_account)),
+                                ),
+                        )
+                    })
                     .child(div().text_sm().font_bold().child("Provider"))
                     .child(Input::new(&self.provider_input).aria_label("Model provider"))
                     .child(div().text_sm().font_bold().child("Model ID"))

@@ -8,6 +8,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **One-click Codex account onboarding.** Work detects an existing local Codex
+  login without reading its credential payload and offers **Use Codex Account**.
+  It reuses the non-secret model selected by the Codex client, clears
+  inapplicable API-key/base-URL fields, and immediately runs Save & Test. This
+  was verified against a real ChatGPT-backed Codex session instead of assuming
+  the generic provider default is account-compatible.
 - **Auto-growing Work composer.** The primary chat and in-run guidance fields
   now use GPUI Component's native multiline textarea. They grow with longer
   prompts, submit with Return, preserve Shift-Return for new lines, and retain

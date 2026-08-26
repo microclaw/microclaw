@@ -75,6 +75,13 @@ credentials are never loaded into the UI and are explicitly removed from
 diagnostic errors before display. A successful response exposes **Start
 Chatting** so the first-use journey returns directly to the composer.
 
+When an existing Codex login is detected through the presence of its auth file
+or access-token environment, Model Settings offers **Use Codex Account**. Work
+does not read the auth payload or copy a token into its config. It uses the
+non-secret model selected in the local Codex `config.toml` when available, then
+runs the same Save & Test journey. This avoids assuming that the Server's
+fallback Codex model is enabled for every ChatGPT account.
+
 A packaged installation falls back to
 `<platform data directory>/microclaw-work/microclaw.config.yaml`, while an
 explicit `MICROCLAW_WORK_CONFIG` or discoverable shared Server config takes

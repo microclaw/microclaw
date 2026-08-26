@@ -429,6 +429,19 @@ impl WorkRuntimeService {
         })
     }
 
+    pub fn codex_account_available(&self) -> bool {
+        codex_account_available_at(
+            dirs::home_dir().as_deref(),
+            std::env::var_os("OPENAI_CODEX_ACCESS_TOKEN").is_some(),
+        )
+    }
+
+    pub fn codex_default_model(&self) -> String {
+        codex_model_from_config(&microclaw::codex_auth::default_codex_config_path()).unwrap_or_else(
+            || microclaw::config::default_model_for_provider_name("openai-codex").to_string(),
+        )
+    }
+
     pub fn save_model_settings(
         &self,
         draft: ModelSettingsDraft,
@@ -735,6 +748,20 @@ fn run_worker(
     }
 }
 
+fn codex_account_available_at(home: Option<&Path>, access_token_present: bool) -> bool {
+    access_token_present || home.is_some_and(|home| home.join(".codex").join("auth.json").is_file())
+}
+
+fn codex_model_from_config(path: &Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct CodexPreferences {
+        model: Option<String>,
+    }
+    let content = fs::read_to_string(path).ok()?;
+    let preferences: CodexPreferences = toml::from_str(&content).ok()?;
+    preferences.model.filter(|model| !model.trim().is_empty())
+}
+
 fn provider_allows_keyless(provider: &str) -> bool {
     matches!(provider, "ollama" | "openai-codex" | "qwen-portal")
 }
@@ -869,6 +896,36 @@ mod tests {
     #[test]
     fn generated_run_ids_are_unique() {
         assert_ne!(next_run_id(), next_run_id());
+    }
+
+    #[test]
+    fn detects_codex_account_without_reading_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(!codex_account_available_at(Some(directory.path()), false));
+        assert!(codex_account_available_at(Some(directory.path()), true));
+
+        let codex_dir = directory.path().join(".codex");
+        fs::create_dir_all(&codex_dir).unwrap();
+        fs::write(codex_dir.join("auth.json"), b"not inspected").unwrap();
+        assert!(codex_account_available_at(Some(directory.path()), false));
+    }
+
+    #[test]
+    fn uses_the_model_selected_by_the_local_codex_client() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config.toml");
+        fs::write(
+            &config,
+            "model = \"gpt-account-model\"\nmodel_reasoning_effort = \"high\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            codex_model_from_config(&config).as_deref(),
+            Some("gpt-account-model")
+        );
+
+        fs::write(&config, "model = \"\"\n").unwrap();
+        assert_eq!(codex_model_from_config(&config), None);
     }
 
     #[test]

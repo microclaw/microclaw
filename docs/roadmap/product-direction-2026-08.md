@@ -472,7 +472,8 @@ native offline readiness diagnostics with explicit provider and full Agent
 Engine first-response probes, a refined conversation/sidebar/composer visual
 language, an auto-growing multiline composer with Return/Shift-Return chat
 semantics, a single Save & Test onboarding action with an explicit return to
-chat, native macOS Edit/Quit/Dock-reopen lifecycle, live plans, in-run steering, structured
+chat, detected Codex-account reuse with its locally selected model, native
+macOS Edit/Quit/Dock-reopen lifecycle, live plans, in-run steering, structured
 inline approvals, bounded process
 evidence, native multi-file diff review, visible subagent activity, checkpoint
 review, process-level crash/retry tests, and macOS development-bundle

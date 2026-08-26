@@ -6235,6 +6235,7 @@ dependencies = [
 name = "microclaw-work-runtime"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "microclaw",
  "microclaw-core",
  "serde",
@@ -6242,6 +6243,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "toml 0.8.23",
  "url",
 ]
 
