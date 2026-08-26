@@ -60,10 +60,12 @@ event does not repeat the accumulated text.
 
 ## Open acceptance work
 
-- AccessKit exposes the primary controls and the composer, but repeated Tab and
-  Shift-Tab input did not produce an observable complete focus traversal in the
-  current macOS keyboard-navigation configuration. VoiceOver and a machine
-  configured for full keyboard navigation still require a manual pass.
+- AccessKit exposes the primary controls and the composer. A later visual pass
+  confirmed that Tab moves from the composer to **Try Demo**, skips the disabled
+  **Stop** action, and then focuses **Send**; Shift-Tab reverses the path. The
+  accessibility snapshot did not expose the focused attribute, so the visible
+  native focus ring is the authoritative evidence for this check. VoiceOver
+  still requires a direct manual pass.
 - Unicode Chinese text, persistence, Return-to-send, and Shift-Return multiline
   input are verified. Native Pinyin candidate composition is not yet proven.
 - A signed build exists, but a live Apple notarization and stapling run still
