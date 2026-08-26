@@ -117,6 +117,15 @@ The validated bundle is written to
 local execution. Developer ID signing, notarization, DMG creation, and
 auto-update are later Phase 0/5 work.
 
+Extended CI continuously checks the Work application on `ubuntu-24.04`, the
+current GitHub-hosted macOS runner, and `windows-latest`. Each platform runs the
+framework-independent session and process-recovery tests, runs Cargo check and
+Clippy for the native GPUI application, produces a release build, and uploads a
+14-day preview archive. These archives are unsigned engineering previews, not release
+installers. A platform is not promoted to release quality until its native
+installer, signing, launch smoke test, IME/accessibility checks, and GPU/display
+matrix have direct evidence.
+
 The UI remains a workflow projection rather than an IDE. Conversation is the
 primary surface, with approvals rendered inline at the point where work pauses.
 Workspace, Plan, Tool Activity, bounded and redacted Process Output, File Changes,

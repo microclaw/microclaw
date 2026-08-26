@@ -8,6 +8,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Cross-platform Work preview gate.** Extended CI now compiles and tests the
+  shared Work session/runtime/recovery path on Linux, macOS, and Windows, builds
+  the native GPUI desktop in release mode on every platform, and uploads
+  short-lived Linux, macOS, and Windows preview archives. The Linux job installs
+  the native dependencies required by the repository's pinned GPUI/Zed revision.
 - **Chat-first MicroClaw Work home.** The GPUI desktop now opens into a
   conversation workspace instead of a task dashboard: New Chat and durable
   conversation history lead the sidebar, setup state is compact and secondary,

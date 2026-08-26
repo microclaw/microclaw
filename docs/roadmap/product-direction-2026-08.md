@@ -470,10 +470,13 @@ the conversation-first home and contextual Details inspector described above,
 live plans, in-run steering, structured inline approvals, bounded process
 evidence, native multi-file diff review, visible subagent activity, checkpoint
 review, process-level crash/retry tests, and macOS development-bundle
-verification. The next gates remain real-provider end-to-end onboarding,
-Windows/Linux CI and packaging, accessibility/IME testing, diagnostics, and
-signed release installers. Phase 1 is not complete until those gates have
-direct evidence.
+verification. The repository also has a Linux/macOS/Windows release-build
+matrix that runs the headless recovery harness and publishes unsigned preview
+archives; successful hosted-run evidence is still required before treating
+that gate as passed. The next gates remain real-provider end-to-end onboarding,
+platform launch smoke tests, accessibility/IME testing, diagnostics, and signed
+release installers. Phase 1 is not complete until those gates have direct
+evidence.
 
 ### Phase 2 — persistent agents and teams
 

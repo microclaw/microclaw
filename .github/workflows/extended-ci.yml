@@ -1,6 +1,7 @@
 name: Extended CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -74,7 +75,26 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc g++ clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev vulkan-validationlayers libvulkan1
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            cmake \
+            gcc \
+            g++ \
+            libasound2-dev \
+            libfontconfig-dev \
+            libgit2-dev \
+            libglib2.0-dev \
+            libssl-dev \
+            libstdc++-14-dev \
+            libva-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxkbcommon-x11-dev \
+            libzstd-dev \
+            pipewire \
+            xdg-desktop-portal
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
@@ -88,6 +108,56 @@ jobs:
       - run: cargo clippy -p microclaw-work-app --all-targets --locked -- -D warnings
       - run: cargo clippy -p microclaw-work --all-targets --no-deps --locked -- -D warnings
       - run: cargo clippy -p microclaw-work-headless --all-targets --no-deps --locked -- -D warnings
-      - name: Build development macOS app bundle
+      - name: Build release desktop binary
+        if: runner.os != 'macOS'
+        run: cargo build -p microclaw-work --release --locked
+      - name: Build release macOS app bundle
         if: runner.os == 'macOS'
-        run: scripts/build_work_macos_app.sh debug
+        run: scripts/build_work_macos_app.sh release
+      - name: Package Linux preview
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p target/microclaw-work-preview
+          cp target/release/microclaw-work target/microclaw-work-preview/
+          cp LICENSE apps/microclaw-work/README.md target/microclaw-work-preview/
+          tar -czf microclaw-work-linux-x86_64.tar.gz -C target microclaw-work-preview
+      - name: Package macOS preview
+        if: runner.os == 'macOS'
+        run: |
+          ditto -c -k --keepParent \
+            'target/microclaw-work-app/release/MicroClaw Work.app' \
+            microclaw-work-macos-runner.zip
+      - name: Package Windows preview
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path target/microclaw-work-preview | Out-Null
+          Copy-Item target/release/microclaw-work.exe target/microclaw-work-preview/
+          Copy-Item LICENSE target/microclaw-work-preview/
+          Copy-Item apps/microclaw-work/README.md target/microclaw-work-preview/
+          Compress-Archive -Path target/microclaw-work-preview/* -DestinationPath microclaw-work-windows-x86_64.zip -Force
+      - name: Upload Linux preview
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: microclaw-work-linux-x86_64
+          path: microclaw-work-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload macOS preview
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: microclaw-work-macos-runner
+          path: microclaw-work-macos-runner.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Windows preview
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: microclaw-work-windows-x86_64
+          path: microclaw-work-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 14
