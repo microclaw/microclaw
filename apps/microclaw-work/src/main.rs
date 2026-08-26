@@ -2383,6 +2383,7 @@ impl Render for WorkApp {
                                     .px_1()
                                     .gap_2()
                                     .items_center()
+                                    .justify_start()
                                     .rounded(cx.theme().radius)
                                     .disabled(self.runtime_active)
                                     .accessibility_label(format!(
@@ -2508,18 +2509,17 @@ impl Render for WorkApp {
                                     .on_click(cx.listener(Self::choose_workspace)),
                             )
                             .child(
+                                Button::new("model-settings")
+                                    .outline()
+                                    .small()
+                                    .w_full()
+                                    .disabled(self.runtime_active)
+                                    .label("Settings")
+                                    .on_click(cx.listener(Self::open_model_settings)),
+                            )
+                            .child(
                                 h_flex()
-                                    .gap_1()
-                                    .child(
-                                        Button::new("model-settings")
-                                            .ghost()
-                                            .xsmall()
-                                            .compact()
-                                            .flex_1()
-                                            .disabled(self.runtime_active)
-                                            .label("Settings")
-                                            .on_click(cx.listener(Self::open_model_settings)),
-                                    )
+                                    .gap_2()
                                     .child(
                                         Button::new("refresh-config")
                                             .ghost()
