@@ -2511,23 +2511,31 @@ fn trim_text(text: &str, limit: usize) -> String {
     }
 }
 
+fn open_work_window(cx: &mut App) {
+    if !cx.windows().is_empty() {
+        cx.activate(true);
+        return;
+    }
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::centered(size(px(1180.), px(760.)), cx)),
+        ..Default::default()
+    };
+    cx.spawn(async move |cx| {
+        cx.open_window(options, |window, cx| {
+            let view = cx.new(|cx| WorkApp::new(window, cx));
+            cx.new(|cx| Root::new(view, window, cx))
+        })
+        .expect("failed to open MicroClaw Work window");
+    })
+    .detach();
+}
+
 fn main() {
-    gpui_platform::application().run(move |cx| {
+    let application = gpui_platform::application();
+    application.on_reopen(open_work_window);
+    application.run(move |cx| {
         gpui_component::init(cx);
         configure_native_application(cx);
-
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(1180.), px(760.)), cx)),
-            ..Default::default()
-        };
-
-        cx.spawn(async move |cx| {
-            cx.open_window(options, |window, cx| {
-                let view = cx.new(|cx| WorkApp::new(window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
-            })
-            .expect("failed to open MicroClaw Work window");
-        })
-        .detach();
+        open_work_window(cx);
     });
 }

@@ -14,8 +14,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   explicit AccessKit names without adding a separate editor implementation.
 - **Native Work application lifecycle.** The macOS application now activates
   itself, installs standard Edit menu actions, and handles Command-Q through a
-  real Quit action. Model onboarding is reduced to **Save & Test**, followed by
-  a clear **Start Chatting** action after the provider responds successfully.
+  real Quit action. Closing the last window keeps the app alive, and reopening
+  it from the Dock recreates the durable conversation window. Model onboarding
+  is reduced to **Save & Test**, followed by a clear **Start Chatting** action
+  after the provider responds successfully.
 - **Keyboard-first Work composer.** Pressing Return in the native chat composer
   now invokes the same primary action as Send, while Return in the active-run
   guidance field sends steering through the existing Work runtime boundary.

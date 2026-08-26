@@ -222,7 +222,9 @@ window root.
 
 The native application menu provides standard Edit commands and a real
 **Quit MicroClaw Work** action. Command-Q exits the GPUI process on macOS rather
-than leaving an old desktop process alive.
+than leaving an old desktop process alive. Closing the last window keeps the
+application available in the Dock; launching the running app again recreates
+the conversation window from durable state.
 
 The UI remains a workflow projection rather than an IDE. Conversation is the
 primary surface, with approvals rendered inline at the point where work pauses.
