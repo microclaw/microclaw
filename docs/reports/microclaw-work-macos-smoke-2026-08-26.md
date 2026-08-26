@@ -33,7 +33,7 @@ the task; project-tool checks used a disposable fixture under `/private/tmp`.
 6. Command-Q terminated the process. Relaunch restored the same single user
    message, assistant response, conversation title, and completed state.
 7. The rebuilt DMG passed `hdiutil verify`. Its SHA-256 is
-   `1798d07453423d96bf98c55c7a0852657b924791827883f334f7b0d965045b20`.
+   `2d874ef5d02a414f39b27a5eda33ed8760a8ff326114adc0c80f01058f9281f4`.
 8. A selected project fixture containing `README.md` and `TASK.md` was opened
    in a fresh conversation. Codex published a three-step plan, read `TASK.md`
    with the native file tool, created `RESULT.md`, re-read the result, and
@@ -73,6 +73,15 @@ optimized `work-release` bundle and DMG:
   `target/microclaw-work-installer/work-release/MicroClaw-Work-0.1.0-macos.dmg`.
 - A read-only mount of that DMG contained `MicroClaw Work.app` and the expected
   `/Applications` installation link, and detached cleanly after inspection.
+- Apple accepted application submission
+  `71e93ee4-ffbc-4088-bbb9-2db4fe6f66d1` and DMG submission
+  `c8f9ea95-bb41-41e1-8362-07739841561b`. Both artifacts were stapled and
+  validated. Gatekeeper accepts both with source `Notarized Developer ID`.
+- A copy of the notarized application launched for four seconds from a fresh
+  disposable installation directory with a fresh isolated data directory. The
+  process remained healthy until the smoke harness stopped it, and the exact
+  disposable directory was then removed. This is not a substitute for the
+  remaining clean-user Homebrew acceptance run.
 - `cargo test -p microclaw --lib --locked` passed 1,180 Server tests, with five
   explicitly ignored tests and no failures. Network tests were run with local
   loopback access; the A2A POST test that cannot bind inside the filesystem
@@ -102,7 +111,8 @@ Homebrew installation test.
   same value after process termination and relaunch. The normal Work data
   directory was not opened; the input source was restored to U.S. and the
   disposable directory was removed after verification.
-- A Developer ID signed and Gatekeeper-accepted build exists, but a live Apple
-  notarization and stapling run still requires the release keychain profile.
+- A Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted
+  candidate exists. A clean-user installation and published Homebrew lifecycle
+  test remain release acceptance work.
 - Longer multi-tool tasks and multi-day survival remain separate acceptance
   runs.

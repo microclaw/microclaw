@@ -87,7 +87,7 @@ loss, unsafe project mutation, or a required terminal workaround.
 
 ## Stage 3 — macOS release
 
-Status: **implementation complete; release credentials pending**
+Status: **notarized candidate complete; publication acceptance pending**
 
 Delivered:
 
@@ -96,14 +96,17 @@ Delivered:
   and DMG verification paths;
 - GitHub release and Homebrew Cask publication automation;
 - a desktop-only distribution profile that does not change Server release
-  settings.
+  settings;
+- a Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted
+  local candidate with application and DMG submission evidence;
+- an automated release verifier covering bundle metadata, signatures,
+  notarization, Gatekeeper, DMG integrity, and installation contents.
 
 Remaining release work:
 
-- run the public candidate with the production Developer ID and notary profile;
 - install that candidate on a clean macOS user account;
 - publish one prerelease and verify Homebrew install, upgrade, and uninstall;
-- record rollback instructions and final checksums.
+- record the immutable checksums of the published architecture-specific assets.
 
 Stage exit: the published Homebrew Cask installs a notarized app, completes a
 real first task, upgrades in place, and leaves Server artifacts unaffected.
