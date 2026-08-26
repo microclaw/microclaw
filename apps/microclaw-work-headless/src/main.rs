@@ -4,6 +4,7 @@ use microclaw::config::Config;
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
 use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
 use microclaw_work_app::session::{WorkCommand, WorkSessionSnapshot};
+use microclaw_work_app::store::WorkSessionStore;
 use std::error::Error;
 use std::io::{self, BufRead};
 
@@ -28,6 +29,7 @@ fn demo_events() -> Vec<RuntimeEventEnvelope> {
             run_id,
             2,
             RuntimeEvent::ToolStart {
+                call_id: "headless-read".into(),
                 name: "read_file".into(),
                 input: serde_json::json!({"path": "Cargo.toml"}),
             },
@@ -36,6 +38,7 @@ fn demo_events() -> Vec<RuntimeEventEnvelope> {
             run_id,
             3,
             RuntimeEvent::ToolResult {
+                call_id: "headless-read".into(),
                 name: "read_file".into(),
                 is_error: false,
                 preview: "workspace manifest loaded".into(),
@@ -53,6 +56,44 @@ fn demo_events() -> Vec<RuntimeEventEnvelope> {
             },
         ),
     ]
+}
+
+fn recovery_crash(root: &str) -> Result<(), Box<dyn Error>> {
+    let store = WorkSessionStore::new(root);
+    let mut session = store.create(std::env::current_dir()?.display().to_string())?;
+    session.apply(WorkCommand::StartTask {
+        task: "Recover this durable Work thread".into(),
+    })?;
+    session.apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+        "process-recovery-run",
+        1,
+        RuntimeEvent::TextDelta {
+            delta: "Partial provider response".into(),
+        },
+    )))?;
+    session.apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+        "process-recovery-run",
+        2,
+        RuntimeEvent::FileDiff {
+            path: "partial.txt".into(),
+            diff: "+partial workspace change".into(),
+            added: 1,
+            removed: 0,
+            truncated: false,
+        },
+    )))?;
+    store.save(&session)?;
+    std::process::abort();
+}
+
+fn recovery_resume(root: &str, retry: bool) -> Result<WorkSessionSnapshot, Box<dyn Error>> {
+    let store = WorkSessionStore::new(root);
+    let mut session = store.load_active_or_create()?;
+    if retry {
+        session.apply(WorkCommand::RetryTask)?;
+        store.save(&session)?;
+    }
+    Ok(session)
 }
 
 async fn run_real(task: String) -> Result<WorkSessionSnapshot, Box<dyn Error>> {
@@ -118,7 +159,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("{}", serde_json::to_string_pretty(&session)?);
             return Ok(());
         }
-        _ => return Err(format!("unknown mode {mode:?}; expected demo, replay, or real").into()),
+        "recovery-crash" => return recovery_crash(&task),
+        "recovery-resume" | "recovery-retry" => {
+            let session = recovery_resume(&task, mode == "recovery-retry")?;
+            println!("{}", serde_json::to_string_pretty(&session)?);
+            return Ok(());
+        }
+        _ => {
+            return Err(format!(
+                "unknown mode {mode:?}; expected demo, replay, real, recovery-crash, recovery-resume, or recovery-retry"
+            )
+            .into());
+        }
     };
 
     let session = project_events(&task, events)?;
@@ -138,6 +190,6 @@ mod tests {
         assert_eq!(session.status, WorkStatus::Completed);
         assert_eq!(session.runtime_run_id.as_deref(), Some("headless-demo"));
         assert_eq!(session.last_runtime_sequence, 4);
-        assert!(session.plan.iter().all(|step| step.completed));
+        assert!(session.plan.is_empty());
     }
 }

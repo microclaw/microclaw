@@ -33,6 +33,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   even when the composer is empty. Retry preserves the conversation without a
   duplicate user message and clears stale partial-run plans, drafts, activities,
   diffs, approvals, and review state before starting again.
+- **Process-level Work recovery harness.** The no-GPUI executable can now abort
+  after persisting a partially streamed Running session, recover it in a second
+  process, and retry it in a third. An integration test proves stable session
+  identity, transcript preservation, Interrupted projection, and stale-run
+  cleanup across real operating-system process boundaries.
 
 - **MicroClaw Work post-task review.** Foreground Work runs emit a pre-task
   checkpoint and completed file changes can be accepted, continued in the same

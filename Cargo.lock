@@ -6226,6 +6226,7 @@ dependencies = [
  "microclaw-core",
  "microclaw-work-app",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

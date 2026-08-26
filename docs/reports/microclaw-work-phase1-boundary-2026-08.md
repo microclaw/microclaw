@@ -103,7 +103,7 @@ cargo test -p microclaw-core --locked                            51 passed
 cargo test -p microclaw-work-app --locked                        24 passed
 cargo test -p microclaw-work-runtime --locked                     6 passed
 cargo test -p microclaw-work --locked                             0 tests; build passed
-cargo test -p microclaw-work-headless --locked                    1 passed
+cargo test -p microclaw-work-headless --locked                    2 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
 cargo clippy -p microclaw-work-headless --all-targets --no-deps  passed
 cargo check -p microclaw-work --locked                           passed
@@ -538,3 +538,19 @@ a Running snapshot, restores it as Interrupted with an empty composer, and
 proves the recovered snapshot accepts Retry. The native Demo interval was also
 lengthened to make active-state inspection practical and no longer seeds its
 conversation through the old synthetic snapshot path.
+
+## Deterministic process-level recovery
+
+Recovery is now verified across operating-system process boundaries instead of
+depending on GUI timing. The no-GPUI harness exposes three test-only modes over
+the real `WorkSessionStore`: the first persists a Running snapshot containing a
+partial provider response and file diff, then aborts; the second process loads
+the same store, which projects the task to Interrupted; the third loads that
+Interrupted snapshot, applies `RetryTask`, persists, and emits the result.
+
+The parent integration test asserts the crash process fails, the recovery
+process retains the task, one user message, partial draft, and file change, and
+the retry process keeps the same session ID and identical transcript while
+returning to Running with partial draft, file changes, plan, and approval state
+cleared. This closes the deterministic crash/restart evidence gap left by the
+short native Demo timing window.

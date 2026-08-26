@@ -18,6 +18,19 @@ cargo run -p microclaw-work-headless -- replay "Replay a runtime task" < events.
 
 This is an architectural harness, not a second agent loop.
 
+Run the deterministic multi-process recovery test:
+
+```sh
+cargo test -p microclaw-work-headless --test recovery_process
+```
+
+The test launches the executable three times. `recovery-crash` persists a
+partially streamed Running session and aborts the process; `recovery-resume`
+opens the same store and projects Interrupted; `recovery-retry` applies the
+first-class retry command and saves the cleaned Running projection. These modes
+are test harness operations over the real `WorkSessionStore`, not product UI or
+a separate runtime.
+
 Run a real task with the configured MicroClaw provider and the current
 directory as the Work workspace:
 
