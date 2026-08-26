@@ -131,6 +131,12 @@ reuses the last submitted turn and Agent Engine session, retains the readable
 conversation without inserting a duplicate user message, and discards stale
 partial-run projections before relaunch.
 
+Reproduce the maximum supported session storage baseline with:
+
+```sh
+cargo run -p microclaw-work-app --example session_scale --locked
+```
+
 If the active session or conversation index contains invalid JSON, Work keeps
 the original file beside the store with a `.corrupt-*` suffix, rebuilds the
 index from valid snapshots, and opens the newest recoverable conversation (or

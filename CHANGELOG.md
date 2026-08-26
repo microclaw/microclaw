@@ -32,7 +32,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   pinned conversations remain above unpinned history until explicitly unpinned.
 - **Responsive long Work sessions.** The desktop progressively renders older
   messages, bounds persisted diff payloads, and limits native diff previews so
-  long conversations and generated files do not make every frame expensive.
+  long conversations and generated files do not make every frame expensive. A
+  reproducible maximum-size save/load benchmark records the local performance
+  baseline.
 - **Current model presets in Work Settings.** Popular providers now have quick
   selection, current recommended model IDs, and provider endpoints while the
   editable Provider, Model ID, and Base URL fields continue to support the full

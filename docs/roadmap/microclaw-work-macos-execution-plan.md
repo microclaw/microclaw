@@ -60,6 +60,9 @@ Delivered:
 - stable creation-time conversation ordering with explicit Pin / Unpin;
 - progressive long-conversation rendering and bounded large-diff persistence
   and previews;
+- a reproducible maximum-size session benchmark with local save/load budgets
+  recorded in
+  [the dated scale report](../reports/microclaw-work-session-scale-2026-08-26.md);
 - shared current-model presets and editable custom provider configuration;
 - recoverable conversation storage that preserves damaged snapshots for
   diagnosis and rebuilds valid history;
@@ -72,8 +75,6 @@ Remaining acceptance work:
 
 - sustained use with long multi-tool conversations;
 - direct VoiceOver and native Pinyin IME acceptance;
-- final performance measurement with representative long-history and
-  large-diff fixtures.
 
 Stage exit: seven consecutive days of daily macOS use without conversation
 loss, unsafe project mutation, or a required terminal workaround.
