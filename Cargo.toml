@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "apps/microclaw-work",
     "crates/microclaw-core",
     "crates/microclaw-clawhub",
     "crates/microclaw-storage",
