@@ -30,6 +30,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - **Stable and pinnable Work conversations.** The desktop rail now keeps
   conversations in creation order regardless of opens, drafts, or new turns;
   pinned conversations remain above unpinned history until explicitly unpinned.
+- **Responsive long Work sessions.** The desktop progressively renders older
+  messages, bounds persisted diff payloads, and limits native diff previews so
+  long conversations and generated files do not make every frame expensive.
 - **Current model presets in Work Settings.** Popular providers now have quick
   selection, current recommended model IDs, and provider endpoints while the
   editable Provider, Model ID, and Base URL fields continue to support the full

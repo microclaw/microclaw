@@ -120,8 +120,10 @@ chat restores its matching runtime session rather than sharing a global desktop
 conversation. The recent-conversation rail is searchable by conversation title
 or Workspace path and keeps an explicit empty-result state. Its order is stable
 by creation time instead of recent clicks or saves, and explicit Pin / Unpin
-controls keep important conversations above the remaining history. Draft input is
-persisted after a short debounce. If the desktop
+controls keep important conversations above the remaining history. Long threads
+initially render the latest 60 messages and load earlier turns in batches.
+Persisted file diffs are bounded, and the native inspector labels its 400-line
+preview when a result is larger. Draft input is persisted after a short debounce. If the desktop
 process exits while a task is Running or Verifying, restart projects it as
 **Interrupted** and offers **Retry** even though the sent composer is empty;
 approval pauses remain resumable. Retry is a distinct application command: it

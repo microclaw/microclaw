@@ -58,9 +58,13 @@ Delivered:
 - Settings for local `SOUL.md` identity and project-context directory;
 - searchable durable conversation history by title or Workspace;
 - stable creation-time conversation ordering with explicit Pin / Unpin;
+- progressive long-conversation rendering and bounded large-diff persistence
+  and previews;
 - shared current-model presets and editable custom provider configuration;
 - recoverable conversation storage that preserves damaged snapshots for
   diagnosis and rebuilds valid history;
+- user-facing recovery for malformed Work-owned configuration that preserves
+  the original file and never replaces an external Server configuration;
 - real Codex-account smoke coverage for completion, cancellation, retry,
   approval, project changes, revert, and relaunch persistence.
 
@@ -68,8 +72,8 @@ Remaining acceptance work:
 
 - sustained use with long multi-tool conversations;
 - direct VoiceOver and native Pinyin IME acceptance;
-- user-facing recovery for malformed configuration files;
-- final performance pass for long histories and large diffs.
+- final performance measurement with representative long-history and
+  large-diff fixtures.
 
 Stage exit: seven consecutive days of daily macOS use without conversation
 loss, unsafe project mutation, or a required terminal workaround.

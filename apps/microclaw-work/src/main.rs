@@ -36,6 +36,9 @@ actions!(
 );
 
 const WORK_KEY_CONTEXT: &str = "MicroClawWork";
+const INITIAL_VISIBLE_MESSAGES: usize = 60;
+const MESSAGE_LOAD_BATCH: usize = 60;
+const MAX_VISIBLE_DIFF_LINES: usize = 400;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum AppearancePreference {
@@ -170,6 +173,7 @@ struct WorkApp {
     first_response_active: bool,
     first_response_message: String,
     inspector_open: bool,
+    visible_message_limit: usize,
     draft_revision: u64,
     _subscriptions: Vec<Subscription>,
 }
@@ -455,6 +459,7 @@ impl WorkApp {
             first_response_message: "Run First Response to verify the complete Agent Engine path."
                 .into(),
             inspector_open,
+            visible_message_limit: INITIAL_VISIBLE_MESSAGES,
             draft_revision: 0,
             _subscriptions,
         }
@@ -462,6 +467,14 @@ impl WorkApp {
 
     fn toggle_inspector(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.inspector_open = !self.inspector_open;
+        cx.notify();
+    }
+
+    fn show_earlier_messages(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.visible_message_limit = self
+            .visible_message_limit
+            .saturating_add(MESSAGE_LOAD_BATCH)
+            .min(WorkSessionSnapshot::MAX_MESSAGES);
         cx.notify();
     }
 
@@ -504,6 +517,7 @@ impl WorkApp {
             || !session.file_changes.is_empty()
             || !session.subagents.is_empty();
         self.session = session;
+        self.visible_message_limit = INITIAL_VISIBLE_MESSAGES;
         let task = self.session.composer_draft.clone();
         self.task_input.update(cx, |input, cx| {
             input.set_value(task, window, cx);
@@ -2218,7 +2232,15 @@ impl Render for WorkApp {
         let selected_file_change = self.session.selected_file_change().cloned();
         let review_status = self.session.review_status;
         let inline_approval = self.session.pending_approval.clone();
-        let messages = self.session.messages.clone();
+        let message_count = self.session.messages.len();
+        let visible_message_start = message_count.saturating_sub(self.visible_message_limit);
+        let messages = self
+            .session
+            .messages
+            .iter()
+            .skip(visible_message_start)
+            .cloned()
+            .collect::<Vec<_>>();
         let assistant_draft = self.session.assistant_draft.clone();
         let retryable = matches!(
             self.session.status,
@@ -2729,8 +2751,19 @@ impl Render for WorkApp {
                                                     ),
                                             )
                                     }))
+                                    .children((visible_message_start > 0).then(|| {
+                                        Button::new("show-earlier-messages")
+                                            .outline()
+                                            .small()
+                                            .label(format!(
+                                                "Show {} earlier messages",
+                                                visible_message_start.min(MESSAGE_LOAD_BATCH)
+                                            ))
+                                            .on_click(cx.listener(Self::show_earlier_messages))
+                                    }))
                                     .children(messages.into_iter().enumerate().map(
                                         |(message_index, message)| {
+                                        let message_index = message_index + visible_message_start;
                                         let is_user = message.role == ConversationRole::User;
                                         let speaker = if is_user { "You" } else { "MicroClaw" };
                                         let accessibility_label =
@@ -3051,6 +3084,9 @@ impl Render for WorkApp {
                                                 }))
                                             }))
                                             .children(selected_file_change.clone().map(|change| {
+                                                let diff_line_count = change.diff.lines().count();
+                                                let diff_preview_truncated =
+                                                    diff_line_count > MAX_VISIBLE_DIFF_LINES;
                                                 v_flex()
                                                     .gap_2()
                                                     .pt_2()
@@ -3082,7 +3118,7 @@ impl Render for WorkApp {
                                                             .border_color(cx.theme().border)
                                                             .font_family("monospace")
                                                             .text_xs()
-                                                            .children(change.diff.lines().map(str::to_owned).map(|line| {
+                                                            .children(change.diff.lines().take(MAX_VISIBLE_DIFF_LINES).map(str::to_owned).map(|line| {
                                                                 let background = if line.starts_with('+')
                                                                     && !line.starts_with("+++")
                                                                 {
@@ -3099,6 +3135,17 @@ impl Render for WorkApp {
                                                                     .py_1()
                                                                     .bg(background)
                                                                     .child(if line.is_empty() { " ".into() } else { line })
+                                                            }))
+                                                            .children(diff_preview_truncated.then(|| {
+                                                                div()
+                                                                    .px_2()
+                                                                    .py_2()
+                                                                    .border_t_1()
+                                                                    .border_color(cx.theme().border)
+                                                                    .text_color(cx.theme().muted_foreground)
+                                                                    .child(format!(
+                                                                        "Previewing the first {MAX_VISIBLE_DIFF_LINES} of {diff_line_count} lines. Open the file for the complete result."
+                                                                    ))
                                                             })),
                                                     )
                                             }))

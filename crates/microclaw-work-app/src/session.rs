@@ -262,6 +262,7 @@ impl WorkSessionSnapshot {
     pub const MAX_TOOL_ACTIVITIES: usize = 100;
     pub const MAX_PROCESS_ACTIVITIES: usize = 50;
     pub const MAX_FILE_CHANGES: usize = 50;
+    pub const MAX_FILE_DIFF_BYTES: usize = 200_000;
     pub const MAX_SUBAGENTS: usize = 50;
     pub const MAX_MESSAGES: usize = 200;
 
@@ -867,6 +868,13 @@ impl WorkSessionSnapshot {
                 removed,
                 truncated,
             } => {
+                let diff = microclaw_core::redact::redact_secrets(&diff);
+                let diff_end = microclaw_core::text::floor_char_boundary(
+                    &diff,
+                    diff.len().min(Self::MAX_FILE_DIFF_BYTES),
+                );
+                let truncated = truncated || diff_end < diff.len();
+                let diff = diff[..diff_end].to_string();
                 self.diff_summary = format!(
                     "{path}: +{added} -{removed}{}",
                     if truncated { " (truncated)" } else { "" }
@@ -874,7 +882,7 @@ impl WorkSessionSnapshot {
                 self.file_changes.retain(|change| change.path != path);
                 self.file_changes.push(FileChange {
                     path: path.clone(),
-                    diff: microclaw_core::redact::redact_secrets(&diff),
+                    diff,
                     added,
                     removed,
                     truncated,
@@ -1855,6 +1863,32 @@ mod tests {
             snapshot.final_response.as_deref(),
             Some("Implemented and verified")
         );
+    }
+
+    #[test]
+    fn large_file_diffs_are_bounded_for_durable_desktop_sessions() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "run-large-diff",
+                1,
+                RuntimeEvent::FileDiff {
+                    path: "generated.txt".into(),
+                    diff: format!(
+                        "+{}",
+                        "x".repeat(WorkSessionSnapshot::MAX_FILE_DIFF_BYTES + 32)
+                    ),
+                    added: 1,
+                    removed: 0,
+                    truncated: false,
+                },
+            )))
+            .unwrap();
+
+        let change = snapshot.selected_file_change().unwrap();
+        assert!(change.diff.len() <= WorkSessionSnapshot::MAX_FILE_DIFF_BYTES);
+        assert!(change.truncated);
+        assert!(snapshot.diff_summary.ends_with("(truncated)"));
     }
 
     #[test]
