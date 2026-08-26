@@ -12,6 +12,12 @@ technology spike, not a production desktop release.
 - Added a native GPUI + GPUI Component application shell.
 - Added Workspace, Task, Plan, Approval, Diff, and Artifact projections.
 - Added an approval transition from `AwaitingApproval` to `Verifying`.
+- Added a GPUI Component task input suitable for real IME validation.
+- Added a timed synthetic Work event stream that moves from planning through
+  tool activity to an approval pause.
+- Added a framework-independent event projection capped at 200 entries.
+- Kept lifecycle transitions in the framework-independent session domain; GPUI
+  owns input, timers, rendering, and commands but not Work state policy.
 - Added a versioned, framework-independent `WorkSessionSnapshot`.
 - Added atomic snapshot persistence to the platform-local data directory and
   startup recovery.
@@ -26,14 +32,16 @@ technology spike, not a production desktop release.
 ```text
 cargo check -p microclaw-work                 passed
 cargo build -p microclaw-work                 passed
-cargo test -p microclaw-work --lib            2 passed
+cargo test -p microclaw-work --lib            4 passed
 cargo clippy -p microclaw-work --all-targets  passed with -D warnings
 cargo check -p microclaw --lib                passed on Rust 1.95.0
 ```
 
-The binary entered its window event loop and remained running until it was
-terminated. Visual and accessibility inspection could not be completed during
-this run because the macOS session was locked.
+The binary entered its window event loop after both implementation increments
+and remained running until it was terminated. The snapshot file was inspected
+in the macOS Application Support directory. Visual, task-input, and
+accessibility inspection could not be completed during these runs because the
+macOS session was locked.
 
 ## Important dependency finding
 
@@ -48,7 +56,6 @@ in the lockfile.
 
 - Inspect the running macOS UI visually and through the accessibility tree.
 - Verify Chinese and English IME composition in a real input control.
-- Replace the static task projection with a bounded synthetic event stream.
 - Exercise recovery by changing state, terminating the process, and relaunching.
 - Run and fix the new CI matrix on Ubuntu, macOS, and Windows.
 - Validate high-DPI, multi-monitor, sleep/wake, old GPU, and remote-desktop use.

@@ -13,6 +13,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["fo
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "d5821f270317754f2a311a0bb148ec32cbb0ced4" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+smol = "2"
 
 [dev-dependencies]
 tempfile = "3"

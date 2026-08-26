@@ -19,7 +19,9 @@ cargo test -p microclaw-work --lib
 The current UI is deliberately a workflow projection. It demonstrates the
 intended Workspace, Plan, Approval, Diff, and Artifact surfaces and persists its
 versioned spike snapshot under the platform-local data directory so restart
-recovery can be exercised. It does not yet execute the production agent loop.
+recovery can be exercised. A task input and bounded synthetic event stream
+exercise the foreground Work lifecycle through an approval pause. It does not
+yet execute the production agent loop.
 
 Pinned upstream revisions:
 

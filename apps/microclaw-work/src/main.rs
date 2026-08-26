@@ -2,19 +2,26 @@ use gpui::*;
 use gpui_component::{
     ActiveTheme, Root, StyledExt,
     button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex,
 };
-use microclaw_work::session::{WorkSessionSnapshot, WorkStatus};
+use microclaw_work::session::{WorkEventKind, WorkSessionSnapshot, WorkStatus};
+use smol::Timer;
 use std::path::PathBuf;
+use std::time::Duration;
 
 struct WorkApp {
     session: WorkSessionSnapshot,
     session_path: PathBuf,
     persistence_message: String,
+    task_input: Entity<InputState>,
+    active_run_id: u64,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl WorkApp {
-    fn new() -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let session_path = dirs::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("microclaw-work")
@@ -29,16 +36,40 @@ impl WorkApp {
                 };
                 (session, message)
             }
-            Err(error) => (
-                WorkSessionSnapshot::spike_demo(),
-                format!("恢复失败，已使用演示状态：{error}"),
-            ),
+            Err(error) => {
+                let session = WorkSessionSnapshot::spike_demo();
+                let message = match session.save(&session_path) {
+                    Ok(()) => format!("恢复失败，已重建演示状态：{error}"),
+                    Err(save_error) => {
+                        format!("恢复失败：{error}；保存新状态也失败：{save_error}")
+                    }
+                };
+                (session, message)
+            }
         };
+
+        let task_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(session.task.clone())
+                .placeholder("描述希望 MicroClaw Work 完成的任务…")
+        });
+        let _subscriptions = vec![cx.subscribe_in(&task_input, window, {
+            let task_input = task_input.clone();
+            move |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.session.task = task_input.read(cx).value().to_string();
+                    cx.notify();
+                }
+            }
+        })];
 
         Self {
             session,
             session_path,
             persistence_message,
+            task_input,
+            active_run_id: 0,
+            _subscriptions,
         }
     }
 
@@ -50,17 +81,69 @@ impl WorkApp {
     }
 
     fn approve(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.session.status = WorkStatus::Verifying;
-        self.session.approval_reason = None;
-        if let Some(step) = self.session.plan.get_mut(2) {
-            step.completed = true;
-        }
+        self.session.approve();
         self.persist();
         cx.notify();
     }
 
-    fn reset(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn start_demo(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let task = self.session.task.clone();
+        if let Err(error) = self.session.start_task(task) {
+            self.persistence_message = error.into();
+            cx.notify();
+            return;
+        }
+
+        self.active_run_id += 1;
+        let run_id = self.active_run_id;
+        self.persist();
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let events = [
+                (WorkEventKind::Plan, "正在分析 Workspace 与任务目标"),
+                (WorkEventKind::Plan, "已生成四步执行计划"),
+                (WorkEventKind::Tool, "读取 Cargo workspace 和桌面应用代码"),
+                (WorkEventKind::Tool, "准备修改 Work projection"),
+            ];
+
+            for (index, (kind, message)) in events.into_iter().enumerate() {
+                Timer::after(Duration::from_millis(650)).await;
+                let result = this.update(cx, |this, cx| {
+                    if this.active_run_id != run_id {
+                        return;
+                    }
+                    this.session
+                        .record_progress(kind, message, Some(index.min(1)));
+                    this.persist();
+                    cx.notify();
+                });
+                if result.is_err() {
+                    return;
+                }
+            }
+
+            Timer::after(Duration::from_millis(650)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.active_run_id != run_id {
+                    return;
+                }
+                this.session
+                    .request_approval("允许演示任务写入 Workspace 并运行验证");
+                this.persist();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn reset(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.session = WorkSessionSnapshot::spike_demo();
+        self.active_run_id += 1;
+        let task = self.session.task.clone();
+        self.task_input.update(cx, |input, cx| {
+            input.set_value(task, window, cx);
+        });
         self.persist();
         cx.notify();
     }
@@ -128,6 +211,17 @@ impl Render for WorkApp {
                     .gap_5()
                     .child(
                         h_flex()
+                            .gap_3()
+                            .child(div().flex_1().child(Input::new(&self.task_input)))
+                            .child(
+                                Button::new("run-demo")
+                                    .primary()
+                                    .label("运行演示任务")
+                                    .on_click(cx.listener(Self::start_demo)),
+                            ),
+                    )
+                    .child(
+                        h_flex()
                             .items_center()
                             .justify_between()
                             .child(
@@ -166,6 +260,25 @@ impl Render for WorkApp {
                                                 .child(if step.completed { "✓" } else { "○" })
                                                 .child(format!("{}. {}", index + 1, step.title))
                                         },
+                                    ))
+                                    .child(
+                                        div()
+                                            .mt_3()
+                                            .pt_3()
+                                            .border_t_1()
+                                            .border_color(cx.theme().border)
+                                            .text_sm()
+                                            .font_bold()
+                                            .child("Live events"),
+                                    )
+                                    .child(v_flex().gap_2().children(
+                                        self.session.events.iter().rev().take(8).map(|event| {
+                                            h_flex()
+                                                .gap_2()
+                                                .text_sm()
+                                                .child(format!("#{:03}", event.id))
+                                                .child(event.message.clone())
+                                        }),
                                     )),
                             )
                             .child(
@@ -239,7 +352,7 @@ fn main() {
 
         cx.spawn(async move |cx| {
             cx.open_window(options, |window, cx| {
-                let view = cx.new(|_| WorkApp::new());
+                let view = cx.new(|cx| WorkApp::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             })
             .expect("failed to open MicroClaw Work window");
