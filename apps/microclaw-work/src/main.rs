@@ -11,19 +11,20 @@ use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
 use microclaw_work_app::session::{
     ConversationRole, WorkCommand, WorkEventKind, WorkReviewStatus, WorkSessionSnapshot, WorkStatus,
 };
-use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
+use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary, startup_workspace};
 use microclaw_work_runtime::{
     ModelSettingsDraft, RuntimeConfigSummary, WorkRunCancellation, WorkRunRequest, WorkRunSteering,
     WorkRuntimeMessage, WorkRuntimeService,
 };
 use smol::Timer;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 struct WorkApp {
     session: WorkSessionSnapshot,
     session_store: WorkSessionStore,
+    work_home: PathBuf,
     recent_sessions: Vec<WorkSessionSummary>,
     persistence_message: String,
     task_input: Entity<InputState>,
@@ -67,6 +68,7 @@ impl WorkApp {
         let work_data_root = dirs::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("microclaw-work");
+        let work_home = work_data_root.join("workspace");
         let session_root = work_data_root.join("work-sessions");
         let runtime_service =
             WorkRuntimeService::discover(work_data_root.join("microclaw.config.yaml"));
@@ -96,21 +98,33 @@ impl WorkApp {
                 format!("Could not open the session store: {error}"),
             ),
         };
-        let workspace_is_valid =
-            !session.workspace.is_empty() && PathBuf::from(&session.workspace).is_dir();
-        let persistence_message = if workspace_is_valid {
-            persistence_message
-        } else {
-            let unavailable = std::mem::take(&mut session.workspace);
-            if unavailable.is_empty() {
-                persistence_message
-            } else {
-                format!("The previous workspace is unavailable ({unavailable}). Select another.")
+        let unavailable = session.workspace.clone();
+        let persistence_message = match startup_workspace(&unavailable, &work_home) {
+            Ok((_, false)) => persistence_message,
+            Ok((workspace, true)) => {
+                session.workspace = workspace.display().to_string();
+                let _ = session_store.save(&session);
+                if unavailable.is_empty() {
+                    "Ready in your private Work Home. Connect a project folder when needed.".into()
+                } else {
+                    format!(
+                        "The previous workspace is unavailable ({unavailable}). Using Work Home instead."
+                    )
+                }
+            }
+            Err(work_home_error) => {
+                session.workspace.clear();
+                let _ = session_store.save(&session);
+                format!(
+                    "Could not create Work Home: {work_home_error}. Select a folder before chatting{}.",
+                    if unavailable.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; previous workspace unavailable ({unavailable})")
+                    }
+                )
             }
         };
-        if !workspace_is_valid {
-            let _ = session_store.save(&session);
-        }
         let recent_sessions = session_store.list().unwrap_or_default();
 
         let task_input = cx.new(|cx| {
@@ -191,6 +205,7 @@ impl WorkApp {
         Self {
             session,
             session_store,
+            work_home,
             recent_sessions,
             persistence_message,
             task_input,
@@ -236,10 +251,14 @@ impl WorkApp {
 
     fn replace_session(
         &mut self,
-        session: WorkSessionSnapshot,
+        mut session: WorkSessionSnapshot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Ok((workspace, true)) = startup_workspace(&session.workspace, &self.work_home) {
+            session.workspace = workspace.display().to_string();
+            let _ = self.session_store.save(&session);
+        }
         self.inspector_open = !session.plan.is_empty()
             || !session.process_activities.is_empty()
             || !session.file_changes.is_empty()
@@ -253,6 +272,7 @@ impl WorkApp {
         self.draft_revision = self.draft_revision.saturating_add(1);
         self.runtime_active = false;
         self.runtime_cancellation = None;
+        self.runtime_steering = None;
     }
 
     fn new_session(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1207,6 +1227,14 @@ impl Render for WorkApp {
         } else {
             &self.task_input
         };
+        let using_work_home = Path::new(&self.session.workspace) == self.work_home;
+        let workspace_label = if using_work_home {
+            "Work Home".to_string()
+        } else if self.session.workspace.is_empty() {
+            "No folder selected".to_string()
+        } else {
+            self.session.workspace.clone()
+        };
 
         h_flex()
             .size_full()
@@ -1270,17 +1298,13 @@ impl Render for WorkApp {
                                     .text_color(cx.theme().muted_foreground)
                                     .child("Workspace"),
                             )
-                            .child(div().text_sm().child(if self.session.workspace.is_empty() {
-                                "No folder selected".to_string()
-                            } else {
-                                self.session.workspace.clone()
-                            }))
+                            .child(div().text_sm().child(workspace_label.clone()))
                             .child(
                                 Button::new("choose-workspace")
                                     .outline()
                                     .disabled(self.runtime_active)
-                                    .label(if self.session.workspace.is_empty() {
-                                        "Choose Folder"
+                                    .label(if using_work_home {
+                                        "Connect Project Folder"
                                     } else {
                                         "Change Folder"
                                     })
@@ -1342,8 +1366,10 @@ impl Render for WorkApp {
                                         },
                                     ))
                                     .child(div().text_sm().text_color(cx.theme().muted_foreground).child(
-                                        if self.session.workspace.is_empty() {
-                                            "Choose a folder when this conversation needs local files".to_string()
+                                        if using_work_home {
+                                            "Chat in Work Home, or connect a project folder when local context is needed".to_string()
+                                        } else if self.session.workspace.is_empty() {
+                                            "Select a folder before starting this conversation".to_string()
                                         } else {
                                             format!("Working in {}", self.session.workspace)
                                         },
@@ -1403,15 +1429,30 @@ impl Render for WorkApp {
                                                     .max_w(px(560.))
                                                     .text_center()
                                                     .text_color(cx.theme().muted_foreground)
-                                                    .child("Ask MicroClaw to research, create, organize, or automate work across your files and tools."),
+                                                    .child(if self.runtime_config.ready {
+                                                        "Ask MicroClaw to research, create, organize, or automate work. Work Home is ready; connect a project folder only when you need its files."
+                                                    } else {
+                                                        "Connect a model once, then start chatting. A private Work Home is already available for files and artifacts."
+                                                    }),
                                             )
-                                            .children(self.session.workspace.is_empty().then(|| {
-                                                Button::new("empty-choose-workspace")
-                                                    .outline()
-                                                    .disabled(self.runtime_active)
-                                                    .label("Connect a Folder")
-                                                    .on_click(cx.listener(Self::choose_workspace))
-                                            }))
+                                            .child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .children((!self.runtime_config.ready).then(|| {
+                                                        Button::new("empty-model-settings")
+                                                            .primary()
+                                                            .disabled(self.runtime_active)
+                                                            .label("Configure Model")
+                                                            .on_click(cx.listener(Self::open_model_settings))
+                                                    }))
+                                                    .child(
+                                                        Button::new("empty-choose-workspace")
+                                                            .outline()
+                                                            .disabled(self.runtime_active)
+                                                            .label("Connect Project Folder")
+                                                            .on_click(cx.listener(Self::choose_workspace)),
+                                                    ),
+                                            )
                                     }))
                                     .children(messages.into_iter().map(|message| {
                                         let is_user = message.role == ConversationRole::User;
@@ -1800,10 +1841,12 @@ impl Render for WorkApp {
                                                     .rounded_full()
                                                     .bg(cx.theme().accent)
                                                     .text_xs()
-                                                    .child(if self.session.workspace.is_empty() {
-                                                        "No folder"
+                                                    .child(if using_work_home {
+                                                        "Work Home"
+                                                    } else if self.session.workspace.is_empty() {
+                                                        "No workspace"
                                                     } else {
-                                                        "Folder connected"
+                                                        "Project connected"
                                                     }),
                                             )
                                             .child(

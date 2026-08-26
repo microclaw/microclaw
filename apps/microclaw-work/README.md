@@ -24,14 +24,18 @@ cargo test -p microclaw-work-app
 ```
 
 The main **Send** action loads the normal MicroClaw configuration,
-uses the selected workspace, and streams versioned Runtime Event envelopes into
-the Work projection. The native **Choose Folder** action is backed by GPUI's
-cross-platform directory prompt; the canonical path survives restart. A new
-install has no implicit workspace and cannot run until the user selects one.
-Missing workspaces return to this safe unselected state instead of falling back
-to the process launch directory (which can be `/` for a packaged application).
+uses the active workspace, and streams versioned Runtime Event envelopes into
+the Work projection. A new installation starts in a private, platform-local
+**Work Home**, so model setup can lead directly to the first chat without a
+folder-picker detour or accidental reliance on the process launch directory.
+The native **Connect Project Folder** action is backed by GPUI's cross-platform
+directory prompt; the canonical path survives restart. If a previously selected
+project disappears, Work returns to Work Home. If Work Home itself cannot be
+created, sending remains disabled until the user selects an accessible folder.
 
-The compact environment area at the bottom of the chat sidebar reports the
+The empty chat home makes missing model configuration a primary onboarding
+action and keeps project connection optional. The compact environment area at
+the bottom of the chat sidebar reports the
 configured provider and model without showing credentials. **Model** opens a
 native, English first-run flow for provider, model, optional base URL, and API
 key, so Work does not

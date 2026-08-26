@@ -467,6 +467,8 @@ features. Its new work is the desktop task lifecycle and product experience.
 Implementation status (2026-08-25): **in progress**. The repository now has a
 native GPUI application, a shared-runtime port, durable conversation threads,
 the conversation-first home and contextual Details inspector described above,
+an automatically provisioned private Work Home that removes the folder-picker
+barrier from first chat, prominent first-run model onboarding,
 live plans, in-run steering, structured inline approvals, bounded process
 evidence, native multi-file diff review, visible subagent activity, checkpoint
 review, process-level crash/retry tests, and macOS development-bundle

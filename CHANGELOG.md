@@ -8,6 +8,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Direct-to-chat MicroClaw Work onboarding.** New desktop installations now
+  provision a private platform-local Work Home, surface model configuration in
+  the empty chat canvas, and allow the first conversation without forcing the
+  user through a project-folder picker. Missing external projects safely fall
+  back to Work Home.
 - **Cross-platform Work preview gate.** Extended CI now compiles and tests the
   shared Work session/runtime/recovery path on Linux, macOS, and Windows, builds
   the native GPUI desktop in release mode on every platform, and uploads

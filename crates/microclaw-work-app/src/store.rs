@@ -4,6 +4,16 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Resolve the safe workspace used when Work opens. An available selected
+/// project wins; otherwise Work creates and returns its private Work Home.
+pub fn startup_workspace(current: &str, work_home: &Path) -> io::Result<(PathBuf, bool)> {
+    if !current.is_empty() && Path::new(current).is_dir() {
+        return Ok((PathBuf::from(current), false));
+    }
+    fs::create_dir_all(work_home)?;
+    Ok((work_home.to_path_buf(), true))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkSessionSummary {
     pub session_id: String,
@@ -201,6 +211,47 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_workspace_provisions_work_home_for_first_chat() {
+        let directory = tempfile::tempdir().unwrap();
+        let work_home = directory.path().join("work-home");
+
+        let (workspace, used_fallback) = startup_workspace("", &work_home).unwrap();
+
+        assert!(used_fallback);
+        assert_eq!(workspace, work_home);
+        assert!(workspace.is_dir());
+    }
+
+    #[test]
+    fn startup_workspace_keeps_an_available_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        let work_home = directory.path().join("work-home");
+        fs::create_dir(&project).unwrap();
+
+        let (workspace, used_fallback) =
+            startup_workspace(project.to_str().unwrap(), &work_home).unwrap();
+
+        assert!(!used_fallback);
+        assert_eq!(workspace, project);
+        assert!(!work_home.exists());
+    }
+
+    #[test]
+    fn startup_workspace_replaces_an_unavailable_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing-project");
+        let work_home = directory.path().join("work-home");
+
+        let (workspace, used_fallback) =
+            startup_workspace(missing.to_str().unwrap(), &work_home).unwrap();
+
+        assert!(used_fallback);
+        assert_eq!(workspace, work_home);
+        assert!(workspace.is_dir());
+    }
 
     #[test]
     fn creates_lists_and_reopens_distinct_sessions() {
