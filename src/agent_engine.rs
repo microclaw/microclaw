@@ -17,6 +17,7 @@ use crate::tools::ToolAuthContext;
 use microclaw_core::llm_types::{
     ContentBlock, ImageSource, Message, MessageContent, ResponseContentBlock,
 };
+pub use microclaw_core::runtime_event::RuntimeEvent as AgentEvent;
 use microclaw_core::text::floor_char_boundary;
 use microclaw_observability::traces::{
     kv, kv_int, new_span_id, new_trace_id, now_unix_nano, SpanData,
@@ -57,81 +58,6 @@ fn experience_environment_fingerprint(
         state.config.model,
         state.config.working_dir_isolation,
     )
-}
-
-#[derive(Debug, Clone)]
-pub enum AgentEvent {
-    Iteration {
-        iteration: usize,
-    },
-    ToolStart {
-        name: String,
-        input: serde_json::Value,
-    },
-    ToolResult {
-        name: String,
-        is_error: bool,
-        preview: String,
-        duration_ms: u128,
-        status_code: Option<i32>,
-        bytes: usize,
-        error_type: Option<String>,
-    },
-    TextDelta {
-        delta: String,
-    },
-    /// Emitted when a tool execution wave starts (parallel mode).
-    ToolWaveStart {
-        wave: usize,
-        tool_count: usize,
-    },
-    /// Emitted when a tool execution wave completes (parallel mode).
-    ToolWaveComplete {
-        wave: usize,
-    },
-    /// Emitted when the agent run was cancelled (via run_control interrupt).
-    /// Carries the final text accumulated before cancellation.
-    Cancelled {
-        final_text: String,
-    },
-    FinalResponse {
-        text: String,
-    },
-    /// Emitted when pending user messages are injected mid-turn.
-    MidTurnInjection {
-        count: usize,
-    },
-    /// Emitted after a successful file-modifying tool call, carrying the
-    /// rendered unified diff so channels/web can show what changed.
-    FileDiff {
-        path: String,
-        diff: String,
-        added: usize,
-        removed: usize,
-        truncated: bool,
-    },
-    /// Emitted when a sub-agent run is spawned from this turn.
-    SubagentStarted {
-        run_id: String,
-        label: String,
-    },
-    /// Emitted when a sub-agent run reaches a terminal state.
-    SubagentFinished {
-        run_id: String,
-        status: String,
-    },
-    /// Emitted when a high-risk tool call pauses the turn waiting for
-    /// operator approval. Carries the structured option card so richer
-    /// clients (web) can render buttons instead of parsing the text.
-    ApprovalRequired {
-        approval_id: String,
-        tool: String,
-        preview: Option<String>,
-        /// Ordered option labels: approve once / always allow / deny.
-        options: Vec<String>,
-        /// Optional advisory verdict from the aux-model risk reviewer.
-        advisory: Option<String>,
-    },
 }
 
 /// Default prompt for the opt-in post-edit self-recheck pass.

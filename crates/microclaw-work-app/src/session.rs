@@ -1,3 +1,4 @@
+use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -11,6 +12,7 @@ pub enum WorkStatus {
     AwaitingApproval,
     Verifying,
     Completed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,7 +38,7 @@ pub struct WorkEvent {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WorkCommand {
     StartTask {
         task: String,
@@ -50,6 +52,7 @@ pub enum WorkCommand {
         reason: String,
     },
     Approve,
+    ApplyRuntimeEvent(RuntimeEventEnvelope),
     ResetDemo,
 }
 
@@ -69,6 +72,14 @@ pub enum WorkCommandError {
         command: &'static str,
         actual: WorkStatus,
     },
+    #[error("unsupported runtime event schema {actual}, expected {expected}")]
+    UnsupportedRuntimeEventSchema { actual: u32, expected: u32 },
+    #[error("runtime event sequence for {run_id} must be {expected}, got {actual}")]
+    UnexpectedRuntimeEventSequence {
+        run_id: String,
+        expected: u64,
+        actual: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,12 +92,48 @@ pub struct WorkSessionSnapshot {
     pub approval_reason: Option<String>,
     pub diff_summary: String,
     #[serde(default)]
+    pub runtime_run_id: Option<String>,
+    #[serde(default)]
+    pub last_runtime_sequence: u64,
+    #[serde(default)]
     pub events: Vec<WorkEvent>,
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 1;
+    pub const SCHEMA_VERSION: u32 = 2;
     pub const MAX_EVENTS: usize = 200;
+
+    pub fn new(workspace: impl Into<String>) -> Self {
+        Self {
+            schema_version: Self::SCHEMA_VERSION,
+            workspace: workspace.into(),
+            task: String::new(),
+            status: WorkStatus::Planning,
+            plan: vec![
+                PlanStep {
+                    title: "理解任务与工作区".into(),
+                    completed: false,
+                },
+                PlanStep {
+                    title: "执行任务".into(),
+                    completed: false,
+                },
+                PlanStep {
+                    title: "处理审批".into(),
+                    completed: false,
+                },
+                PlanStep {
+                    title: "验证并交付结果".into(),
+                    completed: false,
+                },
+            ],
+            approval_reason: None,
+            diff_summary: String::new(),
+            runtime_run_id: None,
+            last_runtime_sequence: 0,
+            events: Vec::new(),
+        }
+    }
 
     pub fn spike_demo() -> Self {
         Self {
@@ -115,6 +162,8 @@ impl WorkSessionSnapshot {
             approval_reason: Some("允许写入 apps/microclaw-work 并运行 cargo check".into()),
             diff_summary: "+ GPUI app shell\n+ resumable session projection\n+ approval surface"
                 .into(),
+            runtime_run_id: None,
+            last_runtime_sequence: 0,
             events: vec![
                 WorkEvent {
                     id: 1,
@@ -163,6 +212,7 @@ impl WorkSessionSnapshot {
                 self.require_status("approve", WorkStatus::AwaitingApproval)?;
                 self.approve();
             }
+            WorkCommand::ApplyRuntimeEvent(envelope) => self.apply_runtime_event(envelope)?,
             WorkCommand::ResetDemo => *self = Self::spike_demo(),
         }
         Ok(CommandOutcome {
@@ -194,6 +244,8 @@ impl WorkSessionSnapshot {
         self.task = task;
         self.status = WorkStatus::Running;
         self.approval_reason = None;
+        self.runtime_run_id = None;
+        self.last_runtime_sequence = 0;
         self.events.clear();
         for step in &mut self.plan {
             step.completed = false;
@@ -231,6 +283,124 @@ impl WorkSessionSnapshot {
             WorkEventKind::Verification,
             "cargo check -p microclaw-work 已加入验证队列",
         );
+    }
+
+    fn apply_runtime_event(
+        &mut self,
+        envelope: RuntimeEventEnvelope,
+    ) -> Result<(), WorkCommandError> {
+        if envelope.schema_version != RuntimeEventEnvelope::SCHEMA_VERSION {
+            return Err(WorkCommandError::UnsupportedRuntimeEventSchema {
+                actual: envelope.schema_version,
+                expected: RuntimeEventEnvelope::SCHEMA_VERSION,
+            });
+        }
+
+        let expected = if self.runtime_run_id.as_deref() == Some(envelope.run_id.as_str()) {
+            self.last_runtime_sequence.saturating_add(1)
+        } else {
+            1
+        };
+        if envelope.sequence != expected {
+            return Err(WorkCommandError::UnexpectedRuntimeEventSequence {
+                run_id: envelope.run_id,
+                expected,
+                actual: envelope.sequence,
+            });
+        }
+
+        self.runtime_run_id = Some(envelope.run_id);
+        self.last_runtime_sequence = envelope.sequence;
+        match envelope.event {
+            RuntimeEvent::Iteration { iteration } => {
+                self.status = WorkStatus::Running;
+                self.push_event(
+                    WorkEventKind::System,
+                    format!("Agent iteration {iteration}"),
+                );
+            }
+            RuntimeEvent::ToolStart { name, .. } => {
+                self.status = WorkStatus::Running;
+                self.push_event(WorkEventKind::Tool, format!("开始执行工具：{name}"));
+            }
+            RuntimeEvent::ToolResult {
+                name,
+                is_error,
+                preview,
+                ..
+            } => {
+                let outcome = if is_error { "失败" } else { "完成" };
+                self.push_event(
+                    WorkEventKind::Tool,
+                    format!("工具 {name} {outcome}：{preview}"),
+                );
+            }
+            RuntimeEvent::TextDelta { delta } => {
+                if !delta.is_empty() {
+                    self.push_event(WorkEventKind::System, delta);
+                }
+            }
+            RuntimeEvent::ToolWaveStart { wave, tool_count } => self.push_event(
+                WorkEventKind::Tool,
+                format!("开始工具批次 {wave}（{tool_count} 个工具）"),
+            ),
+            RuntimeEvent::ToolWaveComplete { wave } => {
+                self.push_event(WorkEventKind::Tool, format!("工具批次 {wave} 已完成"))
+            }
+            RuntimeEvent::Cancelled { final_text } => {
+                self.status = WorkStatus::Cancelled;
+                self.approval_reason = None;
+                self.push_event(WorkEventKind::System, format!("任务已取消：{final_text}"));
+            }
+            RuntimeEvent::FinalResponse { text } => {
+                self.status = WorkStatus::Completed;
+                self.approval_reason = None;
+                for step in &mut self.plan {
+                    step.completed = true;
+                }
+                self.push_event(WorkEventKind::System, format!("任务已完成：{text}"));
+            }
+            RuntimeEvent::MidTurnInjection { count } => self.push_event(
+                WorkEventKind::System,
+                format!("已接收 {count} 条任务补充信息"),
+            ),
+            RuntimeEvent::FileDiff {
+                path,
+                added,
+                removed,
+                truncated,
+                ..
+            } => {
+                self.diff_summary = format!(
+                    "{path}: +{added} -{removed}{}",
+                    if truncated { "（已截断）" } else { "" }
+                );
+                self.push_event(WorkEventKind::Tool, format!("文件已修改：{path}"));
+            }
+            RuntimeEvent::SubagentStarted { run_id, label } => self.push_event(
+                WorkEventKind::System,
+                format!("子 Agent {label} 已启动（{run_id}）"),
+            ),
+            RuntimeEvent::SubagentFinished { run_id, status } => self.push_event(
+                WorkEventKind::System,
+                format!("子 Agent {run_id} 已结束：{status}"),
+            ),
+            RuntimeEvent::ApprovalRequired {
+                approval_id,
+                tool,
+                preview,
+                ..
+            } => {
+                self.status = WorkStatus::AwaitingApproval;
+                let reason = preview.unwrap_or_else(|| format!("工具 {tool} 请求执行权限"));
+                self.approval_reason = Some(reason.clone());
+                self.push_event(
+                    WorkEventKind::Approval,
+                    format!("等待审批 {approval_id}：{reason}"),
+                );
+            }
+        }
+        Ok(())
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> io::Result<()> {
@@ -360,5 +530,77 @@ mod tests {
                 actual: WorkStatus::Running,
             }
         );
+    }
+
+    #[test]
+    fn shared_runtime_events_drive_approval_diff_and_completion() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "edit a file".into(),
+            })
+            .unwrap();
+        let events = [
+            RuntimeEvent::FileDiff {
+                path: "src/main.rs".into(),
+                diff: "+fn main() {}".into(),
+                added: 1,
+                removed: 0,
+                truncated: false,
+            },
+            RuntimeEvent::ApprovalRequired {
+                approval_id: "approval-1".into(),
+                tool: "bash".into(),
+                preview: Some("run cargo test".into()),
+                options: vec!["approve once".into(), "deny".into()],
+                advisory: None,
+            },
+            RuntimeEvent::FinalResponse {
+                text: "done".into(),
+            },
+        ];
+        for (index, event) in events.into_iter().enumerate() {
+            snapshot
+                .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                    "server-run-1",
+                    index as u64 + 1,
+                    event,
+                )))
+                .unwrap();
+        }
+
+        assert_eq!(snapshot.status, WorkStatus::Completed);
+        assert_eq!(snapshot.diff_summary, "src/main.rs: +1 -0");
+        assert_eq!(snapshot.last_runtime_sequence, 3);
+        assert!(snapshot.approval_reason.is_none());
+    }
+
+    #[test]
+    fn rejects_runtime_event_gaps_without_mutating_projection() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "ordered events".into(),
+            })
+            .unwrap();
+
+        let error = snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "server-run-1",
+                2,
+                RuntimeEvent::Iteration { iteration: 1 },
+            )))
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            WorkCommandError::UnexpectedRuntimeEventSequence {
+                run_id: "server-run-1".into(),
+                expected: 1,
+                actual: 2,
+            }
+        );
+        assert_eq!(snapshot.last_runtime_sequence, 0);
+        assert!(snapshot.runtime_run_id.is_none());
     }
 }

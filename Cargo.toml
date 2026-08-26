@@ -2,6 +2,7 @@
 members = [
     ".",
     "apps/microclaw-work",
+    "apps/microclaw-work-headless",
     "crates/microclaw-core",
     "crates/microclaw-clawhub",
     "crates/microclaw-storage",

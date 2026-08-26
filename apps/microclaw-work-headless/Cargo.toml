@@ -1,0 +1,12 @@
+[package]
+name = "microclaw-work-headless"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+microclaw-core = { path = "../../crates/microclaw-core" }
+microclaw-work-app = { path = "../../crates/microclaw-work-app" }
+serde_json = "1"
+

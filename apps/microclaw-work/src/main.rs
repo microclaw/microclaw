@@ -165,6 +165,7 @@ impl Render for WorkApp {
             WorkStatus::AwaitingApproval => "等待审批",
             WorkStatus::Verifying => "验证中",
             WorkStatus::Completed => "已完成",
+            WorkStatus::Cancelled => "已取消",
         };
 
         h_flex()

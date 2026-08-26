@@ -1,0 +1,91 @@
+//! Headless proof that Work state is driven by shared runtime events, not GPUI.
+
+use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
+use microclaw_work_app::session::{WorkCommand, WorkSessionSnapshot};
+use std::error::Error;
+use std::io::{self, BufRead};
+
+fn project_events(
+    task: &str,
+    events: impl IntoIterator<Item = RuntimeEventEnvelope>,
+) -> Result<WorkSessionSnapshot, Box<dyn Error>> {
+    let workspace = std::env::current_dir()?.display().to_string();
+    let mut session = WorkSessionSnapshot::new(workspace);
+    session.apply(WorkCommand::StartTask { task: task.into() })?;
+    for event in events {
+        session.apply(WorkCommand::ApplyRuntimeEvent(event))?;
+    }
+    Ok(session)
+}
+
+fn demo_events() -> Vec<RuntimeEventEnvelope> {
+    let run_id = "headless-demo";
+    vec![
+        RuntimeEventEnvelope::new(run_id, 1, RuntimeEvent::Iteration { iteration: 1 }),
+        RuntimeEventEnvelope::new(
+            run_id,
+            2,
+            RuntimeEvent::ToolStart {
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "Cargo.toml"}),
+            },
+        ),
+        RuntimeEventEnvelope::new(
+            run_id,
+            3,
+            RuntimeEvent::ToolResult {
+                name: "read_file".into(),
+                is_error: false,
+                preview: "workspace manifest loaded".into(),
+                duration_ms: 4,
+                status_code: None,
+                bytes: 512,
+                error_type: None,
+            },
+        ),
+        RuntimeEventEnvelope::new(
+            run_id,
+            4,
+            RuntimeEvent::FinalResponse {
+                text: "headless event projection completed".into(),
+            },
+        ),
+    ]
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut args = std::env::args().skip(1);
+    let mode = args.next().unwrap_or_else(|| "demo".into());
+    let task = args
+        .next()
+        .unwrap_or_else(|| "验证共享 Runtime Event".into());
+    let events = match mode.as_str() {
+        "demo" => demo_events(),
+        "replay" => io::stdin()
+            .lock()
+            .lines()
+            .map(|line| Ok(serde_json::from_str(&line?)?))
+            .collect::<Result<Vec<RuntimeEventEnvelope>, Box<dyn Error>>>()?,
+        _ => return Err(format!("unknown mode {mode:?}; expected demo or replay").into()),
+    };
+
+    let session = project_events(&task, events)?;
+    println!("{}", serde_json::to_string_pretty(&session)?);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use microclaw_work_app::session::WorkStatus;
+
+    #[test]
+    fn demo_reaches_completed_without_a_ui() {
+        let session = project_events("headless task", demo_events()).unwrap();
+
+        assert_eq!(session.status, WorkStatus::Completed);
+        assert_eq!(session.runtime_run_id.as_deref(), Some("headless-demo"));
+        assert_eq!(session.last_runtime_sequence, 4);
+        assert!(session.plan.iter().all(|step| step.completed));
+    }
+}

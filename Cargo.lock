@@ -6206,10 +6206,20 @@ dependencies = [
 name = "microclaw-work-app"
 version = "0.1.0"
 dependencies = [
+ "microclaw-core",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "microclaw-work-headless"
+version = "0.1.0"
+dependencies = [
+ "microclaw-core",
+ "microclaw-work-app",
+ "serde_json",
 ]
 
 [[package]]
