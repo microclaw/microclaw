@@ -33,7 +33,7 @@ the task; project-tool checks used a disposable fixture under `/private/tmp`.
 6. Command-Q terminated the process. Relaunch restored the same single user
    message, assistant response, conversation title, and completed state.
 7. The rebuilt DMG passed `hdiutil verify`. Its SHA-256 is
-   `98d8f3ec1b0ae1ef38884a1770e3c2d0d9598063b802c0a89703b1b84e324edc`.
+   `1798d07453423d96bf98c55c7a0852657b924791827883f334f7b0d965045b20`.
 8. A selected project fixture containing `README.md` and `TASK.md` was opened
    in a fresh conversation. Codex published a three-step plan, read `TASK.md`
    with the native file tool, created `RESULT.md`, re-read the result, and
@@ -63,7 +63,10 @@ event does not repeat the accumulated text.
 The final local pass after the sidebar refinement produced and checked the
 optimized `work-release` bundle and DMG:
 
-- `codesign --verify --deep --strict` accepted the application bundle.
+- `codesign --verify --deep --strict` accepted the application bundle. The
+  final local candidate is signed by `Developer ID Application: Feng Zhu
+  (YPV49M8592)`, includes a secure timestamp and Hardened Runtime, and is
+  accepted by Gatekeeper with source `Developer ID`.
 - The bundle identifier is `org.microclaw.work`, the application version is
   `0.1.0`, and the minimum macOS version is `13.0`.
 - `hdiutil verify` accepted
@@ -99,7 +102,7 @@ Homebrew installation test.
   same value after process termination and relaunch. The normal Work data
   directory was not opened; the input source was restored to U.S. and the
   disposable directory was removed after verification.
-- A signed build exists, but a live Apple notarization and stapling run still
-  requires the release keychain profile.
+- A Developer ID signed and Gatekeeper-accepted build exists, but a live Apple
+  notarization and stapling run still requires the release keychain profile.
 - Longer multi-tool tasks and multi-day survival remain separate acceptance
   runs.
