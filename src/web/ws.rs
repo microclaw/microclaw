@@ -429,7 +429,7 @@ async fn handle_ws_socket(state: WebState, socket: WebSocket, client_key: String
 
     while let Some(msg) = receiver.next().await {
         match msg {
-            Ok(Message::Text(text)) => {
+            Ok(Message::Text(text))
                 if handle_request_frame(
                     &state,
                     &sender,
@@ -440,21 +440,19 @@ async fn handle_ws_socket(state: WebState, socket: WebSocket, client_key: String
                     &text,
                 )
                 .await
-                .is_err()
-                {
-                    break;
-                }
+                .is_err() =>
+            {
+                break;
             }
-            Ok(Message::Ping(payload)) => {
+            Ok(Message::Ping(payload))
                 if sender
                     .lock()
                     .await
-                    .send(Message::Pong(payload))
+                    .send(Message::Pong(payload.clone()))
                     .await
-                    .is_err()
-                {
-                    break;
-                }
+                    .is_err() =>
+            {
+                break;
             }
             Ok(Message::Close(_)) | Err(_) => break,
             _ => {}

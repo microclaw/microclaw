@@ -2760,10 +2760,8 @@ async fn handle_feishu_message(
                 }
             }
         }
-        "media" | "sticker" => {
-            if text.trim().is_empty() || text.trim().starts_with('{') {
-                text = format!("[{}]", message_type);
-            }
+        "media" | "sticker" if text.trim().is_empty() || text.trim().starts_with('{') => {
+            text = format!("[{}]", message_type);
         }
         _ => {}
     }

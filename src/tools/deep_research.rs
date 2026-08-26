@@ -158,7 +158,7 @@ impl Tool for DeepResearchTool {
         }
 
         // Rank: sources corroborated by more sub-queries first, then first-seen.
-        sources.sort_by(|a, b| b.matched.len().cmp(&a.matched.len()));
+        sources.sort_by_key(|source| std::cmp::Reverse(source.matched.len()));
         sources.truncate(MAX_SOURCES);
 
         // Fetch full text for the top sources (SSRF-guarded), concurrently.
@@ -180,7 +180,7 @@ impl Tool for DeepResearchTool {
                 }
             });
             let fetched = join_all(fetches).await;
-            for (src, text) in sources.iter_mut().zip(fetched.into_iter()) {
+            for (src, text) in sources.iter_mut().zip(fetched) {
                 if let Some(text) = text {
                     src.excerpt = Some(truncate_chars(text.trim(), EXCERPT_CHARS));
                 }

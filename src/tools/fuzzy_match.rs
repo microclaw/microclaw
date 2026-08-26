@@ -133,7 +133,7 @@ fn detect_escape_drift(
 
 fn apply_replacements(content: &str, matches: &[(usize, usize)], new_string: &str) -> String {
     let mut sorted: Vec<(usize, usize)> = matches.to_vec();
-    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+    sorted.sort_by_key(|item| std::cmp::Reverse(item.0));
     let mut result = content.to_string();
     for (start, end) in sorted {
         result.replace_range(start..end, new_string);

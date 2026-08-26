@@ -29,7 +29,7 @@ pub(crate) fn prune_old_config_backups(
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         entries.push((modified, entry.path()));
     }
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     for (_, path) in entries.into_iter().skip(keep_latest) {
         let _ = fs::remove_file(path);
     }

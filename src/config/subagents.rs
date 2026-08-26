@@ -206,7 +206,7 @@ impl SubagentAcpConfig {
             .iter()
             .filter(|(_, target)| target.enabled)
             .collect::<Vec<_>>();
-        enabled_targets.sort_by(|(left, _), (right, _)| left.cmp(right));
+        enabled_targets.sort_by_key(|(name, _)| *name);
         match enabled_targets.as_slice() {
             [] => Err(
                 "ACP runtime is enabled but no command is configured. Set subagents.acp.command or add an enabled target under subagents.acp.targets."

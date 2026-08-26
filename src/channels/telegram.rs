@@ -2018,18 +2018,18 @@ async fn send_streaming_response(
                     last_edit_time = Instant::now();
                 }
             }
-            AgentEvent::ToolStart { name, .. } => {
+            AgentEvent::ToolStart { name, .. }
+                if streaming_state.edit_count < config.max_edits_per_message =>
+            {
                 // Show tool usage (but skip in separate_message mode to preserve order)
-                if streaming_state.edit_count < config.max_edits_per_message {
-                    let should_skip_edit =
-                        config.reasoning_display == ReasoningDisplayMode::SeparateMessage;
-                    if !should_skip_edit {
-                        let tool_text =
-                            format!("{}\n\n🔧 Using tool: {}", streaming_state.buffer, name);
-                        let _ = bot
-                            .edit_message_text(chat_id, streaming_state.message_id, &tool_text)
-                            .await;
-                    }
+                let should_skip_edit =
+                    config.reasoning_display == ReasoningDisplayMode::SeparateMessage;
+                if !should_skip_edit {
+                    let tool_text =
+                        format!("{}\n\n🔧 Using tool: {}", streaming_state.buffer, name);
+                    let _ = bot
+                        .edit_message_text(chat_id, streaming_state.message_id, &tool_text)
+                        .await;
                 }
             }
             _ => {} // Ignore other events

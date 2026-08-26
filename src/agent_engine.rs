@@ -2704,8 +2704,7 @@ async fn process_with_agent_logic(
             // Inject iteration budget warning if approaching the limit
             let max_iter = state.config.max_tool_iterations;
             let current_iter = iteration + 1; // 1-based
-            let budget_warning = if max_iter > 0 {
-                let pct = (current_iter * 100) / max_iter;
+            let budget_warning = (current_iter * 100).checked_div(max_iter).and_then(|pct| {
                 let remaining = max_iter.saturating_sub(current_iter);
                 if pct >= 90 {
                     Some(format!(
@@ -2718,9 +2717,7 @@ async fn process_with_agent_logic(
                 } else {
                     None
                 }
-            } else {
-                None
-            };
+            });
             if let Some(warning) = budget_warning {
                 tool_results.push(ContentBlock::Text { text: warning });
             }

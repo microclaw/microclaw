@@ -1193,6 +1193,9 @@ subagents:
     #[test]
     fn test_validate_local_accepts_accounts_json_without_legacy_tokens() {
         let mut app = SetupApp::new();
+        if let Some(field) = app.fields.iter_mut().find(|f| f.key == "LLM_PROVIDER") {
+            field.value = "anthropic".to_string();
+        }
         if let Some(field) = app.fields.iter_mut().find(|f| f.key == "ENABLED_CHANNELS") {
             field.value = "telegram,discord".to_string();
         }
