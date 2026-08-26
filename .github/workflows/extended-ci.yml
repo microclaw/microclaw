@@ -85,3 +85,6 @@ jobs:
       - run: cargo check -p microclaw-work --locked
       - run: cargo test -p microclaw-work --lib --locked
       - run: cargo clippy -p microclaw-work --all-targets --locked -- -D warnings
+      - name: Build development macOS app bundle
+        if: runner.os == 'macOS'
+        run: scripts/build_work_macos_app.sh debug

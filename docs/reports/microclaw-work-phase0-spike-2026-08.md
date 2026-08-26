@@ -26,6 +26,8 @@ technology spike, not a production desktop release.
 - Raised the workspace Rust baseline from 1.93.1 to 1.95.0, the minimum tested
   version that compiles the pinned GPUI revision.
 - Added Linux, macOS, and Windows Work checks to Extended CI.
+- Added a repeatable macOS `.app` bundler with versioned Info.plist validation,
+  ad-hoc development signing, and strict signature verification.
 
 ## Verified on macOS arm64
 
@@ -35,11 +37,15 @@ cargo build -p microclaw-work                 passed
 cargo test -p microclaw-work --lib            4 passed
 cargo clippy -p microclaw-work --all-targets  passed with -D warnings
 cargo check -p microclaw --lib                passed on Rust 1.95.0
+scripts/build_work_macos_app.sh debug          passed; 73 MB app bundle
+scripts/build_work_macos_app.sh release        passed; 13 MB app bundle
 ```
 
 The binary entered its window event loop after both implementation increments
 and remained running until it was terminated. The snapshot file was inspected
-in the macOS Application Support directory. Visual, task-input, and
+in the macOS Application Support directory. The development `.app` was also
+launched successfully through macOS LaunchServices and its process was observed
+before being stopped. Visual, task-input, and
 accessibility inspection could not be completed during these runs because the
 macOS session was locked.
 
@@ -59,7 +65,8 @@ in the lockfile.
 - Exercise recovery by changing state, terminating the process, and relaunching.
 - Run and fix the new CI matrix on Ubuntu, macOS, and Windows.
 - Validate high-DPI, multi-monitor, sleep/wake, old GPU, and remote-desktop use.
-- Produce unsigned development bundles/installers before signing work begins.
+- Add a real app icon and produce a DMG; Developer ID signing and notarization
+  remain release work.
 
 Phase 1 shared-runtime extraction should not start until the macOS/Windows
 window, input, event-stream, and restart-recovery gates are demonstrated.

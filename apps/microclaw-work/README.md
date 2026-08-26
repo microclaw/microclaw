@@ -16,6 +16,18 @@ Run the framework-independent session tests:
 cargo test -p microclaw-work --lib
 ```
 
+Build a development macOS application bundle:
+
+```sh
+scripts/build_work_macos_app.sh debug
+```
+
+The validated bundle is written to
+`target/microclaw-work-app/debug/MicroClaw Work.app`. Use `release` instead of
+`debug` for an optimized bundle. Development bundles are ad-hoc signed for
+local execution. Developer ID signing, notarization, DMG creation, and
+auto-update are later Phase 0/5 work.
+
 The current UI is deliberately a workflow projection. It demonstrates the
 intended Workspace, Plan, Approval, Diff, and Artifact surfaces and persists its
 versioned spike snapshot under the platform-local data directory so restart
