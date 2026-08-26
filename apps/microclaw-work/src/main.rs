@@ -511,6 +511,10 @@ impl WorkApp {
     }
 
     fn refresh_diagnostics(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_diagnostics_state(cx);
+    }
+
+    fn refresh_diagnostics_state(&mut self, cx: &mut Context<Self>) {
         self.runtime_config = self.runtime_service.config_summary();
         self.diagnostics_report = self.runtime_service.local_diagnostics(
             Path::new(&self.session.workspace),
@@ -534,6 +538,7 @@ impl WorkApp {
             return;
         }
         self.diagnostics_open = true;
+        self.settings_open = false;
         self.refresh_diagnostics(event, window, cx);
     }
 
@@ -548,17 +553,7 @@ impl WorkApp {
         }
         self.diagnostics_open = true;
         self.settings_open = false;
-        self.runtime_config = self.runtime_service.config_summary();
-        self.diagnostics_report = self.runtime_service.local_diagnostics(
-            Path::new(&self.session.workspace),
-            self.session_store.root(),
-        );
-        self.persistence_message = if self.diagnostics_report.ready {
-            "Local diagnostics passed.".into()
-        } else {
-            "Diagnostics found an item that blocks Work.".into()
-        };
-        cx.notify();
+        self.refresh_diagnostics_state(cx);
     }
 
     fn close_diagnostics(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
