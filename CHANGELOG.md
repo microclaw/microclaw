@@ -28,6 +28,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   runtime sends a minimal provider request with a 20-second bound, verifies
   endpoint/auth/model/response handling, reports latency and a bounded response
   preview, and redacts the configured credential from errors.
+- **Retryable recovered Work threads.** Interrupted, failed, and cancelled
+  runs now use a first-class Retry command that reuses the last submitted turn
+  even when the composer is empty. Retry preserves the conversation without a
+  duplicate user message and clears stale partial-run plans, drafts, activities,
+  diffs, approvals, and review state before starting again.
 
 - **MicroClaw Work post-task review.** Foreground Work runs emit a pre-task
   checkpoint and completed file changes can be accepted, continued in the same

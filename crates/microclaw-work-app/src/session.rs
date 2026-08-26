@@ -130,6 +130,7 @@ pub enum WorkCommand {
     StartTask {
         task: String,
     },
+    RetryTask,
     SetComposerDraft {
         draft: String,
     },
@@ -406,6 +407,7 @@ impl WorkSessionSnapshot {
         let previous_status = self.status;
         match command {
             WorkCommand::StartTask { task } => self.start_task(task)?,
+            WorkCommand::RetryTask => self.retry_task()?,
             WorkCommand::SetComposerDraft { draft } => self.composer_draft = draft,
             WorkCommand::SetWorkspace { path } => self.set_workspace(path)?,
             WorkCommand::SelectFileChange { path } => self.select_file_change(path)?,
@@ -465,22 +467,46 @@ impl WorkSessionSnapshot {
         if task.trim().is_empty() {
             return Err(WorkCommandError::EmptyTask);
         }
-        let continuing_conversation = self.status == WorkStatus::Completed;
         self.task = task;
         self.composer_draft.clear();
         if self.title.trim().is_empty() {
             self.title = self.task.clone();
         }
+        self.push_message(ConversationRole::User, self.task.clone());
+        self.prepare_run_projection();
+        self.push_event(WorkEventKind::System, "Created a foreground Work task");
+        Ok(())
+    }
+
+    fn retry_task(&mut self) -> Result<(), WorkCommandError> {
+        if !matches!(
+            self.status,
+            WorkStatus::Interrupted | WorkStatus::Failed | WorkStatus::Cancelled
+        ) {
+            return Err(WorkCommandError::InvalidStatus {
+                command: "retry task",
+                actual: self.status,
+            });
+        }
+        if self.task.trim().is_empty() {
+            return Err(WorkCommandError::EmptyTask);
+        }
+        self.composer_draft.clear();
+        self.prepare_run_projection();
+        self.push_event(
+            WorkEventKind::System,
+            "Retrying the last submitted turn in the same Work thread",
+        );
+        Ok(())
+    }
+
+    fn prepare_run_projection(&mut self) {
         self.status = WorkStatus::Running;
         self.approval_reason = None;
         self.pending_approval = None;
         self.runtime_run_id = None;
         self.last_runtime_sequence = 0;
         self.events.clear();
-        if !continuing_conversation {
-            self.messages.clear();
-        }
-        self.push_message(ConversationRole::User, self.task.clone());
         self.assistant_draft.clear();
         self.tool_activities.clear();
         self.process_activities.clear();
@@ -492,8 +518,6 @@ impl WorkSessionSnapshot {
         self.review_status = WorkReviewStatus::None;
         self.diff_summary.clear();
         self.plan.clear();
-        self.push_event(WorkEventKind::System, "Created a foreground Work task");
-        Ok(())
     }
 
     fn reset_demo(&mut self) {
@@ -1672,9 +1696,32 @@ mod tests {
                 task: "long task".into(),
             })
             .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "interrupted-run",
+                1,
+                RuntimeEvent::TextDelta {
+                    delta: "Partial answer".into(),
+                },
+            )))
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "interrupted-run",
+                2,
+                RuntimeEvent::FileDiff {
+                    path: "partial.txt".into(),
+                    diff: "+partial".into(),
+                    added: 1,
+                    removed: 0,
+                    truncated: false,
+                },
+            )))
+            .unwrap();
 
         snapshot.apply(WorkCommand::MarkInterrupted).unwrap();
         assert_eq!(snapshot.status, WorkStatus::Interrupted);
+        assert_eq!(snapshot.assistant_draft, "Partial answer");
         assert!(
             snapshot
                 .events
@@ -1683,6 +1730,15 @@ mod tests {
                 .message
                 .contains("previous desktop process")
         );
+        let message_count = snapshot.messages.len();
+        snapshot.apply(WorkCommand::RetryTask).unwrap();
+        assert_eq!(snapshot.status, WorkStatus::Running);
+        assert_eq!(snapshot.task, "long task");
+        assert_eq!(snapshot.messages.len(), message_count);
+        assert!(snapshot.assistant_draft.is_empty());
+        assert!(snapshot.file_changes.is_empty());
+        assert!(snapshot.events.last().unwrap().message.contains("Retrying"));
+        assert!(snapshot.apply(WorkCommand::RetryTask).is_err());
     }
 
     #[test]

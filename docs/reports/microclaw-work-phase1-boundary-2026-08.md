@@ -519,3 +519,22 @@ caller without the configured credential. Computer Use verified the English
 native settings page, masked API-key field, save-first disabled state, and the
 new accessible Test Connection action. No live credential was read or sent
 during this validation.
+
+## Recovery-ready retry semantics
+
+Separating the composer draft from submitted turns exposed a recovery defect:
+an Interrupted session restored with an empty composer, while the old launch
+path required non-empty composer text. Retry is now a first-class Work command
+for Interrupted, Failed, and Cancelled states. It validates that a prior task
+exists, preserves the transcript and stable thread title, avoids inserting a
+duplicate user message, and resets partial assistant draft, plan, activity,
+process output, file changes, approval, checkpoint, and review projections
+before the shared runtime is relaunched with the last submitted task.
+
+Focused projection coverage constructs a running turn with streamed partial
+text and a file diff, marks it Interrupted, retries it, and proves conversation
+identity is retained while stale run state is removed. Store coverage persists
+a Running snapshot, restores it as Interrupted with an empty composer, and
+proves the recovered snapshot accepts Retry. The native Demo interval was also
+lengthened to make active-state inspection practical and no longer seeds its
+conversation through the old synthetic snapshot path.

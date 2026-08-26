@@ -237,8 +237,12 @@ mod tests {
             .unwrap();
         store.save(&snapshot).unwrap();
 
-        let recovered = store.load_active_or_create().unwrap();
+        let mut recovered = store.load_active_or_create().unwrap();
         assert_eq!(recovered.status, WorkStatus::Interrupted);
+        assert!(recovered.composer_draft.is_empty());
+        recovered.apply(WorkCommand::RetryTask).unwrap();
+        assert_eq!(recovered.status, WorkStatus::Running);
+        assert_eq!(recovered.task, "running task");
         assert_eq!(store.list().unwrap()[0].status, WorkStatus::Interrupted);
     }
 

@@ -654,11 +654,21 @@ impl WorkApp {
             cx.notify();
             return;
         }
-        let task = self.task_input.read(cx).value().to_string();
-        if let Err(error) = self
-            .session
-            .apply(WorkCommand::StartTask { task: task.clone() })
-        {
+        let retrying = matches!(
+            self.session.status,
+            WorkStatus::Interrupted | WorkStatus::Failed | WorkStatus::Cancelled
+        ) && self.task_input.read(cx).value().trim().is_empty();
+        let task = if retrying {
+            self.session.task.clone()
+        } else {
+            self.task_input.read(cx).value().to_string()
+        };
+        let command = if retrying {
+            WorkCommand::RetryTask
+        } else {
+            WorkCommand::StartTask { task: task.clone() }
+        };
+        if let Err(error) = self.session.apply(command) {
             self.persistence_message = error.to_string();
             cx.notify();
             return;
@@ -885,8 +895,7 @@ impl WorkApp {
             return;
         }
         if self.task_input.read(cx).value().trim().is_empty() {
-            let _ = self.session.apply(WorkCommand::ResetDemo);
-            let task = self.session.task.clone();
+            let task = "Build a native desktop workflow for MicroClaw Work".to_string();
             self.task_input.update(cx, |input, cx| {
                 input.set_value(task, window, cx);
             });
@@ -919,7 +928,7 @@ impl WorkApp {
             ];
 
             for (kind, message) in events {
-                Timer::after(Duration::from_millis(650)).await;
+                Timer::after(Duration::from_millis(1_500)).await;
                 let result = this.update(cx, |this, cx| {
                     if this.active_run_id != run_id {
                         return;
@@ -937,7 +946,7 @@ impl WorkApp {
                 }
             }
 
-            Timer::after(Duration::from_millis(650)).await;
+            Timer::after(Duration::from_millis(1_500)).await;
             let _ = this.update(cx, |this, cx| {
                 if this.active_run_id != run_id {
                     return;
@@ -1162,6 +1171,10 @@ impl Render for WorkApp {
         let inline_approval = self.session.pending_approval.clone();
         let messages = self.session.messages.clone();
         let assistant_draft = self.session.assistant_draft.clone();
+        let retryable = matches!(
+            self.session.status,
+            WorkStatus::Interrupted | WorkStatus::Failed | WorkStatus::Cancelled
+        );
         let composer_input = if self.runtime_active {
             &self.steer_input
         } else {
@@ -1361,7 +1374,12 @@ impl Render for WorkApp {
                                             .p_3()
                                             .rounded(cx.theme().radius)
                                             .bg(cx.theme().secondary)
-                                            .child(div().text_xs().font_bold().child("MicroClaw · working"))
+                                            .child(div().text_xs().font_bold().child(match self.session.status {
+                                                WorkStatus::Interrupted => "MicroClaw · interrupted",
+                                                WorkStatus::Failed => "MicroClaw · failed",
+                                                WorkStatus::Cancelled => "MicroClaw · cancelled",
+                                                _ => "MicroClaw · working",
+                                            }))
                                             .child(assistant_draft)
                                     }))
                                     .children(inline_approval.map(|approval| {
@@ -1659,7 +1677,8 @@ impl Render for WorkApp {
                                     .disabled(if self.runtime_active {
                                         self.steer_input.read(cx).value().trim().is_empty()
                                     } else {
-                                        self.task_input.read(cx).value().trim().is_empty()
+                                        (!retryable
+                                            && self.task_input.read(cx).value().trim().is_empty())
                                             || !self.runtime_config.ready
                                             || self.session.workspace.is_empty()
                                     })
@@ -1667,6 +1686,10 @@ impl Render for WorkApp {
                                         "Send Update"
                                     } else if self.session.status == WorkStatus::Completed {
                                         "Continue"
+                                    } else if retryable
+                                        && self.task_input.read(cx).value().trim().is_empty()
+                                    {
+                                        "Retry"
                                     } else {
                                         "Send"
                                     })

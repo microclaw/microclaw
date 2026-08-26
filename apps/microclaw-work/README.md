@@ -63,7 +63,11 @@ Task** creates an independent Agent Engine conversation, and opening a recent
 task restores its matching runtime session rather than sharing a global desktop
 conversation. Draft input is persisted after a short debounce. If the desktop
 process exits while a task is Running or Verifying, restart projects it as
-**Interrupted** and offers **Retry Task**; approval pauses remain resumable.
+**Interrupted** and offers **Retry** even though the sent composer is empty;
+approval pauses remain resumable. Retry is a distinct application command: it
+reuses the last submitted turn and Agent Engine session, retains the readable
+conversation without inserting a duplicate user message, and discards stale
+partial-run projections before relaunch.
 
 **Stop** sends a cancellation request through the shared run-control registry.
 It interrupts the real Agent Engine, including a pending model call, and waits
