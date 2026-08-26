@@ -8,6 +8,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Auto-growing Work composer.** The primary chat and in-run guidance fields
+  now use GPUI Component's native multiline textarea. They grow with longer
+  prompts, submit with Return, preserve Shift-Return for new lines, and retain
+  explicit AccessKit names without adding a separate editor implementation.
 - **Native Work application lifecycle.** The macOS application now activates
   itself, installs standard Edit menu actions, and handles Command-Q through a
   real Quit action. Model onboarding is reduced to **Save & Test**, followed by

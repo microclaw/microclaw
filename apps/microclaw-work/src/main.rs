@@ -4,7 +4,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Root, StyledExt,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputContentType, InputEvent, InputState},
+    input::{Input, InputContentType, InputEvent, InputState, Textarea, TextareaState},
     scroll::ScrollableElement,
     v_flex,
 };
@@ -61,8 +61,8 @@ struct WorkApp {
     work_home: PathBuf,
     recent_sessions: Vec<WorkSessionSummary>,
     persistence_message: String,
-    task_input: Entity<InputState>,
-    steer_input: Entity<InputState>,
+    task_input: Entity<TextareaState>,
+    steer_input: Entity<TextareaState>,
     active_run_id: u64,
     runtime_active: bool,
     runtime_cancellation: Option<WorkRunCancellation>,
@@ -168,12 +168,17 @@ impl WorkApp {
             runtime_service.local_diagnostics(Path::new(&session.workspace), session_store.root());
 
         let task_input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
+                .auto_grow(1, 5)
+                .submit_on_enter(true)
                 .default_value(session.composer_draft.clone())
-                .placeholder("Describe what you want MicroClaw Work to do…")
+                .placeholder("Describe a task… Return to send, Shift-Return for a new line")
         });
         let steer_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Add guidance while the Agent is working…")
+            TextareaState::new(window, cx)
+                .auto_grow(1, 4)
+                .submit_on_enter(true)
+                .placeholder("Add guidance… Return to send, Shift-Return for a new line")
         });
         let provider_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -2370,7 +2375,7 @@ impl Render for WorkApp {
                                 div()
                                     .min_h(px(44.))
                                     .child(
-                                        Input::new(composer_input)
+                                        Textarea::new(composer_input)
                                             .aria_label(if self.runtime_active {
                                                 "Guidance for the active Work task"
                                             } else {
