@@ -13,8 +13,8 @@ use microclaw_work_app::session::{
 };
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary, startup_workspace};
 use microclaw_work_runtime::{
-    ModelSettingsDraft, RuntimeConfigSummary, WorkRunCancellation, WorkRunRequest, WorkRunSteering,
-    WorkRuntimeMessage, WorkRuntimeService,
+    DiagnosticStatus, ModelSettingsDraft, RuntimeConfigSummary, WorkDiagnosticsReport,
+    WorkRunCancellation, WorkRunRequest, WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService,
 };
 use smol::Timer;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,8 @@ struct WorkApp {
     runtime_steering: Option<WorkRunSteering>,
     runtime_service: WorkRuntimeService,
     runtime_config: RuntimeConfigSummary,
+    diagnostics_open: bool,
+    diagnostics_report: WorkDiagnosticsReport,
     settings_open: bool,
     settings_has_api_key: bool,
     provider_input: Entity<InputState>,
@@ -126,6 +128,8 @@ impl WorkApp {
             }
         };
         let recent_sessions = session_store.list().unwrap_or_default();
+        let diagnostics_report =
+            runtime_service.local_diagnostics(Path::new(&session.workspace), session_store.root());
 
         let task_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -216,6 +220,8 @@ impl WorkApp {
             runtime_steering: None,
             runtime_service,
             runtime_config,
+            diagnostics_open: false,
+            diagnostics_report,
             settings_open: false,
             settings_has_api_key,
             provider_input,
@@ -377,6 +383,38 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn refresh_diagnostics(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.runtime_config = self.runtime_service.config_summary();
+        self.diagnostics_report = self.runtime_service.local_diagnostics(
+            Path::new(&self.session.workspace),
+            self.session_store.root(),
+        );
+        self.persistence_message = if self.diagnostics_report.ready {
+            "Local diagnostics passed.".into()
+        } else {
+            "Diagnostics found an item that blocks Work.".into()
+        };
+        cx.notify();
+    }
+
+    fn open_diagnostics(
+        &mut self,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.reject_if_runtime_busy(cx) {
+            return;
+        }
+        self.diagnostics_open = true;
+        self.refresh_diagnostics(event, window, cx);
+    }
+
+    fn close_diagnostics(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.diagnostics_open = false;
+        cx.notify();
+    }
+
     fn open_model_settings(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.reject_if_runtime_busy(cx) {
             return;
@@ -422,6 +460,10 @@ impl WorkApp {
                 self.persistence_message = "Model configuration saved for MicroClaw Work.".into();
                 self.connection_test_message =
                     "Settings saved. Test the connection before starting work.".into();
+                self.diagnostics_report = self.runtime_service.local_diagnostics(
+                    Path::new(&self.session.workspace),
+                    self.session_store.root(),
+                );
             }
             Err(error) => {
                 self.persistence_message = format!("Could not save model settings: {error}");
@@ -1181,12 +1223,151 @@ impl WorkApp {
                     )),
             )
     }
+
+    fn render_diagnostics(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .p_8()
+            .gap_5()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_2xl().font_bold().child("Diagnostics"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Check whether this desktop can safely start and persist a Work conversation."),
+                            ),
+                    )
+                    .child(
+                        Button::new("close-diagnostics")
+                            .outline()
+                            .disabled(self.connection_test_active)
+                            .label("Back to Work")
+                            .on_click(cx.listener(Self::close_diagnostics)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .rounded_full()
+                            .bg(if self.diagnostics_report.ready {
+                                cx.theme().success.opacity(0.16)
+                            } else {
+                                cx.theme().danger.opacity(0.16)
+                            })
+                            .child(if self.diagnostics_report.ready {
+                                "Local runtime ready"
+                            } else {
+                                "Action required"
+                            }),
+                    )
+                    .child(
+                        Button::new("refresh-diagnostics")
+                            .outline()
+                            .disabled(self.connection_test_active)
+                            .label("Run Again")
+                            .on_click(cx.listener(Self::refresh_diagnostics)),
+                    )
+                    .child(
+                        Button::new("diagnostics-model-settings")
+                            .outline()
+                            .disabled(self.connection_test_active)
+                            .label("Model Settings")
+                            .on_click(cx.listener(Self::open_model_settings)),
+                    )
+                    .child(
+                        Button::new("diagnostics-provider-test")
+                            .primary()
+                            .disabled(
+                                self.connection_test_active || !self.runtime_config.ready,
+                            )
+                            .label(if self.connection_test_active {
+                                "Testing Provider…"
+                            } else {
+                                "Test Provider"
+                            })
+                            .on_click(cx.listener(Self::test_provider_connection)),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w(px(760.))
+                    .gap_3()
+                    .children(self.diagnostics_report.checks.iter().map(|check| {
+                        let (status, color) = match check.status {
+                            DiagnosticStatus::Pass => ("Pass", cx.theme().success),
+                            DiagnosticStatus::Warning => ("Warning", cx.theme().warning),
+                            DiagnosticStatus::Fail => ("Fail", cx.theme().danger),
+                        };
+                        h_flex()
+                            .items_start()
+                            .gap_3()
+                            .p_4()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                div()
+                                    .w(px(72.))
+                                    .text_sm()
+                                    .font_bold()
+                                    .text_color(color)
+                                    .child(status),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap_1()
+                                    .child(div().text_sm().font_bold().child(check.label))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(check.detail.clone()),
+                                    ),
+                            )
+                    })),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(if self.connection_test_message.starts_with("Connected") {
+                        cx.theme().success
+                    } else if self.connection_test_message.contains("failed") {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(self.connection_test_message.clone()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Local checks are offline. Test Provider is the explicit network and authentication probe."),
+            )
+    }
 }
 
 impl Render for WorkApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.settings_open {
             return self.render_model_settings(cx).into_any_element();
+        }
+        if self.diagnostics_open {
+            return self.render_diagnostics(cx).into_any_element();
         }
         let conversation_is_empty = self.session.messages.is_empty()
             && self.session.task.trim().is_empty()
@@ -1326,6 +1507,13 @@ impl Render for WorkApp {
                                             .label("Refresh")
                                             .on_click(cx.listener(Self::refresh_runtime_config)),
                                     ),
+                            )
+                            .child(
+                                Button::new("diagnostics")
+                                    .outline()
+                                    .disabled(self.runtime_active)
+                                    .label("Diagnostics")
+                                    .on_click(cx.listener(Self::open_diagnostics)),
                             )
                             .child(
                                 div()

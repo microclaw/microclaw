@@ -16,6 +16,7 @@ use std::time::Duration;
 use std::{fs, io};
 
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 pub struct WorkRunRequest {
@@ -30,6 +31,27 @@ pub struct RuntimeConfigSummary {
     pub provider: String,
     pub model: String,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticStatus {
+    Pass,
+    Warning,
+    Fail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticCheck {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub status: DiagnosticStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkDiagnosticsReport {
+    pub ready: bool,
+    pub checks: Vec<DiagnosticCheck>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +193,50 @@ impl WorkRuntimeService {
 
     pub fn config_summary(&self) -> RuntimeConfigSummary {
         load_runtime_config_summary(&self.config_path)
+    }
+
+    /// Inspect the local prerequisites for starting a Work conversation.
+    /// This is deliberately offline: provider reachability remains an explicit
+    /// user-triggered connection test and credentials never enter the report.
+    pub fn local_diagnostics(
+        &self,
+        workspace: &Path,
+        session_root: &Path,
+    ) -> WorkDiagnosticsReport {
+        let mut checks = Vec::new();
+        match Config::load_from_path_for_headless(&self.config_path) {
+            Ok(config) => checks.push(DiagnosticCheck {
+                id: "model-config",
+                label: "Model configuration",
+                status: DiagnosticStatus::Pass,
+                detail: format!("{} / {}", config.llm_provider, config.model),
+            }),
+            Err(error) => checks.push(DiagnosticCheck {
+                id: "model-config",
+                label: "Model configuration",
+                status: DiagnosticStatus::Fail,
+                detail: microclaw_core::redact::redact_secrets(&error.to_string()),
+            }),
+        }
+
+        checks.push(directory_diagnostic(
+            "workspace",
+            "Active workspace",
+            workspace,
+        ));
+        checks.push(directory_diagnostic(
+            "session-store",
+            "Conversation storage",
+            session_root,
+        ));
+        checks.push(config_permissions_diagnostic(&self.config_path));
+
+        WorkDiagnosticsReport {
+            ready: checks
+                .iter()
+                .all(|check| check.status != DiagnosticStatus::Fail),
+            checks,
+        }
     }
 
     /// Sends a minimal provider request on a background thread. This validates
@@ -381,6 +447,88 @@ impl WorkRuntimeService {
             return fallback_rx;
         }
         result_rx
+    }
+}
+
+fn directory_diagnostic(id: &'static str, label: &'static str, path: &Path) -> DiagnosticCheck {
+    let result = (|| -> io::Result<PathBuf> {
+        if path.as_os_str().is_empty() {
+            return Err(io::Error::other("path is not configured"));
+        }
+        fs::create_dir_all(path)?;
+        let canonical = path.canonicalize()?;
+        if !canonical.is_dir() {
+            return Err(io::Error::other("path is not a directory"));
+        }
+        let probe = canonical.join(format!(
+            ".microclaw-work-write-test-{}-{}",
+            std::process::id(),
+            NEXT_DIAGNOSTIC_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&probe, b"ok")?;
+        fs::remove_file(probe)?;
+        Ok(canonical)
+    })();
+    match result {
+        Ok(path) => DiagnosticCheck {
+            id,
+            label,
+            status: DiagnosticStatus::Pass,
+            detail: path.display().to_string(),
+        },
+        Err(error) => DiagnosticCheck {
+            id,
+            label,
+            status: DiagnosticStatus::Fail,
+            detail: format!("{}: {error}", path.display()),
+        },
+    }
+}
+
+fn config_permissions_diagnostic(path: &Path) -> DiagnosticCheck {
+    if !path.is_file() {
+        return DiagnosticCheck {
+            id: "config-permissions",
+            label: "Credential file permissions",
+            status: DiagnosticStatus::Warning,
+            detail: "Configuration file has not been created yet.".into(),
+        };
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.permissions().mode() & 0o077 == 0 => DiagnosticCheck {
+                id: "config-permissions",
+                label: "Credential file permissions",
+                status: DiagnosticStatus::Pass,
+                detail: "Only the current OS user can read the configuration file.".into(),
+            },
+            Ok(metadata) => DiagnosticCheck {
+                id: "config-permissions",
+                label: "Credential file permissions",
+                status: DiagnosticStatus::Warning,
+                detail: format!(
+                    "Configuration mode {:o} is broader than recommended 600.",
+                    metadata.permissions().mode() & 0o777
+                ),
+            },
+            Err(error) => DiagnosticCheck {
+                id: "config-permissions",
+                label: "Credential file permissions",
+                status: DiagnosticStatus::Fail,
+                detail: error.to_string(),
+            },
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        DiagnosticCheck {
+            id: "config-permissions",
+            label: "Credential file permissions",
+            status: DiagnosticStatus::Warning,
+            detail: "Configuration access is managed by the operating system ACL and was not inspected by this preview build.".into(),
+        }
     }
 }
 
@@ -623,6 +771,72 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn diagnostics_report_missing_model_but_prepare_local_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = WorkRuntimeService::new(directory.path().join("config.yaml"));
+        let workspace = directory.path().join("workspace");
+        let sessions = directory.path().join("sessions");
+
+        let report = service.local_diagnostics(&workspace, &sessions);
+
+        assert!(!report.ready);
+        assert!(workspace.is_dir());
+        assert!(sessions.is_dir());
+        assert_eq!(
+            report
+                .checks
+                .iter()
+                .find(|check| check.id == "model-config")
+                .unwrap()
+                .status,
+            DiagnosticStatus::Fail
+        );
+        assert_eq!(
+            report
+                .checks
+                .iter()
+                .find(|check| check.id == "config-permissions")
+                .unwrap()
+                .status,
+            DiagnosticStatus::Warning
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_ready_after_model_and_storage_are_configured() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = WorkRuntimeService::new(directory.path().join("config.yaml"));
+        service
+            .save_model_settings(ModelSettingsDraft {
+                provider: "openai".into(),
+                model: "gpt-5".into(),
+                base_url: "".into(),
+                api_key: Some("secret-key".into()),
+            })
+            .unwrap();
+
+        let report = service.local_diagnostics(
+            &directory.path().join("workspace"),
+            &directory.path().join("sessions"),
+        );
+
+        assert!(report.ready);
+        assert_eq!(report.checks.len(), 4);
+        assert!(
+            report
+                .checks
+                .iter()
+                .all(|check| check.status != DiagnosticStatus::Fail)
+        );
+        assert!(
+            report
+                .checks
+                .iter()
+                .all(|check| !check.detail.contains("secret-key"))
+        );
     }
 
     #[test]

@@ -469,14 +469,16 @@ native GPUI application, a shared-runtime port, durable conversation threads,
 the conversation-first home and contextual Details inspector described above,
 an automatically provisioned private Work Home that removes the folder-picker
 barrier from first chat, prominent first-run model onboarding,
-live plans, in-run steering, structured inline approvals, bounded process
+native offline readiness diagnostics with an explicit provider probe, live
+plans, in-run steering, structured inline approvals, bounded process
 evidence, native multi-file diff review, visible subagent activity, checkpoint
 review, process-level crash/retry tests, and macOS development-bundle
 verification. The repository also has a Linux/macOS/Windows release-build
 matrix that runs the headless recovery harness and publishes unsigned preview
-archives; successful hosted-run evidence is still required before treating
-that gate as passed. The next gates remain real-provider end-to-end onboarding,
-platform launch smoke tests, accessibility/IME testing, diagnostics, and signed
+archives. Hosted Linux and macOS jobs have completed successfully and produced
+non-expired preview artifacts; Windows hosted completion is still required
+before treating the three-platform gate as passed. The next gates remain real-provider end-to-end onboarding,
+platform launch smoke tests, accessibility/IME testing, and signed
 release installers. Phase 1 is not complete until those gates have direct
 evidence.
 

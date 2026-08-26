@@ -8,6 +8,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Native Work diagnostics.** The desktop now exposes an offline diagnostics
+  report for model configuration, active-workspace writes, durable conversation
+  storage, and credential-file permissions, with an explicit redacted provider
+  connection probe beside the local checks.
 - **Direct-to-chat MicroClaw Work onboarding.** New desktop installations now
   provision a private platform-local Work Home, surface model configuration in
   the empty chat canvas, and allow the first conversation without forcing the

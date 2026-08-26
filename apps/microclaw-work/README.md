@@ -48,6 +48,13 @@ network probe. **Demo** remains available for UI testing without credentials.
 Provider/runtime failures are shown as a terminal Work state instead of
 crashing the window.
 
+**Diagnostics** opens a native offline readiness report covering model
+configuration, active-workspace writes, conversation-storage writes, and
+credential-file permissions. Write probes use unique temporary files and remove
+them immediately. The report never includes credentials. Provider reachability,
+authentication, routing, and response decoding remain behind the explicit
+**Test Provider** action so opening Diagnostics never makes a network request.
+
 Saving Model Settings keeps onboarding open and enables **Test Connection**.
 The test runs off the GPUI thread, sends a minimal request through the same
 provider implementation used by the Agent Engine, times out after 20 seconds,
@@ -145,7 +152,8 @@ Pinned upstream revisions:
 - GPUI Component: `d5821f270317754f2a311a0bb148ec32cbb0ced4`
 
 Phase 0 still requires real-machine validation for Chinese IME, accessibility,
-Windows/Linux rendering, GPU compatibility, packaging, and restart recovery.
+Windows/Linux rendering, GPU compatibility, release packaging, and a real
+provider first-response journey.
 
 The workspace uses Rust 1.95 because the pinned GPUI revision relies on stable
 standard-library APIs that are unavailable in Rust 1.93.
