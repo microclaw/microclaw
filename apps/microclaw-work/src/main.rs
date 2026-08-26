@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Disableable, Root, Sizable, StyledExt,
+    ActiveTheme, Disableable, Root, Sizable, StyledExt, Theme, ThemeMode,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputContentType, InputEvent, InputState, Textarea, TextareaState},
@@ -18,6 +18,7 @@ use microclaw_work_runtime::{
     WorkRunCancellation, WorkRunRequest, WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService,
 };
 use smol::Timer;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
@@ -34,6 +35,49 @@ actions!(
 );
 
 const WORK_KEY_CONTEXT: &str = "MicroClawWork";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AppearancePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl AppearancePreference {
+    fn load(path: &Path) -> Self {
+        match fs::read_to_string(path).as_deref().map(str::trim) {
+            Ok("light") => Self::Light,
+            Ok("dark") => Self::Dark,
+            _ => Self::System,
+        }
+    }
+
+    fn save(self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, self.name())
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    fn apply(self, window: &mut Window, cx: &mut App) {
+        match self {
+            Self::System => Theme::sync_system_appearance(Some(window), cx),
+            Self::Light => Theme::change(ThemeMode::Light, Some(window), cx),
+            Self::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
+        }
+    }
+}
+
+impl Global for AppearancePreference {}
 
 fn configure_native_application(cx: &mut App) {
     cx.activate(true);
@@ -53,7 +97,7 @@ fn configure_native_application(cx: &mut App) {
         Menu {
             name: "MicroClaw Work".into(),
             items: vec![
-                MenuItem::action("Model Settings…", OpenModelSettings),
+                MenuItem::action("Settings…", OpenModelSettings),
                 MenuItem::separator(),
                 MenuItem::action("Quit MicroClaw Work", Quit),
             ],
@@ -106,6 +150,8 @@ struct WorkApp {
     diagnostics_open: bool,
     diagnostics_report: WorkDiagnosticsReport,
     settings_open: bool,
+    appearance_preference: AppearancePreference,
+    appearance_preferences_path: PathBuf,
     settings_has_api_key: bool,
     codex_account_available: bool,
     provider_input: Entity<InputState>,
@@ -142,6 +188,10 @@ impl WorkApp {
             .unwrap_or_else(std::env::temp_dir)
             .join("microclaw-work");
         let work_home = work_data_root.join("workspace");
+        let appearance_preferences_path = work_data_root.join("appearance");
+        let appearance_preference = AppearancePreference::load(&appearance_preferences_path);
+        appearance_preference.apply(window, cx);
+        cx.set_global(appearance_preference);
         let session_root = work_data_root.join("work-sessions");
         let runtime_service =
             WorkRuntimeService::discover(work_data_root.join("microclaw.config.yaml"));
@@ -310,6 +360,8 @@ impl WorkApp {
             diagnostics_open: false,
             diagnostics_report,
             settings_open: false,
+            appearance_preference,
+            appearance_preferences_path,
             settings_has_api_key,
             codex_account_available,
             provider_input,
@@ -607,6 +659,22 @@ impl WorkApp {
         self.settings_open = false;
         self.task_input
             .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn set_appearance_preference(
+        &mut self,
+        preference: AppearancePreference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.appearance_preference = preference;
+        *cx.global_mut::<AppearancePreference>() = preference;
+        preference.apply(window, cx);
+        self.persistence_message = match preference.save(&self.appearance_preferences_path) {
+            Ok(()) => format!("Appearance set to {}.", preference.name()),
+            Err(error) => format!("Appearance changed, but the preference was not saved: {error}"),
+        };
         cx.notify();
     }
 
@@ -1392,29 +1460,32 @@ impl WorkApp {
         v_flex()
             .size_full()
             .items_center()
+            .overflow_y_scrollbar()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .p_8()
-            .gap_5()
+            .p_6()
+            .gap_4()
+            .text_size(px(12.))
             .child(
                 h_flex()
-                    .w(px(860.))
+                    .w(px(760.))
                     .justify_between()
                     .items_center()
                     .child(
                         v_flex()
-                            .gap_1()
-                            .child(div().text_2xl().font_bold().child("Model Settings"))
+                            .gap_0p5()
+                            .child(div().text_lg().font_semibold().child("Settings"))
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(px(11.))
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Configure the model used by this Work installation."),
+                                    .child("Appearance and model configuration for MicroClaw Work."),
                             ),
                     )
                     .child(
                         Button::new("close-model-settings")
-                            .outline()
+                            .ghost()
+                            .small()
                             .disabled(self.connection_test_active)
                             .label("Back to Work")
                             .on_click(cx.listener(Self::close_model_settings)),
@@ -1423,27 +1494,81 @@ impl WorkApp {
             .child(
                 v_flex()
                     .w(px(680.))
-                    .gap_4()
-                    .p_5()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(div().text_sm().font_semibold().child("Appearance"))
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("System follows the current macOS appearance automatically."),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_1()
+                            .p_1()
+                            .rounded_lg()
+                            .bg(cx.theme().secondary.opacity(0.55))
+                            .children([
+                                ("appearance-system", "System", AppearancePreference::System),
+                                ("appearance-light", "Light", AppearancePreference::Light),
+                                ("appearance-dark", "Dark", AppearancePreference::Dark),
+                            ].into_iter().map(|(id, label, preference)| {
+                                Button::new(id)
+                                    .ghost()
+                                    .small()
+                                    .w_full()
+                                    .when(self.appearance_preference == preference, |button| {
+                                        button
+                                            .bg(cx.theme().background)
+                                            .shadow_xs()
+                                            .font_semibold()
+                                    })
+                                    .label(label)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.set_appearance_preference(preference, window, cx);
+                                    }))
+                            })),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w(px(680.))
+                    .gap_3()
+                    .pt_4()
+                    .border_t_1()
+                    .border_color(cx.theme().border.opacity(0.72))
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(div().text_sm().font_semibold().child("Model"))
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Configure the provider used for conversations and tools."),
+                            ),
+                    )
                     .when(self.codex_account_available, |this| {
                         this.child(
                             h_flex()
                                 .items_center()
                                 .justify_between()
                                 .gap_4()
-                                .p_4()
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().accent.opacity(0.45))
+                                .p_3()
+                                .rounded_lg()
+                                .bg(cx.theme().accent.opacity(0.26))
                                 .child(
                                     v_flex()
                                         .gap_1()
-                                        .child(div().font_bold().child("Codex login found"))
+                                        .child(div().text_size(px(12.)).font_semibold().child("Codex account available"))
                                         .child(
                                             div()
-                                                .text_sm()
+                                                .text_size(px(10.))
                                                 .text_color(cx.theme().muted_foreground)
                                                 .child("Use the existing account on this Mac. No API key is copied into Work."),
                                         ),
@@ -1451,23 +1576,24 @@ impl WorkApp {
                                 .child(
                                     Button::new("use-codex-account")
                                         .primary()
+                                        .small()
                                         .disabled(self.connection_test_active)
-                                        .label("Use Codex Account")
+                                        .label("Use Account")
                                         .on_click(cx.listener(Self::use_codex_account)),
                                 ),
                         )
                     })
-                    .child(div().text_sm().font_bold().child("Provider"))
+                    .child(div().text_size(px(11.)).font_medium().child("Provider"))
                     .child(Input::new(&self.provider_input).aria_label("Model provider"))
-                    .child(div().text_sm().font_bold().child("Model ID"))
+                    .child(div().text_size(px(11.)).font_medium().child("Model ID"))
                     .child(Input::new(&self.model_input).aria_label("Model ID"))
-                    .child(div().text_sm().font_bold().child("Base URL (optional)"))
+                    .child(div().text_size(px(11.)).font_medium().child("Base URL (optional)"))
                     .child(
                         Input::new(&self.base_url_input)
                             .aria_label("Provider base URL")
                             .content_type(InputContentType::Url),
                     )
-                    .child(div().text_sm().font_bold().child("API key"))
+                    .child(div().text_size(px(11.)).font_medium().child("API key"))
                     .child(
                         Input::new(&self.api_key_input)
                             .aria_label("Provider API key")
@@ -1476,7 +1602,7 @@ impl WorkApp {
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(10.))
                             .text_color(cx.theme().muted_foreground)
                             .child(if self.settings_has_api_key {
                                 "A key is already saved. Leave this field blank to keep it."
@@ -1488,6 +1614,7 @@ impl WorkApp {
                         h_flex().gap_3().child(
                             Button::new("save-and-test-model-settings")
                                 .primary()
+                                .small()
                                 .disabled(self.connection_test_active)
                                 .label(if self.connection_test_active {
                                     "Saving & Testing…"
@@ -1500,7 +1627,7 @@ impl WorkApp {
             )
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(11.))
                     .text_color(if self.connection_test_message.starts_with("Connected") {
                         cx.theme().success
                     } else if self.connection_test_message.contains("failed") {
@@ -1516,12 +1643,13 @@ impl WorkApp {
                     this.child(
                         Button::new("model-settings-start-chatting")
                             .primary()
+                            .small()
                             .label("Start Chatting")
                             .on_click(cx.listener(Self::close_model_settings)),
                     )
                 },
             )
-            .child(div().text_sm().child(self.persistence_message.clone()))
+            .child(div().text_size(px(11.)).child(self.persistence_message.clone()))
             .child(
                 div()
                     .text_xs()
@@ -2008,7 +2136,7 @@ impl Render for WorkApp {
                                             .xsmall()
                                             .compact()
                                             .disabled(self.runtime_active)
-                                            .label("Model")
+                                            .label("Settings")
                                             .on_click(cx.listener(Self::open_model_settings)),
                                     )
                                     .child(
@@ -2058,7 +2186,8 @@ impl Render for WorkApp {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .p_5()
+                    .p_4()
+                    .text_size(px(13.))
                     .gap_3()
                     .child(
                         h_flex()
@@ -2075,8 +2204,8 @@ impl Render for WorkApp {
                                             .w_full()
                                             .overflow_hidden()
                                             .text_ellipsis()
-                                            .text_xl()
-                                            .font_bold()
+                                            .text_base()
+                                            .font_semibold()
                                             .child(if self.session.title.trim().is_empty() {
                                                 "New conversation".to_string()
                                             } else {
@@ -2088,7 +2217,7 @@ impl Render for WorkApp {
                                             .w_full()
                                             .overflow_hidden()
                                             .text_ellipsis()
-                                            .text_sm()
+                                            .text_size(px(11.))
                                             .text_color(cx.theme().muted_foreground)
                                             .child(if using_work_home {
                                                 "Chat in Work Home, or connect a project folder when local context is needed".to_string()
@@ -2105,11 +2234,12 @@ impl Render for WorkApp {
                                     .gap_2()
                                     .child(
                                         div()
-                                            .px_3()
+                                            .px_2()
                                             .py_1()
                                             .rounded_full()
                                             .bg(status_color.opacity(0.14))
                                             .text_color(status_color)
+                                            .text_size(px(11.))
                                             .child(status),
                                     )
                                     .children(has_inspector_content.then(|| {
@@ -2128,45 +2258,46 @@ impl Render for WorkApp {
                         h_flex()
                             .flex_1()
                             .min_h_0()
-                            .gap_4()
+                            .gap_3()
                             .child(
                                 v_flex()
                                     .flex_1()
                                     .min_w_0()
                                     .min_h_0()
                                     .overflow_y_scrollbar()
-                                    .gap_4()
-                                    .px_5()
-                                    .py_4()
+                                    .gap_3()
+                                    .px_4()
+                                    .py_3()
                                     .children(messages.is_empty().then(|| {
                                         v_flex()
                                             .flex_1()
                                             .items_center()
                                             .justify_center()
-                                            .gap_4()
-                                            .p_8()
+                                            .gap_3()
+                                            .p_6()
                                             .child(
                                                 div()
-                                                    .size(px(58.))
+                                                    .size(px(46.))
                                                     .rounded_full()
                                                     .bg(cx.theme().accent)
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()
-                                                    .text_xl()
+                                                    .text_base()
                                                     .font_bold()
                                                     .child("μ"),
                                             )
                                             .child(
                                                 div()
-                                                    .text_2xl()
-                                                    .font_bold()
+                                                    .text_xl()
+                                                    .font_semibold()
                                                     .child("What would you like to get done?"),
                                             )
                                             .child(
                                                 div()
                                                     .max_w(px(560.))
                                                     .text_center()
+                                                    .text_size(px(12.))
                                                     .text_color(cx.theme().muted_foreground)
                                                     .child(if self.runtime_config.ready {
                                                         "Ask MicroClaw to research, create, organize, or automate work. Work Home is ready; connect a project folder only when you need its files."
@@ -2781,6 +2912,14 @@ fn open_work_window(cx: &mut App) {
     cx.spawn(async move |cx| {
         cx.open_window(options, |window, cx| {
             let view = cx.new(|cx| WorkApp::new(window, cx));
+            let appearance_subscription = window.observe_window_appearance(|window, cx| {
+                if *cx.global::<AppearancePreference>() == AppearancePreference::System {
+                    Theme::sync_system_appearance(Some(window), cx);
+                }
+            });
+            view.update(cx, |view, _| {
+                view._subscriptions.push(appearance_subscription);
+            });
             cx.new(|cx| Root::new(view, window, cx))
         })
         .expect("failed to open MicroClaw Work window");

@@ -29,6 +29,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   and a restrained active state. Workspace selection, model configuration,
   reload, and diagnostics live in a divided utility footer instead of a large
   stack of outlined buttons.
+- **Native Work appearance settings.** The desktop now follows the operating
+  system's light or dark appearance by default, updates when the system changes,
+  and offers persisted System, Light, and Dark choices on a compact application
+  Settings page alongside model configuration.
 - **macOS Work shortcuts.** Native menu actions and Command-N, Command-L,
   Command-Comma, and Command-Shift-D now provide direct access to New Chat,
   the composer, Model Settings, and Diagnostics.
