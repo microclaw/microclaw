@@ -1,3 +1,9 @@
+//! UI-independent application service for running MicroClaw Work tasks.
+//!
+//! This crate owns the foreground worker lifecycle and bridges the shared
+//! Agent Engine to versioned runtime events. UI packages consume this port;
+//! they do not create Tokio runtimes or call the Agent Engine directly.
+
 use microclaw::config::Config;
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
@@ -8,7 +14,7 @@ use std::time::Duration;
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
-pub struct RuntimeRunSpec {
+pub struct WorkRunRequest {
     pub task: String,
     pub workspace: String,
     pub session: String,
@@ -46,23 +52,23 @@ pub fn load_runtime_config_summary() -> RuntimeConfigSummary {
 }
 
 #[derive(Debug)]
-pub enum RuntimeMessage {
+pub enum WorkRuntimeMessage {
     Envelope(RuntimeEventEnvelope),
     Completed { run_id: String },
     Failed { run_id: String, message: String },
 }
 
-pub struct RuntimeHandle {
-    pub messages: Receiver<RuntimeMessage>,
-    pub cancellation: RuntimeCancellation,
+pub struct WorkRunHandle {
+    pub messages: Receiver<WorkRuntimeMessage>,
+    pub cancellation: WorkRunCancellation,
 }
 
 #[derive(Clone)]
-pub struct RuntimeCancellation {
+pub struct WorkRunCancellation {
     cancel_tx: tokio::sync::mpsc::UnboundedSender<()>,
 }
 
-impl RuntimeCancellation {
+impl WorkRunCancellation {
     pub fn cancel(&self) -> Result<(), &'static str> {
         self.cancel_tx
             .send(())
@@ -70,32 +76,37 @@ impl RuntimeCancellation {
     }
 }
 
-pub fn spawn_runtime(spec: RuntimeRunSpec) -> RuntimeHandle {
-    let (message_tx, message_rx) = mpsc::channel();
-    let (cancel_tx, cancel_rx) = tokio::sync::mpsc::unbounded_channel();
-    let run_id = next_run_id();
-    let thread_name = format!("microclaw-work-{run_id}");
-    let worker_run_id = run_id.clone();
-    let worker_message_tx = message_tx.clone();
-    let spawn_result = std::thread::Builder::new()
-        .name(thread_name)
-        .spawn(move || run_worker(spec, worker_run_id, worker_message_tx, cancel_rx));
-    if let Err(error) = spawn_result {
-        let _ = message_tx.send(RuntimeMessage::Failed {
-            run_id,
-            message: format!("Could not start the runtime worker thread: {error}"),
-        });
-    }
-    RuntimeHandle {
-        messages: message_rx,
-        cancellation: RuntimeCancellation { cancel_tx },
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkRuntimeService;
+
+impl WorkRuntimeService {
+    pub fn start(&self, request: WorkRunRequest) -> WorkRunHandle {
+        let (message_tx, message_rx) = mpsc::channel();
+        let (cancel_tx, cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+        let run_id = next_run_id();
+        let thread_name = format!("microclaw-work-{run_id}");
+        let worker_run_id = run_id.clone();
+        let worker_message_tx = message_tx.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || run_worker(request, worker_run_id, worker_message_tx, cancel_rx));
+        if let Err(error) = spawn_result {
+            let _ = message_tx.send(WorkRuntimeMessage::Failed {
+                run_id,
+                message: format!("Could not start the runtime worker thread: {error}"),
+            });
+        }
+        WorkRunHandle {
+            messages: message_rx,
+            cancellation: WorkRunCancellation { cancel_tx },
+        }
     }
 }
 
 fn run_worker(
-    spec: RuntimeRunSpec,
+    request: WorkRunRequest,
     run_id: String,
-    message_tx: Sender<RuntimeMessage>,
+    message_tx: Sender<WorkRuntimeMessage>,
     mut cancel_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
 ) {
     let tokio_runtime = match tokio::runtime::Runtime::new() {
@@ -112,14 +123,14 @@ fn run_worker(
 
     let result = tokio_runtime.block_on(async {
         let mut config = Config::load()?;
-        config.working_dir = spec.workspace;
+        config.working_dir = request.workspace;
         let runtime = HeadlessRuntime::load(config).await?;
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let event_message_tx = message_tx.clone();
         let event_forwarder = tokio::spawn(async move {
             while let Some(envelope) = event_rx.recv().await {
                 if event_message_tx
-                    .send(RuntimeMessage::Envelope(envelope))
+                    .send(WorkRuntimeMessage::Envelope(envelope))
                     .is_err()
                 {
                     break;
@@ -127,9 +138,9 @@ fn run_worker(
             }
         });
 
-        let session = spec.session.clone();
+        let session = request.session.clone();
         let run = runtime.run(
-            HeadlessRunRequest::work(spec.task, Some(spec.session), run_id.clone()),
+            HeadlessRunRequest::work(request.task, Some(request.session), run_id.clone()),
             Some(event_tx),
         );
         tokio::pin!(run);
@@ -162,7 +173,7 @@ fn run_worker(
 
     match result {
         Ok(result) => {
-            let _ = message_tx.send(RuntimeMessage::Completed {
+            let _ = message_tx.send(WorkRuntimeMessage::Completed {
                 run_id: result.run_id,
             });
         }
@@ -170,8 +181,8 @@ fn run_worker(
     }
 }
 
-fn send_failure(message_tx: &Sender<RuntimeMessage>, run_id: &str, message: String) {
-    let _ = message_tx.send(RuntimeMessage::Failed {
+fn send_failure(message_tx: &Sender<WorkRuntimeMessage>, run_id: &str, message: String) {
+    let _ = message_tx.send(WorkRuntimeMessage::Failed {
         run_id: run_id.to_string(),
         message,
     });
@@ -195,15 +206,11 @@ mod tests {
     }
 
     #[test]
-    fn cancel_signal_can_be_sent_without_a_tokio_runtime() {
+    fn cancellation_signal_is_runtime_independent() {
         let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (_message_tx, messages) = mpsc::channel();
-        let handle = RuntimeHandle {
-            messages,
-            cancellation: RuntimeCancellation { cancel_tx },
-        };
+        let cancellation = WorkRunCancellation { cancel_tx };
 
-        handle.cancellation.cancel().unwrap();
+        cancellation.cancel().unwrap();
         assert_eq!(cancel_rx.try_recv(), Ok(()));
     }
 }

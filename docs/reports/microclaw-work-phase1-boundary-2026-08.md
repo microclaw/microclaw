@@ -13,14 +13,15 @@ workspace crate:
 ```text
 apps/microclaw-work
   GPUI views, input, timers, platform data path, native packaging
-                  |
-                  v
-crates/microclaw-work-app
-  task lifecycle, plan, events, approval, snapshot, persistence
-                  |
-                  v
-microclaw-core::runtime_event
-  provider-neutral Server/Work event protocol
+        | commands/projection             | foreground execution
+        v                                 v
+crates/microclaw-work-app        crates/microclaw-work-runtime
+  lifecycle, approval,             start, events, cancellation,
+  snapshot, persistence             worker lifecycle
+        ^                                 |
+        | RuntimeEventEnvelope            v
+        +------------------------ microclaw::HeadlessRuntime
+                          shared provider-neutral Agent Engine
 ```
 
 The desktop crate no longer defines a library or owns Work lifecycle policy.
@@ -100,7 +101,8 @@ It contains no GPUI, platform, channel, provider, or Server dependency.
 ```text
 cargo test -p microclaw-core --locked                            51 passed
 cargo test -p microclaw-work-app --locked                        22 passed
-cargo test -p microclaw-work --locked                             2 passed
+cargo test -p microclaw-work-runtime --locked                     2 passed
+cargo test -p microclaw-work --locked                             0 tests; build passed
 cargo test -p microclaw-work-headless --locked                    1 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
 cargo clippy -p microclaw-work-headless --all-targets --no-deps  passed
@@ -155,6 +157,14 @@ Approval is a multi-turn lifecycle. A `FinalResponse` that follows
 action applies the local transition and submits approve-once (`1`) into the
 same persisted runtime session, allowing the existing Agent Engine to resume
 without a separate desktop-only approval implementation.
+
+The foreground worker is no longer a private module inside the GPUI binary.
+`microclaw-work-runtime::WorkRuntimeService` now owns task start, the dedicated
+Tokio worker, event subscription, terminal results, and cancellation. Its
+public request/handle/message boundary has no GPUI types. The desktop therefore
+contains no Tokio dependency and cannot silently grow a second runtime-control
+implementation. Future headless projections and Work-to-Server transports can
+adapt the same application-service boundary.
 
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing

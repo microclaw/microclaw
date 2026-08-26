@@ -1,0 +1,11 @@
+[package]
+name = "microclaw-work-runtime"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+microclaw = { path = "../.." }
+microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }

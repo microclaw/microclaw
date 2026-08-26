@@ -6199,12 +6199,11 @@ dependencies = [
  "gpui",
  "gpui-component",
  "gpui_platform",
- "microclaw",
  "microclaw-core",
  "microclaw-work-app",
+ "microclaw-work-runtime",
  "serde_json",
  "smol",
- "tokio",
  "url",
 ]
 
@@ -6227,6 +6226,15 @@ dependencies = [
  "microclaw-core",
  "microclaw-work-app",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "microclaw-work-runtime"
+version = "0.1.0"
+dependencies = [
+ "microclaw",
+ "microclaw-core",
  "tokio",
 ]
 

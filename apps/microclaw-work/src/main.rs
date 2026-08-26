@@ -1,5 +1,3 @@
-mod runtime_worker;
-
 use gpui::*;
 use gpui_component::{
     ActiveTheme, Disableable, Root, StyledExt,
@@ -13,9 +11,9 @@ use microclaw_work_app::session::{
     ToolActivityStatus, WorkCommand, WorkEventKind, WorkSessionSnapshot, WorkStatus,
 };
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
-use runtime_worker::{
-    RuntimeCancellation, RuntimeConfigSummary, RuntimeMessage, RuntimeRunSpec,
-    load_runtime_config_summary, spawn_runtime,
+use microclaw_work_runtime::{
+    RuntimeConfigSummary, WorkRunCancellation, WorkRunRequest, WorkRuntimeMessage,
+    WorkRuntimeService, load_runtime_config_summary,
 };
 use smol::Timer;
 use std::path::PathBuf;
@@ -30,7 +28,8 @@ struct WorkApp {
     task_input: Entity<InputState>,
     active_run_id: u64,
     runtime_active: bool,
-    runtime_cancellation: Option<RuntimeCancellation>,
+    runtime_cancellation: Option<WorkRunCancellation>,
+    runtime_service: WorkRuntimeService,
     runtime_config: RuntimeConfigSummary,
     last_run_was_demo: bool,
     draft_revision: u64,
@@ -127,6 +126,7 @@ impl WorkApp {
             active_run_id: 0,
             runtime_active: false,
             runtime_cancellation: None,
+            runtime_service: WorkRuntimeService,
             runtime_config: load_runtime_config_summary(),
             last_run_was_demo: false,
             draft_revision: 0,
@@ -350,7 +350,7 @@ impl WorkApp {
         self.active_run_id = self.active_run_id.saturating_add(1);
         self.runtime_active = true;
         let generation = self.active_run_id;
-        let handle = spawn_runtime(RuntimeRunSpec {
+        let handle = self.runtime_service.start(WorkRunRequest {
             task: prompt,
             workspace: self.session.workspace.clone(),
             session: self.session.session_id.clone(),
@@ -366,7 +366,8 @@ impl WorkApp {
                     Ok(message) => {
                         let terminal = matches!(
                             &message,
-                            RuntimeMessage::Completed { .. } | RuntimeMessage::Failed { .. }
+                            WorkRuntimeMessage::Completed { .. }
+                                | WorkRuntimeMessage::Failed { .. }
                         );
                         if this
                             .update(cx, |this, cx| {
@@ -374,7 +375,7 @@ impl WorkApp {
                                     return;
                                 }
                                 match message {
-                                    RuntimeMessage::Envelope(envelope) => {
+                                    WorkRuntimeMessage::Envelope(envelope) => {
                                         if let Err(error) = this
                                             .session
                                             .apply(WorkCommand::ApplyRuntimeEvent(envelope))
@@ -382,7 +383,7 @@ impl WorkApp {
                                             this.persistence_message = error.to_string();
                                         }
                                     }
-                                    RuntimeMessage::Completed { run_id } => {
+                                    WorkRuntimeMessage::Completed { run_id } => {
                                         this.runtime_active = false;
                                         this.runtime_cancellation = None;
                                         this.persistence_message = match this.session.status {
@@ -395,7 +396,7 @@ impl WorkApp {
                                             _ => format!("Runtime {run_id} completed."),
                                         };
                                     }
-                                    RuntimeMessage::Failed { run_id, message } => {
+                                    WorkRuntimeMessage::Failed { run_id, message } => {
                                         this.runtime_active = false;
                                         this.runtime_cancellation = None;
                                         let display = format!("Runtime {run_id} failed: {message}");

@@ -1,12 +1,15 @@
 # MicroClaw Work Desktop
 
 This crate is the native MicroClaw Work desktop application. It uses GPUI and
-GPUI Component for the UI and runs the existing provider-neutral MicroClaw
-Agent Engine on a dedicated Tokio worker thread.
+GPUI Component for the UI and consumes `microclaw-work-runtime`, the reusable
+foreground application service that runs the existing provider-neutral
+MicroClaw Agent Engine on a dedicated Tokio worker thread.
 
 Work lifecycle and persistence live in the framework-independent
-`microclaw-work-app` crate. This desktop package owns only GPUI/platform
-adaptation and must not duplicate the provider-neutral Agent Engine.
+`microclaw-work-app` crate. Worker lifecycle, event forwarding, and
+cancellation live in `microclaw-work-runtime`. This desktop package owns only
+GPUI/platform adaptation and must not duplicate the provider-neutral Agent
+Engine or runtime control.
 
 Run on a supported desktop host:
 
