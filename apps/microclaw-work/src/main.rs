@@ -1,3 +1,5 @@
+mod runtime_worker;
+
 use gpui::*;
 use gpui_component::{
     ActiveTheme, Root, StyledExt,
@@ -7,8 +9,10 @@ use gpui_component::{
     v_flex,
 };
 use microclaw_work_app::session::{WorkCommand, WorkEventKind, WorkSessionSnapshot, WorkStatus};
+use runtime_worker::{RuntimeMessage, RuntimeRunSpec, spawn_runtime};
 use smol::Timer;
 use std::path::PathBuf;
+use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 struct WorkApp {
@@ -17,16 +21,32 @@ struct WorkApp {
     persistence_message: String,
     task_input: Entity<InputState>,
     active_run_id: u64,
+    runtime_active: bool,
+    last_run_was_demo: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl WorkApp {
+    fn runtime_busy(&self) -> bool {
+        self.runtime_active
+    }
+
+    fn reject_if_runtime_busy(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.runtime_busy() {
+            self.persistence_message = "已有真实任务正在运行；请等待完成或审批".into();
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let session_path = dirs::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("microclaw-work")
             .join("spike-session.json");
-        let (session, persistence_message) = match WorkSessionSnapshot::load(&session_path) {
+        let (mut session, persistence_message) = match WorkSessionSnapshot::load(&session_path) {
             Ok(session) => (session, "已从上次运行恢复".into()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let session = WorkSessionSnapshot::spike_demo();
@@ -47,6 +67,10 @@ impl WorkApp {
                 (session, message)
             }
         };
+        session.workspace = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .display()
+            .to_string();
 
         let task_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -69,6 +93,8 @@ impl WorkApp {
             persistence_message,
             task_input,
             active_run_id: 0,
+            runtime_active: false,
+            last_run_was_demo: false,
             _subscriptions,
         }
     }
@@ -88,9 +114,126 @@ impl WorkApp {
         }
         self.persist();
         cx.notify();
+        if !self.last_run_was_demo {
+            self.launch_runtime_prompt("1".into(), cx);
+        }
+    }
+
+    fn start_runtime(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_if_runtime_busy(cx) {
+            return;
+        }
+        let task = self.session.task.clone();
+        if let Err(error) = self
+            .session
+            .apply(WorkCommand::StartTask { task: task.clone() })
+        {
+            self.persistence_message = error.to_string();
+            cx.notify();
+            return;
+        }
+        self.last_run_was_demo = false;
+        self.persist();
+        self.launch_runtime_prompt(task, cx);
+    }
+
+    fn launch_runtime_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
+        self.active_run_id = self.active_run_id.saturating_add(1);
+        self.runtime_active = true;
+        let generation = self.active_run_id;
+        let receiver = spawn_runtime(RuntimeRunSpec {
+            task: prompt,
+            workspace: self.session.workspace.clone(),
+            session: "desktop-default".into(),
+        });
+        self.persistence_message = "正在连接 MicroClaw Runtime…".into();
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            loop {
+                match receiver.try_recv() {
+                    Ok(message) => {
+                        let terminal = matches!(
+                            &message,
+                            RuntimeMessage::Completed { .. } | RuntimeMessage::Failed { .. }
+                        );
+                        if this
+                            .update(cx, |this, cx| {
+                                if this.active_run_id != generation {
+                                    return;
+                                }
+                                match message {
+                                    RuntimeMessage::Envelope(envelope) => {
+                                        if let Err(error) = this
+                                            .session
+                                            .apply(WorkCommand::ApplyRuntimeEvent(envelope))
+                                        {
+                                            this.persistence_message = error.to_string();
+                                        }
+                                    }
+                                    RuntimeMessage::Completed { run_id } => {
+                                        this.runtime_active = false;
+                                        this.persistence_message = if this.session.status
+                                            == WorkStatus::AwaitingApproval
+                                        {
+                                            format!("Runtime {run_id} 已暂停，等待审批")
+                                        } else {
+                                            format!("Runtime {run_id} 已完成")
+                                        };
+                                    }
+                                    RuntimeMessage::Failed { run_id, message } => {
+                                        this.runtime_active = false;
+                                        let display = format!("Runtime {run_id} 失败：{message}");
+                                        let _ = this.session.apply(WorkCommand::FailRun {
+                                            message: message.clone(),
+                                        });
+                                        this.persistence_message = display;
+                                    }
+                                }
+                                if let Err(error) = this.session.save(&this.session_path) {
+                                    this.persistence_message = format!("保存失败：{error}");
+                                }
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                        if terminal {
+                            return;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => {
+                        Timer::after(Duration::from_millis(40)).await;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.active_run_id != generation || !this.runtime_active {
+                                return;
+                            }
+                            this.runtime_active = false;
+                            let message = "Runtime 消息通道意外断开".to_string();
+                            let _ = this.session.apply(WorkCommand::FailRun {
+                                message: message.clone(),
+                            });
+                            this.persistence_message = message;
+                            if let Err(error) = this.session.save(&this.session_path) {
+                                this.persistence_message = format!("保存失败：{error}");
+                            }
+                            cx.notify();
+                        });
+                        return;
+                    }
+                }
+            }
+        })
+        .detach();
     }
 
     fn start_demo(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_if_runtime_busy(cx) {
+            return;
+        }
         let task = self.session.task.clone();
         if let Err(error) = self.session.apply(WorkCommand::StartTask { task }) {
             self.persistence_message = error.to_string();
@@ -99,6 +242,8 @@ impl WorkApp {
         }
 
         self.active_run_id += 1;
+        self.runtime_active = true;
+        self.last_run_was_demo = true;
         let run_id = self.active_run_id;
         self.persist();
         cx.notify();
@@ -138,6 +283,7 @@ impl WorkApp {
                 let _ = this.session.apply(WorkCommand::RequestApproval {
                     reason: "允许演示任务写入 Workspace 并运行验证".into(),
                 });
+                this.runtime_active = false;
                 this.persist();
                 cx.notify();
             });
@@ -146,8 +292,13 @@ impl WorkApp {
     }
 
     fn reset(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_if_runtime_busy(cx) {
+            return;
+        }
         let _ = self.session.apply(WorkCommand::ResetDemo);
         self.active_run_id += 1;
+        self.runtime_active = false;
+        self.last_run_was_demo = true;
         let task = self.session.task.clone();
         self.task_input.update(cx, |input, cx| {
             input.set_value(task, window, cx);
@@ -166,6 +317,7 @@ impl Render for WorkApp {
             WorkStatus::Verifying => "验证中",
             WorkStatus::Completed => "已完成",
             WorkStatus::Cancelled => "已取消",
+            WorkStatus::Failed => "失败",
         };
 
         h_flex()
@@ -223,9 +375,15 @@ impl Render for WorkApp {
                             .gap_3()
                             .child(div().flex_1().child(Input::new(&self.task_input)))
                             .child(
-                                Button::new("run-demo")
+                                Button::new("run-runtime")
                                     .primary()
-                                    .label("运行演示任务")
+                                    .label("运行真实任务")
+                                    .on_click(cx.listener(Self::start_runtime)),
+                            )
+                            .child(
+                                Button::new("run-demo")
+                                    .outline()
+                                    .label("演示")
                                     .on_click(cx.listener(Self::start_demo)),
                             ),
                     )

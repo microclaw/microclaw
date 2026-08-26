@@ -13,6 +13,7 @@ pub enum WorkStatus {
     Verifying,
     Completed,
     Cancelled,
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +54,9 @@ pub enum WorkCommand {
     },
     Approve,
     ApplyRuntimeEvent(RuntimeEventEnvelope),
+    FailRun {
+        message: String,
+    },
     ResetDemo,
 }
 
@@ -213,6 +217,7 @@ impl WorkSessionSnapshot {
                 self.approve();
             }
             WorkCommand::ApplyRuntimeEvent(envelope) => self.apply_runtime_event(envelope)?,
+            WorkCommand::FailRun { message } => self.fail_run(message),
             WorkCommand::ResetDemo => *self = Self::spike_demo(),
         }
         Ok(CommandOutcome {
@@ -285,6 +290,15 @@ impl WorkSessionSnapshot {
         );
     }
 
+    fn fail_run(&mut self, message: impl Into<String>) {
+        self.status = WorkStatus::Failed;
+        self.approval_reason = None;
+        self.push_event(
+            WorkEventKind::System,
+            format!("任务失败：{}", message.into()),
+        );
+    }
+
     fn apply_runtime_event(
         &mut self,
         envelope: RuntimeEventEnvelope,
@@ -353,12 +367,16 @@ impl WorkSessionSnapshot {
                 self.push_event(WorkEventKind::System, format!("任务已取消：{final_text}"));
             }
             RuntimeEvent::FinalResponse { text } => {
-                self.status = WorkStatus::Completed;
-                self.approval_reason = None;
-                for step in &mut self.plan {
-                    step.completed = true;
+                if self.status == WorkStatus::AwaitingApproval {
+                    self.push_event(WorkEventKind::System, text);
+                } else {
+                    self.status = WorkStatus::Completed;
+                    self.approval_reason = None;
+                    for step in &mut self.plan {
+                        step.completed = true;
+                    }
+                    self.push_event(WorkEventKind::System, format!("任务已完成：{text}"));
                 }
-                self.push_event(WorkEventKind::System, format!("任务已完成：{text}"));
             }
             RuntimeEvent::MidTurnInjection { count } => self.push_event(
                 WorkEventKind::System,
@@ -555,9 +573,6 @@ mod tests {
                 options: vec!["approve once".into(), "deny".into()],
                 advisory: None,
             },
-            RuntimeEvent::FinalResponse {
-                text: "done".into(),
-            },
         ];
         for (index, event) in events.into_iter().enumerate() {
             snapshot
@@ -569,9 +584,21 @@ mod tests {
                 .unwrap();
         }
 
+        assert_eq!(snapshot.status, WorkStatus::AwaitingApproval);
+        snapshot.apply(WorkCommand::Approve).unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "server-run-2",
+                1,
+                RuntimeEvent::FinalResponse {
+                    text: "done".into(),
+                },
+            )))
+            .unwrap();
+
         assert_eq!(snapshot.status, WorkStatus::Completed);
         assert_eq!(snapshot.diff_summary, "src/main.rs: +1 -0");
-        assert_eq!(snapshot.last_runtime_sequence, 3);
+        assert_eq!(snapshot.last_runtime_sequence, 1);
         assert!(snapshot.approval_reason.is_none());
     }
 
@@ -602,5 +629,66 @@ mod tests {
         );
         assert_eq!(snapshot.last_runtime_sequence, 0);
         assert!(snapshot.runtime_run_id.is_none());
+    }
+
+    #[test]
+    fn final_explanation_does_not_clear_pending_approval() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "dangerous task".into(),
+            })
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "run-approval",
+                1,
+                RuntimeEvent::ApprovalRequired {
+                    approval_id: "approval-1".into(),
+                    tool: "bash".into(),
+                    preview: Some("run command".into()),
+                    options: vec!["approve".into(), "deny".into()],
+                    advisory: None,
+                },
+            )))
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "run-approval",
+                2,
+                RuntimeEvent::FinalResponse {
+                    text: "Please approve the command".into(),
+                },
+            )))
+            .unwrap();
+
+        assert_eq!(snapshot.status, WorkStatus::AwaitingApproval);
+        assert_eq!(snapshot.approval_reason.as_deref(), Some("run command"));
+    }
+
+    #[test]
+    fn runtime_failure_is_projected_as_terminal_state() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "unavailable provider".into(),
+            })
+            .unwrap();
+
+        snapshot
+            .apply(WorkCommand::FailRun {
+                message: "provider rejected model".into(),
+            })
+            .unwrap();
+
+        assert_eq!(snapshot.status, WorkStatus::Failed);
+        assert!(
+            snapshot
+                .events
+                .last()
+                .unwrap()
+                .message
+                .contains("provider rejected model")
+        );
     }
 }

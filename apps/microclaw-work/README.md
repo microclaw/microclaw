@@ -1,8 +1,8 @@
-# MicroClaw Work GPUI spike
+# MicroClaw Work Desktop
 
-This crate is the Phase 0 desktop technology spike. It validates a pure-Rust
-GPUI + GPUI Component application boundary before the shared agent runtime is
-connected.
+This crate is the native MicroClaw Work desktop application. It uses GPUI and
+GPUI Component for the UI and runs the existing provider-neutral MicroClaw
+Agent Engine on a dedicated Tokio worker thread.
 
 Work lifecycle and persistence live in the framework-independent
 `microclaw-work-app` crate. This desktop package owns only GPUI/platform
@@ -17,8 +17,18 @@ cargo run -p microclaw-work
 Run the framework-independent session tests:
 
 ```sh
-cargo test -p microclaw-work --lib
+cargo test -p microclaw-work-app
 ```
+
+The main action, **运行真实任务**, loads the normal MicroClaw configuration,
+uses the current directory as the workspace, and streams versioned Runtime
+Event envelopes into the Work projection. **演示** remains available for UI
+testing without credentials. Provider/configuration failures are shown as a
+terminal Work state instead of crashing the window.
+
+High-risk tool requests remain in the approval state even when the Agent's
+current turn ends with explanatory text. **允许并继续** submits the approve-once
+reply into the same persisted runtime session and projects the resumed run.
 
 Build a development macOS application bundle:
 
@@ -32,12 +42,10 @@ The validated bundle is written to
 local execution. Developer ID signing, notarization, DMG creation, and
 auto-update are later Phase 0/5 work.
 
-The current UI is deliberately a workflow projection. It demonstrates the
-intended Workspace, Plan, Approval, Diff, and Artifact surfaces and persists its
-versioned spike snapshot under the platform-local data directory so restart
-recovery can be exercised. A task input and bounded synthetic event stream
-exercise the foreground Work lifecycle through an approval pause. It does not
-yet execute the production agent loop.
+The UI remains a workflow projection rather than an IDE. Workspace, Plan,
+Approval, Diff, Artifact, runtime failures, and bounded events are persisted
+under the platform-local data directory so restart recovery can be exercised.
+The desktop does not contain a second Agent Loop.
 
 Pinned upstream revisions:
 

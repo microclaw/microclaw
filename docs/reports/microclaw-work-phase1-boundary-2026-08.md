@@ -97,12 +97,13 @@ It contains no GPUI, platform, channel, provider, or Server dependency.
 
 ```text
 cargo test -p microclaw-core --locked                            51 passed
-cargo test -p microclaw-work-app --locked                         7 passed
+cargo test -p microclaw-work-app --locked                         9 passed
+cargo test -p microclaw-work --locked                             1 passed
 cargo test -p microclaw-work-headless --locked                    1 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
-cargo clippy -p microclaw-work-headless --all-targets -- -D warnings passed
+cargo clippy -p microclaw-work-headless --all-targets --no-deps  passed
 cargo check -p microclaw-work --locked                           passed
-cargo clippy -p microclaw-work --all-targets -- -D warnings     passed
+cargo clippy -p microclaw-work --all-targets --no-deps          passed
 cargo check -p microclaw --lib --locked                          passed
 cargo test -p microclaw event_tap --lib --locked                 12 passed
 cargo test -p microclaw agent_engine::tests --lib --locked       43 passed
@@ -121,9 +122,64 @@ end-to-end task. No private workspace file was sent during that request.
 
 - Add an application-service port for starting, approving, cancelling, and
   resuming a runtime run rather than only projecting its events.
-- Replace synthetic desktop events with an application-service port backed by
-  the shared runtime.
 - Add event persistence/replay at the Server boundary and coalesce high-rate
   text deltas before they enter the durable Work timeline.
 
 The existing provider-neutral Agent Engine must not be copied into this crate.
+
+## Desktop runtime connection
+
+The GPUI desktop now links the same `HeadlessRuntime` service used by the CLI
+and headless harness. A named operating-system thread owns a Tokio runtime and
+forwards only `RuntimeMessage` values to GPUI:
+
+```text
+GPUI task input
+  -> desktop runtime worker
+  -> HeadlessRuntime
+  -> existing Agent Engine
+  -> RuntimeEventEnvelope
+  -> WorkCommand::ApplyRuntimeEvent
+  -> GPUI projection + atomic snapshot persistence
+```
+
+No model call or tool execution runs on the GPUI thread. The desktop keeps an
+explicit Demo action for credential-free UI testing; the primary action runs
+the production Agent Loop. Configuration/provider errors become a terminal
+`Failed` Work status.
+
+Approval is a multi-turn lifecycle. A `FinalResponse` that follows
+`ApprovalRequired` no longer clears the approval state. The desktop's approve
+action applies the local transition and submits approve-once (`1`) into the
+same persisted runtime session, allowing the existing Agent Engine to resume
+without a separate desktop-only approval implementation.
+
+The desktop prevents starting a second real or demo run while a run is active.
+Superseding only the UI generation would leave the previous Agent executing
+side effects in the background, so parallel starts are rejected until an
+explicit cancellation control is implemented.
+
+## Packaging evidence after runtime linkage
+
+The native bundle now includes the production runtime rather than only the
+GPUI projection:
+
+```text
+debug .app                         260 MB
+release .app                        55 MB
+release build (cold, Thin LTO)   6m 02s
+Info.plist lint                      passed
+ad-hoc strict code-sign verify       passed
+LaunchServices debug launch          passed
+```
+
+The release size remains viable for an early desktop build, but the cold build
+time and dependency surface confirm that linking the whole Server root crate is
+transitional. A later Phase 1/3 extraction should move the channel-free runtime
+assembly into a smaller crate while preserving the same application-service
+API. This is a build-boundary optimization, not permission to duplicate the
+Agent Engine.
+
+Visual and accessibility inspection is still not verified because the test Mac
+was locked and Computer Use could not unlock it. Compilation, signing, bundle
+validation, and process launch do not substitute for that remaining UI gate.

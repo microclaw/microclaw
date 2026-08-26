@@ -6199,8 +6199,11 @@ dependencies = [
  "gpui",
  "gpui-component",
  "gpui_platform",
+ "microclaw",
+ "microclaw-core",
  "microclaw-work-app",
  "smol",
+ "tokio",
 ]
 
 [[package]]
