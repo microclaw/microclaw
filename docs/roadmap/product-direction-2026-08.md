@@ -442,15 +442,15 @@ invented in this document.
 Estimated scope: a two-week adoption spike followed by 6–8 weeks for the first
 vertical slice if the gate passes.
 
-1. Pin GPUI and GPUI Component revisions and pass the macOS/Windows adoption
-   gate, including IME, accessibility, rendering, recovery, and packaging.
+1. Pin GPUI and GPUI Component revisions and pass the macOS adoption gate,
+   including IME, accessibility, rendering, recovery, and packaging.
 2. Add the GPUI compatibility/component boundary and application projections.
 3. Extract and stabilize the shared agent-runtime boundary without duplicating
    the existing engine.
 4. Deliver one end-to-end native workflow: open workspace, start task, review
    plan, observe tools, approve a side effect, inspect a diff, verify, and
    accept an artifact.
-5. Produce macOS and Windows signed installers for `microclaw-work`.
+5. Produce a signed and notarized macOS installer for `microclaw-work`.
 6. Foreground workspace task model: plan, steer, pause, resume, cancel, verify,
    diff, and artifact delivery.
 7. Guided onboarding and first-completed-task path.
@@ -476,29 +476,27 @@ review, process-level crash/retry tests, and macOS development-bundle
 verification. The macOS bundle uses the website brand icon; local packaging has
 also produced a Developer ID-signed, Hardened Runtime application and signed,
 checksum-verified DMG that Gatekeeper accepts. CI builds the equivalent ad-hoc
-signed DMG preview and launch-smokes the packaged application. Apple notarization
-and stapling are still required for public distribution. Windows now has a
-separate branded per-user Inno Setup package, optional Authenticode signing for
-both the application and installer, and a CI silent-install/launch/uninstall
-smoke gate. A production Windows certificate is still required before public
-distribution. Work installers use a dedicated optimized `work-release` Cargo
-profile so the Server's Thin LTO policy does not impose disproportionate Windows
-link times on the desktop product. The repository also has
-a Linux/macOS/Windows release-build matrix that runs the headless recovery harness
-and publishes unsigned preview artifacts. Hosted Linux and macOS jobs have completed successfully and produced
-non-expired preview artifacts; Windows hosted completion is still required
-before treating the three-platform gate as passed. The next gates remain real-provider end-to-end onboarding,
-accessibility/IME testing, the physical GPU/display matrix, Apple notarization,
-and production Windows Authenticode evidence. Phase 1 is not complete until those gates have direct
-evidence.
+signed DMG preview and launch-smokes the packaged application. The release
+script now supports Apple notarization and stapling through a keychain profile;
+live credentialed evidence is still required before public distribution. Work
+installers use a dedicated optimized `work-release` Cargo profile so desktop
+iteration remains practical without changing Server release characteristics.
+Windows and Linux builds, installers, and CI previews remain in the repository
+as non-blocking engineering work, but their release gates are deferred. The
+next macOS gates are real-provider end-to-end onboarding, native Chinese IME,
+VoiceOver and keyboard traversal, the physical GPU/display matrix, and a live
+Apple notarization run. Phase 1 is not complete until those macOS gates have
+direct evidence from sustained daily use.
 
 Accessibility note (2026-08-25): primary controls are present in the macOS
 AccessKit tree after activation, and model fields, composer, messages, streaming
 status, and approvals now have explicit names or roles. A Unicode Chinese
 composer value was set through the accessibility value action and survived an
-application restart. That does not prove native IME composition: consistent
-fresh-process AccessKit activation, keyboard traversal, VoiceOver/Narrator/Orca,
-and real macOS/Windows/Linux IME sessions remain open acceptance work.
+application restart. The composer now maps Return to its primary action for
+both normal chat and in-run steering. That does not prove native IME
+composition: consistent fresh-process AccessKit activation, keyboard traversal,
+VoiceOver, and a real macOS Pinyin composition session remain open acceptance
+work.
 
 ### Phase 2 — persistent agents and teams
 

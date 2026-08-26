@@ -168,8 +168,8 @@ impl WorkApp {
         let _subscriptions = vec![
             cx.subscribe_in(&task_input, window, {
                 let task_input = task_input.clone();
-                move |this, _, event: &InputEvent, _, cx| {
-                    if matches!(event, InputEvent::Change) {
+                move |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => {
                         let _ = this.session.apply(WorkCommand::SetComposerDraft {
                             draft: task_input.read(cx).value().to_string(),
                         });
@@ -191,15 +191,21 @@ impl WorkApp {
                         .detach();
                         cx.notify();
                     }
+                    InputEvent::PressEnter { shift: false, .. } => {
+                        this.submit_composer(window, cx);
+                    }
+                    _ => {}
                 }
             }),
             cx.subscribe_in(
                 &steer_input,
                 window,
-                move |_, _, event: &InputEvent, _, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        cx.notify();
+                move |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { shift: false, .. } => {
+                        this.submit_composer(window, cx);
                     }
+                    _ => {}
                 },
             ),
         ];
@@ -813,7 +819,7 @@ impl WorkApp {
         }
     }
 
-    fn start_runtime(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_runtime(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.reject_if_runtime_busy(cx) {
             return;
         }
@@ -850,15 +856,19 @@ impl WorkApp {
         self.launch_runtime_prompt(task, cx);
     }
 
-    fn primary_action(&mut self, event: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn primary_action(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.submit_composer(window, cx);
+    }
+
+    fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.runtime_active {
-            self.send_steering(event, window, cx);
+            self.send_steering(window, cx);
         } else {
-            self.start_runtime(event, window, cx);
+            self.start_runtime(window, cx);
         }
     }
 
-    fn send_steering(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn send_steering(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let update = self.steer_input.read(cx).value().to_string();
         if self.last_run_was_demo {
             match self.session.apply(WorkCommand::RecordSteering {

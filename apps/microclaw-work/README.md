@@ -209,9 +209,10 @@ not yet evidence for the broader physical GPU/display matrix.
 
 Primary controls expose native AccessKit roles and stable labels. The chat
 composer is named `Message MicroClaw Work` (or active-task guidance while a run
-is in progress); persisted messages are paragraphs, streamed output is a status
-region, and approvals are alerts. Platform release acceptance still requires
-direct VoiceOver/Narrator/Orca traversal and real IME composition evidence.
+is in progress), and Return invokes Send or sends steering to the active run;
+persisted messages are paragraphs, streamed output is a status region, and
+approvals are alerts. macOS release acceptance still requires direct VoiceOver
+traversal and real Pinyin IME composition evidence.
 
 The UI remains a workflow projection rather than an IDE. Conversation is the
 primary surface, with approvals rendered inline at the point where work pauses.
