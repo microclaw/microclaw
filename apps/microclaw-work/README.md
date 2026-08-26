@@ -17,6 +17,13 @@ Run on a supported desktop host:
 cargo run -p microclaw-work
 ```
 
+Install the signed and notarized stable macOS application through Homebrew:
+
+```sh
+brew tap microclaw/tap
+brew install --cask microclaw-work
+```
+
 Run the framework-independent session tests:
 
 ```sh
@@ -36,7 +43,7 @@ created, sending remains disabled until the user selects an accessible folder.
 The empty chat home makes missing model configuration a primary onboarding
 action and keeps project connection optional. The compact environment area at
 the bottom of the chat sidebar reports the
-configured provider and model without showing credentials. **Model** opens a
+configured provider and model without showing credentials. **Settings** opens a
 native, English first-run flow for provider, model, optional base URL, and API
 key, so Work does not
 require a terminal setup step. The API-key input is masked and marked as a

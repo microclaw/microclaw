@@ -126,6 +126,7 @@ Anthropic 使用原生 provider 通路。OpenAI、OpenAI Codex、OpenRouter、Ol
 | 安装脚本 | 最快完成 macOS/Linux 安装 | `curl -fsSL https://microclaw.org/install.sh \| bash` |
 | PowerShell | 最快完成 Windows 安装 | `iwr https://microclaw.org/install.ps1 -UseBasicParsing \| iex` |
 | Homebrew | 在 macOS 上管理升级 | `brew tap microclaw/tap && brew install microclaw` |
+| Homebrew Cask | 原生 MicroClaw Work 桌面端 | `brew tap microclaw/tap && brew install --cask microclaw-work` |
 | 容器 | 隔离部署 | `ghcr.io/microclaw/microclaw:latest` |
 | 源码 | 开发或启用自定义 feature | `cargo build --release` |
 

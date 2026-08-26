@@ -22,7 +22,7 @@ case "$work_profile" in
     ;;
 esac
 
-work_version="$(awk -F '"' '/^version = / { print $2; exit }' "$work_repo_root/apps/microclaw-work/Cargo.toml")"
+work_version="${MICROCLAW_WORK_VERSION_OVERRIDE:-$(awk -F '"' '/^version = / { print $2; exit }' "$work_repo_root/apps/microclaw-work/Cargo.toml")}"
 if [[ -z "$work_version" ]]; then
   echo "failed to read MicroClaw Work version" >&2
   exit 1
