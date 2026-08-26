@@ -185,6 +185,14 @@ model-only updates use comment-preserving shared persistence. Five focused
 runtime-service tests cover creation, reload, comment/key preservation,
 credential validation, URL validation, cancellation, and run-ID uniqueness.
 
+Computer Use then exercised the first-run flow against an isolated `/tmp`
+configuration. It verified the English settings layout, an accessibility role
+of `secure text field` with no exposed value, masked on-screen key rendering,
+the missing-key validation message, keyless Ollama creation, immediate sidebar
+readiness, mode `0600`, preservation of a saved key after a blank edit, and
+provider/model restoration after a full native process restart. The isolated
+run did not read or modify the user's production model configuration.
+
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing
 side effects in the background, so parallel starts remain rejected. The Stop
