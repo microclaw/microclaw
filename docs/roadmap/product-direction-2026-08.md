@@ -189,15 +189,23 @@ Markdown, code viewing, notifications, and themes. Drop down to `gpui-base` or
 custom GPUI elements only for a measured product requirement. This avoids
 turning the first release into a design-system project.
 
-The first information architecture should stay work-oriented:
+The first information architecture is conversation-first and work-capable:
 
 - onboarding and provider setup;
-- workspace and recent-task sidebar;
-- primary conversation/work canvas;
-- plan and live progress timeline;
+- New Chat and durable conversation history in the sidebar;
+- a dominant conversation canvas and persistent composer;
+- workspace and model context kept compact and secondary;
+- plan and live progress in a collapsible contextual inspector;
 - tool activity, process output, files, diffs, and artifacts;
-- a persistent approval center;
+- approvals inline at the point where conversation pauses;
 - diagnostics, models, policies, and Server connections.
+
+The product model is: chat is the home, tasks are runs inside durable
+conversations, and execution details are an expandable layer. Users should not
+need to manage a task dashboard to talk to the Agent. A conversation may begin
+as discussion, gain a workspace when local access is needed, execute multiple
+foreground runs, and later expose subagents without changing this primary
+navigation model.
 
 A process-output panel is sufficient for the first vertical slice. A complete
 PTY terminal emulator, IDE-grade editor, arbitrary dock customization, and
@@ -458,12 +466,14 @@ features. Its new work is the desktop task lifecycle and product experience.
 
 Implementation status (2026-08-25): **in progress**. The repository now has a
 native GPUI application, a shared-runtime port, durable conversation threads,
+the conversation-first home and contextual Details inspector described above,
 live plans, in-run steering, structured inline approvals, bounded process
-evidence, file projections, checkpoint review, and macOS development-bundle
+evidence, native multi-file diff review, visible subagent activity, checkpoint
+review, process-level crash/retry tests, and macOS development-bundle
 verification. The next gates remain real-provider end-to-end onboarding,
-production diff/artifact presentation, crash-resume validation, Windows/Linux
-CI and packaging, accessibility/IME testing, diagnostics, and signed release
-installers. Phase 1 is not complete until those gates have direct evidence.
+Windows/Linux CI and packaging, accessibility/IME testing, diagnostics, and
+signed release installers. Phase 1 is not complete until those gates have
+direct evidence.
 
 ### Phase 2 — persistent agents and teams
 

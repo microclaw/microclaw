@@ -43,6 +43,7 @@ struct WorkApp {
     last_run_was_demo: bool,
     connection_test_active: bool,
     connection_test_message: String,
+    inspector_open: bool,
     draft_revision: u64,
     _subscriptions: Vec<Subscription>,
 }
@@ -182,6 +183,10 @@ impl WorkApp {
                 },
             ),
         ];
+        let inspector_open = !session.plan.is_empty()
+            || !session.process_activities.is_empty()
+            || !session.file_changes.is_empty()
+            || !session.subagents.is_empty();
 
         Self {
             session,
@@ -205,9 +210,15 @@ impl WorkApp {
             last_run_was_demo: false,
             connection_test_active: false,
             connection_test_message: "Save settings, then test the provider connection.".into(),
+            inspector_open,
             draft_revision: 0,
             _subscriptions,
         }
+    }
+
+    fn toggle_inspector(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.inspector_open = !self.inspector_open;
+        cx.notify();
     }
 
     fn persist(&mut self) {
@@ -229,6 +240,10 @@ impl WorkApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.inspector_open = !session.plan.is_empty()
+            || !session.process_activities.is_empty()
+            || !session.file_changes.is_empty()
+            || !session.subagents.is_empty();
         self.session = session;
         let task = self.session.composer_draft.clone();
         self.task_input.update(cx, |input, cx| {
@@ -1153,19 +1168,31 @@ impl Render for WorkApp {
         if self.settings_open {
             return self.render_model_settings(cx).into_any_element();
         }
-        let status = match self.session.status {
-            WorkStatus::Planning => "Planning",
-            WorkStatus::Running => "Running",
-            WorkStatus::AwaitingApproval => "Awaiting approval",
-            WorkStatus::Verifying => "Verifying",
-            WorkStatus::Completed => "Completed",
-            WorkStatus::Cancelled => "Cancelled",
-            WorkStatus::Failed => "Failed",
-            WorkStatus::Interrupted => "Interrupted",
+        let conversation_is_empty = self.session.messages.is_empty()
+            && self.session.task.trim().is_empty()
+            && self.session.assistant_draft.is_empty();
+        let status = if conversation_is_empty {
+            "Ready"
+        } else {
+            match self.session.status {
+                WorkStatus::Planning => "Planning",
+                WorkStatus::Running => "Running",
+                WorkStatus::AwaitingApproval => "Awaiting approval",
+                WorkStatus::Verifying => "Verifying",
+                WorkStatus::Completed => "Completed",
+                WorkStatus::Cancelled => "Cancelled",
+                WorkStatus::Failed => "Failed",
+                WorkStatus::Interrupted => "Interrupted",
+            }
         };
         let recent_sessions = self.recent_sessions.clone();
         let process_activities = self.session.process_activities.clone();
         let file_changes = self.session.file_changes.clone();
+        let subagents = self.session.subagents.clone();
+        let has_inspector_content = !self.session.plan.is_empty()
+            || !process_activities.is_empty()
+            || !file_changes.is_empty()
+            || !subagents.is_empty();
         let selected_file_change = self.session.selected_file_change().cloned();
         let review_status = self.session.review_status;
         let inline_approval = self.session.pending_approval.clone();
@@ -1198,78 +1225,30 @@ impl Render for WorkApp {
                         Button::new("new-session")
                             .primary()
                             .disabled(self.runtime_active)
-                            .label("New Task")
+                            .label("New Chat")
                             .on_click(cx.listener(Self::new_session)),
                     )
                     .child(
                         div()
+                            .mt_3()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Workspace"),
-                    )
-                    .child(div().child(if self.session.workspace.is_empty() {
-                        "Not selected".to_string()
-                    } else {
-                        self.session.workspace.clone()
-                    }))
-                    .child(
-                        Button::new("choose-workspace")
-                            .outline()
-                            .disabled(self.runtime_active)
-                            .label("Select Workspace")
-                            .on_click(cx.listener(Self::choose_workspace)),
-                    )
-                    .child(
-                        div()
-                            .mt_4()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Runtime configuration"),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .p_3()
-                            .rounded(cx.theme().radius)
-                            .bg(cx.theme().accent)
-                            .child(format!("Provider: {}", self.runtime_config.provider))
-                            .child(format!("Model: {}", self.runtime_config.model))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(self.runtime_config.detail.clone()),
-                            ),
-                    )
-                    .child(
-                        Button::new("model-settings")
-                            .outline()
-                            .disabled(self.runtime_active)
-                            .label("Model Settings")
-                            .on_click(cx.listener(Self::open_model_settings)),
-                    )
-                    .child(
-                        Button::new("refresh-config")
-                            .outline()
-                            .label("Refresh Configuration")
-                            .on_click(cx.listener(Self::refresh_runtime_config)),
-                    )
-                    .child(
-                        div()
-                            .mt_4()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Recent tasks"),
+                            .child("Chats"),
                     )
                     .children(recent_sessions.into_iter().take(6).map(|summary| {
                         let session_id = summary.session_id.clone();
                         let is_active = session_id == self.session.session_id;
                         let title = if summary.task.trim().is_empty() {
-                            "Untitled task".to_string()
+                            "New conversation".to_string()
                         } else {
                             summary.task.chars().take(42).collect()
                         };
-                        let label = format!("{title} · {}", work_status_label(summary.status));
+                        let summary_status = if summary.task.trim().is_empty() {
+                            "Ready"
+                        } else {
+                            work_status_label(summary.status)
+                        };
+                        let label = format!("{title} · {summary_status}");
                         Button::new(format!("session-{session_id}"))
                             .outline()
                             .disabled(self.runtime_active || is_active)
@@ -1279,15 +1258,65 @@ impl Render for WorkApp {
                             }))
                     }))
                     .child(
-                        div()
+                        v_flex()
                             .mt_auto()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(self.persistence_message.clone())
+                            .gap_2()
+                            .pt_3()
+                            .border_t_1()
+                            .border_color(cx.theme().border)
                             .child(
                                 div()
-                                    .mt_1()
-                                    .child(self.session_store.root().display().to_string()),
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Workspace"),
+                            )
+                            .child(div().text_sm().child(if self.session.workspace.is_empty() {
+                                "No folder selected".to_string()
+                            } else {
+                                self.session.workspace.clone()
+                            }))
+                            .child(
+                                Button::new("choose-workspace")
+                                    .outline()
+                                    .disabled(self.runtime_active)
+                                    .label(if self.session.workspace.is_empty() {
+                                        "Choose Folder"
+                                    } else {
+                                        "Change Folder"
+                                    })
+                                    .on_click(cx.listener(Self::choose_workspace)),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("model-settings")
+                                            .outline()
+                                            .disabled(self.runtime_active)
+                                            .label("Model")
+                                            .on_click(cx.listener(Self::open_model_settings)),
+                                    )
+                                    .child(
+                                        Button::new("refresh-config")
+                                            .outline()
+                                            .label("Refresh")
+                                            .on_click(cx.listener(Self::refresh_runtime_config)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} · {}",
+                                        self.runtime_config.provider, self.runtime_config.model
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(self.persistence_message.clone()),
                             ),
                     ),
             )
@@ -1296,8 +1325,8 @@ impl Render for WorkApp {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .p_6()
-                    .gap_5()
+                    .p_5()
+                    .gap_3()
                     .child(
                         h_flex()
                             .items_center()
@@ -1305,60 +1334,96 @@ impl Render for WorkApp {
                             .child(
                                 v_flex()
                                     .gap_1()
-                                    .child(div().text_2xl().font_bold().child("Work Task"))
-                                    .child(if self.session.title.trim().is_empty() {
-                                        self.session.task.clone()
-                                    } else {
-                                        self.session.title.clone()
-                                    }),
+                                    .child(div().text_xl().font_bold().child(
+                                        if self.session.title.trim().is_empty() {
+                                            "New conversation".to_string()
+                                        } else {
+                                            trim_text(&self.session.title, 72)
+                                        },
+                                    ))
+                                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(
+                                        if self.session.workspace.is_empty() {
+                                            "Choose a folder when this conversation needs local files".to_string()
+                                        } else {
+                                            format!("Working in {}", self.session.workspace)
+                                        },
+                                    )),
                             )
                             .child(
-                                div()
-                                    .px_3()
-                                    .py_1()
-                                    .rounded_full()
-                                    .bg(cx.theme().warning.opacity(0.18))
-                                    .child(status),
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .px_3()
+                                            .py_1()
+                                            .rounded_full()
+                                            .bg(cx.theme().warning.opacity(0.18))
+                                            .child(status),
+                                    )
+                                    .children(has_inspector_content.then(|| {
+                                        Button::new("toggle-inspector")
+                                            .outline()
+                                            .label(if self.inspector_open {
+                                                "Hide Details"
+                                            } else {
+                                                "Show Details"
+                                            })
+                                            .on_click(cx.listener(Self::toggle_inspector))
+                                    })),
                             ),
                     )
                     .child(
                         h_flex()
                             .flex_1()
                             .min_h_0()
-                            .gap_5()
+                            .gap_4()
                             .child(
                                 v_flex()
                                     .flex_1()
                                     .min_h_0()
                                     .overflow_y_scrollbar()
-                                    .gap_3()
-                                    .p_4()
-                                    .rounded(cx.theme().radius)
-                                    .border_1()
-                                    .border_color(cx.theme().border)
-                                    .child(div().text_lg().font_bold().child("Conversation"))
+                                    .gap_4()
+                                    .px_5()
+                                    .py_4()
                                     .children(messages.is_empty().then(|| {
-                                        div()
-                                            .p_6()
-                                            .text_lg()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child("What would you like MicroClaw to work on?")
+                                        v_flex()
+                                            .flex_1()
+                                            .items_center()
+                                            .justify_center()
+                                            .gap_3()
+                                            .p_8()
+                                            .child(
+                                                div()
+                                                    .text_2xl()
+                                                    .font_bold()
+                                                    .child("What would you like to get done?"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .max_w(px(560.))
+                                                    .text_center()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("Ask MicroClaw to research, create, organize, or automate work across your files and tools."),
+                                            )
+                                            .children(self.session.workspace.is_empty().then(|| {
+                                                Button::new("empty-choose-workspace")
+                                                    .outline()
+                                                    .disabled(self.runtime_active)
+                                                    .label("Connect a Folder")
+                                                    .on_click(cx.listener(Self::choose_workspace))
+                                            }))
                                     }))
                                     .children(messages.into_iter().map(|message| {
                                         let is_user = message.role == ConversationRole::User;
-                                        h_flex()
-                                            .w_full()
-                                            .child(
+                                        let row = h_flex().w_full();
+                                        let row = if is_user { row.justify_end() } else { row };
+                                        row.child(
                                                 v_flex()
-                                                    .max_w(px(if is_user { 560. } else { 720. }))
+                                                    .max_w(px(if is_user { 620. } else { 760. }))
                                                     .gap_1()
                                                     .p_3()
                                                     .rounded(cx.theme().radius)
-                                                    .bg(if is_user {
-                                                        cx.theme().accent
-                                                    } else {
-                                                        cx.theme().secondary
-                                                    })
+                                                    .bg(if is_user { cx.theme().accent } else { cx.theme().background })
                                                     .child(div().text_xs().font_bold().child(if is_user {
                                                         "You"
                                                     } else {
@@ -1430,7 +1495,7 @@ impl Render for WorkApp {
                                             ))
                                     })),
                             )
-                            .child(
+                            .children((self.inspector_open && has_inspector_content).then(|| {
                                 v_flex()
                                     .w(px(360.))
                                     .h_full()
@@ -1464,6 +1529,52 @@ impl Render for WorkApp {
                                                 },
                                             )),
                                     )
+                                    .children((!subagents.is_empty()).then(|| {
+                                        v_flex()
+                                            .gap_3()
+                                            .p_4()
+                                            .rounded(cx.theme().radius)
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .child(div().text_lg().font_bold().child("Agents"))
+                                            .children(subagents.into_iter().map(|agent| {
+                                                h_flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .gap_3()
+                                                    .child(
+                                                        v_flex()
+                                                            .gap_1()
+                                                            .child(
+                                                                div()
+                                                                    .text_sm()
+                                                                    .font_bold()
+                                                                    .child(agent.label),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(
+                                                                        cx.theme()
+                                                                            .muted_foreground,
+                                                                    )
+                                                                    .child(trim_text(
+                                                                        &agent.run_id,
+                                                                        28,
+                                                                    )),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .px_2()
+                                                            .py_1()
+                                                            .rounded_full()
+                                                            .bg(cx.theme().accent)
+                                                            .text_xs()
+                                                            .child(agent.status),
+                                                    )
+                                            }))
+                                    }))
                                     .child(
                                         v_flex()
                                             .gap_3()
@@ -1660,57 +1771,117 @@ impl Render for WorkApp {
                                                             ),
                                                     ),
                                             ),
-                                    ),
-                            ),
+                                    )
+                            })),
                     )
                     .child(
-                        h_flex()
-                            .gap_3()
+                        v_flex()
+                            .gap_2()
                             .p_3()
                             .rounded(cx.theme().radius)
                             .border_1()
                             .border_color(cx.theme().border)
-                            .child(div().flex_1().child(Input::new(composer_input)))
                             .child(
-                                Button::new("run-runtime")
-                                    .primary()
-                                    .disabled(if self.runtime_active {
-                                        self.steer_input.read(cx).value().trim().is_empty()
-                                    } else {
-                                        (!retryable
-                                            && self.task_input.read(cx).value().trim().is_empty())
-                                            || !self.runtime_config.ready
-                                            || self.session.workspace.is_empty()
-                                    })
-                                    .label(if self.runtime_active {
-                                        "Send Update"
-                                    } else if self.session.status == WorkStatus::Completed {
-                                        "Continue"
-                                    } else if retryable
-                                        && self.task_input.read(cx).value().trim().is_empty()
-                                    {
-                                        "Retry"
-                                    } else {
-                                        "Send"
-                                    })
-                                    .on_click(cx.listener(Self::primary_action)),
+                                div()
+                                    .min_h(px(44.))
+                                    .child(Input::new(composer_input)),
                             )
                             .child(
-                                Button::new("run-demo")
-                                    .outline()
-                                    .disabled(self.runtime_active)
-                                    .label("Demo")
-                                    .on_click(cx.listener(Self::start_demo)),
-                            )
-                            .child(
-                                Button::new("stop-runtime")
-                                    .outline()
-                                    .disabled(
-                                        !self.runtime_active
-                                            && self.session.status != WorkStatus::AwaitingApproval,
+                                h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .rounded_full()
+                                                    .bg(cx.theme().accent)
+                                                    .text_xs()
+                                                    .child(if self.session.workspace.is_empty() {
+                                                        "No folder"
+                                                    } else {
+                                                        "Folder connected"
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .rounded_full()
+                                                    .bg(cx.theme().accent)
+                                                    .text_xs()
+                                                    .child(format!(
+                                                        "{} / {}",
+                                                        self.runtime_config.provider,
+                                                        self.runtime_config.model
+                                                    )),
+                                            ),
                                     )
-                                    .label("Stop")
-                                    .on_click(cx.listener(Self::stop_runtime)),
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("run-demo")
+                                                    .outline()
+                                                    .disabled(self.runtime_active)
+                                                    .label("Try Demo")
+                                                    .on_click(cx.listener(Self::start_demo)),
+                                            )
+                                            .child(
+                                                Button::new("stop-runtime")
+                                                    .outline()
+                                                    .disabled(
+                                                        !self.runtime_active
+                                                            && self.session.status
+                                                                != WorkStatus::AwaitingApproval,
+                                                    )
+                                                    .label("Stop")
+                                                    .on_click(cx.listener(Self::stop_runtime)),
+                                            )
+                                            .child(
+                                                Button::new("run-runtime")
+                                                    .primary()
+                                                    .disabled(if self.runtime_active {
+                                                        self.steer_input
+                                                            .read(cx)
+                                                            .value()
+                                                            .trim()
+                                                            .is_empty()
+                                                    } else {
+                                                        (!retryable
+                                                            && self
+                                                                .task_input
+                                                                .read(cx)
+                                                                .value()
+                                                                .trim()
+                                                                .is_empty())
+                                                            || !self.runtime_config.ready
+                                                            || self.session.workspace.is_empty()
+                                                    })
+                                                    .label(if self.runtime_active {
+                                                        "Send Update"
+                                                    } else if self.session.status
+                                                        == WorkStatus::Completed
+                                                    {
+                                                        "Continue"
+                                                    } else if retryable
+                                                        && self
+                                                            .task_input
+                                                            .read(cx)
+                                                            .value()
+                                                            .trim()
+                                                            .is_empty()
+                                                    {
+                                                        "Retry"
+                                                    } else {
+                                                        "Send"
+                                                    })
+                                                    .on_click(cx.listener(Self::primary_action)),
+                                            ),
+                                    )
                             ),
                     ),
             )

@@ -23,17 +23,18 @@ Run the framework-independent session tests:
 cargo test -p microclaw-work-app
 ```
 
-The main action, **Run Task**, loads the normal MicroClaw configuration,
+The main **Send** action loads the normal MicroClaw configuration,
 uses the selected workspace, and streams versioned Runtime Event envelopes into
-the Work projection. The native **Select Workspace** action is backed by GPUI's
+the Work projection. The native **Choose Folder** action is backed by GPUI's
 cross-platform directory prompt; the canonical path survives restart. A new
 install has no implicit workspace and cannot run until the user selects one.
 Missing workspaces return to this safe unselected state instead of falling back
 to the process launch directory (which can be `/` for a packaged application).
 
-The sidebar reports the configured provider, model, and config path without
-showing credentials. **Model Settings** provides a native, English first-run
-flow for provider, model, optional base URL, and API key, so Work does not
+The compact environment area at the bottom of the chat sidebar reports the
+configured provider and model without showing credentials. **Model** opens a
+native, English first-run flow for provider, model, optional base URL, and API
+key, so Work does not
 require a terminal setup step. The API-key input is masked and marked as a
 password field for accessibility/password-manager semantics; an existing key
 is never loaded into the UI and a blank edit preserves it. Missing or invalid
@@ -58,9 +59,9 @@ written atomically and use mode `0600` on Unix; edits preserve existing YAML
 comments and retain a saved key unless the user explicitly replaces it.
 
 Work sessions are stored as separate versioned snapshots under the application
-data directory, with an atomic bounded index for the recent-task list. **New
-Task** creates an independent Agent Engine conversation, and opening a recent
-task restores its matching runtime session rather than sharing a global desktop
+data directory, with an atomic bounded index for the conversation list. **New
+Chat** creates an independent Agent Engine conversation, and opening a recent
+chat restores its matching runtime session rather than sharing a global desktop
 conversation. Draft input is persisted after a short debounce. If the desktop
 process exits while a task is Running or Verifying, restart projects it as
 **Interrupted** and offers **Retry** even though the sent composer is empty;
@@ -79,8 +80,10 @@ High-risk tool requests remain in the approval state even when the Agent's
 current turn ends with explanatory text. **Allow and Continue** submits the approve-once
 reply into the same persisted runtime session and projects the resumed run.
 
-The task view keeps structured, bounded projections for tool activity, file
-changes, subagents, and the final response. The Changes / Artifacts inspector
+The conversation view keeps structured, bounded projections for tool activity,
+file changes, subagents, and the final response. The collapsible Details
+inspector holds Plan, Process Output, and Changes / Artifacts so chat remains
+the primary canvas. Its Changes / Artifacts section
 supports multiple changed files, durably remembers the selected file, renders
 bounded unified diffs with addition/removal highlighting, and keeps safe file
 opening beside the accept/revert review controls. Tool starts and results are paired

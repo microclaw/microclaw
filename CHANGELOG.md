@@ -8,6 +8,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Chat-first MicroClaw Work home.** The GPUI desktop now opens into a
+  conversation workspace instead of a task dashboard: New Chat and durable
+  conversation history lead the sidebar, setup state is compact and secondary,
+  the empty thread has a dedicated welcome state, user messages align as chat,
+  and a larger persistent composer carries folder and model context. Plan,
+  process evidence, and change review live in a collapsible Details inspector
+  so ordinary conversation can use the full canvas.
 - **Conversation-first MicroClaw Work shell.** The native desktop now treats
   each task as a durable conversation: user and assistant messages are stored
   in the Work snapshot, streaming text is coalesced into an assistant draft,
