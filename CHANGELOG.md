@@ -18,6 +18,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   tasks accept direct same-session follow-ups without deleting prior messages,
   and approval choices appear inline in the conversation where execution
   pauses instead of living in a separate empty inspector card.
+- **Native multi-file change review.** Work snapshot schema v13 persists the
+  selected changed file. The inspector now provides an explicit multi-file
+  list, addition/removal and truncation metadata, a bounded scrollable unified
+  diff with added/removed line highlighting, safe file opening, and the
+  existing accept/revert decision in one review surface.
 
 - **MicroClaw Work post-task review.** Foreground Work runs emit a pre-task
   checkpoint and completed file changes can be accepted, continued in the same

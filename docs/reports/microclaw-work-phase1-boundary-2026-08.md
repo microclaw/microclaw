@@ -483,3 +483,21 @@ on plan, verification, and artifacts. Computer Use exercised this exact path:
 it ran the Demo to an inline three-option approval, denied it, entered a new
 follow-up, started the Demo again, and verified both user turns remained visible
 while the composer cleared and the new inline approval appeared below them.
+
+## Multi-file change review
+
+Work snapshot schema v13 adds an explicit selected-file projection. Each
+successful shared `FileDiff` event updates the bounded file collection and
+selects the newest change; selecting another known path is a validated Work
+command and survives snapshot reload. The GPUI inspector now combines the file
+list, `+added/-removed` and truncation metadata, safe file opening, a bounded
+scrollable unified diff, and accept/revert state. Added and removed lines use
+theme-derived success and danger backgrounds while headers and context remain
+neutral.
+
+Computer Use verified the two-file Demo in a maximized native window. It showed
+`demo-output.md` and `src/work.rs`, initially rendered the selected Rust diff
+with red/green line treatment, then activated the Markdown entry through its
+accessible button and immediately replaced the selected styling, filename, and
+diff body. The focused persistence test additionally proves invalid paths are
+rejected and a valid selection restores after reload.

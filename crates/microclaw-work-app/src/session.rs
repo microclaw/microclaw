@@ -136,6 +136,9 @@ pub enum WorkCommand {
     SetWorkspace {
         path: String,
     },
+    SelectFileChange {
+        path: String,
+    },
     RecordProgress {
         kind: WorkEventKind,
         message: String,
@@ -177,6 +180,8 @@ pub enum WorkCommandError {
     EmptySteering,
     #[error("approval option is unavailable: {value}")]
     UnknownApprovalOption { value: String },
+    #[error("file change is unavailable: {path}")]
+    UnknownFileChange { path: String },
     #[error("workspace is not an accessible directory: {path}")]
     InvalidWorkspace { path: String },
     #[error("cannot {command} while Work status is {actual:?}")]
@@ -229,6 +234,8 @@ pub struct WorkSessionSnapshot {
     #[serde(default)]
     pub file_changes: Vec<FileChange>,
     #[serde(default)]
+    pub selected_file_change: Option<String>,
+    #[serde(default)]
     pub subagents: Vec<SubagentActivity>,
     #[serde(default)]
     pub final_response: Option<String>,
@@ -249,7 +256,7 @@ pub struct WorkSessionSnapshot {
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 12;
+    pub const SCHEMA_VERSION: u32 = 13;
     pub const MAX_EVENTS: usize = 200;
     pub const MAX_TOOL_ACTIVITIES: usize = 100;
     pub const MAX_PROCESS_ACTIVITIES: usize = 50;
@@ -276,6 +283,7 @@ impl WorkSessionSnapshot {
             tool_activities: Vec::new(),
             process_activities: Vec::new(),
             file_changes: Vec::new(),
+            selected_file_change: None,
             subagents: Vec::new(),
             final_response: None,
             baseline_checkpoint: None,
@@ -343,6 +351,7 @@ impl WorkSessionSnapshot {
                 kind: microclaw_core::runtime_event::RuntimeProcessKind::Verification,
             }],
             file_changes: Vec::new(),
+            selected_file_change: None,
             subagents: Vec::new(),
             final_response: None,
             baseline_checkpoint: None,
@@ -399,6 +408,7 @@ impl WorkSessionSnapshot {
             WorkCommand::StartTask { task } => self.start_task(task)?,
             WorkCommand::SetComposerDraft { draft } => self.composer_draft = draft,
             WorkCommand::SetWorkspace { path } => self.set_workspace(path)?,
+            WorkCommand::SelectFileChange { path } => self.select_file_change(path)?,
             WorkCommand::RecordProgress {
                 kind,
                 message,
@@ -475,6 +485,7 @@ impl WorkSessionSnapshot {
         self.tool_activities.clear();
         self.process_activities.clear();
         self.file_changes.clear();
+        self.selected_file_change = None;
         self.subagents.clear();
         self.final_response = None;
         self.baseline_checkpoint = None;
@@ -509,6 +520,21 @@ impl WorkSessionSnapshot {
             format!("Workspace changed to {}", self.workspace),
         );
         Ok(())
+    }
+
+    fn select_file_change(&mut self, path: String) -> Result<(), WorkCommandError> {
+        if !self.file_changes.iter().any(|change| change.path == path) {
+            return Err(WorkCommandError::UnknownFileChange { path });
+        }
+        self.selected_file_change = Some(path);
+        Ok(())
+    }
+
+    pub fn selected_file_change(&self) -> Option<&FileChange> {
+        self.selected_file_change
+            .as_deref()
+            .and_then(|path| self.file_changes.iter().find(|change| change.path == path))
+            .or_else(|| self.file_changes.last())
     }
 
     fn record_progress(
@@ -829,6 +855,7 @@ impl WorkSessionSnapshot {
                     removed,
                     truncated,
                 });
+                self.selected_file_change = Some(path.clone());
                 trim_front(&mut self.file_changes, Self::MAX_FILE_CHANGES);
                 self.push_event(WorkEventKind::Tool, format!("File changed: {path}"));
             }
@@ -1007,6 +1034,17 @@ impl WorkSessionSnapshot {
         }
         if snapshot.title.trim().is_empty() {
             snapshot.title = snapshot.task.clone();
+        }
+        if snapshot.selected_file_change.as_ref().is_none_or(|path| {
+            !snapshot
+                .file_changes
+                .iter()
+                .any(|change| &change.path == path)
+        }) {
+            snapshot.selected_file_change = snapshot
+                .file_changes
+                .last()
+                .map(|change| change.path.clone());
         }
         if snapshot.composer_draft.is_empty()
             && snapshot.status == WorkStatus::Planning
@@ -1749,10 +1787,68 @@ mod tests {
             .unwrap();
 
         assert_eq!(snapshot.file_changes[0].path, "src/main.rs");
+        assert_eq!(
+            snapshot
+                .selected_file_change()
+                .map(|change| change.path.as_str()),
+            Some("src/main.rs")
+        );
         assert_eq!(snapshot.file_changes[0].added, 1);
         assert_eq!(
             snapshot.final_response.as_deref(),
             Some("Implemented and verified")
+        );
+    }
+
+    #[test]
+    fn file_change_selection_is_explicit_validated_and_durable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session.json");
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "edit files".into(),
+            })
+            .unwrap();
+        for (sequence, path) in [(1, "src/main.rs"), (2, "README.md")] {
+            snapshot
+                .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                    "run-selection",
+                    sequence,
+                    RuntimeEvent::FileDiff {
+                        path: path.into(),
+                        diff: format!("+changed {path}"),
+                        added: 1,
+                        removed: 0,
+                        truncated: false,
+                    },
+                )))
+                .unwrap();
+        }
+        assert_eq!(
+            snapshot
+                .selected_file_change()
+                .map(|change| change.path.as_str()),
+            Some("README.md")
+        );
+        snapshot
+            .apply(WorkCommand::SelectFileChange {
+                path: "src/main.rs".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            snapshot.apply(WorkCommand::SelectFileChange {
+                path: "missing.rs".into()
+            }),
+            Err(WorkCommandError::UnknownFileChange { .. })
+        ));
+        snapshot.save(&path).unwrap();
+        let restored = WorkSessionSnapshot::load(&path).unwrap();
+        assert_eq!(
+            restored
+                .selected_file_change()
+                .map(|change| change.path.as_str()),
+            Some("src/main.rs")
         );
     }
 

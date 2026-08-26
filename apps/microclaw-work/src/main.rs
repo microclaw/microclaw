@@ -407,6 +407,14 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn select_file_change(&mut self, path: String, cx: &mut Context<Self>) {
+        match self.session.apply(WorkCommand::SelectFileChange { path }) {
+            Ok(_) => self.persist(),
+            Err(error) => self.persistence_message = error.to_string(),
+        }
+        cx.notify();
+    }
+
     fn accept_changes(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         match self.session.apply(WorkCommand::AcceptChanges) {
             Ok(_) => {
@@ -925,6 +933,14 @@ impl WorkApp {
                         removed: 0,
                         truncated: false,
                     },
+                    RuntimeEvent::FileDiff {
+                        path: "src/work.rs".into(),
+                        diff: "@@ -1,3 +1,4 @@\n pub struct WorkTask {\n-    pub prompt: String,\n+    pub conversation: Vec<Message>,\n+    pub composer_draft: String,\n }"
+                            .into(),
+                        added: 2,
+                        removed: 1,
+                        truncated: false,
+                    },
                 ];
                 for (index, event) in structured_events.into_iter().enumerate() {
                     let _ = this.session.apply(WorkCommand::ApplyRuntimeEvent(
@@ -1043,7 +1059,7 @@ impl Render for WorkApp {
         let recent_sessions = self.recent_sessions.clone();
         let process_activities = self.session.process_activities.clone();
         let file_changes = self.session.file_changes.clone();
-        let final_response = self.session.final_response.clone();
+        let selected_file_change = self.session.selected_file_change().cloned();
         let review_status = self.session.review_status;
         let inline_approval = self.session.pending_approval.clone();
         let messages = self.session.messages.clone();
@@ -1391,44 +1407,89 @@ impl Render for WorkApp {
                                                 div()
                                                     .text_lg()
                                                     .font_bold()
-                                                    .child("Files / Artifacts"),
+                                                    .child("Changes / Artifacts"),
                                             )
                                             .children(file_changes.iter().map(|change| {
                                                 let path = change.path.clone();
-                                                Button::new(format!("artifact-{path}"))
-                                                    .outline()
+                                                let selected = selected_file_change
+                                                    .as_ref()
+                                                    .is_some_and(|selected| selected.path == path);
+                                                let button = Button::new(format!("change-{path}"))
+                                                    .w_full()
                                                     .label(format!(
-                                                        "{}  +{} -{}",
-                                                        change.path, change.added, change.removed
-                                                    ))
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.open_artifact(&path, cx);
-                                                    }))
+                                                        "{}  +{} -{}{}",
+                                                        change.path,
+                                                        change.added,
+                                                        change.removed,
+                                                        if change.truncated { " · truncated" } else { "" }
+                                                    ));
+                                                let button = if selected {
+                                                    button.primary()
+                                                } else {
+                                                    button.outline()
+                                                };
+                                                button.on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.select_file_change(path.clone(), cx);
+                                                }))
                                             }))
-                                            .child(
-                                                div().font_family("monospace").text_xs().child(
-                                                    file_changes
-                                                        .last()
-                                                        .map(|change| trim_text(&change.diff, 1800))
-                                                        .unwrap_or_default(),
-                                                ),
-                                            )
-                                            .child(
+                                            .children(selected_file_change.clone().map(|change| {
                                                 v_flex()
-                                                    .gap_1()
+                                                    .gap_2()
+                                                    .pt_2()
+                                                    .border_t_1()
+                                                    .border_color(cx.theme().border)
                                                     .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .font_bold()
-                                                            .child("Final response"),
+                                                        h_flex()
+                                                            .items_center()
+                                                            .justify_between()
+                                                            .child(div().text_sm().font_bold().child(change.path.clone()))
+                                                            .child(
+                                                                Button::new("open-selected-artifact")
+                                                                    .outline()
+                                                                    .label("Open File")
+                                                                    .on_click(cx.listener({
+                                                                        let path = change.path.clone();
+                                                                        move |this, _, _, cx| {
+                                                                            this.open_artifact(&path, cx);
+                                                                        }
+                                                                    })),
+                                                            ),
                                                     )
-                                                    .child(trim_text(
-                                                        final_response
-                                                            .as_deref()
-                                                            .unwrap_or("No final response yet."),
-                                                        1200,
-                                                    )),
-                                            )
+                                                    .child(
+                                                        v_flex()
+                                                            .max_h(px(320.))
+                                                            .overflow_y_scrollbar()
+                                                            .rounded(cx.theme().radius)
+                                                            .border_1()
+                                                            .border_color(cx.theme().border)
+                                                            .font_family("monospace")
+                                                            .text_xs()
+                                                            .children(change.diff.lines().map(str::to_owned).map(|line| {
+                                                                let background = if line.starts_with('+')
+                                                                    && !line.starts_with("+++")
+                                                                {
+                                                                    cx.theme().success.opacity(0.12)
+                                                                } else if line.starts_with('-')
+                                                                    && !line.starts_with("---")
+                                                                {
+                                                                    cx.theme().danger.opacity(0.12)
+                                                                } else {
+                                                                    cx.theme().background
+                                                                };
+                                                                div()
+                                                                    .px_2()
+                                                                    .py_1()
+                                                                    .bg(background)
+                                                                    .child(if line.is_empty() { " ".into() } else { line })
+                                                            })),
+                                                    )
+                                            }))
+                                            .children(file_changes.is_empty().then(|| {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("No workspace changes yet.")
+                                            }))
                                             .child(
                                                 v_flex()
                                                     .gap_2()

@@ -69,7 +69,10 @@ current turn ends with explanatory text. **Allow and Continue** submits the appr
 reply into the same persisted runtime session and projects the resumed run.
 
 The task view keeps structured, bounded projections for tool activity, file
-changes, subagents, and the final response. Tool starts and results are paired
+changes, subagents, and the final response. The Changes / Artifacts inspector
+supports multiple changed files, durably remembers the selected file, renders
+bounded unified diffs with addition/removal highlighting, and keeps safe file
+opening beside the accept/revert review controls. Tool starts and results are paired
 by the shared runtime call ID instead of display order. Persisted tool inputs,
 results, and diffs are secret-redacted. Artifact buttons canonicalize their
 target and open it only when it exists inside the explicitly selected
