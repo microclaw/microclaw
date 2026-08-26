@@ -24,6 +24,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Compact Work navigation.** The native desktop sidebar now uses a denser,
+  scrollable recent-chat list with left-aligned titles, compact status signals,
+  and a restrained active state. Workspace selection, model configuration,
+  reload, and diagnostics live in a divided utility footer instead of a large
+  stack of outlined buttons.
 - **macOS Work shortcuts.** Native menu actions and Command-N, Command-L,
   Command-Comma, and Command-Shift-D now provide direct access to New Chat,
   the composer, Model Settings, and Diagnostics.

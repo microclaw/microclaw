@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Disableable, Root, StyledExt,
+    ActiveTheme, Disableable, Root, Sizable, StyledExt,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputContentType, InputEvent, InputState, Textarea, TextareaState},
@@ -1804,22 +1804,23 @@ impl Render for WorkApp {
             .text_color(cx.theme().foreground)
             .child(
                 v_flex()
-                    .w(px(278.))
+                    .w(px(250.))
                     .h_full()
                     .p_3()
-                    .gap_3()
-                    .bg(cx.theme().secondary.opacity(0.38))
+                    .gap_2()
+                    .text_size(px(13.))
+                    .bg(cx.theme().secondary.opacity(0.26))
                     .border_r_1()
                     .border_color(cx.theme().border)
                     .child(
                         h_flex()
                             .items_center()
-                            .gap_3()
-                            .px_2()
-                            .py_2()
+                            .gap_2()
+                            .px_1()
+                            .py_1()
                             .child(
                                 div()
-                                    .size(px(34.))
+                                    .size(px(28.))
                                     .rounded_full()
                                     .bg(cx.theme().foreground)
                                     .text_color(cx.theme().background)
@@ -1832,10 +1833,10 @@ impl Render for WorkApp {
                             .child(
                                 v_flex()
                                     .gap_0p5()
-                                    .child(div().text_lg().font_bold().child("MicroClaw"))
+                                    .child(div().text_sm().font_semibold().child("MicroClaw"))
                                     .child(
                                         div()
-                                            .text_xs()
+                                            .text_size(px(10.))
                                             .text_color(cx.theme().muted_foreground)
                                             .child("WORK"),
                                     ),
@@ -1844,81 +1845,152 @@ impl Render for WorkApp {
                     .child(
                         Button::new("new-session")
                             .primary()
+                            .small()
                             .w_full()
                             .disabled(self.runtime_active)
-                            .label("+  New Chat")
+                            .label("+  New chat")
                             .on_click(cx.listener(Self::new_session)),
                     )
                     .child(
                         div()
-                            .mt_3()
-                            .text_sm()
+                            .mt_2()
+                            .px_1()
+                            .text_size(px(11.))
+                            .font_semibold()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Chats"),
+                            .child("RECENT"),
                     )
-                    .children(recent_sessions.into_iter().take(7).map(|summary| {
-                        let session_id = summary.session_id.clone();
-                        let is_active = session_id == self.session.session_id;
-                        let title = if summary.task.trim().is_empty() {
-                            "New conversation".to_string()
-                        } else {
-                            summary.task.chars().take(42).collect()
-                        };
-                        let summary_status = if summary.task.trim().is_empty() {
-                            "Ready"
-                        } else {
-                            work_status_label(summary.status)
-                        };
-                        let label = format!("{title} · {summary_status}");
-                        if is_active {
-                            v_flex()
-                                .w_full()
-                                .gap_1()
-                                .px_3()
-                                .py_2()
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().background)
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .child(div().text_sm().font_bold().child(title))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(summary_status),
-                                )
-                                .into_any_element()
-                        } else {
-                            Button::new(format!("session-{session_id}"))
-                                .outline()
-                                .w_full()
-                                .disabled(self.runtime_active)
-                                .label(label)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.open_session(&session_id, window, cx);
-                                }))
-                                .into_any_element()
-                        }
-                    }))
                     .child(
                         v_flex()
-                            .mt_auto()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .gap_1()
+                            .children(recent_sessions.into_iter().take(12).map(|summary| {
+                                let session_id = summary.session_id.clone();
+                                let is_active = session_id == self.session.session_id;
+                                let title = if summary.task.trim().is_empty() {
+                                    "New conversation".to_string()
+                                } else {
+                                    summary.task.chars().take(54).collect()
+                                };
+                                let summary_status = if summary.task.trim().is_empty() {
+                                    "Ready"
+                                } else {
+                                    work_status_label(summary.status)
+                                };
+                                let summary_status_color = match summary.status {
+                                    WorkStatus::Completed => cx.theme().success,
+                                    WorkStatus::Failed
+                                    | WorkStatus::Cancelled
+                                    | WorkStatus::Interrupted => cx.theme().danger,
+                                    WorkStatus::Planning
+                                    | WorkStatus::Running
+                                    | WorkStatus::AwaitingApproval
+                                    | WorkStatus::Verifying => cx.theme().warning,
+                                };
+                                let row = h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .size(px(6.))
+                                            .flex_shrink_0()
+                                            .rounded_full()
+                                            .bg(summary_status_color.opacity(if is_active {
+                                                1.0
+                                            } else {
+                                                0.62
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .text_size(px(12.))
+                                            .font_weight(if is_active {
+                                                FontWeight::SEMIBOLD
+                                            } else {
+                                                FontWeight::NORMAL
+                                            })
+                                            .child(title),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_size(px(10.))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(summary_status),
+                                    );
+                                Button::new(format!("session-{session_id}"))
+                                    .ghost()
+                                    .small()
+                                    .compact()
+                                    .w_full()
+                                    .justify_start()
+                                    .disabled(self.runtime_active)
+                                    .when(is_active, |button| {
+                                        button
+                                            .bg(cx.theme().accent.opacity(0.12))
+                                            .text_color(cx.theme().foreground)
+                                    })
+                                    .child(row)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_session(&session_id, window, cx);
+                                    }))
+                            })),
+                    )
+                    .child(
+                        v_flex()
                             .gap_2()
-                            .p_3()
-                            .rounded(cx.theme().radius)
-                            .bg(cx.theme().background)
-                            .border_1()
-                            .border_color(cx.theme().border)
+                            .px_1()
+                            .pt_3()
+                            .border_t_1()
+                            .border_color(cx.theme().border.opacity(0.72))
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .font_semibold()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("WORKSPACE"),
+                                    )
+                                    .child(
+                                        div()
+                                            .size(px(6.))
+                                            .rounded_full()
+                                            .bg(if self.runtime_config.ready {
+                                                cx.theme().success
+                                            } else {
+                                                cx.theme().warning
+                                            }),
+                                    ),
+                            )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Workspace"),
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_size(px(12.))
+                                    .font_medium()
+                                    .child(workspace_label.clone()),
                             )
-                            .child(div().text_sm().child(workspace_label.clone()))
                             .child(
                                 Button::new("choose-workspace")
-                                    .outline()
+                                    .ghost()
+                                    .small()
+                                    .compact()
+                                    .w_full()
+                                    .justify_start()
                                     .disabled(self.runtime_active)
                                     .label(if using_work_home {
                                         "Connect Project Folder"
@@ -1929,31 +2001,41 @@ impl Render for WorkApp {
                             )
                             .child(
                                 h_flex()
-                                    .gap_2()
+                                    .gap_1()
                                     .child(
                                         Button::new("model-settings")
-                                            .outline()
+                                            .ghost()
+                                            .xsmall()
+                                            .compact()
                                             .disabled(self.runtime_active)
                                             .label("Model")
                                             .on_click(cx.listener(Self::open_model_settings)),
                                     )
                                     .child(
                                         Button::new("refresh-config")
-                                            .outline()
-                                            .label("Refresh")
+                                            .ghost()
+                                            .xsmall()
+                                            .compact()
+                                            .label("Reload")
                                             .on_click(cx.listener(Self::refresh_runtime_config)),
+                                    )
+                                    .child(
+                                        Button::new("diagnostics")
+                                            .ghost()
+                                            .xsmall()
+                                            .compact()
+                                            .disabled(self.runtime_active)
+                                            .label("Checks")
+                                            .on_click(cx.listener(Self::open_diagnostics)),
                                     ),
                             )
                             .child(
-                                Button::new("diagnostics")
-                                    .outline()
-                                    .disabled(self.runtime_active)
-                                    .label("Diagnostics")
-                                    .on_click(cx.listener(Self::open_diagnostics)),
-                            )
-                            .child(
                                 div()
-                                    .text_xs()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_size(px(10.))
                                     .text_color(cx.theme().muted_foreground)
                                     .child(format!(
                                         "{} · {}",
@@ -1962,7 +2044,10 @@ impl Render for WorkApp {
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .max_h(px(30.))
+                                    .overflow_hidden()
+                                    .text_size(px(10.))
+                                    .line_height(relative(1.35))
                                     .text_color(cx.theme().muted_foreground)
                                     .child(self.persistence_message.clone()),
                             ),
