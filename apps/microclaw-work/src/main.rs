@@ -47,13 +47,7 @@ fn configure_native_application(cx: &mut App) {
         KeyBinding::new("cmd-shift-d", OpenDiagnostics, Some(WORK_KEY_CONTEXT)),
     ]);
     #[cfg(not(target_os = "macos"))]
-    cx.bind_keys([
-        KeyBinding::new("ctrl-q", Quit, None),
-        KeyBinding::new("ctrl-n", NewChat, Some(WORK_KEY_CONTEXT)),
-        KeyBinding::new("ctrl-l", FocusComposer, Some(WORK_KEY_CONTEXT)),
-        KeyBinding::new("ctrl-,", OpenModelSettings, Some(WORK_KEY_CONTEXT)),
-        KeyBinding::new("ctrl-shift-d", OpenDiagnostics, Some(WORK_KEY_CONTEXT)),
-    ]);
+    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 
     cx.set_menus(vec![
         Menu {
