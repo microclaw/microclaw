@@ -6,6 +6,7 @@ work_repo_root="$(cd "$work_script_dir/.." && pwd)"
 work_profile="${1:-release}"
 work_signing_identity="${MICROCLAW_WORK_SIGNING_IDENTITY:--}"
 work_notary_profile="${MICROCLAW_WORK_NOTARY_PROFILE:-}"
+work_reclaim_build_artifacts="${MICROCLAW_WORK_RECLAIM_BUILD_ARTIFACTS:-0}"
 
 case "$work_profile" in
   debug|release|work-release) ;;
@@ -27,6 +28,18 @@ work_staging="$work_output_root/staging"
 work_dmg="$work_output_root/MicroClaw-Work-$work_version-macos.dmg"
 
 "$work_script_dir/build_work_macos_app.sh" "$work_profile"
+
+if [[ "$work_reclaim_build_artifacts" == "1" ]]; then
+  work_cargo_profile_dir="$work_repo_root/target/$work_profile"
+  case "$work_cargo_profile_dir" in
+    "$work_repo_root/target/debug"|"$work_repo_root/target/release"|"$work_repo_root/target/work-release") ;;
+    *)
+      echo "refusing to remove unexpected Cargo profile path: $work_cargo_profile_dir" >&2
+      exit 1
+      ;;
+  esac
+  rm -rf "$work_cargo_profile_dir"
+fi
 
 if [[ -n "$work_notary_profile" ]]; then
   if [[ "$work_signing_identity" == "-" ]]; then

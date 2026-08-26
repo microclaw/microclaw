@@ -84,6 +84,8 @@ jobs:
         run: cargo clean
       - name: Build release macOS DMG preview
         run: scripts/build_work_macos_dmg.sh work-release
+        env:
+          MICROCLAW_WORK_RECLAIM_BUILD_ARTIFACTS: '1'
       - name: Launch-smoke macOS app bundle
         run: scripts/smoke_work_macos_app.sh work-release
       - name: Upload macOS preview
