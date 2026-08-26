@@ -22,20 +22,52 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
-actions!(microclaw_work, [Quit]);
+actions!(
+    microclaw_work,
+    [
+        Quit,
+        NewChat,
+        FocusComposer,
+        OpenModelSettings,
+        OpenDiagnostics
+    ]
+);
+
+const WORK_KEY_CONTEXT: &str = "MicroClawWork";
 
 fn configure_native_application(cx: &mut App) {
     cx.activate(true);
     cx.on_action(|_: &Quit, cx| cx.quit());
     #[cfg(target_os = "macos")]
-    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+    cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-n", NewChat, Some(WORK_KEY_CONTEXT)),
+        KeyBinding::new("cmd-l", FocusComposer, Some(WORK_KEY_CONTEXT)),
+        KeyBinding::new("cmd-,", OpenModelSettings, Some(WORK_KEY_CONTEXT)),
+        KeyBinding::new("cmd-shift-d", OpenDiagnostics, Some(WORK_KEY_CONTEXT)),
+    ]);
     #[cfg(not(target_os = "macos"))]
-    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+    cx.bind_keys([
+        KeyBinding::new("ctrl-q", Quit, None),
+        KeyBinding::new("ctrl-n", NewChat, Some(WORK_KEY_CONTEXT)),
+        KeyBinding::new("ctrl-l", FocusComposer, Some(WORK_KEY_CONTEXT)),
+        KeyBinding::new("ctrl-,", OpenModelSettings, Some(WORK_KEY_CONTEXT)),
+        KeyBinding::new("ctrl-shift-d", OpenDiagnostics, Some(WORK_KEY_CONTEXT)),
+    ]);
 
     cx.set_menus(vec![
         Menu {
             name: "MicroClaw Work".into(),
-            items: vec![MenuItem::action("Quit MicroClaw Work", Quit)],
+            items: vec![
+                MenuItem::action("Model Settings…", OpenModelSettings),
+                MenuItem::separator(),
+                MenuItem::action("Quit MicroClaw Work", Quit),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "File".into(),
+            items: vec![MenuItem::action("New Chat", NewChat)],
             disabled: false,
         },
         Menu {
@@ -49,6 +81,14 @@ fn configure_native_application(cx: &mut App) {
                 MenuItem::action("Paste", gpui_component::input::Paste),
                 MenuItem::separator(),
                 MenuItem::action("Select All", gpui_component::input::SelectAll),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "View".into(),
+            items: vec![
+                MenuItem::action("Focus Composer", FocusComposer),
+                MenuItem::action("Diagnostics", OpenDiagnostics),
             ],
             disabled: false,
         },
@@ -350,6 +390,10 @@ impl WorkApp {
     }
 
     fn new_session(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_new_session(window, cx);
+    }
+
+    fn create_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.reject_if_runtime_busy(cx) {
             return;
         }
@@ -367,6 +411,27 @@ impl WorkApp {
             }
             Err(error) => self.persistence_message = format!("Could not create session: {error}"),
         }
+        cx.notify();
+    }
+
+    fn new_chat_action(&mut self, _: &NewChat, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_new_session(window, cx);
+    }
+
+    fn focus_composer_action(
+        &mut self,
+        _: &FocusComposer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_open = false;
+        self.diagnostics_open = false;
+        let input = if self.runtime_active {
+            self.steer_input.clone()
+        } else {
+            self.task_input.clone()
+        };
+        input.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -478,6 +543,30 @@ impl WorkApp {
         self.refresh_diagnostics(event, window, cx);
     }
 
+    fn open_diagnostics_action(
+        &mut self,
+        _: &OpenDiagnostics,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.reject_if_runtime_busy(cx) {
+            return;
+        }
+        self.diagnostics_open = true;
+        self.settings_open = false;
+        self.runtime_config = self.runtime_service.config_summary();
+        self.diagnostics_report = self.runtime_service.local_diagnostics(
+            Path::new(&self.session.workspace),
+            self.session_store.root(),
+        );
+        self.persistence_message = if self.diagnostics_report.ready {
+            "Local diagnostics passed.".into()
+        } else {
+            "Diagnostics found an item that blocks Work.".into()
+        };
+        cx.notify();
+    }
+
     fn close_diagnostics(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.diagnostics_open = false;
         self.task_input
@@ -486,6 +575,19 @@ impl WorkApp {
     }
 
     fn open_model_settings(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_model_settings_view(window, cx);
+    }
+
+    fn open_model_settings_action(
+        &mut self,
+        _: &OpenModelSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_model_settings_view(window, cx);
+    }
+
+    fn open_model_settings_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.reject_if_runtime_busy(cx) {
             return;
         }
@@ -503,6 +605,7 @@ impl WorkApp {
         self.api_key_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.settings_open = true;
+        self.diagnostics_open = false;
         cx.notify();
     }
 
@@ -1618,10 +1721,26 @@ impl WorkApp {
 impl Render for WorkApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.settings_open {
-            return self.render_model_settings(cx).into_any_element();
+            return div()
+                .size_full()
+                .key_context(WORK_KEY_CONTEXT)
+                .on_action(cx.listener(Self::new_chat_action))
+                .on_action(cx.listener(Self::focus_composer_action))
+                .on_action(cx.listener(Self::open_model_settings_action))
+                .on_action(cx.listener(Self::open_diagnostics_action))
+                .child(self.render_model_settings(cx))
+                .into_any_element();
         }
         if self.diagnostics_open {
-            return self.render_diagnostics(cx).into_any_element();
+            return div()
+                .size_full()
+                .key_context(WORK_KEY_CONTEXT)
+                .on_action(cx.listener(Self::new_chat_action))
+                .on_action(cx.listener(Self::focus_composer_action))
+                .on_action(cx.listener(Self::open_model_settings_action))
+                .on_action(cx.listener(Self::open_diagnostics_action))
+                .child(self.render_diagnostics(cx))
+                .into_any_element();
         }
         let conversation_is_empty = self.session.messages.is_empty()
             && self.session.task.trim().is_empty()
@@ -1687,6 +1806,11 @@ impl Render for WorkApp {
 
         h_flex()
             .size_full()
+            .key_context(WORK_KEY_CONTEXT)
+            .on_action(cx.listener(Self::new_chat_action))
+            .on_action(cx.listener(Self::focus_composer_action))
+            .on_action(cx.listener(Self::open_model_settings_action))
+            .on_action(cx.listener(Self::open_diagnostics_action))
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(

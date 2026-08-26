@@ -24,6 +24,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **macOS Work shortcuts.** Native menu actions and Command-N, Command-L,
+  Command-Comma, and Command-Shift-D now provide direct access to New Chat,
+  the composer, Model Settings, and Diagnostics.
 - **Enforced native Work tool approval.** Desktop runs now carry a dedicated
   `work` caller context through the shared Agent Engine. High-risk tools pause
   on the inline approval card, and **Approve once** resumes the same persisted
