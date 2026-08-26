@@ -41,6 +41,13 @@ pub struct RuntimeApprovalOption {
     pub decision: RuntimeApprovalDecision,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeProcessKind {
+    Command,
+    Verification,
+}
+
 /// An observable event emitted by the shared agent runtime.
 ///
 /// Keep provider-specific payloads behind the runtime boundary. Consumers
@@ -61,7 +68,7 @@ pub enum RuntimeEvent {
         name: String,
         is_error: bool,
         preview: String,
-        duration_ms: u128,
+        duration_ms: u64,
         status_code: Option<i32>,
         bytes: usize,
         error_type: Option<String>,
@@ -114,6 +121,15 @@ pub enum RuntimeEvent {
     PlanUpdated {
         steps: Vec<RuntimePlanStep>,
     },
+    ProcessOutput {
+        call_id: String,
+        command: String,
+        output: String,
+        exit_code: Option<i32>,
+        duration_ms: u64,
+        truncated: bool,
+        kind: RuntimeProcessKind,
+    },
 }
 
 /// Versioned transport envelope for replayable runtime event streams.
@@ -126,7 +142,7 @@ pub struct RuntimeEventEnvelope {
 }
 
 impl RuntimeEventEnvelope {
-    pub const SCHEMA_VERSION: u32 = 5;
+    pub const SCHEMA_VERSION: u32 = 6;
 
     pub fn new(run_id: impl Into<String>, sequence: u64, event: RuntimeEvent) -> Self {
         Self {
@@ -206,6 +222,49 @@ mod tests {
         let json = serde_json::to_string(&expected).expect("serialize approval event");
         let actual: RuntimeEventEnvelope =
             serde_json::from_str(&json).expect("deserialize approval event");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn process_output_round_trips_as_bounded_execution_evidence() {
+        let expected = RuntimeEventEnvelope::new(
+            "run-process",
+            4,
+            RuntimeEvent::ProcessOutput {
+                call_id: "bash-1".into(),
+                command: "cargo test".into(),
+                output: "test result: ok".into(),
+                exit_code: Some(0),
+                duration_ms: 250,
+                truncated: false,
+                kind: RuntimeProcessKind::Verification,
+            },
+        );
+        let json = serde_json::to_string(&expected).expect("serialize process output");
+        let actual: RuntimeEventEnvelope =
+            serde_json::from_str(&json).expect("deserialize process output");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn tool_result_duration_is_json_transport_safe() {
+        let expected = RuntimeEventEnvelope::new(
+            "run-tool",
+            5,
+            RuntimeEvent::ToolResult {
+                call_id: "call-1".into(),
+                name: "bash".into(),
+                is_error: false,
+                preview: "ok".into(),
+                duration_ms: u64::MAX,
+                status_code: Some(0),
+                bytes: 2,
+                error_type: None,
+            },
+        );
+        let json = serde_json::to_string(&expected).expect("serialize tool result");
+        let actual: RuntimeEventEnvelope =
+            serde_json::from_str(&json).expect("deserialize tool result");
         assert_eq!(actual, expected);
     }
 }

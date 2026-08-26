@@ -21,7 +21,7 @@ use microclaw_tools::runtime::{
 use opentelemetry_proto::tonic::trace::v1::Status;
 
 use crate::agent_engine::AgentEvent;
-use microclaw_core::runtime_event::{RuntimePlanStep, RuntimePlanStepStatus};
+use microclaw_core::runtime_event::{RuntimePlanStep, RuntimePlanStepStatus, RuntimeProcessKind};
 use microclaw_observability::traces::OtlpTraceExporter;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -538,20 +538,23 @@ async fn execute_single_tool(
     // Emit ToolResult event
     if let Some(tx) = event_tx {
         let preview = truncate_for_log(&result.content, 160);
+        let duration_ms = result
+            .duration_ms
+            .unwrap_or_else(|| started.elapsed().as_millis());
+        let transport_duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX);
         let _ = tx.send(AgentEvent::ToolResult {
             call_id: id.clone(),
             name: name.clone(),
             is_error: result.is_error,
             preview,
-            duration_ms: result
-                .duration_ms
-                .unwrap_or_else(|| started.elapsed().as_millis()),
+            duration_ms: transport_duration_ms,
             status_code: result.status_code,
             bytes: result.bytes,
             error_type: result.error_type.clone(),
         });
         emit_file_diff_event(tx, &result);
         emit_plan_update_event(tx, name, &executed_input, result.is_error);
+        emit_process_output_event(tx, id, name, &executed_input, &result, duration_ms);
     }
     if result.is_error {
         metrics.tool_errors += 1;
@@ -779,18 +782,21 @@ async fn execute_wave_parallel(
         // Emit ToolResult event
         if let Some(tx) = event_tx {
             let preview = truncate_for_log(&result.content, 160);
+            let duration_ms = result.duration_ms.unwrap_or(_duration);
+            let transport_duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX);
             let _ = tx.send(AgentEvent::ToolResult {
                 call_id: call_id.clone(),
                 name: name.clone(),
                 is_error: result.is_error,
                 preview,
-                duration_ms: result.duration_ms.unwrap_or(_duration),
+                duration_ms: transport_duration_ms,
                 status_code: result.status_code,
                 bytes: result.bytes,
                 error_type: result.error_type.clone(),
             });
             emit_file_diff_event(tx, &result);
             emit_plan_update_event(tx, &name, &input, result.is_error);
+            emit_process_output_event(tx, call_id, &name, &input, &result, duration_ms);
         }
 
         results.push((
@@ -838,6 +844,87 @@ fn emit_plan_update_event(
         })
         .collect();
     let _ = tx.send(AgentEvent::PlanUpdated { steps });
+}
+
+const MAX_PROCESS_OUTPUT_BYTES: usize = 16 * 1024;
+
+fn emit_process_output_event(
+    tx: &UnboundedSender<AgentEvent>,
+    call_id: &str,
+    tool_name: &str,
+    input: &Value,
+    result: &ToolResult,
+    duration_ms: u128,
+) {
+    if tool_name != "bash" {
+        return;
+    }
+    let Some(command) = input.get("command").and_then(Value::as_str) else {
+        return;
+    };
+    let command = microclaw_core::redact::redact_secrets(command);
+    let command = bounded_text(&command, 2_000).0;
+    let output = microclaw_core::redact::redact_secrets(&result.content);
+    let (output, truncated) = bounded_text(&output, MAX_PROCESS_OUTPUT_BYTES);
+    let kind = if is_verification_command(&command) {
+        RuntimeProcessKind::Verification
+    } else {
+        RuntimeProcessKind::Command
+    };
+    let _ = tx.send(AgentEvent::ProcessOutput {
+        call_id: call_id.to_string(),
+        command,
+        output,
+        exit_code: result.status_code,
+        duration_ms: u64::try_from(duration_ms).unwrap_or(u64::MAX),
+        truncated,
+        kind,
+    });
+}
+
+fn is_verification_command(command: &str) -> bool {
+    let normalized = command.to_ascii_lowercase();
+    [
+        "cargo test",
+        "cargo check",
+        "cargo clippy",
+        "npm test",
+        "npm run test",
+        "npm run build",
+        "pnpm test",
+        "pnpm build",
+        "yarn test",
+        "yarn build",
+        "pytest",
+        "go test",
+        "swift test",
+        "dotnet test",
+        "mvn test",
+        "gradle test",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+}
+
+fn bounded_text(text: &str, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (text.to_string(), false);
+    }
+    let half = limit / 2;
+    let head_end = microclaw_core::text::floor_char_boundary(text, half);
+    let mut tail_start = text.len() - half;
+    while tail_start < text.len() && !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    (
+        format!(
+            "{}\n\n[… {} bytes omitted …]\n\n{}",
+            &text[..head_end],
+            tail_start.saturating_sub(head_end),
+            &text[tail_start..]
+        ),
+        true,
+    )
 }
 
 /// Forward a `file_diff` metadata payload (attached by edit_file/write_file)
@@ -1145,6 +1232,62 @@ mod tests {
             "todo_write",
             &serde_json::json!({"todos": [{"task": "Nope", "status": "pending"}]}),
             true,
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn bash_result_emits_bounded_redacted_verification_evidence() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+        let output = format!(
+            "{secret}\n{}\nTAIL",
+            "x".repeat(MAX_PROCESS_OUTPUT_BYTES + 100)
+        );
+        let result = ToolResult::success(output).with_status_code(0);
+
+        emit_process_output_event(
+            &tx,
+            "call-check",
+            "bash",
+            &serde_json::json!({"command": "cargo test -p microclaw-core"}),
+            &result,
+            321,
+        );
+
+        let event = rx.try_recv().unwrap();
+        let AgentEvent::ProcessOutput {
+            call_id,
+            output,
+            exit_code,
+            duration_ms,
+            truncated,
+            kind,
+            ..
+        } = event
+        else {
+            panic!("expected process output event");
+        };
+        assert_eq!(call_id, "call-check");
+        assert_eq!(exit_code, Some(0));
+        assert_eq!(duration_ms, 321);
+        assert!(truncated);
+        assert_eq!(kind, RuntimeProcessKind::Verification);
+        assert!(!output.contains(secret));
+        assert!(output.to_ascii_lowercase().contains("redacted"));
+        assert!(output.ends_with("TAIL"));
+    }
+
+    #[test]
+    fn non_process_tool_does_not_emit_process_output() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        emit_process_output_event(
+            &tx,
+            "call-read",
+            "read_file",
+            &serde_json::json!({"path": "README.md"}),
+            &ToolResult::success("contents".into()),
+            1,
         );
         assert!(rx.try_recv().is_err());
     }

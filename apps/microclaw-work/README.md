@@ -98,8 +98,9 @@ local execution. Developer ID signing, notarization, DMG creation, and
 auto-update are later Phase 0/5 work.
 
 The UI remains a workflow projection rather than an IDE. Workspace, Plan,
-Approval, Tool Activity, File Changes, Artifacts, runtime failures, and bounded events are persisted
-under the platform-local data directory so restart recovery can be exercised.
+Approval, Tool Activity, bounded and redacted Process Output, File Changes,
+Artifacts, runtime failures, and bounded events are persisted under the
+platform-local data directory so restart recovery can be exercised.
 The desktop does not contain a second Agent Loop.
 
 Pinned upstream revisions:

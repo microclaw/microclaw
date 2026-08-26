@@ -4,12 +4,12 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputContentType, InputEvent, InputState},
+    scroll::ScrollableElement,
     v_flex,
 };
 use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
 use microclaw_work_app::session::{
-    ToolActivityStatus, WorkCommand, WorkEventKind, WorkReviewStatus, WorkSessionSnapshot,
-    WorkStatus,
+    ConversationRole, WorkCommand, WorkEventKind, WorkReviewStatus, WorkSessionSnapshot, WorkStatus,
 };
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
 use microclaw_work_runtime::{
@@ -550,11 +550,29 @@ impl WorkApp {
                 .clone()
                 .unwrap_or_else(|| format!("demo-{}", self.active_run_id));
             let sequence = self.session.last_runtime_sequence.saturating_add(1);
+            let completed_steps = self
+                .session
+                .plan
+                .iter()
+                .map(|step| microclaw_core::runtime_event::RuntimePlanStep {
+                    title: step.title.clone(),
+                    status: microclaw_core::runtime_event::RuntimePlanStepStatus::Completed,
+                })
+                .collect();
+            let _ = self
+                .session
+                .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                    &run_id,
+                    sequence,
+                    RuntimeEvent::PlanUpdated {
+                        steps: completed_steps,
+                    },
+                )));
             let _ = self
                 .session
                 .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
                     run_id,
-                    sequence,
+                    sequence.saturating_add(1),
                     RuntimeEvent::FinalResponse {
                         text: "Demo task completed with structured activity and artifacts.".into(),
                     },
@@ -900,6 +918,15 @@ impl WorkApp {
                         bytes: 2048,
                         error_type: None,
                     },
+                    RuntimeEvent::ProcessOutput {
+                        call_id: "demo-check".into(),
+                        command: "cargo check -p microclaw-work".into(),
+                        output: "Checking microclaw-work\nFinished dev profile".into(),
+                        exit_code: Some(0),
+                        duration_ms: 842,
+                        truncated: false,
+                        kind: microclaw_core::runtime_event::RuntimeProcessKind::Verification,
+                    },
                     RuntimeEvent::FileDiff {
                         path: "demo-output.md".into(),
                         diff: "+# MicroClaw Work demo artifact\n+Structured runtime projection verified."
@@ -1024,12 +1051,13 @@ impl Render for WorkApp {
             WorkStatus::Interrupted => "Interrupted",
         };
         let recent_sessions = self.recent_sessions.clone();
-        let tool_activities = self.session.tool_activities.clone();
+        let process_activities = self.session.process_activities.clone();
         let file_changes = self.session.file_changes.clone();
-        let subagents = self.session.subagents.clone();
         let final_response = self.session.final_response.clone();
         let review_status = self.session.review_status;
         let pending_approval = self.session.pending_approval.clone();
+        let messages = self.session.messages.clone();
+        let assistant_draft = self.session.assistant_draft.clone();
         let composer_input = if self.runtime_active {
             &self.steer_input
         } else {
@@ -1155,53 +1183,6 @@ impl Render for WorkApp {
                     .gap_5()
                     .child(
                         h_flex()
-                            .gap_3()
-                            .child(div().flex_1().child(Input::new(composer_input)))
-                            .child(
-                                Button::new("run-runtime")
-                                    .primary()
-                                    .disabled(
-                                        if self.runtime_active {
-                                            self.steer_input.read(cx).value().trim().is_empty()
-                                        } else {
-                                            !self.runtime_config.ready
-                                                || self.session.workspace.is_empty()
-                                        },
-                                    )
-                                    .label(if self.runtime_active {
-                                        "Send Update"
-                                    } else if matches!(
-                                            self.session.status,
-                                            WorkStatus::Failed
-                                                | WorkStatus::Cancelled
-                                                | WorkStatus::Interrupted
-                                        ) {
-                                        "Retry Task"
-                                    } else {
-                                        "Run Task"
-                                    })
-                                    .on_click(cx.listener(Self::primary_action)),
-                            )
-                            .child(
-                                Button::new("run-demo")
-                                    .outline()
-                                    .disabled(self.runtime_active)
-                                    .label("Demo")
-                                    .on_click(cx.listener(Self::start_demo)),
-                            )
-                            .child(
-                                Button::new("stop-runtime")
-                                    .outline()
-                                    .disabled(
-                                        !self.runtime_active
-                                            && self.session.status != WorkStatus::AwaitingApproval,
-                                    )
-                                    .label("Stop")
-                                    .on_click(cx.listener(Self::stop_runtime)),
-                            ),
-                    )
-                    .child(
-                        h_flex()
                             .items_center()
                             .justify_between()
                             .child(
@@ -1231,98 +1212,90 @@ impl Render for WorkApp {
                             .child(
                                 v_flex()
                                     .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scrollbar()
                                     .gap_3()
                                     .p_4()
                                     .rounded(cx.theme().radius)
                                     .border_1()
                                     .border_color(cx.theme().border)
-                                    .child(div().text_lg().font_bold().child("Plan"))
-                                    .children((self.session.plan.is_empty()).then(|| {
+                                    .child(div().text_lg().font_bold().child("Conversation"))
+                                    .children(messages.is_empty().then(|| {
                                         div()
-                                            .text_sm()
+                                            .p_6()
+                                            .text_lg()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child("Waiting for the Agent to publish a plan…")
+                                            .child("What would you like MicroClaw to work on?")
                                     }))
-                                    .children(self.session.plan.iter().enumerate().map(
-                                        |(index, step)| {
-                                            let marker = match step.status {
-                                                microclaw_core::runtime_event::RuntimePlanStepStatus::Completed => "✓",
-                                                microclaw_core::runtime_event::RuntimePlanStepStatus::InProgress => "●",
-                                                microclaw_core::runtime_event::RuntimePlanStepStatus::Pending => "○",
-                                            };
-                                            h_flex()
-                                                .gap_3()
-                                                .child(marker)
-                                                .child(format!("{}. {}", index + 1, step.title))
-                                        },
-                                    ))
-                                    .child(
-                                        div()
-                                            .mt_3()
-                                            .pt_3()
-                                            .border_t_1()
-                                            .border_color(cx.theme().border)
-                                            .text_sm()
-                                            .font_bold()
-                                            .child("Live events"),
-                                    )
-                                    .child(v_flex().gap_2().children(
-                                        self.session.events.iter().rev().take(5).map(|event| {
-                                            h_flex()
-                                                .gap_2()
-                                                .text_sm()
-                                                .child(format!("#{:03}", event.id))
-                                                .child(event.message.clone())
-                                        }),
-                                    ))
-                                    .child(
-                                        div()
-                                            .mt_3()
-                                            .pt_3()
-                                            .border_t_1()
-                                            .border_color(cx.theme().border)
-                                            .text_sm()
-                                            .font_bold()
-                                            .child("Tool activity"),
-                                    )
-                                    .children(tool_activities.into_iter().rev().take(4).map(
-                                        |activity| {
-                                            let status = match activity.status {
-                                                ToolActivityStatus::Running => "Running",
-                                                ToolActivityStatus::Succeeded => "Succeeded",
-                                                ToolActivityStatus::Failed => "Failed",
-                                            };
-                                            v_flex()
-                                                .gap_1()
-                                                .text_sm()
-                                                .child(format!("{} · {status}", activity.name))
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child(trim_text(
-                                                            activity
-                                                                .result_preview
-                                                                .as_deref()
-                                                                .unwrap_or(&activity.input_preview),
-                                                            120,
-                                                        )),
-                                                )
-                                        },
-                                    ))
-                                    .children(subagents.into_iter().rev().take(3).map(
-                                        |subagent| {
-                                            div().text_sm().child(format!(
-                                                "Subagent {} · {}",
-                                                subagent.label, subagent.status
-                                            ))
-                                        },
-                                    )),
+                                    .children(messages.into_iter().map(|message| {
+                                        let is_user = message.role == ConversationRole::User;
+                                        h_flex()
+                                            .w_full()
+                                            .child(
+                                                v_flex()
+                                                    .max_w(px(if is_user { 560. } else { 720. }))
+                                                    .gap_1()
+                                                    .p_3()
+                                                    .rounded(cx.theme().radius)
+                                                    .bg(if is_user {
+                                                        cx.theme().accent
+                                                    } else {
+                                                        cx.theme().secondary
+                                                    })
+                                                    .child(div().text_xs().font_bold().child(if is_user {
+                                                        "You"
+                                                    } else {
+                                                        "MicroClaw"
+                                                    }))
+                                                    .child(message.content),
+                                            )
+                                    }))
+                                    .children((!assistant_draft.is_empty()).then(|| {
+                                        v_flex()
+                                            .max_w(px(720.))
+                                            .gap_1()
+                                            .p_3()
+                                            .rounded(cx.theme().radius)
+                                            .bg(cx.theme().secondary)
+                                            .child(div().text_xs().font_bold().child("MicroClaw · working"))
+                                            .child(assistant_draft)
+                                    }))
+                                    ,
                             )
                             .child(
                                 v_flex()
                                     .w(px(360.))
+                                    .h_full()
+                                    .min_h_0()
+                                    .overflow_y_scrollbar()
                                     .gap_3()
+                                    .child(
+                                        v_flex()
+                                            .gap_3()
+                                            .p_4()
+                                            .rounded(cx.theme().radius)
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .child(div().text_lg().font_bold().child("Plan"))
+                                            .children((self.session.plan.is_empty()).then(|| {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("No plan published yet.")
+                                            }))
+                                            .children(self.session.plan.iter().enumerate().map(
+                                                |(index, step)| {
+                                                    let marker = match step.status {
+                                                        microclaw_core::runtime_event::RuntimePlanStepStatus::Completed => "✓",
+                                                        microclaw_core::runtime_event::RuntimePlanStepStatus::InProgress => "●",
+                                                        microclaw_core::runtime_event::RuntimePlanStepStatus::Pending => "○",
+                                                    };
+                                                    h_flex().gap_2().text_sm().child(marker).child(
+                                                        format!("{}. {}", index + 1, step.title),
+                                                    )
+                                                },
+                                            )),
+                                    )
                                     .child(
                                         v_flex()
                                             .gap_3()
@@ -1381,6 +1354,54 @@ impl Render for WorkApp {
                                                             },
                                                         ))
                                                     }),
+                                            )),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .gap_3()
+                                            .p_4()
+                                            .rounded(cx.theme().radius)
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .child(
+                                                div()
+                                                    .text_lg()
+                                                    .font_bold()
+                                                    .child("Verification / Process Output"),
+                                            )
+                                            .children((process_activities.is_empty()).then(|| {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("No command output yet.")
+                                            }))
+                                            .children(process_activities.into_iter().rev().take(3).map(
+                                                |activity| {
+                                                    let category = match activity.kind {
+                                                        microclaw_core::runtime_event::RuntimeProcessKind::Command => "Command",
+                                                        microclaw_core::runtime_event::RuntimeProcessKind::Verification => "Verification",
+                                                    };
+                                                    let exit = activity
+                                                        .exit_code
+                                                        .map_or_else(|| "—".into(), |code| code.to_string());
+                                                    v_flex()
+                                                        .gap_1()
+                                                        .pt_2()
+                                                        .border_t_1()
+                                                        .border_color(cx.theme().border)
+                                                        .child(div().text_sm().font_bold().child(format!(
+                                                            "{category} · exit {exit} · {} ms{}",
+                                                            activity.duration_ms,
+                                                            if activity.truncated { " · truncated" } else { "" }
+                                                        )))
+                                                        .child(div().font_family("monospace").text_xs().child(
+                                                            format!(
+                                                                "$ {}\n{}",
+                                                                trim_text(&activity.command, 220),
+                                                                trim_text(&activity.output, 1_200)
+                                                            ),
+                                                        ))
+                                                },
                                             )),
                                     )
                                     .child(
@@ -1500,6 +1521,49 @@ impl Render for WorkApp {
                                                     ),
                                             ),
                                     ),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .p_3()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .child(div().flex_1().child(Input::new(composer_input)))
+                            .child(
+                                Button::new("run-runtime")
+                                    .primary()
+                                    .disabled(if self.runtime_active {
+                                        self.steer_input.read(cx).value().trim().is_empty()
+                                    } else {
+                                        !self.runtime_config.ready || self.session.workspace.is_empty()
+                                    })
+                                    .label(if self.runtime_active {
+                                        "Send Update"
+                                    } else if self.session.status == WorkStatus::Completed {
+                                        "Continue"
+                                    } else {
+                                        "Send"
+                                    })
+                                    .on_click(cx.listener(Self::primary_action)),
+                            )
+                            .child(
+                                Button::new("run-demo")
+                                    .outline()
+                                    .disabled(self.runtime_active)
+                                    .label("Demo")
+                                    .on_click(cx.listener(Self::start_demo)),
+                            )
+                            .child(
+                                Button::new("stop-runtime")
+                                    .outline()
+                                    .disabled(
+                                        !self.runtime_active
+                                            && self.session.status != WorkStatus::AwaitingApproval,
+                                    )
+                                    .label("Stop")
+                                    .on_click(cx.listener(Self::stop_runtime)),
                             ),
                     ),
             )

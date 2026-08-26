@@ -8,6 +8,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Conversation-first MicroClaw Work shell.** The native desktop now treats
+  each task as a durable conversation: user and assistant messages are stored
+  in the Work snapshot, streaming text is coalesced into an assistant draft,
+  and the composer stays at the bottom of the primary chat surface. Plans,
+  approvals, process evidence, and artifacts remain supporting work context.
+
 - **MicroClaw Work post-task review.** Foreground Work runs emit a pre-task
   checkpoint and completed file changes can be accepted, continued in the same
   runtime session, or reverted through a native confirmation and background
@@ -26,6 +32,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   an explicit response value, Approve/Deny decision, and visual intent. Work
   persists the complete approval card, renders advisory text and native choice
   buttons, and resumes the same Agent session with the selected value.
+- **Native verification evidence.** Runtime Event v6 exposes bounded, redacted
+  Bash output with command, exit code, duration, truncation state, and command
+  or verification classification. Work persists this evidence and renders it
+  in a scrollable native Process Output panel.
 
 ## 0.5.0 - 2026-08-16
 

@@ -301,6 +301,39 @@ The GPUI Approval panel now renders the advisory separately and uses native
 Primary, Secondary, and Danger buttons for each choice. It no longer collapses
 the shared card into one hard-coded `Allow and Continue` action.
 
+## Verification and process output
+
+Runtime Event protocol v6 adds `ProcessOutput` for completed Bash calls. It
+carries the paired call ID, redacted command, combined output, exit code,
+duration, truncation state, and Command or Verification classification. Common
+test, check, lint, and build commands are classified as verification evidence;
+the classification is presentation metadata and does not alter execution or
+success semantics.
+
+The shared executor redacts both command and result before retaining a 16 KiB
+head/tail window, preserving the failure tail instead of keeping only a prefix.
+Non-process tools do not emit the event. Web forwards the same structured event.
+Work applies secret redaction and a second 20 KiB bound at its trust boundary,
+retains at most 50 process records, and persists exit/duration evidence in Work
+session schema v10.
+
+The native right column is now scrollable and contains a dedicated
+`Verification / Process Output` panel. It presents the command, bounded output,
+exit code, duration, truncation marker, and classification independently from
+the short Tool Activity preview. The left timeline and right evidence column
+also use GPUI Component scrollbars so long plans, approval cards, and command
+evidence remain reachable without growing the window beyond the display.
+
+After rebuilding and signing the macOS bundle, Computer Use started Demo and
+visually verified the populated 1180×760 layout: all three styled approval
+choices were visible, the verification card showed `cargo check`, exit 0,
+842 ms, and its output, and the file panel remained reachable below it. A
+coordinate click on the native Danger button dispatched `Deny`; the durable
+timeline recorded `Approval response: Deny`, the approval card cleared, and
+the demo reached its final response. This run also exposed a synthetic-plan
+fixture inconsistency, so Demo now emits a final `PlanUpdated` before completion
+instead of leaving an active marker on a completed task.
+
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing
 side effects in the background, so parallel starts remain rejected. The Stop
@@ -318,7 +351,8 @@ automatic launch-directory fallback dangerously broad. A new install and a
 missing saved path now enter a safe unselected state and real execution is
 blocked until the user explicitly chooses a directory. The Work snapshot schema
 was first raised to v6 for structured artifacts, v7 for durable review state,
-v8 for Agent-owned plans, and is now v9 for structured approvals. Newly added
+v8 for Agent-owned plans, v9 for structured approvals, and is now v10 for
+process evidence. Newly added
 fields default safely when loading v5-v8 snapshots,
 which are upgraded without losing the task. Earlier
 Phase 0 and transitional single-session snapshots migrate to a blank English
@@ -404,3 +438,38 @@ selected workspace did not open an external path. The same run exposed a v5
 snapshot deserialization regression; defaulted v6 fields plus the focused v5
 migration fixed it, and the existing recent sessions loaded cleanly after
 restart.
+
+## Conversation-first desktop information architecture
+
+The initial native shell proved runtime projection, but its main column read as
+a run monitor: the composer sat above a plan and event feed, while the final
+answer was buried in the artifacts inspector. That hierarchy is incorrect for
+a general Work product. A Work task is a conversation that can execute, not a
+dashboard that happens to accept a prompt.
+
+The Phase 1 desktop hierarchy is now:
+
+1. **Threads and workspace context** in the left rail. A thread is the durable
+   unit of work and maps to one shared Agent Engine session.
+2. **Conversation** in the dominant center surface. User turns, assistant
+   responses, and the in-progress assistant draft remain readable as a single
+   continuous exchange. The bottom composer starts, steers, or continues the
+   same thread according to runtime state.
+3. **Work inspector** on the right. Plans, approvals, verification evidence,
+   file changes, and review controls support the conversation without replacing
+   it. Approval can demand attention, but it remains part of the current thread.
+
+Work snapshot schema v11 adds bounded, durable user/assistant messages and a
+coalesced assistant draft. It deliberately does not create a desktop-specific
+agent loop: text still arrives through the shared Runtime Event protocol and
+final responses still come from the shared Agent Engine. Future multi-agent
+work should add child-run activity and thread switching around this stable
+center, not turn the home page into a grid of agent status cards.
+
+Computer Use verified the rebuilt GPUI app after terminating stale test
+instances: the center surface restored the migrated user prompt and assistant
+answer as conversation cards, the composer remained anchored below the thread,
+and Plan, Approval, Verification / Process Output, and Artifacts occupied the
+scrollable inspector. This visual pass also caught that older schema snapshots
+would otherwise render an empty conversation; schema v11 migration now derives
+the initial user and assistant turns from their legacy task and final response.

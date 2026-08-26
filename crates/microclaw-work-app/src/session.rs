@@ -55,6 +55,20 @@ pub struct WorkEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ConversationRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationMessage {
+    pub id: u64,
+    pub role: ConversationRole,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolActivityStatus {
     Running,
     Succeeded,
@@ -78,10 +92,21 @@ pub struct ToolActivity {
     pub input_preview: String,
     pub status: ToolActivityStatus,
     pub result_preview: Option<String>,
-    pub duration_ms: Option<u128>,
+    pub duration_ms: Option<u64>,
     pub status_code: Option<i32>,
     pub bytes: Option<usize>,
     pub error_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessActivity {
+    pub call_id: String,
+    pub command: String,
+    pub output: String,
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    pub truncated: bool,
+    pub kind: microclaw_core::runtime_event::RuntimeProcessKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +224,8 @@ pub struct WorkSessionSnapshot {
     #[serde(default)]
     pub tool_activities: Vec<ToolActivity>,
     #[serde(default)]
+    pub process_activities: Vec<ProcessActivity>,
+    #[serde(default)]
     pub file_changes: Vec<FileChange>,
     #[serde(default)]
     pub subagents: Vec<SubagentActivity>,
@@ -214,14 +241,20 @@ pub struct WorkSessionSnapshot {
     pub last_runtime_sequence: u64,
     #[serde(default)]
     pub events: Vec<WorkEvent>,
+    #[serde(default)]
+    pub messages: Vec<ConversationMessage>,
+    #[serde(default)]
+    pub assistant_draft: String,
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 9;
+    pub const SCHEMA_VERSION: u32 = 11;
     pub const MAX_EVENTS: usize = 200;
     pub const MAX_TOOL_ACTIVITIES: usize = 100;
+    pub const MAX_PROCESS_ACTIVITIES: usize = 50;
     pub const MAX_FILE_CHANGES: usize = 50;
     pub const MAX_SUBAGENTS: usize = 50;
+    pub const MAX_MESSAGES: usize = 200;
 
     pub fn new(workspace: impl Into<String>) -> Self {
         let now = current_time_ms();
@@ -239,6 +272,7 @@ impl WorkSessionSnapshot {
             pending_approval: None,
             diff_summary: String::new(),
             tool_activities: Vec::new(),
+            process_activities: Vec::new(),
             file_changes: Vec::new(),
             subagents: Vec::new(),
             final_response: None,
@@ -247,6 +281,8 @@ impl WorkSessionSnapshot {
             runtime_run_id: None,
             last_runtime_sequence: 0,
             events: Vec::new(),
+            messages: Vec::new(),
+            assistant_draft: String::new(),
         }
     }
 
@@ -294,6 +330,15 @@ impl WorkSessionSnapshot {
                 bytes: Some(2048),
                 error_type: None,
             }],
+            process_activities: vec![ProcessActivity {
+                call_id: "demo-check".into(),
+                command: "cargo check -p microclaw-work".into(),
+                output: "Checking microclaw-work\nFinished dev profile".into(),
+                exit_code: Some(0),
+                duration_ms: 842,
+                truncated: false,
+                kind: microclaw_core::runtime_event::RuntimeProcessKind::Verification,
+            }],
             file_changes: Vec::new(),
             subagents: Vec::new(),
             final_response: None,
@@ -313,7 +358,23 @@ impl WorkSessionSnapshot {
                     message: "A tool requested access to write desktop prototype files".into(),
                 },
             ],
+            messages: vec![ConversationMessage {
+                id: 1,
+                role: ConversationRole::User,
+                content: "Build a native desktop workflow for MicroClaw Work".into(),
+            }],
+            assistant_draft: "I mapped the shared runtime and prepared a native Work shell. I need your approval before writing the desktop files and running verification.".into(),
         }
+    }
+
+    fn push_message(&mut self, role: ConversationRole, content: impl Into<String>) {
+        let id = self.messages.last().map_or(1, |message| message.id + 1);
+        self.messages.push(ConversationMessage {
+            id,
+            role,
+            content: trim_owned(content.into(), 64_000),
+        });
+        trim_front(&mut self.messages, Self::MAX_MESSAGES);
     }
 
     fn push_event(&mut self, kind: WorkEventKind, message: impl Into<String>) {
@@ -392,6 +453,7 @@ impl WorkSessionSnapshot {
         if task.trim().is_empty() {
             return Err(WorkCommandError::EmptyTask);
         }
+        let continuing_conversation = self.status == WorkStatus::Completed;
         self.task = task;
         if self.title.trim().is_empty() {
             self.title = self.task.clone();
@@ -402,7 +464,13 @@ impl WorkSessionSnapshot {
         self.runtime_run_id = None;
         self.last_runtime_sequence = 0;
         self.events.clear();
+        if !continuing_conversation {
+            self.messages.clear();
+        }
+        self.push_message(ConversationRole::User, self.task.clone());
+        self.assistant_draft.clear();
         self.tool_activities.clear();
+        self.process_activities.clear();
         self.file_changes.clear();
         self.subagents.clear();
         self.final_response = None;
@@ -485,6 +553,7 @@ impl WorkSessionSnapshot {
             WorkEventKind::System,
             format!("Steering update: {}", &message[..end]),
         );
+        self.push_message(ConversationRole::User, &message[..end]);
         Ok(())
     }
 
@@ -711,7 +780,9 @@ impl WorkSessionSnapshot {
             }
             RuntimeEvent::TextDelta { delta } => {
                 if !delta.is_empty() {
-                    self.push_event(WorkEventKind::System, delta);
+                    self.assistant_draft.push_str(&delta);
+                    self.assistant_draft =
+                        trim_owned(std::mem::take(&mut self.assistant_draft), 64_000);
                 }
             }
             RuntimeEvent::ToolWaveStart { wave, tool_count } => self.push_event(
@@ -736,6 +807,8 @@ impl WorkSessionSnapshot {
                 } else {
                     self.status = WorkStatus::Completed;
                     self.final_response = Some(text.clone());
+                    self.assistant_draft.clear();
+                    self.push_message(ConversationRole::Assistant, text.clone());
                     self.review_status =
                         if self.baseline_checkpoint.is_some() && !self.file_changes.is_empty() {
                             WorkReviewStatus::Pending
@@ -845,6 +918,39 @@ impl WorkSessionSnapshot {
                     format!("Agent updated the plan ({} steps)", self.plan.len()),
                 );
             }
+            RuntimeEvent::ProcessOutput {
+                call_id,
+                command,
+                output,
+                exit_code,
+                duration_ms,
+                truncated,
+                kind,
+            } => {
+                self.process_activities.push(ProcessActivity {
+                    call_id,
+                    command: trim_owned(command, 2_000),
+                    output: trim_owned(microclaw_core::redact::redact_secrets(&output), 20_000),
+                    exit_code,
+                    duration_ms,
+                    truncated,
+                    kind,
+                });
+                trim_front(&mut self.process_activities, Self::MAX_PROCESS_ACTIVITIES);
+                let label = match kind {
+                    microclaw_core::runtime_event::RuntimeProcessKind::Command => "Command",
+                    microclaw_core::runtime_event::RuntimeProcessKind::Verification => {
+                        "Verification"
+                    }
+                };
+                self.push_event(
+                    WorkEventKind::Verification,
+                    format!(
+                        "{label} finished with exit code {}",
+                        exit_code.map_or_else(|| "—".into(), |code| code.to_string())
+                    ),
+                );
+            }
         }
         Ok(())
     }
@@ -915,6 +1021,12 @@ impl WorkSessionSnapshot {
         }
         if snapshot.title.trim().is_empty() {
             snapshot.title = snapshot.task.clone();
+        }
+        if snapshot.messages.is_empty() && !snapshot.task.trim().is_empty() {
+            snapshot.push_message(ConversationRole::User, snapshot.task.clone());
+            if let Some(response) = snapshot.final_response.clone() {
+                snapshot.push_message(ConversationRole::Assistant, response);
+            }
         }
         if snapshot.status == WorkStatus::AwaitingApproval && snapshot.pending_approval.is_none() {
             let reason = snapshot
@@ -1126,6 +1238,45 @@ mod tests {
         assert_eq!(restored.plan[1].title, "Implement the feature");
         assert_eq!(restored.plan[1].status, RuntimePlanStepStatus::InProgress);
         assert_eq!(restored.events.last().unwrap().kind, WorkEventKind::Plan);
+    }
+
+    #[test]
+    fn process_output_is_structured_bounded_redacted_and_durable() {
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let path = directory.path().join("session.json");
+        let mut snapshot = WorkSessionSnapshot::new("");
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "process-run",
+                1,
+                RuntimeEvent::ProcessOutput {
+                    call_id: "bash-1".into(),
+                    command: "cargo test".into(),
+                    output: format!(
+                        "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789\n{}",
+                        "result\n".repeat(4_000)
+                    ),
+                    exit_code: Some(0),
+                    duration_ms: 400,
+                    truncated: true,
+                    kind: microclaw_core::runtime_event::RuntimeProcessKind::Verification,
+                },
+            )))
+            .unwrap();
+        snapshot.save(&path).unwrap();
+        let restored = WorkSessionSnapshot::load(&path).unwrap();
+
+        assert_eq!(restored.process_activities.len(), 1);
+        let process = &restored.process_activities[0];
+        assert_eq!(process.call_id, "bash-1");
+        assert_eq!(process.exit_code, Some(0));
+        assert!(process.truncated);
+        assert!(process.output.len() <= 20_000);
+        assert!(!process.output.contains("sk-proj-"));
+        assert_eq!(
+            restored.events.last().unwrap().kind,
+            WorkEventKind::Verification
+        );
     }
 
     #[test]

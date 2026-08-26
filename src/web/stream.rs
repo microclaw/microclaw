@@ -291,6 +291,33 @@ async fn start_stream_run_internal(
                                 )
                                 .await;
                         }
+                        AgentEvent::ProcessOutput {
+                            call_id,
+                            command,
+                            output,
+                            exit_code,
+                            duration_ms,
+                            truncated,
+                            kind,
+                        } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "process_output",
+                                    json!({
+                                        "call_id": call_id,
+                                        "command": command,
+                                        "output": output,
+                                        "exit_code": exit_code,
+                                        "duration_ms": duration_ms,
+                                        "truncated": truncated,
+                                        "kind": kind,
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                     }
                 }
             });
