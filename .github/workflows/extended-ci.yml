@@ -86,6 +86,8 @@ jobs:
         run: scripts/build_work_macos_dmg.sh work-release
         env:
           MICROCLAW_WORK_RECLAIM_BUILD_ARTIFACTS: '1'
+      - name: Verify macOS release artifacts
+        run: scripts/verify_work_macos_release.sh work-release
       - name: Launch-smoke macOS app bundle
         run: scripts/smoke_work_macos_app.sh work-release
       - name: Upload macOS preview

@@ -57,7 +57,29 @@ MICROCLAW_WORK_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
 MICROCLAW_WORK_NOTARY_PROFILE="microclaw-work" \
 MICROCLAW_WORK_VERSION_OVERRIDE="0.6.0" \
 scripts/build_work_macos_dmg.sh work-release
+MICROCLAW_WORK_REQUIRE_NOTARIZATION=1 \
+scripts/verify_work_macos_release.sh work-release
 ```
 
 Do not publish the ad-hoc signed preview produced when these release credentials
 are absent.
+
+## Rollback
+
+If a Work release is defective, revert the Homebrew tap commit that introduced
+its Cask version and push the revert before changing or deleting release
+assets. This makes `brew update` stop offering the defective build while
+keeping immutable release evidence available for diagnosis.
+
+Publish a corrected patch release through the normal signed and notarized
+pipeline. Do not replace a DMG under an existing tag: the Cask SHA-256 and the
+GitHub asset must remain an immutable pair. Users who already upgraded can
+install the preceding notarized DMG from its GitHub release, then install the
+corrected Cask when available. Work conversation and settings data remain in
+the platform data directory; neither Cask removal nor rollback should delete
+that directory.
+
+Before reopening the Cask, run the release verifier above. Then verify `brew
+install --cask microclaw-work`, `brew upgrade --cask microclaw-work`, and `brew
+uninstall --cask microclaw-work` from a clean macOS user account. Confirm that
+the Server formula and binary version are unchanged.

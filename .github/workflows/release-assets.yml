@@ -319,6 +319,12 @@ jobs:
         shell: bash
         run: scripts/build_work_macos_dmg.sh work-release
 
+      - name: Verify signed and notarized Work release
+        shell: bash
+        env:
+          MICROCLAW_WORK_REQUIRE_NOTARIZATION: "1"
+        run: scripts/verify_work_macos_release.sh work-release
+
       - name: Stage release asset
         shell: bash
         run: |
