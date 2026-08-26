@@ -36,6 +36,41 @@ pub struct WorkEvent {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkCommand {
+    StartTask {
+        task: String,
+    },
+    RecordProgress {
+        kind: WorkEventKind,
+        message: String,
+        completed_step: Option<usize>,
+    },
+    RequestApproval {
+        reason: String,
+    },
+    Approve,
+    ResetDemo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandOutcome {
+    pub previous_status: WorkStatus,
+    pub current_status: WorkStatus,
+    pub latest_event_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WorkCommandError {
+    #[error("task must not be empty")]
+    EmptyTask,
+    #[error("cannot {command} while Work status is {actual:?}")]
+    InvalidStatus {
+        command: &'static str,
+        actual: WorkStatus,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkSessionSnapshot {
     pub schema_version: u32,
@@ -95,7 +130,7 @@ impl WorkSessionSnapshot {
         }
     }
 
-    pub fn push_event(&mut self, kind: WorkEventKind, message: impl Into<String>) {
+    fn push_event(&mut self, kind: WorkEventKind, message: impl Into<String>) {
         let id = self.events.last().map_or(1, |event| event.id + 1);
         self.events.push(WorkEvent {
             id,
@@ -108,10 +143,53 @@ impl WorkSessionSnapshot {
         }
     }
 
-    pub fn start_task(&mut self, task: impl Into<String>) -> Result<(), &'static str> {
-        let task = task.into();
+    pub fn apply(&mut self, command: WorkCommand) -> Result<CommandOutcome, WorkCommandError> {
+        let previous_status = self.status;
+        match command {
+            WorkCommand::StartTask { task } => self.start_task(task)?,
+            WorkCommand::RecordProgress {
+                kind,
+                message,
+                completed_step,
+            } => {
+                self.require_status("record progress", WorkStatus::Running)?;
+                self.record_progress(kind, message, completed_step);
+            }
+            WorkCommand::RequestApproval { reason } => {
+                self.require_status("request approval", WorkStatus::Running)?;
+                self.request_approval(reason);
+            }
+            WorkCommand::Approve => {
+                self.require_status("approve", WorkStatus::AwaitingApproval)?;
+                self.approve();
+            }
+            WorkCommand::ResetDemo => *self = Self::spike_demo(),
+        }
+        Ok(CommandOutcome {
+            previous_status,
+            current_status: self.status,
+            latest_event_id: self.events.last().map(|event| event.id),
+        })
+    }
+
+    fn require_status(
+        &self,
+        command: &'static str,
+        expected: WorkStatus,
+    ) -> Result<(), WorkCommandError> {
+        if self.status == expected {
+            Ok(())
+        } else {
+            Err(WorkCommandError::InvalidStatus {
+                command,
+                actual: self.status,
+            })
+        }
+    }
+
+    fn start_task(&mut self, task: String) -> Result<(), WorkCommandError> {
         if task.trim().is_empty() {
-            return Err("task must not be empty");
+            return Err(WorkCommandError::EmptyTask);
         }
         self.task = task;
         self.status = WorkStatus::Running;
@@ -124,7 +202,7 @@ impl WorkSessionSnapshot {
         Ok(())
     }
 
-    pub fn record_progress(
+    fn record_progress(
         &mut self,
         kind: WorkEventKind,
         message: impl Into<String>,
@@ -136,13 +214,13 @@ impl WorkSessionSnapshot {
         self.push_event(kind, message);
     }
 
-    pub fn request_approval(&mut self, reason: impl Into<String>) {
+    fn request_approval(&mut self, reason: impl Into<String>) {
         self.status = WorkStatus::AwaitingApproval;
         self.approval_reason = Some(reason.into());
         self.push_event(WorkEventKind::Approval, "等待用户批准文件修改");
     }
 
-    pub fn approve(&mut self) {
+    fn approve(&mut self) {
         self.status = WorkStatus::Verifying;
         self.approval_reason = None;
         if let Some(step) = self.plan.get_mut(2) {
@@ -229,9 +307,23 @@ mod tests {
     fn foreground_lifecycle_pauses_for_approval_and_resumes_verification() {
         let mut snapshot = WorkSessionSnapshot::spike_demo();
 
-        snapshot.start_task("实现中文任务输入").unwrap();
-        snapshot.record_progress(WorkEventKind::Plan, "已生成计划", Some(0));
-        snapshot.request_approval("允许修改 Workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "实现中文任务输入".into(),
+            })
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::RecordProgress {
+                kind: WorkEventKind::Plan,
+                message: "已生成计划".into(),
+                completed_step: Some(0),
+            })
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::RequestApproval {
+                reason: "允许修改 Workspace".into(),
+            })
+            .unwrap();
 
         assert_eq!(snapshot.status, WorkStatus::AwaitingApproval);
         assert_eq!(
@@ -239,7 +331,7 @@ mod tests {
             Some("允许修改 Workspace")
         );
 
-        snapshot.approve();
+        snapshot.apply(WorkCommand::Approve).unwrap();
 
         assert_eq!(snapshot.status, WorkStatus::Verifying);
         assert!(snapshot.approval_reason.is_none());
@@ -247,6 +339,26 @@ mod tests {
         assert_eq!(
             snapshot.events.last().unwrap().kind,
             WorkEventKind::Verification
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_approval_transition() {
+        let mut snapshot = WorkSessionSnapshot::spike_demo();
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "仍在运行的任务".into(),
+            })
+            .unwrap();
+
+        let error = snapshot.apply(WorkCommand::Approve).unwrap_err();
+
+        assert_eq!(
+            error,
+            WorkCommandError::InvalidStatus {
+                command: "approve",
+                actual: WorkStatus::Running,
+            }
         );
     }
 }

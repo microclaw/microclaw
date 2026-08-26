@@ -6,7 +6,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
-use microclaw_work_app::session::{WorkEventKind, WorkSessionSnapshot, WorkStatus};
+use microclaw_work_app::session::{WorkCommand, WorkEventKind, WorkSessionSnapshot, WorkStatus};
 use smol::Timer;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -81,15 +81,19 @@ impl WorkApp {
     }
 
     fn approve(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.session.approve();
+        if let Err(error) = self.session.apply(WorkCommand::Approve) {
+            self.persistence_message = error.to_string();
+            cx.notify();
+            return;
+        }
         self.persist();
         cx.notify();
     }
 
     fn start_demo(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         let task = self.session.task.clone();
-        if let Err(error) = self.session.start_task(task) {
-            self.persistence_message = error.into();
+        if let Err(error) = self.session.apply(WorkCommand::StartTask { task }) {
+            self.persistence_message = error.to_string();
             cx.notify();
             return;
         }
@@ -113,8 +117,11 @@ impl WorkApp {
                     if this.active_run_id != run_id {
                         return;
                     }
-                    this.session
-                        .record_progress(kind, message, Some(index.min(1)));
+                    let _ = this.session.apply(WorkCommand::RecordProgress {
+                        kind,
+                        message: message.into(),
+                        completed_step: Some(index.min(1)),
+                    });
                     this.persist();
                     cx.notify();
                 });
@@ -128,8 +135,9 @@ impl WorkApp {
                 if this.active_run_id != run_id {
                     return;
                 }
-                this.session
-                    .request_approval("允许演示任务写入 Workspace 并运行验证");
+                let _ = this.session.apply(WorkCommand::RequestApproval {
+                    reason: "允许演示任务写入 Workspace 并运行验证".into(),
+                });
                 this.persist();
                 cx.notify();
             });
@@ -138,7 +146,7 @@ impl WorkApp {
     }
 
     fn reset(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.session = WorkSessionSnapshot::spike_demo();
+        let _ = self.session.apply(WorkCommand::ResetDemo);
         self.active_run_id += 1;
         let task = self.session.task.clone();
         self.task_input.update(cx, |input, cx| {

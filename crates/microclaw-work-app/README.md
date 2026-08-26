@@ -9,6 +9,11 @@ This crate owns:
 - bounded event projections;
 - versioned session snapshots and persistence format.
 
+All lifecycle changes enter through `WorkSessionSnapshot::apply(WorkCommand)`.
+The command reducer returns a `CommandOutcome` and rejects invalid transitions,
+such as approving a task that is not waiting for approval. UI and runtime
+adapters must not modify lifecycle fields directly.
+
 It must not depend on GPUI, operating-system UI APIs, LLM providers, channel
 SDKs, or Server transports. Desktop views send commands into this layer and
 render its projections. The production shared agent runtime will be attached
