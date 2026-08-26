@@ -3,7 +3,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Root, StyledExt,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputContentType, InputEvent, InputState},
     v_flex,
 };
 use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
@@ -12,8 +12,8 @@ use microclaw_work_app::session::{
 };
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
 use microclaw_work_runtime::{
-    RuntimeConfigSummary, WorkRunCancellation, WorkRunRequest, WorkRuntimeMessage,
-    WorkRuntimeService, load_runtime_config_summary,
+    ModelSettingsDraft, RuntimeConfigSummary, WorkRunCancellation, WorkRunRequest,
+    WorkRuntimeMessage, WorkRuntimeService,
 };
 use smol::Timer;
 use std::path::PathBuf;
@@ -31,6 +31,12 @@ struct WorkApp {
     runtime_cancellation: Option<WorkRunCancellation>,
     runtime_service: WorkRuntimeService,
     runtime_config: RuntimeConfigSummary,
+    settings_open: bool,
+    settings_has_api_key: bool,
+    provider_input: Entity<InputState>,
+    model_input: Entity<InputState>,
+    base_url_input: Entity<InputState>,
+    api_key_input: Entity<InputState>,
     last_run_was_demo: bool,
     draft_revision: u64,
     _subscriptions: Vec<Subscription>,
@@ -52,10 +58,26 @@ impl WorkApp {
     }
 
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let session_root = dirs::data_local_dir()
+        let work_data_root = dirs::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join("microclaw-work")
-            .join("work-sessions");
+            .join("microclaw-work");
+        let session_root = work_data_root.join("work-sessions");
+        let runtime_service =
+            WorkRuntimeService::discover(work_data_root.join("microclaw.config.yaml"));
+        let runtime_config = runtime_service.config_summary();
+        let model_settings = runtime_service.model_settings().ok();
+        let settings_provider = model_settings
+            .as_ref()
+            .map_or_else(|| "openai".to_string(), |value| value.provider.clone());
+        let settings_model = model_settings
+            .as_ref()
+            .map_or_else(|| "gpt-5".to_string(), |value| value.model.clone());
+        let settings_base_url = model_settings
+            .as_ref()
+            .map_or_else(String::new, |value| value.base_url.clone());
+        let settings_has_api_key = model_settings
+            .as_ref()
+            .is_some_and(|value| value.has_api_key);
         let session_store = WorkSessionStore::new(session_root);
         let (mut session, persistence_message) = match session_store.load_active_or_create() {
             Ok(session) if session.status == WorkStatus::Interrupted => (
@@ -89,6 +111,30 @@ impl WorkApp {
             InputState::new(window, cx)
                 .default_value(session.task.clone())
                 .placeholder("Describe what you want MicroClaw Work to do…")
+        });
+        let provider_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(settings_provider)
+                .placeholder("openai, anthropic, ollama, openrouter, or custom")
+        });
+        let model_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(settings_model)
+                .placeholder("Model ID")
+        });
+        let base_url_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(settings_base_url)
+                .placeholder("Optional HTTPS provider endpoint")
+        });
+        let api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(if settings_has_api_key {
+                    "Saved key — leave blank to keep it"
+                } else {
+                    "API key"
+                })
         });
         let _subscriptions = vec![cx.subscribe_in(&task_input, window, {
             let task_input = task_input.clone();
@@ -126,8 +172,14 @@ impl WorkApp {
             active_run_id: 0,
             runtime_active: false,
             runtime_cancellation: None,
-            runtime_service: WorkRuntimeService,
-            runtime_config: load_runtime_config_summary(),
+            runtime_service,
+            runtime_config,
+            settings_open: false,
+            settings_has_api_key,
+            provider_input,
+            model_input,
+            base_url_input,
+            api_key_input,
             last_run_was_demo: false,
             draft_revision: 0,
             _subscriptions,
@@ -257,12 +309,64 @@ impl WorkApp {
     }
 
     fn refresh_runtime_config(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.runtime_config = load_runtime_config_summary();
+        self.runtime_config = self.runtime_service.config_summary();
         self.persistence_message = if self.runtime_config.ready {
             "Runtime configuration refreshed.".into()
         } else {
             "Runtime configuration is incomplete.".into()
         };
+        cx.notify();
+    }
+
+    fn open_model_settings(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reject_if_runtime_busy(cx) {
+            return;
+        }
+        if let Ok(settings) = self.runtime_service.model_settings() {
+            self.provider_input.update(cx, |input, cx| {
+                input.set_value(settings.provider, window, cx)
+            });
+            self.model_input
+                .update(cx, |input, cx| input.set_value(settings.model, window, cx));
+            self.base_url_input.update(cx, |input, cx| {
+                input.set_value(settings.base_url, window, cx)
+            });
+            self.settings_has_api_key = settings.has_api_key;
+        }
+        self.api_key_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.settings_open = true;
+        cx.notify();
+    }
+
+    fn close_model_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.settings_open = false;
+        cx.notify();
+    }
+
+    fn save_model_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let api_key = self.api_key_input.read(cx).value().trim().to_string();
+        let draft = ModelSettingsDraft {
+            provider: self.provider_input.read(cx).value().to_string(),
+            model: self.model_input.read(cx).value().to_string(),
+            base_url: self.base_url_input.read(cx).value().to_string(),
+            api_key: if api_key.is_empty() && self.settings_has_api_key {
+                None
+            } else {
+                Some(api_key)
+            },
+        };
+        match self.runtime_service.save_model_settings(draft) {
+            Ok(settings) => {
+                self.settings_has_api_key = settings.has_api_key;
+                self.runtime_config = self.runtime_service.config_summary();
+                self.persistence_message = "Model configuration saved for MicroClaw Work.".into();
+                self.settings_open = false;
+            }
+            Err(error) => {
+                self.persistence_message = format!("Could not save model settings: {error}");
+            }
+        }
         cx.notify();
     }
 
@@ -325,10 +429,9 @@ impl WorkApp {
         if self.reject_if_runtime_busy(cx) {
             return;
         }
-        self.runtime_config = load_runtime_config_summary();
+        self.runtime_config = self.runtime_service.config_summary();
         if !self.runtime_config.ready {
-            self.persistence_message =
-                "Run `microclaw setup`, then refresh the runtime configuration.".into();
+            self.persistence_message = "Open Model Settings to configure the runtime.".into();
             cx.notify();
             return;
         }
@@ -589,10 +692,91 @@ impl WorkApp {
         })
         .detach();
     }
+
+    fn render_model_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .p_8()
+            .gap_5()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_2xl().font_bold().child("Model Settings"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Configure the model used by this Work installation."),
+                            ),
+                    )
+                    .child(
+                        Button::new("close-model-settings")
+                            .outline()
+                            .label("Back to Work")
+                            .on_click(cx.listener(Self::close_model_settings)),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w(px(680.))
+                    .gap_4()
+                    .p_5()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(div().text_sm().font_bold().child("Provider"))
+                    .child(Input::new(&self.provider_input))
+                    .child(div().text_sm().font_bold().child("Model ID"))
+                    .child(Input::new(&self.model_input))
+                    .child(div().text_sm().font_bold().child("Base URL (optional)"))
+                    .child(Input::new(&self.base_url_input).content_type(InputContentType::Url))
+                    .child(div().text_sm().font_bold().child("API key"))
+                    .child(
+                        Input::new(&self.api_key_input)
+                            .content_type(InputContentType::Password)
+                            .mask_toggle(),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if self.settings_has_api_key {
+                                "A key is already saved. Leave this field blank to keep it."
+                            } else {
+                                "Ollama and account-authenticated providers may not require a key."
+                            }),
+                    )
+                    .child(
+                        Button::new("save-model-settings")
+                            .primary()
+                            .label("Save Model Settings")
+                            .on_click(cx.listener(Self::save_model_settings)),
+                    ),
+            )
+            .child(div().text_sm().child(self.persistence_message.clone()))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "Configuration file: {}",
+                        self.runtime_service.config_path().display()
+                    )),
+            )
+    }
 }
 
 impl Render for WorkApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.settings_open {
+            return self.render_model_settings(cx).into_any_element();
+        }
         let status = match self.session.status {
             WorkStatus::Planning => "Planning",
             WorkStatus::Running => "Running",
@@ -668,6 +852,13 @@ impl Render for WorkApp {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(self.runtime_config.detail.clone()),
                             ),
+                    )
+                    .child(
+                        Button::new("model-settings")
+                            .outline()
+                            .disabled(self.runtime_active)
+                            .label("Model Settings")
+                            .on_click(cx.listener(Self::open_model_settings)),
                     )
                     .child(
                         Button::new("refresh-config")
@@ -953,6 +1144,7 @@ impl Render for WorkApp {
                             ),
                     ),
             )
+            .into_any_element()
     }
 }
 

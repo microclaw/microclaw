@@ -101,7 +101,7 @@ It contains no GPUI, platform, channel, provider, or Server dependency.
 ```text
 cargo test -p microclaw-core --locked                            51 passed
 cargo test -p microclaw-work-app --locked                        22 passed
-cargo test -p microclaw-work-runtime --locked                     2 passed
+cargo test -p microclaw-work-runtime --locked                     5 passed
 cargo test -p microclaw-work --locked                             0 tests; build passed
 cargo test -p microclaw-work-headless --locked                    1 passed
 cargo clippy -p microclaw-work-app --all-targets -- -D warnings passed
@@ -165,6 +165,25 @@ public request/handle/message boundary has no GPUI types. The desktop therefore
 contains no Tokio dependency and cannot silently grow a second runtime-control
 implementation. Future headless projections and Work-to-Server transports can
 adapt the same application-service boundary.
+
+## Native model onboarding
+
+The desktop no longer requires a terminal-only `microclaw setup` detour for
+its first task. An English Model Settings surface edits the provider, model,
+optional base URL, and a masked password-semantic API-key input. Existing keys
+are represented only by a boolean “saved” state and are never copied back into
+the GPUI field or accessibility tree; leaving the field blank preserves the
+saved value.
+
+`WorkRuntimeService` owns one explicit config path. Resolution prefers
+`MICROCLAW_WORK_CONFIG`, then a discoverable shared Server config, then Work's
+platform-local data directory. The new shared
+`Config::load_from_path_for_headless` retains provider, security, path, and tool
+validation while waiving only the irrelevant Server delivery-channel
+requirement. New Work configs are atomically renamed and mode `0600` on Unix;
+model-only updates use comment-preserving shared persistence. Five focused
+runtime-service tests cover creation, reload, comment/key preservation,
+credential validation, URL validation, cancellation, and run-ID uniqueness.
 
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing

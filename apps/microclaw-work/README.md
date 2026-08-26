@@ -32,12 +32,23 @@ Missing workspaces return to this safe unselected state instead of falling back
 to the process launch directory (which can be `/` for a packaged application).
 
 The sidebar reports the configured provider, model, and config path without
-showing credentials. Missing or invalid configuration blocks real launch with
-an instruction to run `microclaw setup`; **Refresh Configuration** re-reads the shared Config
-after setup. This is an offline configuration check, not a provider network
-probe. **Demo** remains available for UI testing without credentials.
+showing credentials. **Model Settings** provides a native, English first-run
+flow for provider, model, optional base URL, and API key, so Work does not
+require a terminal setup step. The API-key input is masked and marked as a
+password field for accessibility/password-manager semantics; an existing key
+is never loaded into the UI and a blank edit preserves it. Missing or invalid
+configuration blocks real launch. **Refresh Configuration** re-reads the same
+explicit Config path. This is an offline configuration check, not a provider
+network probe. **Demo** remains available for UI testing without credentials.
 Provider/runtime failures are shown as a terminal Work state instead of
 crashing the window.
+
+A packaged installation falls back to
+`<platform data directory>/microclaw-work/microclaw.config.yaml`, while an
+explicit `MICROCLAW_WORK_CONFIG` or discoverable shared Server config takes
+precedence. Work-only configs may omit Server delivery channels. New files are
+written atomically and use mode `0600` on Unix; edits preserve existing YAML
+comments and retain a saved key unless the user explicitly replaces it.
 
 Work sessions are stored as separate versioned snapshots under the application
 data directory, with an atomic bounded index for the recent-task list. **New

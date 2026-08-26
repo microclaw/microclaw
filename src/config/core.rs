@@ -1234,47 +1234,71 @@ impl Config {
         let yaml_path = Self::resolve_config_path()?;
 
         if let Some(path) = yaml_path {
-            let path_str = path.to_string_lossy().to_string();
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| MicroClawError::Config(format!("Failed to read {path_str}: {e}")))?;
-            if let Ok(raw) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                if let Some(map) = raw.as_mapping() {
-                    let old_top_level = map
-                        .get(serde_yaml::Value::String("web_auth_token".to_string()))
-                        .is_some();
-                    let old_channel_level = map
-                        .get(serde_yaml::Value::String("channels".to_string()))
-                        .and_then(|v| v.as_mapping())
-                        .and_then(|channels| {
-                            channels.get(serde_yaml::Value::String("web".to_string()))
-                        })
-                        .and_then(|v| v.as_mapping())
-                        .map(|web| {
-                            web.contains_key(serde_yaml::Value::String("auth_token".to_string()))
-                        })
-                        .unwrap_or(false);
-                    if old_top_level || old_channel_level {
-                        warn!(
-                            "Deprecated web auth token config detected in {}. \
-`web_auth_token` / `channels.web.auth_token` are ignored; migrate to operator password + API keys.",
-                            path_str
-                        );
-                    }
-                    for w in unknown_top_level_key_warnings(map) {
-                        warn!("{w} (in {path_str})");
-                    }
-                }
-            }
-            let mut config: Config = serde_yaml::from_str(&content)
-                .map_err(|e| MicroClawError::Config(friendly_yaml_error(&path_str, &e)))?;
-            config.post_deserialize()?;
-            return Ok(config);
+            return Self::load_from_path(&path);
         }
 
         // No config file found at all
         Err(MicroClawError::Config(
             "No microclaw.config.yaml found. Run `microclaw setup` to create one.".into(),
         ))
+    }
+
+    /// Load and validate a specific YAML configuration file.
+    pub fn load_from_path(path: &Path) -> Result<Self, MicroClawError> {
+        Self::load_from_path_inner(path, false)
+    }
+
+    /// Load a specific configuration for a channel-free foreground runtime.
+    ///
+    /// All provider, tool, path, and security validation is retained. Only the
+    /// Server requirement that at least one delivery channel be enabled is
+    /// waived, because Work and other headless callers deliver results through
+    /// their own application boundary.
+    pub fn load_from_path_for_headless(path: &Path) -> Result<Self, MicroClawError> {
+        Self::load_from_path_inner(path, true)
+    }
+
+    fn load_from_path_inner(path: &Path, allow_no_channels: bool) -> Result<Self, MicroClawError> {
+        let path_str = path.to_string_lossy().to_string();
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| MicroClawError::Config(format!("Failed to read {path_str}: {e}")))?;
+        if let Ok(raw) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
+            if let Some(map) = raw.as_mapping() {
+                let old_top_level = map
+                    .get(serde_yaml::Value::String("web_auth_token".to_string()))
+                    .is_some();
+                let old_channel_level = map
+                    .get(serde_yaml::Value::String("channels".to_string()))
+                    .and_then(|v| v.as_mapping())
+                    .and_then(|channels| channels.get(serde_yaml::Value::String("web".to_string())))
+                    .and_then(|v| v.as_mapping())
+                    .map(|web| {
+                        web.contains_key(serde_yaml::Value::String("auth_token".to_string()))
+                    })
+                    .unwrap_or(false);
+                if old_top_level || old_channel_level {
+                    warn!(
+                        "Deprecated web auth token config detected in {}. \
+`web_auth_token` / `channels.web.auth_token` are ignored; migrate to operator password + API keys.",
+                        path_str
+                    );
+                }
+                for warning in unknown_top_level_key_warnings(map) {
+                    warn!("{warning} (in {path_str})");
+                }
+            }
+        }
+        let mut config: Config = serde_yaml::from_str(&content)
+            .map_err(|error| MicroClawError::Config(friendly_yaml_error(&path_str, &error)))?;
+        let synthesized_channel = allow_no_channels && config.channel_status().0.is_empty();
+        if synthesized_channel {
+            config.web_enabled = true;
+        }
+        config.post_deserialize()?;
+        if synthesized_channel {
+            config.web_enabled = false;
+        }
+        Ok(config)
     }
 
     /// Apply post-deserialization normalization and validation.

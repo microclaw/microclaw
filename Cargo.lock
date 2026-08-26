@@ -6235,7 +6235,12 @@ version = "0.1.0"
 dependencies = [
  "microclaw",
  "microclaw-core",
+ "serde",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.19",
  "tokio",
+ "url",
 ]
 
 [[package]]
