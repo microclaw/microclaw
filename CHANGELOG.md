@@ -8,6 +8,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Agent Engine first-response proof.** Work Diagnostics can now run a fixed,
+  explicit end-to-end probe through provider streaming, the shared Agent
+  Engine, durable runtime assembly, versioned Work events, and visible final
+  completion. Results are bounded and secret-redacted.
+- **Refined native Work presentation.** The GPUI desktop now uses a quieter
+  layered sidebar, a distinct active-conversation card, contextual status
+  colors, polished chat bubbles and composer surfaces, starter prompts, and
+  structured diagnostic cards with compact state badges.
 - **Native Work diagnostics.** The desktop now exposes an offline diagnostics
   report for model configuration, active-workspace writes, durable conversation
   storage, and credential-file permissions, with an explicit redacted provider

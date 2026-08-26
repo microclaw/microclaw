@@ -469,8 +469,9 @@ native GPUI application, a shared-runtime port, durable conversation threads,
 the conversation-first home and contextual Details inspector described above,
 an automatically provisioned private Work Home that removes the folder-picker
 barrier from first chat, prominent first-run model onboarding,
-native offline readiness diagnostics with an explicit provider probe, live
-plans, in-run steering, structured inline approvals, bounded process
+native offline readiness diagnostics with explicit provider and full Agent
+Engine first-response probes, a refined conversation/sidebar/composer visual
+language, live plans, in-run steering, structured inline approvals, bounded process
 evidence, native multi-file diff review, visible subagent activity, checkpoint
 review, process-level crash/retry tests, and macOS development-bundle
 verification. The repository also has a Linux/macOS/Windows release-build

@@ -63,6 +63,16 @@ pub struct ProviderConnectionReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstResponseReport {
+    pub provider: String,
+    pub model: String,
+    pub latency_ms: u64,
+    pub run_id: String,
+    pub event_count: usize,
+    pub response_preview: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelSettings {
     pub provider: String,
     pub model: String,
@@ -306,6 +316,104 @@ impl WorkRuntimeService {
             });
         if let Err(error) = spawn {
             let _ = result_tx.send(Err(format!("could not start provider diagnostic: {error}")));
+        }
+        result_rx
+    }
+
+    /// Execute a minimal, tool-free-intent prompt through the shared Agent
+    /// Engine and consume its versioned Work event stream. This is the explicit
+    /// end-to-end first-response proof; unlike `test_provider_connection`, it
+    /// validates runtime assembly, persistence, event bridging, and completion.
+    pub fn test_first_response(
+        &self,
+        workspace: PathBuf,
+    ) -> Receiver<Result<FirstResponseReport, String>> {
+        let (result_tx, result_rx) = mpsc::channel();
+        let config_path = self.config_path.clone();
+        let worker_tx = result_tx.clone();
+        let spawn = std::thread::Builder::new()
+            .name("microclaw-work-first-response".into())
+            .spawn(move || {
+                let result = (|| -> Result<FirstResponseReport, String> {
+                    let mut config = Config::load_from_path_for_headless(&config_path)
+                        .map_err(|error| error.to_string())?;
+                    let workspace = workspace
+                        .canonicalize()
+                        .map_err(|error| format!("workspace is unavailable: {error}"))?;
+                    config.working_dir = workspace.display().to_string();
+                    config.checkpoints_enabled = false;
+                    let provider = config.llm_provider.clone();
+                    let model = config.model.clone();
+                    let api_key = config.api_key.clone();
+                    let runtime = tokio::runtime::Runtime::new()
+                        .map_err(|error| format!("could not create diagnostic runtime: {error}"))?;
+                    let started = std::time::Instant::now();
+                    runtime.block_on(async {
+                        let runtime = HeadlessRuntime::load(config)
+                            .await
+                            .map_err(|error| redact_runtime_error(&error.to_string(), &api_key))?;
+                        let run_id = next_diagnostic_run_id();
+                        let session = format!("diagnostic-{run_id}");
+                        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+                        let events = tokio::spawn(async move {
+                            let mut count = 0usize;
+                            while event_rx.recv().await.is_some() {
+                                count = count.saturating_add(1);
+                            }
+                            count
+                        });
+                        let result = tokio::time::timeout(
+                            Duration::from_secs(60),
+                            runtime.run(
+                                HeadlessRunRequest::work(
+                                    "Reply with exactly: first response ok".into(),
+                                    Some(session),
+                                    run_id.clone(),
+                                ),
+                                Some(event_tx),
+                            ),
+                        )
+                        .await
+                        .map_err(|_| "first response timed out after 60 seconds".to_string())?
+                        .map_err(|error| redact_runtime_error(&error.to_string(), &api_key))?;
+                        let event_count = tokio::time::timeout(Duration::from_secs(5), events)
+                            .await
+                            .map_err(|_| "runtime event stream did not close".to_string())?
+                            .map_err(|error| error.to_string())?;
+                        if event_count == 0 {
+                            return Err("Agent Engine completed without Work runtime events".into());
+                        }
+                        let response = result.response.trim();
+                        if response.is_empty() {
+                            return Err("Agent Engine completed without a visible response".into());
+                        }
+                        if response.starts_with("I couldn't produce a visible reply")
+                            || response.starts_with("I reached the model output limit")
+                        {
+                            return Err(format!(
+                                "Agent Engine returned its completion fallback: {response}"
+                            ));
+                        }
+                        Ok(FirstResponseReport {
+                            provider,
+                            model,
+                            latency_ms: u64::try_from(started.elapsed().as_millis())
+                                .unwrap_or(u64::MAX),
+                            run_id: result.run_id,
+                            event_count,
+                            response_preview: microclaw_core::redact::redact_secrets(
+                                &result.response.chars().take(240).collect::<String>(),
+                            ),
+                        })
+                    })
+                })()
+                .map_err(|error| microclaw_core::redact::redact_secrets(&error));
+                let _ = worker_tx.send(result);
+            });
+        if let Err(error) = spawn {
+            let _ = result_tx.send(Err(format!(
+                "could not start first-response diagnostic: {error}"
+            )));
         }
         result_rx
     }
@@ -676,6 +784,23 @@ fn send_failure(message_tx: &Sender<WorkRuntimeMessage>, run_id: &str, message: 
     });
 }
 
+fn redact_runtime_error(error: &str, api_key: &str) -> String {
+    let error = if api_key.is_empty() {
+        error.to_string()
+    } else {
+        error.replace(api_key, "<redacted>")
+    };
+    microclaw_core::redact::redact_secrets(&error)
+}
+
+fn next_diagnostic_run_id() -> String {
+    let counter = NEXT_DIAGNOSTIC_ID.fetch_add(1, Ordering::Relaxed);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    format!("work-diagnostic-{millis}-{counter}")
+}
+
 fn next_run_id() -> String {
     let counter = NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed);
     let millis = std::time::SystemTime::now()
@@ -710,6 +835,33 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).unwrap();
             stream.flush().unwrap();
+        });
+        (format!("http://{address}/v1"), request_rx)
+    }
+
+    fn repeating_provider_fixture(status: &str, body: &'static str) -> (String, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let status = status.to_string();
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = vec![0; 64 * 1024];
+                let count = stream.read(&mut bytes).unwrap_or(0);
+                let request = String::from_utf8_lossy(&bytes[..count]).to_string();
+                if request_tx.send(request).is_err() {
+                    break;
+                }
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
         });
         (format!("http://{address}/v1"), request_rx)
     }
@@ -892,7 +1044,7 @@ mod tests {
 
     #[test]
     fn provider_connection_test_exercises_endpoint_auth_model_and_response() {
-        let (base_url, request_rx) = provider_fixture(
+        let (base_url, request_rx) = repeating_provider_fixture(
             "200 OK",
             r#"{"choices":[{"message":{"content":"connection ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#,
         );
@@ -924,6 +1076,49 @@ mod tests {
         assert_eq!(report.provider, "openai");
         assert_eq!(report.model, "fixture-model");
         assert_eq!(report.response_preview, "connection ok");
+    }
+
+    #[test]
+    fn first_response_proof_runs_shared_agent_engine_and_event_stream() {
+        let (base_url, request_rx) = repeating_provider_fixture(
+            "200 OK",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"first response ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.yaml");
+        let service = WorkRuntimeService::new(&config_path);
+        service
+            .save_model_settings(ModelSettingsDraft {
+                provider: "openai".into(),
+                model: "fixture-model".into(),
+                base_url,
+                api_key: Some("fixture-secret".into()),
+            })
+            .unwrap();
+        let mut config = fs::read_to_string(&config_path).unwrap();
+        config.push_str(&format!(
+            "data_dir: {}\n",
+            directory.path().join("runtime-data").display()
+        ));
+        fs::write(&config_path, config).unwrap();
+        let workspace = directory.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+
+        let report = service
+            .test_first_response(workspace)
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(report.provider, "openai");
+        assert_eq!(report.model, "fixture-model");
+        assert!(report.run_id.starts_with("work-diagnostic-"));
+        assert!(report.event_count > 0);
+        assert_eq!(report.response_preview, "first response ok");
+        let request = request_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(request.contains("first response ok"));
+        assert!(request.contains("fixture-model"));
+        assert!(!report.response_preview.contains("fixture-secret"));
     }
 
     #[test]

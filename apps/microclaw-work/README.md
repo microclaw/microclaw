@@ -54,6 +54,18 @@ credential-file permissions. Write probes use unique temporary files and remove
 them immediately. The report never includes credentials. Provider reachability,
 authentication, routing, and response decoding remain behind the explicit
 **Test Provider** action so opening Diagnostics never makes a network request.
+**Run First Response** is the stronger, explicitly triggered end-to-end proof:
+it sends a fixed non-sensitive prompt through provider streaming and the shared
+Agent Engine, consumes the versioned Work event stream, requires a visible
+non-fallback completion, and reports bounded latency, event count, model, and
+redacted response evidence. It uses an isolated diagnostic session and does not
+duplicate the Agent Loop.
+
+The native visual language keeps conversation primary: the quieter layered
+sidebar distinguishes the active chat without rendering it as a disabled
+button, the empty home offers small starter prompts, status badges use semantic
+colors, and supporting setup/diagnostic surfaces use consistent cards, spacing,
+and hierarchy instead of exposing a dense engineering dashboard.
 
 Saving Model Settings keeps onboarding open and enables **Test Connection**.
 The test runs off the GPUI thread, sends a minimal request through the same

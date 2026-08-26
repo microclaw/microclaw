@@ -46,6 +46,8 @@ struct WorkApp {
     last_run_was_demo: bool,
     connection_test_active: bool,
     connection_test_message: String,
+    first_response_active: bool,
+    first_response_message: String,
     inspector_open: bool,
     draft_revision: u64,
     _subscriptions: Vec<Subscription>,
@@ -231,6 +233,9 @@ impl WorkApp {
             last_run_was_demo: false,
             connection_test_active: false,
             connection_test_message: "Save settings, then test the provider connection.".into(),
+            first_response_active: false,
+            first_response_message: "Run First Response to verify the complete Agent Engine path."
+                .into(),
             inspector_open,
             draft_revision: 0,
             _subscriptions,
@@ -239,6 +244,17 @@ impl WorkApp {
 
     fn toggle_inspector(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.inspector_open = !self.inspector_open;
+        cx.notify();
+    }
+
+    fn use_starter_prompt(&mut self, prompt: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.task_input.update(cx, |input, cx| {
+            input.set_value(prompt, window, cx);
+        });
+        let _ = self.session.apply(WorkCommand::SetComposerDraft {
+            draft: prompt.to_string(),
+        });
+        self.persist();
         cx.notify();
     }
 
@@ -473,7 +489,7 @@ impl WorkApp {
     }
 
     fn test_provider_connection(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.connection_test_active {
+        if self.connection_test_active || self.first_response_active {
             return;
         }
         self.runtime_config = self.runtime_service.config_summary();
@@ -523,6 +539,72 @@ impl WorkApp {
                             this.connection_test_active = false;
                             this.connection_test_message =
                                 "Connection test worker exited unexpectedly.".into();
+                            cx.notify();
+                        });
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn test_first_response(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.connection_test_active || self.first_response_active {
+            return;
+        }
+        self.runtime_config = self.runtime_service.config_summary();
+        self.diagnostics_report = self.runtime_service.local_diagnostics(
+            Path::new(&self.session.workspace),
+            self.session_store.root(),
+        );
+        if !self.diagnostics_report.ready {
+            self.first_response_message =
+                "Resolve the failing local diagnostics before running First Response.".into();
+            cx.notify();
+            return;
+        }
+        self.first_response_active = true;
+        self.first_response_message =
+            "Running the shared Agent Engine first-response proof…".into();
+        let receiver = self
+            .runtime_service
+            .test_first_response(PathBuf::from(&self.session.workspace));
+        cx.spawn(async move |this, cx| {
+            loop {
+                match receiver.try_recv() {
+                    Ok(Ok(report)) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.first_response_active = false;
+                            this.first_response_message = format!(
+                                "First response passed in {} ms · {} events · {} / {} · {}",
+                                report.latency_ms,
+                                report.event_count,
+                                report.provider,
+                                report.model,
+                                report.response_preview
+                            );
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Ok(Err(error)) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.first_response_active = false;
+                            this.first_response_message = format!("First response failed: {error}");
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => {
+                        Timer::after(Duration::from_millis(50)).await;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.first_response_active = false;
+                            this.first_response_message =
+                                "First-response worker exited unexpectedly.".into();
                             cx.notify();
                         });
                         break;
@@ -1118,12 +1200,14 @@ impl WorkApp {
     fn render_model_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
+            .items_center()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .p_8()
             .gap_5()
             .child(
                 h_flex()
+                    .w(px(860.))
                     .justify_between()
                     .items_center()
                     .child(
@@ -1227,12 +1311,14 @@ impl WorkApp {
     fn render_diagnostics(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
+            .items_center()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .p_8()
             .gap_5()
             .child(
                 h_flex()
+                    .w(px(860.))
                     .justify_between()
                     .items_center()
                     .child(
@@ -1249,13 +1335,14 @@ impl WorkApp {
                     .child(
                         Button::new("close-diagnostics")
                             .outline()
-                            .disabled(self.connection_test_active)
+                            .disabled(self.connection_test_active || self.first_response_active)
                             .label("Back to Work")
                             .on_click(cx.listener(Self::close_diagnostics)),
                     ),
             )
             .child(
                 h_flex()
+                    .w(px(860.))
                     .gap_3()
                     .child(
                         div()
@@ -1276,14 +1363,14 @@ impl WorkApp {
                     .child(
                         Button::new("refresh-diagnostics")
                             .outline()
-                            .disabled(self.connection_test_active)
+                            .disabled(self.connection_test_active || self.first_response_active)
                             .label("Run Again")
                             .on_click(cx.listener(Self::refresh_diagnostics)),
                     )
                     .child(
                         Button::new("diagnostics-model-settings")
                             .outline()
-                            .disabled(self.connection_test_active)
+                            .disabled(self.connection_test_active || self.first_response_active)
                             .label("Model Settings")
                             .on_click(cx.listener(Self::open_model_settings)),
                     )
@@ -1291,7 +1378,9 @@ impl WorkApp {
                         Button::new("diagnostics-provider-test")
                             .primary()
                             .disabled(
-                                self.connection_test_active || !self.runtime_config.ready,
+                                self.connection_test_active
+                                    || self.first_response_active
+                                    || !self.runtime_config.ready,
                             )
                             .label(if self.connection_test_active {
                                 "Testing Provider…"
@@ -1299,11 +1388,26 @@ impl WorkApp {
                                 "Test Provider"
                             })
                             .on_click(cx.listener(Self::test_provider_connection)),
+                    )
+                    .child(
+                        Button::new("diagnostics-first-response")
+                            .primary()
+                            .disabled(
+                                self.connection_test_active
+                                    || self.first_response_active
+                                    || !self.diagnostics_report.ready,
+                            )
+                            .label(if self.first_response_active {
+                                "Running First Response…"
+                            } else {
+                                "Run First Response"
+                            })
+                            .on_click(cx.listener(Self::test_first_response)),
                     ),
             )
             .child(
                 v_flex()
-                    .w(px(760.))
+                    .w(px(860.))
                     .gap_3()
                     .children(self.diagnostics_report.checks.iter().map(|check| {
                         let (status, color) = match check.status {
@@ -1316,12 +1420,17 @@ impl WorkApp {
                             .gap_3()
                             .p_4()
                             .rounded(cx.theme().radius)
+                            .bg(cx.theme().secondary.opacity(0.25))
                             .border_1()
                             .border_color(cx.theme().border)
                             .child(
                                 div()
-                                    .w(px(72.))
-                                    .text_sm()
+                                    .w(px(94.))
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_full()
+                                    .bg(color.opacity(0.14))
+                                    .text_xs()
                                     .font_bold()
                                     .text_color(color)
                                     .child(status),
@@ -1351,6 +1460,18 @@ impl WorkApp {
                         cx.theme().muted_foreground
                     })
                     .child(self.connection_test_message.clone()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(if self.first_response_message.starts_with("First response passed") {
+                        cx.theme().success
+                    } else if self.first_response_message.contains("failed") {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(self.first_response_message.clone()),
             )
             .child(
                 div()
@@ -1384,6 +1505,20 @@ impl Render for WorkApp {
                 WorkStatus::Cancelled => "Cancelled",
                 WorkStatus::Failed => "Failed",
                 WorkStatus::Interrupted => "Interrupted",
+            }
+        };
+        let status_color = if conversation_is_empty {
+            cx.theme().success
+        } else {
+            match self.session.status {
+                WorkStatus::Completed => cx.theme().success,
+                WorkStatus::Failed | WorkStatus::Cancelled | WorkStatus::Interrupted => {
+                    cx.theme().danger
+                }
+                WorkStatus::Planning
+                | WorkStatus::Running
+                | WorkStatus::AwaitingApproval
+                | WorkStatus::Verifying => cx.theme().warning,
             }
         };
         let recent_sessions = self.recent_sessions.clone();
@@ -1423,18 +1558,49 @@ impl Render for WorkApp {
             .text_color(cx.theme().foreground)
             .child(
                 v_flex()
-                    .w(px(260.))
+                    .w(px(278.))
                     .h_full()
-                    .p_4()
+                    .p_3()
                     .gap_3()
+                    .bg(cx.theme().secondary.opacity(0.38))
                     .border_r_1()
                     .border_color(cx.theme().border)
-                    .child(div().text_xl().font_bold().child("MicroClaw Work"))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_3()
+                            .px_2()
+                            .py_2()
+                            .child(
+                                div()
+                                    .size(px(34.))
+                                    .rounded_full()
+                                    .bg(cx.theme().foreground)
+                                    .text_color(cx.theme().background)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .font_bold()
+                                    .child("μ"),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(div().text_lg().font_bold().child("MicroClaw"))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("WORK"),
+                                    ),
+                            ),
+                    )
                     .child(
                         Button::new("new-session")
                             .primary()
+                            .w_full()
                             .disabled(self.runtime_active)
-                            .label("New Chat")
+                            .label("+  New Chat")
                             .on_click(cx.listener(Self::new_session)),
                     )
                     .child(
@@ -1444,7 +1610,7 @@ impl Render for WorkApp {
                             .text_color(cx.theme().muted_foreground)
                             .child("Chats"),
                     )
-                    .children(recent_sessions.into_iter().take(6).map(|summary| {
+                    .children(recent_sessions.into_iter().take(7).map(|summary| {
                         let session_id = summary.session_id.clone();
                         let is_active = session_id == self.session.session_id;
                         let title = if summary.task.trim().is_empty() {
@@ -1458,20 +1624,44 @@ impl Render for WorkApp {
                             work_status_label(summary.status)
                         };
                         let label = format!("{title} · {summary_status}");
-                        Button::new(format!("session-{session_id}"))
-                            .outline()
-                            .disabled(self.runtime_active || is_active)
-                            .label(label)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_session(&session_id, window, cx);
-                            }))
+                        if is_active {
+                            v_flex()
+                                .w_full()
+                                .gap_1()
+                                .px_3()
+                                .py_2()
+                                .rounded(cx.theme().radius)
+                                .bg(cx.theme().background)
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .child(div().text_sm().font_bold().child(title))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(summary_status),
+                                )
+                                .into_any_element()
+                        } else {
+                            Button::new(format!("session-{session_id}"))
+                                .outline()
+                                .w_full()
+                                .disabled(self.runtime_active)
+                                .label(label)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_session(&session_id, window, cx);
+                                }))
+                                .into_any_element()
+                        }
                     }))
                     .child(
                         v_flex()
                             .mt_auto()
                             .gap_2()
-                            .pt_3()
-                            .border_t_1()
+                            .p_3()
+                            .rounded(cx.theme().radius)
+                            .bg(cx.theme().background)
+                            .border_1()
                             .border_color(cx.theme().border)
                             .child(
                                 div()
@@ -1571,7 +1761,8 @@ impl Render for WorkApp {
                                             .px_3()
                                             .py_1()
                                             .rounded_full()
-                                            .bg(cx.theme().warning.opacity(0.18))
+                                            .bg(status_color.opacity(0.14))
+                                            .text_color(status_color)
                                             .child(status),
                                     )
                                     .children(has_inspector_content.then(|| {
@@ -1604,8 +1795,20 @@ impl Render for WorkApp {
                                             .flex_1()
                                             .items_center()
                                             .justify_center()
-                                            .gap_3()
+                                            .gap_4()
                                             .p_8()
+                                            .child(
+                                                div()
+                                                    .size(px(58.))
+                                                    .rounded_full()
+                                                    .bg(cx.theme().accent)
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_xl()
+                                                    .font_bold()
+                                                    .child("μ"),
+                                            )
                                             .child(
                                                 div()
                                                     .text_2xl()
@@ -1623,6 +1826,52 @@ impl Render for WorkApp {
                                                         "Connect a model once, then start chatting. A private Work Home is already available for files and artifacts."
                                                     }),
                                             )
+                                            .children(self.runtime_config.ready.then(|| {
+                                                h_flex()
+                                                    .gap_2()
+                                                    .child(
+                                                        Button::new("starter-plan")
+                                                            .outline()
+                                                            .label("Plan a feature")
+                                                            .on_click(cx.listener(
+                                                                |this, _, window, cx| {
+                                                                    this.use_starter_prompt(
+                                                                        "Help me plan and implement a feature in this workspace.",
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        Button::new("starter-review")
+                                                            .outline()
+                                                            .label("Review this workspace")
+                                                            .on_click(cx.listener(
+                                                                |this, _, window, cx| {
+                                                                    this.use_starter_prompt(
+                                                                        "Review this workspace and identify the highest-impact improvements.",
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        Button::new("starter-research")
+                                                            .outline()
+                                                            .label("Research a topic")
+                                                            .on_click(cx.listener(
+                                                                |this, _, window, cx| {
+                                                                    this.use_starter_prompt(
+                                                                        "Research a topic with me and produce a concise, evidence-backed brief.",
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            )),
+                                                    )
+                                            }))
                                             .child(
                                                 h_flex()
                                                     .gap_2()
@@ -1650,9 +1899,20 @@ impl Render for WorkApp {
                                                 v_flex()
                                                     .max_w(px(if is_user { 620. } else { 760. }))
                                                     .gap_1()
-                                                    .p_3()
+                                                    .px_4()
+                                                    .py_3()
                                                     .rounded(cx.theme().radius)
-                                                    .bg(if is_user { cx.theme().accent } else { cx.theme().background })
+                                                    .bg(if is_user {
+                                                        cx.theme().accent
+                                                    } else {
+                                                        cx.theme().secondary.opacity(0.35)
+                                                    })
+                                                    .border_1()
+                                                    .border_color(if is_user {
+                                                        cx.theme().accent
+                                                    } else {
+                                                        cx.theme().border
+                                                    })
                                                     .child(div().text_xs().font_bold().child(if is_user {
                                                         "You"
                                                     } else {
@@ -2005,9 +2265,10 @@ impl Render for WorkApp {
                     )
                     .child(
                         v_flex()
-                            .gap_2()
-                            .p_3()
+                            .gap_3()
+                            .p_4()
                             .rounded(cx.theme().radius)
+                            .bg(cx.theme().secondary.opacity(0.28))
                             .border_1()
                             .border_color(cx.theme().border)
                             .child(
