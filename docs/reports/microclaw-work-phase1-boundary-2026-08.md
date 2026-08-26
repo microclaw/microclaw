@@ -473,3 +473,13 @@ and Plan, Approval, Verification / Process Output, and Artifacts occupied the
 scrollable inspector. This visual pass also caught that older schema snapshots
 would otherwise render an empty conversation; schema v11 migration now derives
 the initial user and assistant turns from their legacy task and final response.
+
+The next native pass removed the transitional `Continue Task` mode. Snapshot
+schema v12 separates the last submitted task from the unsent composer draft;
+completed threads now accept the next turn directly, preserve all earlier
+messages, and clear the composer after submission. Approval choices moved into
+the conversation at the pause point, while the right inspector remains focused
+on plan, verification, and artifacts. Computer Use exercised this exact path:
+it ran the Demo to an inline three-option approval, denied it, entered a new
+follow-up, started the Demo again, and verified both user turns remained visible
+while the composer cleared and the new inline approval appeared below them.

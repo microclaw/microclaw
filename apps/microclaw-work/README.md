@@ -80,7 +80,10 @@ the shared shadow-git implementation, even when Server channel configuration
 has checkpoints disabled. A completed task with file changes enters explicit
 review: **Accept Changes** keeps the workspace, **Revert Changes** presents a
 native destructive-action confirmation and restores the checkpoint, and
-**Continue Task** opens a follow-up prompt in the same Agent Engine session.
+the bottom composer sends a follow-up directly into the same durable
+conversation and Agent Engine session. Submitted turns and unsent composer
+drafts are stored separately, so sending clears the composer without erasing
+the transcript or changing the thread title.
 Restore handles empty workspaces, modified/deleted tracked files, and new
 non-ignored files. Existing ignored files such as `.env` and nested repositories
 remain protected. Checkpoint and restore work runs off the GPUI thread.
@@ -97,8 +100,9 @@ The validated bundle is written to
 local execution. Developer ID signing, notarization, DMG creation, and
 auto-update are later Phase 0/5 work.
 
-The UI remains a workflow projection rather than an IDE. Workspace, Plan,
-Approval, Tool Activity, bounded and redacted Process Output, File Changes,
+The UI remains a workflow projection rather than an IDE. Conversation is the
+primary surface, with approvals rendered inline at the point where work pauses.
+Workspace, Plan, Tool Activity, bounded and redacted Process Output, File Changes,
 Artifacts, runtime failures, and bounded events are persisted under the
 platform-local data directory so restart recovery can be exercised.
 The desktop does not contain a second Agent Loop.

@@ -130,8 +130,8 @@ pub enum WorkCommand {
     StartTask {
         task: String,
     },
-    SetTaskDraft {
-        task: String,
+    SetComposerDraft {
+        draft: String,
     },
     SetWorkspace {
         path: String,
@@ -159,7 +159,6 @@ pub enum WorkCommand {
     MarkInterrupted,
     AcceptChanges,
     MarkReverted,
-    PrepareFollowUp,
     ResetDemo,
 }
 
@@ -215,6 +214,8 @@ pub struct WorkSessionSnapshot {
     #[serde(default)]
     pub title: String,
     pub task: String,
+    #[serde(default)]
+    pub composer_draft: String,
     pub status: WorkStatus,
     pub plan: Vec<PlanStep>,
     pub approval_reason: Option<String>,
@@ -248,7 +249,7 @@ pub struct WorkSessionSnapshot {
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 11;
+    pub const SCHEMA_VERSION: u32 = 12;
     pub const MAX_EVENTS: usize = 200;
     pub const MAX_TOOL_ACTIVITIES: usize = 100;
     pub const MAX_PROCESS_ACTIVITIES: usize = 50;
@@ -266,6 +267,7 @@ impl WorkSessionSnapshot {
             workspace: workspace.into(),
             title: String::new(),
             task: String::new(),
+            composer_draft: String::new(),
             status: WorkStatus::Planning,
             plan: Vec::new(),
             approval_reason: None,
@@ -296,6 +298,7 @@ impl WorkSessionSnapshot {
             workspace: String::new(),
             title: "Build a native desktop workflow for MicroClaw Work".into(),
             task: "Build a native desktop workflow for MicroClaw Work".into(),
+            composer_draft: String::new(),
             status: WorkStatus::AwaitingApproval,
             plan: vec![
                 PlanStep {
@@ -394,7 +397,7 @@ impl WorkSessionSnapshot {
         let previous_status = self.status;
         match command {
             WorkCommand::StartTask { task } => self.start_task(task)?,
-            WorkCommand::SetTaskDraft { task } => self.task = task,
+            WorkCommand::SetComposerDraft { draft } => self.composer_draft = draft,
             WorkCommand::SetWorkspace { path } => self.set_workspace(path)?,
             WorkCommand::RecordProgress {
                 kind,
@@ -423,7 +426,6 @@ impl WorkSessionSnapshot {
             WorkCommand::MarkInterrupted => self.mark_interrupted()?,
             WorkCommand::AcceptChanges => self.finish_review(WorkReviewStatus::Accepted)?,
             WorkCommand::MarkReverted => self.finish_review(WorkReviewStatus::Reverted)?,
-            WorkCommand::PrepareFollowUp => self.prepare_follow_up()?,
             WorkCommand::ResetDemo => self.reset_demo(),
         }
         self.touch();
@@ -455,6 +457,7 @@ impl WorkSessionSnapshot {
         }
         let continuing_conversation = self.status == WorkStatus::Completed;
         self.task = task;
+        self.composer_draft.clear();
         if self.title.trim().is_empty() {
             self.title = self.task.clone();
         }
@@ -652,23 +655,6 @@ impl WorkSessionSnapshot {
                 WorkReviewStatus::Reverted => "Restored the pre-task workspace checkpoint",
                 _ => unreachable!(),
             },
-        );
-        Ok(())
-    }
-
-    fn prepare_follow_up(&mut self) -> Result<(), WorkCommandError> {
-        if self.status != WorkStatus::Completed {
-            return Err(WorkCommandError::InvalidStatus {
-                command: "continue task",
-                actual: self.status,
-            });
-        }
-        self.status = WorkStatus::Planning;
-        self.task.clear();
-        self.review_status = WorkReviewStatus::None;
-        self.push_event(
-            WorkEventKind::System,
-            "Prepared a follow-up in the same Agent Engine session",
         );
         Ok(())
     }
@@ -1021,6 +1007,12 @@ impl WorkSessionSnapshot {
         }
         if snapshot.title.trim().is_empty() {
             snapshot.title = snapshot.task.clone();
+        }
+        if snapshot.composer_draft.is_empty()
+            && snapshot.status == WorkStatus::Planning
+            && snapshot.messages.is_empty()
+        {
+            snapshot.composer_draft = snapshot.task.clone();
         }
         if snapshot.messages.is_empty() && !snapshot.task.trim().is_empty() {
             snapshot.push_message(ConversationRole::User, snapshot.task.clone());
@@ -1808,7 +1800,7 @@ mod tests {
     }
 
     #[test]
-    fn reverted_review_is_durable_and_new_task_resets_it() {
+    fn completed_thread_accepts_follow_ups_without_losing_the_transcript() {
         let mut snapshot = WorkSessionSnapshot::new("/workspace");
         snapshot.status = WorkStatus::Completed;
         snapshot.review_status = WorkReviewStatus::Pending;
@@ -1824,12 +1816,25 @@ mod tests {
         assert_eq!(snapshot.title, "follow-up");
         assert_eq!(snapshot.review_status, WorkReviewStatus::None);
         assert!(snapshot.baseline_checkpoint.is_none());
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].content, "follow-up");
 
         snapshot.status = WorkStatus::Completed;
-        snapshot.apply(WorkCommand::PrepareFollowUp).unwrap();
-        assert_eq!(snapshot.status, WorkStatus::Planning);
-        assert!(snapshot.task.is_empty());
+        snapshot
+            .apply(WorkCommand::SetComposerDraft {
+                draft: "refine it".into(),
+            })
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: snapshot.composer_draft.clone(),
+            })
+            .unwrap();
+        assert_eq!(snapshot.status, WorkStatus::Running);
+        assert!(snapshot.composer_draft.is_empty());
         assert_eq!(snapshot.title, "follow-up");
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[1].content, "refine it");
     }
 
     #[test]

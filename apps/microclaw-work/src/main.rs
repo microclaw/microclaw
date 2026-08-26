@@ -112,7 +112,7 @@ impl WorkApp {
 
         let task_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .default_value(session.task.clone())
+                .default_value(session.composer_draft.clone())
                 .placeholder("Describe what you want MicroClaw Work to do…")
         });
         let steer_input = cx.new(|cx| {
@@ -147,8 +147,8 @@ impl WorkApp {
                 let task_input = task_input.clone();
                 move |this, _, event: &InputEvent, _, cx| {
                     if matches!(event, InputEvent::Change) {
-                        let _ = this.session.apply(WorkCommand::SetTaskDraft {
-                            task: task_input.read(cx).value().to_string(),
+                        let _ = this.session.apply(WorkCommand::SetComposerDraft {
+                            draft: task_input.read(cx).value().to_string(),
                         });
                         this.draft_revision = this.draft_revision.saturating_add(1);
                         let revision = this.draft_revision;
@@ -226,7 +226,7 @@ impl WorkApp {
         cx: &mut Context<Self>,
     ) {
         self.session = session;
-        let task = self.session.task.clone();
+        let task = self.session.composer_draft.clone();
         self.task_input.update(cx, |input, cx| {
             input.set_value(task, window, cx);
         });
@@ -418,22 +418,6 @@ impl WorkApp {
         cx.notify();
     }
 
-    fn continue_task(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        match self.session.apply(WorkCommand::PrepareFollowUp) {
-            Ok(_) => {
-                self.task_input.update(cx, |input, cx| {
-                    input.set_value("", window, cx);
-                    input.focus(window, cx);
-                });
-                self.persistence_message =
-                    "Describe the follow-up. It will continue in the same runtime session.".into();
-                self.persist();
-            }
-            Err(error) => self.persistence_message = error.to_string(),
-        }
-        cx.notify();
-    }
-
     fn request_revert_changes(
         &mut self,
         _: &ClickEvent,
@@ -585,7 +569,7 @@ impl WorkApp {
         }
     }
 
-    fn start_runtime(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn start_runtime(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.reject_if_runtime_busy(cx) {
             return;
         }
@@ -595,7 +579,7 @@ impl WorkApp {
             cx.notify();
             return;
         }
-        let task = self.session.task.clone();
+        let task = self.task_input.read(cx).value().to_string();
         if let Err(error) = self
             .session
             .apply(WorkCommand::StartTask { task: task.clone() })
@@ -605,6 +589,9 @@ impl WorkApp {
             return;
         }
         self.last_run_was_demo = false;
+        self.task_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
         self.persist();
         self.launch_runtime_prompt(task, cx);
     }
@@ -822,14 +809,14 @@ impl WorkApp {
         if self.reject_if_runtime_busy(cx) {
             return;
         }
-        if self.session.task.trim().is_empty() {
+        if self.task_input.read(cx).value().trim().is_empty() {
             let _ = self.session.apply(WorkCommand::ResetDemo);
             let task = self.session.task.clone();
             self.task_input.update(cx, |input, cx| {
                 input.set_value(task, window, cx);
             });
         }
-        let task = self.session.task.clone();
+        let task = self.task_input.read(cx).value().to_string();
         if let Err(error) = self.session.apply(WorkCommand::StartTask { task }) {
             self.persistence_message = error.to_string();
             cx.notify();
@@ -839,6 +826,9 @@ impl WorkApp {
         self.active_run_id += 1;
         self.runtime_active = true;
         self.last_run_was_demo = true;
+        self.task_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
         let run_id = self.active_run_id;
         self.persist();
         cx.notify();
@@ -1055,7 +1045,7 @@ impl Render for WorkApp {
         let file_changes = self.session.file_changes.clone();
         let final_response = self.session.final_response.clone();
         let review_status = self.session.review_status;
-        let pending_approval = self.session.pending_approval.clone();
+        let inline_approval = self.session.pending_approval.clone();
         let messages = self.session.messages.clone();
         let assistant_draft = self.session.assistant_draft.clone();
         let composer_input = if self.runtime_active {
@@ -1260,7 +1250,53 @@ impl Render for WorkApp {
                                             .child(div().text_xs().font_bold().child("MicroClaw · working"))
                                             .child(assistant_draft)
                                     }))
-                                    ,
+                                    .children(inline_approval.map(|approval| {
+                                        v_flex()
+                                            .gap_3()
+                                            .p_4()
+                                            .rounded(cx.theme().radius)
+                                            .border_1()
+                                            .border_color(cx.theme().warning)
+                                            .bg(cx.theme().warning.opacity(0.08))
+                                            .child(div().text_sm().font_bold().child(format!(
+                                                "Approval required · {}",
+                                                approval.tool
+                                            )))
+                                            .child(approval.reason)
+                                            .children(approval.advisory.map(|advisory| {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(advisory)
+                                            }))
+                                            .child(h_flex().gap_2().children(
+                                                approval.options.into_iter().map(|option| {
+                                                    let value = option.value.clone();
+                                                    let button = Button::new(format!(
+                                                        "inline-approval-{}-{value}",
+                                                        self.session.session_id
+                                                    ))
+                                                    .disabled(
+                                                        self.session.status
+                                                            != WorkStatus::AwaitingApproval,
+                                                    )
+                                                    .label(option.label);
+                                                    let button = match option.kind {
+                                                        microclaw_core::runtime_event::RuntimeApprovalOptionKind::Primary => button.primary(),
+                                                        microclaw_core::runtime_event::RuntimeApprovalOptionKind::Secondary => button.secondary(),
+                                                        microclaw_core::runtime_event::RuntimeApprovalOptionKind::Danger => button.danger(),
+                                                    };
+                                                    button.on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.resolve_approval(
+                                                                value.clone(),
+                                                                cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                }),
+                                            ))
+                                    })),
                             )
                             .child(
                                 v_flex()
@@ -1294,66 +1330,6 @@ impl Render for WorkApp {
                                                         format!("{}. {}", index + 1, step.title),
                                                     )
                                                 },
-                                            )),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .gap_3()
-                                            .p_4()
-                                            .rounded(cx.theme().radius)
-                                            .border_1()
-                                            .border_color(cx.theme().border)
-                                            .child(div().text_lg().font_bold().child("Approval"))
-                                            .child(
-                                                pending_approval
-                                                    .as_ref()
-                                                    .map(|approval| approval.reason.clone())
-                                                    .unwrap_or_else(|| {
-                                                        "No approval is pending.".into()
-                                                    }),
-                                            )
-                                            .children(
-                                                pending_approval
-                                                    .as_ref()
-                                                    .and_then(|approval| approval.advisory.clone())
-                                                    .map(|advisory| {
-                                                        v_flex()
-                                                            .gap_1()
-                                                            .p_3()
-                                                            .rounded(cx.theme().radius)
-                                                            .bg(cx.theme().warning.opacity(0.12))
-                                                            .child(div().text_sm().font_bold().child("Advisory"))
-                                                            .child(div().text_sm().child(advisory))
-                                                    }),
-                                            )
-                                            .child(v_flex().gap_2().children(
-                                                pending_approval
-                                                    .map(|approval| approval.options)
-                                                    .unwrap_or_default()
-                                                    .into_iter()
-                                                    .map(|option| {
-                                                        let value = option.value.clone();
-                                                        let button = Button::new(format!(
-                                                            "approval-{}-{value}",
-                                                            self.session.session_id
-                                                        ))
-                                                        .w_full()
-                                                        .disabled(
-                                                            self.session.status
-                                                                != WorkStatus::AwaitingApproval,
-                                                        )
-                                                        .label(option.label);
-                                                        let button = match option.kind {
-                                                            microclaw_core::runtime_event::RuntimeApprovalOptionKind::Primary => button.primary(),
-                                                            microclaw_core::runtime_event::RuntimeApprovalOptionKind::Secondary => button.secondary(),
-                                                            microclaw_core::runtime_event::RuntimeApprovalOptionKind::Danger => button.danger(),
-                                                        };
-                                                        button.on_click(cx.listener(
-                                                            move |this, _, _, cx| {
-                                                                this.resolve_approval(value.clone(), cx);
-                                                            },
-                                                        ))
-                                                    }),
                                             )),
                                     )
                                     .child(
@@ -1504,19 +1480,6 @@ impl Render for WorkApp {
                                                                     .on_click(cx.listener(
                                                                         Self::request_revert_changes,
                                                                     )),
-                                                            )
-                                                            .child(
-                                                                Button::new("continue-task")
-                                                                    .outline()
-                                                                    .disabled(
-                                                                        self.session.status
-                                                                            != WorkStatus::Completed
-                                                                            || self.runtime_active,
-                                                                    )
-                                                                    .label("Continue Task")
-                                                                    .on_click(cx.listener(
-                                                                        Self::continue_task,
-                                                                    )),
                                                             ),
                                                     ),
                                             ),
@@ -1537,7 +1500,9 @@ impl Render for WorkApp {
                                     .disabled(if self.runtime_active {
                                         self.steer_input.read(cx).value().trim().is_empty()
                                     } else {
-                                        !self.runtime_config.ready || self.session.workspace.is_empty()
+                                        self.task_input.read(cx).value().trim().is_empty()
+                                            || !self.runtime_config.ready
+                                            || self.session.workspace.is_empty()
                                     })
                                     .label(if self.runtime_active {
                                         "Send Update"

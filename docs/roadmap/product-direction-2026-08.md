@@ -456,6 +456,15 @@ vertical slice if the gate passes.
 This phase should reuse current capabilities rather than add broad new agent
 features. Its new work is the desktop task lifecycle and product experience.
 
+Implementation status (2026-08-25): **in progress**. The repository now has a
+native GPUI application, a shared-runtime port, durable conversation threads,
+live plans, in-run steering, structured inline approvals, bounded process
+evidence, file projections, checkpoint review, and macOS development-bundle
+verification. The next gates remain real-provider end-to-end onboarding,
+production diff/artifact presentation, crash-resume validation, Windows/Linux
+CI and packaging, accessibility/IME testing, diagnostics, and signed release
+installers. Phase 1 is not complete until those gates have direct evidence.
+
 ### Phase 2 — persistent agents and teams
 
 Estimated scope: 6–10 weeks after Phase 1 proves the control surface.

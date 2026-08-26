@@ -13,6 +13,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   in the Work snapshot, streaming text is coalesced into an assistant draft,
   and the composer stays at the bottom of the primary chat surface. Plans,
   approvals, process evidence, and artifacts remain supporting work context.
+- **Continuous Work threads.** Submitted turns and unsent composer drafts now
+  have separate durable state. Sending clears the bottom composer, completed
+  tasks accept direct same-session follow-ups without deleting prior messages,
+  and approval choices appear inline in the conversation where execution
+  pauses instead of living in a separate empty inspector card.
 
 - **MicroClaw Work post-task review.** Foreground Work runs emit a pre-task
   checkpoint and completed file changes can be accepted, continued in the same
