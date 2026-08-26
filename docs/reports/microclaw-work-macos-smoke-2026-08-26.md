@@ -16,7 +16,7 @@ the task.
 - Model: `gpt-5.6-sol`
 - Runtime path: shared MicroClaw Agent Engine through
   `microclaw-work-runtime`
-- Workspace: private Work Home
+- Workspaces: private Work Home and a disposable selected project fixture
 
 ## Evidence
 
@@ -33,7 +33,19 @@ the task.
 6. Command-Q terminated the process. Relaunch restored the same single user
    message, assistant response, conversation title, and completed state.
 7. The rebuilt DMG passed `hdiutil verify`. Its SHA-256 is
-   `ff838ee3c73df149c03055b802b6e943657db1fd65a3ef5d12b7c8d9a39dfb1d`.
+   `1de06d2dbf1c2e12544d712ecbe9fd432a01dfb9bb2adb61bf934860250e930f`.
+8. A selected project fixture containing `README.md` and `TASK.md` was opened
+   in a fresh conversation. Codex published a three-step plan, read `TASK.md`
+   with the native file tool, created `RESULT.md`, re-read the result, and
+   returned a visible completion.
+9. Work created a pre-task shadow-git checkpoint, projected the new file as a
+   bounded nine-line unified diff, and entered pending review. No `chat/` or
+   `shared/` runtime directory was created inside the project.
+10. The Details inspector remained fully inside the compact application window
+    with a long conversation title. Accept and Revert appeared before the diff.
+11. Revert displayed a native destructive-action confirmation. Confirming it
+    removed `RESULT.md`, retained the two original files byte-for-byte, stored
+    review status `reverted`, and recorded the checkpoint restoration event.
 
 This exercise also confirms the provider-level SSE normalization added for
 Codex responses: streamed output remains visible when the terminal response
@@ -49,6 +61,5 @@ event does not repeat the accumulated text.
   input are verified. Native Pinyin candidate composition is not yet proven.
 - A signed build exists, but a live Apple notarization and stapling run still
   requires the release keychain profile.
-- Longer tool-using project tasks, approval handling against a real workspace,
-  checkpoint review, and multi-day survival remain separate acceptance runs.
-
+- High-risk approval and same-session resume against a real workspace, longer
+  multi-tool tasks, and multi-day survival remain separate acceptance runs.

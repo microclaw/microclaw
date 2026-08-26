@@ -492,10 +492,13 @@ as non-blocking engineering work, but their release gates are deferred. The
 real-provider path now also has live cancellation, same-session retry, visible
 completion, and process-restart persistence evidence, recorded in
 [`../reports/microclaw-work-macos-smoke-2026-08-26.md`](../reports/microclaw-work-macos-smoke-2026-08-26.md).
-The next macOS gates are native Chinese IME, VoiceOver and keyboard traversal,
-real workspace tool/approval/checkpoint review, the physical GPU/display
-matrix, sustained daily use, and a live Apple notarization run. Phase 1 is not
-complete until those macOS gates have direct evidence.
+The same report now includes a real selected-workspace run through Codex tool
+calls, a pre-task checkpoint, file creation and verification, durable unified
+diff review, and confirmed checkpoint reversion. The next macOS gates are
+native Chinese IME, VoiceOver and keyboard traversal, a real high-risk approval
+resume, the physical GPU/display matrix, sustained daily use, and a live Apple
+notarization run. Phase 1 is not complete until those macOS gates have direct
+evidence.
 
 Accessibility note (2026-08-25): primary controls are present in the macOS
 AccessKit tree after activation, and model fields, composer, messages, streaming

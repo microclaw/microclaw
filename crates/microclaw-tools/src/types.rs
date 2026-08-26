@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkingDirIsolation {
+    Direct,
     Shared,
     Chat,
 }
@@ -27,10 +28,11 @@ impl<'de> Deserialize<'de> for WorkingDirIsolation {
                 WorkingDirIsolation::Shared
             }),
             IsolationValue::Str(v) => match v.trim().to_ascii_lowercase().as_str() {
+                "direct" | "root" => Ok(WorkingDirIsolation::Direct),
                 "chat" | "isolated" | "true" => Ok(WorkingDirIsolation::Chat),
                 "shared" | "false" => Ok(WorkingDirIsolation::Shared),
                 other => Err(de::Error::custom(format!(
-                    "invalid working_dir_isolation '{other}', expected chat/shared or true/false"
+                    "invalid working_dir_isolation '{other}', expected direct/shared/chat or true/false"
                 ))),
             },
         }
@@ -57,5 +59,11 @@ mod tests {
     fn test_deserialize_chat_string() {
         let v: WorkingDirIsolation = serde_json::from_str("\"chat\"").unwrap();
         assert!(matches!(v, WorkingDirIsolation::Chat));
+    }
+
+    #[test]
+    fn test_deserialize_direct_string() {
+        let v: WorkingDirIsolation = serde_json::from_str("\"direct\"").unwrap();
+        assert!(matches!(v, WorkingDirIsolation::Direct));
     }
 }

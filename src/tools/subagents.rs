@@ -407,6 +407,7 @@ async fn apply_completion_contract(
     }
     let base = std::path::Path::new(&config.working_dir);
     let working_dir = match config.working_dir_isolation {
+        crate::config::WorkingDirIsolation::Direct => base.to_path_buf(),
         crate::config::WorkingDirIsolation::Shared => base.join("shared"),
         crate::config::WorkingDirIsolation::Chat => microclaw_tools::runtime::chat_working_dir(
             base,

@@ -1865,29 +1865,45 @@ impl Render for WorkApp {
                     .child(
                         h_flex()
                             .items_center()
-                            .justify_between()
+                            .gap_3()
                             .child(
                                 v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
                                     .gap_1()
-                                    .child(div().text_xl().font_bold().child(
-                                        if self.session.title.trim().is_empty() {
-                                            "New conversation".to_string()
-                                        } else {
-                                            trim_text(&self.session.title, 72)
-                                        },
-                                    ))
-                                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(
-                                        if using_work_home {
-                                            "Chat in Work Home, or connect a project folder when local context is needed".to_string()
-                                        } else if self.session.workspace.is_empty() {
-                                            "Select a folder before starting this conversation".to_string()
-                                        } else {
-                                            format!("Working in {}", self.session.workspace)
-                                        },
-                                    )),
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .text_xl()
+                                            .font_bold()
+                                            .child(if self.session.title.trim().is_empty() {
+                                                "New conversation".to_string()
+                                            } else {
+                                                trim_text(&self.session.title, 72)
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(if using_work_home {
+                                                "Chat in Work Home, or connect a project folder when local context is needed".to_string()
+                                            } else if self.session.workspace.is_empty() {
+                                                "Select a folder before starting this conversation".to_string()
+                                            } else {
+                                                format!("Working in {}", self.session.workspace)
+                                            }),
+                                    ),
                             )
                             .child(
                                 h_flex()
+                                    .flex_shrink_0()
                                     .gap_2()
                                     .child(
                                         div()
@@ -1918,6 +1934,7 @@ impl Render for WorkApp {
                             .child(
                                 v_flex()
                                     .flex_1()
+                                    .min_w_0()
                                     .min_h_0()
                                     .overflow_y_scrollbar()
                                     .gap_4()
@@ -2135,6 +2152,7 @@ impl Render for WorkApp {
                             .children((self.inspector_open && has_inspector_content).then(|| {
                                 v_flex()
                                     .w(px(360.))
+                                    .flex_shrink_0()
                                     .h_full()
                                     .min_h_0()
                                     .overflow_y_scrollbar()
@@ -2273,6 +2291,54 @@ impl Render for WorkApp {
                                                     .font_bold()
                                                     .child("Changes / Artifacts"),
                                             )
+                                            .child(
+                                                v_flex()
+                                                    .gap_2()
+                                                    .child(match review_status {
+                                                        WorkReviewStatus::None => {
+                                                            "No change review is pending."
+                                                        }
+                                                        WorkReviewStatus::Pending => {
+                                                            "Accept these changes or restore the pre-task checkpoint."
+                                                        }
+                                                        WorkReviewStatus::Accepted => {
+                                                            "Changes accepted."
+                                                        }
+                                                        WorkReviewStatus::Reverted => {
+                                                            "Changes reverted."
+                                                        }
+                                                    })
+                                                    .child(
+                                                        h_flex()
+                                                            .gap_2()
+                                                            .child(
+                                                                Button::new("accept-changes")
+                                                                    .primary()
+                                                                    .disabled(
+                                                                        review_status
+                                                                            != WorkReviewStatus::Pending
+                                                                            || self.runtime_active,
+                                                                    )
+                                                                    .label("Accept Changes")
+                                                                    .on_click(cx.listener(
+                                                                        Self::accept_changes,
+                                                                    )),
+                                                            )
+                                                            .child(
+                                                                Button::new("revert-changes")
+                                                                    .outline()
+                                                                    .disabled(
+                                                                        review_status
+                                                                            != WorkReviewStatus::Pending
+                                                                            || self.runtime_active,
+                                                                    )
+                                                                    .label("Revert Changes")
+                                                                    .on_click(cx.listener(
+                                                                        Self::request_revert_changes,
+                                                                    )),
+                                                            ),
+                                                    ),
+                                            )
                                             .children(file_changes.iter().map(|change| {
                                                 let path = change.path.clone();
                                                 let selected = selected_file_change
@@ -2354,60 +2420,6 @@ impl Render for WorkApp {
                                                     .text_color(cx.theme().muted_foreground)
                                                     .child("No workspace changes yet.")
                                             }))
-                                            .child(
-                                                v_flex()
-                                                    .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .font_bold()
-                                                            .child("Review"),
-                                                    )
-                                                    .child(match review_status {
-                                                        WorkReviewStatus::None => {
-                                                            "No change review is pending."
-                                                        }
-                                                        WorkReviewStatus::Pending => {
-                                                            "Accept these changes or restore the pre-task checkpoint."
-                                                        }
-                                                        WorkReviewStatus::Accepted => {
-                                                            "Changes accepted."
-                                                        }
-                                                        WorkReviewStatus::Reverted => {
-                                                            "Changes reverted."
-                                                        }
-                                                    })
-                                                    .child(
-                                                        v_flex()
-                                                            .gap_2()
-                                                            .child(
-                                                                Button::new("accept-changes")
-                                                                    .primary()
-                                                                    .disabled(
-                                                                        review_status
-                                                                            != WorkReviewStatus::Pending
-                                                                            || self.runtime_active,
-                                                                    )
-                                                                    .label("Accept Changes")
-                                                                    .on_click(cx.listener(
-                                                                        Self::accept_changes,
-                                                                    )),
-                                                            )
-                                                            .child(
-                                                                Button::new("revert-changes")
-                                                                    .outline()
-                                                                    .disabled(
-                                                                        review_status
-                                                                            != WorkReviewStatus::Pending
-                                                                            || self.runtime_active,
-                                                                    )
-                                                                    .label("Revert Changes")
-                                                                    .on_click(cx.listener(
-                                                                        Self::request_revert_changes,
-                                                                    )),
-                                                            ),
-                                                    ),
-                                            ),
                                     )
                             })),
                     )

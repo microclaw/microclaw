@@ -1312,8 +1312,9 @@ async fn process_with_agent_logic(
     if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
         if let MessageContent::Text(text) = messages[idx].content.clone() {
             if text.contains('@') {
-                let chat_cwd = microclaw_tools::runtime::chat_working_dir(
+                let chat_cwd = microclaw_tools::runtime::working_dir_for_context(
                     std::path::Path::new(&state.config.working_dir),
+                    state.config.working_dir_isolation,
                     context.caller_channel,
                     chat_id,
                 );
@@ -1796,8 +1797,9 @@ async fn process_with_agent_logic(
     // directory itself is excluded (its hint file is already in the system
     // prompt via `load_project_context`).
     let mut subdir_hints = crate::subdirectory_hints::SubdirectoryHintTracker::new(
-        microclaw_tools::runtime::chat_working_dir(
+        microclaw_tools::runtime::working_dir_for_context(
             std::path::Path::new(&state.config.working_dir),
+            state.config.working_dir_isolation,
             context.caller_channel,
             chat_id,
         ),
@@ -1808,8 +1810,9 @@ async fn process_with_agent_logic(
     // /rewind. Failure here is logged and ignored; checkpoints must never
     // block the agent loop.
     if state.config.checkpoints_enabled {
-        let working_dir = microclaw_tools::runtime::chat_working_dir(
+        let working_dir = microclaw_tools::runtime::working_dir_for_context(
             std::path::Path::new(&state.config.working_dir),
+            state.config.working_dir_isolation,
             context.caller_channel,
             chat_id,
         );

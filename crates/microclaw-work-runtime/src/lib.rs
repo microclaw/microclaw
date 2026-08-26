@@ -4,7 +4,7 @@
 //! Agent Engine to versioned runtime events. UI packages consume this port;
 //! they do not create Tokio runtimes or call the Agent Engine directly.
 
-use microclaw::config::Config;
+use microclaw::config::{Config, WorkingDirIsolation};
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
 use microclaw::llm::create_provider;
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
@@ -674,9 +674,10 @@ fn run_worker(
     };
 
     let result = tokio_runtime.block_on(async {
-        let mut config = Config::load_from_path_for_headless(&config_path)?;
-        config.working_dir = request.workspace;
-        config.checkpoints_enabled = true;
+        let config = configure_work_runtime(
+            Config::load_from_path_for_headless(&config_path)?,
+            request.workspace,
+        );
         let runtime = HeadlessRuntime::load(config).await?;
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let event_message_tx = message_tx.clone();
@@ -746,6 +747,16 @@ fn run_worker(
         }
         Err(error) => send_failure(&message_tx, &run_id, error.to_string()),
     }
+}
+
+fn configure_work_runtime(mut config: Config, workspace: String) -> Config {
+    config.working_dir = workspace;
+    // Work is an explicit foreground project session. Its tools must operate
+    // from the folder the user selected, while Server keeps its configured
+    // per-chat isolation behavior.
+    config.working_dir_isolation = WorkingDirIsolation::Direct;
+    config.checkpoints_enabled = true;
+    config
 }
 
 fn codex_account_available_at(home: Option<&Path>, access_token_present: bool) -> bool {
@@ -935,6 +946,30 @@ mod tests {
 
         cancellation.cancel().unwrap();
         assert_eq!(cancel_rx.try_recv(), Ok(()));
+    }
+
+    #[test]
+    fn work_runtime_uses_selected_workspace_without_server_chat_isolation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        fs::write(
+            &path,
+            "llm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\n",
+        )
+        .unwrap();
+        let mut config = Config::load_from_path_for_headless(&path).unwrap();
+        config.working_dir = "/server/default".into();
+        config.working_dir_isolation = WorkingDirIsolation::Chat;
+        config.checkpoints_enabled = false;
+
+        let configured = configure_work_runtime(config, "/project/selected".into());
+
+        assert_eq!(configured.working_dir, "/project/selected");
+        assert_eq!(
+            configured.working_dir_isolation,
+            WorkingDirIsolation::Direct
+        );
+        assert!(configured.checkpoints_enabled);
     }
 
     #[test]

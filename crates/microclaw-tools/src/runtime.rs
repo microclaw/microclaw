@@ -378,12 +378,26 @@ pub fn chat_working_dir(base_working_dir: &Path, channel: &str, chat_id: i64) ->
         .join(chat_segment)
 }
 
+pub fn working_dir_for_context(
+    base_working_dir: &Path,
+    isolation: WorkingDirIsolation,
+    channel: &str,
+    chat_id: i64,
+) -> PathBuf {
+    match isolation {
+        WorkingDirIsolation::Direct => base_working_dir.to_path_buf(),
+        WorkingDirIsolation::Shared => base_working_dir.join("shared"),
+        WorkingDirIsolation::Chat => chat_working_dir(base_working_dir, channel, chat_id),
+    }
+}
+
 pub fn resolve_tool_working_dir(
     base_working_dir: &Path,
     isolation: WorkingDirIsolation,
     input: &serde_json::Value,
 ) -> PathBuf {
     let resolved = match isolation {
+        WorkingDirIsolation::Direct => base_working_dir.to_path_buf(),
         WorkingDirIsolation::Shared => base_working_dir.join("shared"),
         WorkingDirIsolation::Chat => auth_context_from_input(input)
             .map(|auth| {

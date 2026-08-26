@@ -8,6 +8,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Fixed
 
+- **Codex tool calls and native Work project roots.** The Codex Responses SSE
+  parser now recovers streamed function calls whether event names are carried
+  in JSON or standard `event:` lines. Work uses an explicit direct-workspace
+  mode so tools, project context, checkpoints, and completion verification run
+  at the folder selected by the user without changing Server's configured
+  shared/per-chat isolation. Long conversation titles and the Details panel now
+  shrink within the window, and Accept/Revert actions remain visible above the
+  diff.
 - **Codex streamed final-text recovery.** The OpenAI Codex Responses parser now
   retains `response.output_text.delta`/`done` text when the terminal
   `response.done` payload omits visible output. This prevents a successfully

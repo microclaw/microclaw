@@ -942,6 +942,22 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_tool_working_dir_direct() {
+        let dir = resolve_tool_working_dir(
+            std::path::Path::new("/tmp/work"),
+            WorkingDirIsolation::Direct,
+            &json!({
+                "__microclaw_auth": {
+                    "caller_channel": "headless",
+                    "caller_chat_id": 123,
+                    "control_chat_ids": []
+                }
+            }),
+        );
+        assert_eq!(dir, std::path::PathBuf::from("/tmp/work"));
+    }
+
+    #[test]
     fn test_resolve_tool_working_dir_chat() {
         let dir = resolve_tool_working_dir(
             std::path::Path::new("/tmp/work"),

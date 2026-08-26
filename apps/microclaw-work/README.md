@@ -118,6 +118,12 @@ relaunch persistence. See the dated
 [macOS smoke report](../../docs/reports/microclaw-work-macos-smoke-2026-08-26.md)
 for the evidence and remaining acceptance work.
 
+Work overrides Server's configured chat isolation only for its foreground
+runtime instance. Tools, project context, checkpoint creation, diff collection,
+and completion verification all resolve to the project folder explicitly
+selected in the desktop conversation. Server retains its configured shared or
+per-chat directory behavior.
+
 High-risk tool requests remain in the approval state even when the Agent's
 current turn ends with explanatory text. **Allow and Continue** submits the approve-once
 reply into the same persisted runtime session and projects the resumed run.
@@ -128,7 +134,8 @@ inspector holds Plan, Process Output, and Changes / Artifacts so chat remains
 the primary canvas. Its Changes / Artifacts section
 supports multiple changed files, durably remembers the selected file, renders
 bounded unified diffs with addition/removal highlighting, and keeps safe file
-opening beside the accept/revert review controls. Tool starts and results are paired
+opening beside accept/revert controls placed before the diff so they remain
+reachable in a compact macOS window. Tool starts and results are paired
 by the shared runtime call ID instead of display order. Persisted tool inputs,
 results, and diffs are secret-redacted. Artifact buttons canonicalize their
 target and open it only when it exists inside the explicitly selected

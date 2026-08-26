@@ -1113,8 +1113,14 @@ pub(crate) fn parse_openai_codex_response_payload(
 
     let mut from_done_event: Option<OaiResponsesResponse> = None;
     let mut streamed_output_text = String::new();
+    let mut streamed_function_calls = Vec::new();
+    let mut pending_event_type: Option<&str> = None;
     for line in text.lines() {
         let line = line.trim();
+        if let Some(event_type) = line.strip_prefix("event:") {
+            pending_event_type = Some(event_type.trim());
+            continue;
+        }
         if !line.starts_with("data:") {
             continue;
         }
@@ -1125,8 +1131,12 @@ pub(crate) fn parse_openai_codex_response_payload(
         let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
             continue;
         };
+        let event_type = value
+            .get("type")
+            .and_then(|value| value.as_str())
+            .or(pending_event_type);
 
-        match value.get("type").and_then(|value| value.as_str()) {
+        match event_type {
             Some("response.output_text.delta") => {
                 if let Some(delta) = value.get("delta").and_then(|value| value.as_str()) {
                     streamed_output_text.push_str(delta);
@@ -1137,6 +1147,24 @@ pub(crate) fn parse_openai_codex_response_payload(
                     streamed_output_text.push_str(done);
                 }
             }
+            Some("response.output_item.done") => {
+                if let Some(item) = value.get("item") {
+                    if let Ok(OaiResponsesOutputItem::FunctionCall {
+                        id,
+                        call_id,
+                        name,
+                        arguments,
+                    }) = serde_json::from_value::<OaiResponsesOutputItem>(item.clone())
+                    {
+                        streamed_function_calls.push(OaiResponsesOutputItem::FunctionCall {
+                            id,
+                            call_id,
+                            name,
+                            arguments,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -1145,14 +1173,23 @@ pub(crate) fn parse_openai_codex_response_payload(
                 serde_json::from_value::<OaiResponsesResponse>(response_value.clone())
             {
                 from_done_event = Some(parsed);
-                if value.get("type").and_then(|v| v.as_str()) == Some("response.done") {
+                if matches!(event_type, Some("response.done" | "response.completed")) {
                     break;
                 }
             }
         }
+        pending_event_type = None;
     }
 
     if let Some(mut parsed) = from_done_event {
+        if !streamed_function_calls.is_empty()
+            && !parsed
+                .output
+                .iter()
+                .any(|item| matches!(item, OaiResponsesOutputItem::FunctionCall { .. }))
+        {
+            parsed.output.append(&mut streamed_function_calls);
+        }
         if !streamed_output_text.is_empty()
             && !parsed.output.iter().any(|item| match item {
                 OaiResponsesOutputItem::Message { content } => content.iter().any(|part| {
@@ -1170,13 +1207,17 @@ pub(crate) fn parse_openai_codex_response_payload(
         return Ok(parsed);
     }
 
-    if !streamed_output_text.is_empty() {
-        return Ok(OaiResponsesResponse {
-            output: vec![OaiResponsesOutputItem::Message {
+    if !streamed_output_text.is_empty() || !streamed_function_calls.is_empty() {
+        let mut output = streamed_function_calls;
+        if !streamed_output_text.is_empty() {
+            output.push(OaiResponsesOutputItem::Message {
                 content: vec![OaiResponsesOutputContentPart::OutputText {
                     text: streamed_output_text,
                 }],
-            }],
+            });
+        }
+        return Ok(OaiResponsesResponse {
+            output,
             usage: None,
         });
     }
@@ -2327,5 +2368,62 @@ data: [DONE]
             ResponseContentBlock::Text { text } => assert_eq!(text, "Visible"),
             _ => panic!("Expected recovered text block"),
         }
+    }
+
+    #[test]
+    fn test_parse_openai_codex_response_payload_recovers_streamed_function_call() {
+        let body = r#"data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"TASK.md\"}"}}
+
+data: {"type":"response.done","response":{"output":[],"usage":{"input_tokens":10,"output_tokens":5}}}
+
+data: [DONE]
+"#;
+        let parsed = parse_openai_codex_response_payload(body).unwrap();
+        let translated = translate_oai_responses_response(parsed);
+        assert_eq!(translated.stop_reason.as_deref(), Some("tool_use"));
+        match &translated.content[0] {
+            ResponseContentBlock::ToolUse {
+                id, name, input, ..
+            } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "read_file");
+                assert_eq!(input, &serde_json::json!({"path": "TASK.md"}));
+            }
+            _ => panic!("Expected recovered tool call"),
+        }
+    }
+
+    #[test]
+    fn test_parse_openai_codex_response_payload_accepts_function_call_only_stream() {
+        let body = r#"data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"write_file","arguments":"{\"path\":\"RESULT.md\",\"content\":\"done\"}"}}
+
+data: [DONE]
+"#;
+        let parsed = parse_openai_codex_response_payload(body).unwrap();
+        let translated = translate_oai_responses_response(parsed);
+        assert_eq!(translated.stop_reason.as_deref(), Some("tool_use"));
+        assert!(matches!(
+            &translated.content[0],
+            ResponseContentBlock::ToolUse { name, .. } if name == "write_file"
+        ));
+    }
+
+    #[test]
+    fn test_parse_openai_codex_response_payload_uses_sse_event_name() {
+        let body = r#"event: response.output_item.done
+data: {"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"TASK.md\"}"}}
+
+event: response.completed
+data: {"response":{"output":[],"usage":{"input_tokens":10,"output_tokens":5}}}
+
+data: [DONE]
+"#;
+        let parsed = parse_openai_codex_response_payload(body).unwrap();
+        let translated = translate_oai_responses_response(parsed);
+        assert_eq!(translated.stop_reason.as_deref(), Some("tool_use"));
+        assert!(matches!(
+            &translated.content[0],
+            ResponseContentBlock::ToolUse { name, .. } if name == "read_file"
+        ));
     }
 }
