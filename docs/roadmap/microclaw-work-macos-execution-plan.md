@@ -60,6 +60,8 @@ Delivered:
 - stable creation-time conversation ordering with Pin / Unpin in each row's
   right-click menu;
 - named conversation controls and a repeatable macOS Accessibility-tree audit;
+- left-aligned conversation rows and a compact equal-width Workspace utility
+  toolbar;
 - progressive long-conversation rendering and bounded large-diff persistence
   and previews;
 - a reproducible maximum-size session benchmark with local save/load budgets

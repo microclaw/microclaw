@@ -121,7 +121,8 @@ conversation. The recent-conversation rail is searchable by conversation title
 or Workspace path and keeps an explicit empty-result state. Its order is stable
 by creation time instead of recent clicks or saves, and explicit Pin / Unpin
 controls in each conversation's right-click menu keep important conversations
-above the remaining history without adding a permanent action column. Long threads
+above the remaining history without adding a permanent action column. Titles
+are consistently left-aligned beside compact status dots. Long threads
 initially render the latest 60 messages and load earlier turns in batches.
 Persisted file diffs are bounded, and the native inspector labels its 400-line
 preview when a result is larger. Draft input is persisted after a short debounce. If the desktop
@@ -144,6 +145,9 @@ permission, audit the primary control names with:
 ```sh
 scripts/audit_work_macos_accessibility.sh
 ```
+
+The Workspace footer keeps folder connection as the primary full-width action;
+Settings, Reload, and Checks share a compact equal-width utility row.
 
 If the active session or conversation index contains invalid JSON, Work keeps
 the original file beside the store with a `.corrupt-*` suffix, rebuilds the

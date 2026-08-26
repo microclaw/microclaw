@@ -6198,6 +6198,7 @@ dependencies = [
  "dirs",
  "embed-resource",
  "gpui",
+ "gpui-base",
  "gpui-component",
  "gpui_platform",
  "microclaw-core",

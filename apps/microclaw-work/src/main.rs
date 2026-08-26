@@ -1,5 +1,6 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_base::Button as BaseButton;
 use gpui_component::{
     ActiveTheme, Disableable, Root, Sizable, StyledExt, Theme, ThemeMode,
     button::{Button, ButtonVariants},
@@ -2377,66 +2378,47 @@ impl Render for WorkApp {
                                     | WorkStatus::AwaitingApproval
                                     | WorkStatus::Verifying => cx.theme().warning,
                                 };
-                                let conversation_label = title.clone();
-                                let status_indicator = div()
-                                    .size(px(6.))
-                                    .flex_shrink_0()
-                                    .rounded_full()
-                                    .bg(summary_status_color.opacity(if is_active {
-                                        1.0
-                                    } else {
-                                        0.62
-                                    }));
-                                h_flex()
+                                BaseButton::new(format!("session-{session_id}"))
                                     .w_full()
                                     .min_w_0()
-                                    .gap_1()
+                                    .h(px(28.))
+                                    .px_1()
+                                    .gap_2()
                                     .items_center()
-                                    .child(status_indicator)
+                                    .rounded(cx.theme().radius)
+                                    .disabled(self.runtime_active)
+                                    .accessibility_label(format!(
+                                        "{title}, {summary_status}"
+                                    ))
+                                    .when(is_active, |button| {
+                                        button.bg(cx.theme().accent.opacity(0.12))
+                                    })
+                                    .hover(|style| style.bg(cx.theme().accent.opacity(0.08)))
                                     .child(
-                                        Button::new(format!("session-{session_id}"))
-                                            .ghost()
-                                            .small()
-                                            .compact()
+                                        div()
+                                            .size(px(6.))
+                                            .flex_shrink_0()
+                                            .rounded_full()
+                                            .bg(summary_status_color.opacity(if is_active {
+                                                1.0
+                                            } else {
+                                                0.62
+                                            })),
+                                    )
+                                    .child(
+                                        div()
                                             .flex_1()
                                             .min_w_0()
-                                            .justify_start()
-                                            .disabled(self.runtime_active)
-                                            .label(conversation_label)
-                                            .tooltip(format!("{title} · {summary_status}"))
-                                            .when(is_active, |button| {
-                                                button
-                                                    .bg(cx.theme().accent.opacity(0.12))
-                                                    .text_color(cx.theme().foreground)
-                                                    .font_weight(FontWeight::SEMIBOLD)
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .text_size(px(12.))
+                                            .font_weight(if is_active {
+                                                FontWeight::SEMIBOLD
+                                            } else {
+                                                FontWeight::NORMAL
                                             })
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.open_session(&session_id, window, cx);
-                                            }))
-                                            .context_menu({
-                                                let work_view = work_view.clone();
-                                                let pin_session_id = summary.session_id.clone();
-                                                move |menu, window, _| {
-                                                    let pin_session_id = pin_session_id.clone();
-                                                    menu.item(
-                                                        PopupMenuItem::new(if pinned {
-                                                            "Unpin conversation"
-                                                        } else {
-                                                            "Pin conversation"
-                                                        })
-                                                        .on_click(window.listener_for(
-                                                            &work_view,
-                                                            move |this, _, _, cx| {
-                                                                this.set_session_pinned(
-                                                                    &pin_session_id,
-                                                                    !pinned,
-                                                                    cx,
-                                                                );
-                                                            },
-                                                        )),
-                                                    )
-                                                }
-                                            }),
+                                            .child(title),
                                     )
                                     .children(pinned.then(|| {
                                         div()
@@ -2446,6 +2428,33 @@ impl Render for WorkApp {
                                             .text_color(cx.theme().muted_foreground)
                                             .child("PIN")
                                     }))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_session(&session_id, window, cx);
+                                    }))
+                                    .context_menu({
+                                        let work_view = work_view.clone();
+                                        let pin_session_id = summary.session_id.clone();
+                                        move |menu, window, _| {
+                                            let pin_session_id = pin_session_id.clone();
+                                            menu.item(
+                                                PopupMenuItem::new(if pinned {
+                                                    "Unpin conversation"
+                                                } else {
+                                                    "Pin conversation"
+                                                })
+                                                .on_click(window.listener_for(
+                                                    &work_view,
+                                                    move |this, _, _, cx| {
+                                                        this.set_session_pinned(
+                                                            &pin_session_id,
+                                                            !pinned,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                            )
+                                        }
+                                    })
                             })),
                     )
                     .child(
@@ -2489,11 +2498,9 @@ impl Render for WorkApp {
                             )
                             .child(
                                 Button::new("choose-workspace")
-                                    .ghost()
+                                    .outline()
                                     .small()
-                                    .compact()
                                     .w_full()
-                                    .justify_start()
                                     .disabled(self.runtime_active)
                                     .label(if using_work_home {
                                         "Connect Project Folder"
@@ -2510,6 +2517,7 @@ impl Render for WorkApp {
                                             .ghost()
                                             .xsmall()
                                             .compact()
+                                            .flex_1()
                                             .disabled(self.runtime_active)
                                             .label("Settings")
                                             .on_click(cx.listener(Self::open_model_settings)),
@@ -2519,6 +2527,7 @@ impl Render for WorkApp {
                                             .ghost()
                                             .xsmall()
                                             .compact()
+                                            .flex_1()
                                             .label("Reload")
                                             .on_click(cx.listener(Self::refresh_runtime_config)),
                                     )
@@ -2527,6 +2536,7 @@ impl Render for WorkApp {
                                             .ghost()
                                             .xsmall()
                                             .compact()
+                                            .flex_1()
                                             .disabled(self.runtime_active)
                                             .label("Checks")
                                             .on_click(cx.listener(Self::open_diagnostics)),

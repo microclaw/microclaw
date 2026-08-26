@@ -34,6 +34,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - **Named Work conversation controls.** Conversation rows now expose their
   titles to macOS Accessibility instead of appearing as numbered anonymous
   buttons, with a repeatable local accessibility-tree audit.
+- **Left-aligned Work navigation.** Conversation rows now use the accessible
+  GPUI button primitive directly so status dots, titles, and pinned state stay
+  left-aligned at every title length. The Workspace footer uses one clear
+  project action and an equal-width Settings, Reload, and Checks toolbar.
 - **Responsive long Work sessions.** The desktop progressively renders older
   messages, bounds persisted diff payloads, and limits native diff previews so
   long conversations and generated files do not make every frame expensive. A
