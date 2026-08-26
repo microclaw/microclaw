@@ -24,14 +24,14 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Alibaba Cloud (Qwen / DashScope)",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        models: &["qwen3-max", "qwen3-plus", "qwen-max-latest"],
+        models: &["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"],
     },
     ProviderPreset {
         id: "aliyun-bailian",
         label: "Alibaba Cloud Bailian",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://coding.dashscope.aliyuncs.com/v1",
-        models: &["qwen3.5-plus", "qwen3-max", "qwen-plus-latest"],
+        models: &["qwen3.8-max", "qwen3.7-plus", "qwen3.6-plus"],
     },
     ProviderPreset {
         id: "anthropic",
@@ -39,9 +39,10 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         protocol: ProviderProtocol::Anthropic,
         default_base_url: "",
         models: &[
-            "claude-sonnet-4-5-20250929",
-            "claude-opus-4-6-20260205",
-            "claude-haiku-4-5-20250929",
+            "claude-fable-5",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5-20251001",
         ],
     },
     ProviderPreset {
@@ -128,13 +129,7 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "DeepSeek",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.deepseek.com/v1",
-        models: &[
-            "deepseek-chat",
-            "deepseek-reasoner",
-            "deepseek-v3",
-            "deepseek-v4",
-            "deepseek-v4-flash",
-        ],
+        models: &["deepseek-v4-pro", "deepseek-v4-flash"],
     },
     ProviderPreset {
         id: "fireworks",
@@ -153,9 +148,10 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
         models: &[
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
+            "gemini-3.7-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
         ],
     },
     ProviderPreset {
@@ -213,7 +209,7 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "MiniMax",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.minimax.io/v1",
-        models: &["MiniMax-M2.5", "MiniMax-M2.5-Thinking", "MiniMax-M2.1"],
+        models: &["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"],
     },
     ProviderPreset {
         id: "mistral",
@@ -231,7 +227,7 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Moonshot AI (Kimi)",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.moonshot.cn/v1",
-        models: &["kimi-k2.5", "kimi-k2", "kimi-latest"],
+        models: &["kimi-k3", "kimi-k2.7-code-highspeed", "kimi-k2.6"],
     },
     ProviderPreset {
         id: "nvidia",
@@ -249,21 +245,21 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         label: "Ollama (local)",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "http://127.0.0.1:11434/v1",
-        models: &["llama3.2", "qwen2.5-coder:7b", "mistral"],
+        models: &["qwen3.6", "qwen3-coder:30b", "gpt-oss:20b", "llama3.3"],
     },
     ProviderPreset {
         id: "openai",
         label: "OpenAI",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "https://api.openai.com/v1",
-        models: &["gpt-5.2", "gpt-5", "gpt-5-mini"],
+        models: &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
     },
     ProviderPreset {
         id: "openai-codex",
         label: "OpenAI Codex",
         protocol: ProviderProtocol::OpenAiCompat,
         default_base_url: "",
-        models: &["gpt-5.3-codex", "gpt-5.2-codex", "gpt-5-codex"],
+        models: &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
     },
     ProviderPreset {
         id: "openrouter",
@@ -272,8 +268,9 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         default_base_url: "https://openrouter.ai/api/v1",
         models: &[
             "openrouter/auto",
-            "openai/gpt-5.2",
-            "anthropic/claude-sonnet-4.5",
+            "openai/gpt-5.6-sol",
+            "anthropic/claude-opus-5",
+            "google/gemini-3.7-flash",
         ],
     },
     ProviderPreset {
@@ -393,6 +390,23 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         models: &["glm-4.7", "glm-4.7-flash", "glm-4.5-air"],
     },
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderCatalogEntry {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub default_base_url: &'static str,
+    pub models: &'static [&'static str],
+}
+
+pub fn provider_catalog() -> impl Iterator<Item = ProviderCatalogEntry> {
+    PROVIDER_PRESETS.iter().map(|preset| ProviderCatalogEntry {
+        id: preset.id,
+        label: preset.label,
+        default_base_url: preset.default_base_url,
+        models: preset.models,
+    })
+}
 
 pub(crate) fn find_provider_preset(provider: &str) -> Option<&'static ProviderPreset> {
     PROVIDER_PRESETS
@@ -1228,7 +1242,7 @@ mod tests {
         assert_eq!(request.api_key, "sk-test");
         assert_eq!(request.base_url, "https://example.com/v1");
         assert_eq!(request.user_agent, "microclaw-test/1.0");
-        assert_eq!(request.model, "claude-sonnet-4-5-20250929");
+        assert_eq!(request.model, "claude-fable-5");
         assert_eq!(request.codex_account_id, None);
     }
 
@@ -1317,7 +1331,7 @@ mod tests {
         let page = app.provider_preset_page.as_ref().unwrap();
         assert_eq!(page.entries[0].provider, "openai");
         assert_eq!(page.entries[0].base_url, "https://api.openai.com/v1");
-        assert_eq!(page.entries[0].default_model, "gpt-5.2");
+        assert_eq!(page.entries[0].default_model, "gpt-5.6-sol");
     }
 
     #[test]
@@ -1415,8 +1429,8 @@ mod tests {
     }
 
     #[test]
-    fn test_default_model_for_minimax_is_m2_5() {
-        assert_eq!(default_model_for_provider("minimax"), "MiniMax-M2.5");
+    fn test_default_model_for_minimax_is_m3() {
+        assert_eq!(default_model_for_provider("minimax"), "MiniMax-M3");
     }
 
     #[test]

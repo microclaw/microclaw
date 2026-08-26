@@ -14,9 +14,9 @@ use microclaw_work_app::session::{
 };
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary, startup_workspace};
 use microclaw_work_runtime::{
-    AgentSettingsDraft, DiagnosticStatus, ModelSettingsDraft, RuntimeConfigSummary,
-    WorkDiagnosticsReport, WorkRunCancellation, WorkRunRequest, WorkRunSteering,
-    WorkRuntimeMessage, WorkRuntimeService,
+    AgentSettingsDraft, DiagnosticStatus, ModelProviderPreset, ModelSettingsDraft,
+    RuntimeConfigSummary, WorkDiagnosticsReport, WorkRunCancellation, WorkRunRequest,
+    WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService, popular_model_provider_presets,
 };
 use smol::Timer;
 use std::fs;
@@ -206,9 +206,17 @@ impl WorkApp {
         let settings_provider = model_settings
             .as_ref()
             .map_or_else(|| "openai".to_string(), |value| value.provider.clone());
-        let settings_model = model_settings
-            .as_ref()
-            .map_or_else(|| "gpt-5".to_string(), |value| value.model.clone());
+        let settings_model = model_settings.as_ref().map_or_else(
+            || {
+                popular_model_provider_presets()
+                    .into_iter()
+                    .find(|preset| preset.id == "openai")
+                    .and_then(|preset| preset.models.first().copied())
+                    .unwrap_or("gpt-5.6-sol")
+                    .to_string()
+            },
+            |value| value.model.clone(),
+        );
         let settings_base_url = model_settings
             .as_ref()
             .map_or_else(String::new, |value| value.base_url.clone());
@@ -339,6 +347,15 @@ impl WorkApp {
                 .placeholder("Directory containing project context Markdown files")
         });
         let _subscriptions = vec![
+            cx.subscribe_in(
+                &provider_input,
+                window,
+                move |_, _, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            ),
             cx.subscribe_in(
                 &session_search_input,
                 window,
@@ -569,6 +586,23 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn set_session_pinned(&mut self, session_id: &str, pinned: bool, cx: &mut Context<Self>) {
+        match self.session_store.set_pinned(session_id, pinned) {
+            Ok(()) => {
+                self.recent_sessions = self.session_store.list().unwrap_or_default();
+                self.persistence_message = if pinned {
+                    "Conversation pinned.".into()
+                } else {
+                    "Conversation unpinned.".into()
+                };
+            }
+            Err(error) => {
+                self.persistence_message = format!("Could not update conversation pin: {error}");
+            }
+        }
+        cx.notify();
+    }
+
     fn choose_workspace(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.reject_if_runtime_busy(cx) {
             return;
@@ -752,6 +786,39 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn apply_model_provider_preset(
+        &mut self,
+        preset: ModelProviderPreset,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.provider_input
+            .update(cx, |input, cx| input.set_value(preset.id, window, cx));
+        if let Some(model) = preset.models.first() {
+            self.model_input
+                .update(cx, |input, cx| input.set_value(*model, window, cx));
+        }
+        self.base_url_input.update(cx, |input, cx| {
+            input.set_value(preset.default_base_url, window, cx)
+        });
+        self.connection_test_message = format!(
+            "Selected {}. Review the model and credentials, then Save & Test.",
+            preset.label
+        );
+        cx.notify();
+    }
+
+    fn apply_model_suggestion(
+        &mut self,
+        model: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.model_input
+            .update(cx, |input, cx| input.set_value(model, window, cx));
+        cx.notify();
+    }
+
     fn save_model_settings(&mut self, cx: &mut Context<Self>) -> bool {
         let api_key = self.api_key_input.read(cx).value().trim().to_string();
         let draft = ModelSettingsDraft {
@@ -768,7 +835,14 @@ impl WorkApp {
             Ok(settings) => {
                 self.settings_has_api_key = settings.has_api_key;
                 self.runtime_config = self.runtime_service.config_summary();
-                self.persistence_message = "Model configuration saved for MicroClaw Work.".into();
+                self.persistence_message = settings.recovery_backup.map_or_else(
+                    || "Model configuration saved for MicroClaw Work.".into(),
+                    |backup| {
+                        format!(
+                            "Recovered the Work configuration and saved the damaged file at {backup}."
+                        )
+                    },
+                );
                 self.connection_test_message =
                     "Settings saved. Test the connection before starting work.".into();
                 self.diagnostics_report = self.runtime_service.local_diagnostics(
@@ -1552,6 +1626,12 @@ impl WorkApp {
     }
 
     fn render_model_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let provider_presets = popular_model_provider_presets();
+        let selected_provider = self.provider_input.read(cx).value().trim().to_lowercase();
+        let selected_preset = provider_presets
+            .iter()
+            .copied()
+            .find(|preset| preset.id == selected_provider);
         v_flex()
             .size_full()
             .items_center()
@@ -1750,10 +1830,67 @@ impl WorkApp {
                                 ),
                         )
                     })
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_medium()
+                                    .child("Popular providers"),
+                            )
+                            .children(provider_presets.chunks(4).map(|row| {
+                                h_flex().w_full().gap_1().children(row.iter().copied().map(
+                                    |preset| {
+                                        let selected = preset.id == selected_provider;
+                                        Button::new(format!("provider-preset-{}", preset.id))
+                                            .ghost()
+                                            .small()
+                                            .w_full()
+                                            .when(selected, |button| {
+                                                button
+                                                    .bg(cx.theme().accent.opacity(0.18))
+                                                    .font_semibold()
+                                            })
+                                            .label(preset.id)
+                                            .on_click(cx.listener(
+                                                move |this, _, window, cx| {
+                                                    this.apply_model_provider_preset(
+                                                        preset, window, cx,
+                                                    );
+                                                },
+                                            ))
+                                    },
+                                ))
+                            })),
+                    )
                     .child(div().text_size(px(11.)).font_medium().child("Provider"))
                     .child(Input::new(&self.provider_input).aria_label("Model provider"))
                     .child(div().text_size(px(11.)).font_medium().child("Model ID"))
                     .child(Input::new(&self.model_input).aria_label("Model ID"))
+                    .when_some(selected_preset, |this, preset| {
+                        this.child(
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Recommended current models"),
+                                )
+                                .children(preset.models.iter().copied().map(|model| {
+                                    Button::new(format!("model-suggestion-{model}"))
+                                        .ghost()
+                                        .xsmall()
+                                        .w_full()
+                                        .justify_start()
+                                        .label(model)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.apply_model_suggestion(model, window, cx);
+                                        }))
+                                })),
+                        )
+                    })
                     .child(div().text_size(px(11.)).font_medium().child("Base URL (optional)"))
                     .child(
                         Input::new(&self.base_url_input)
@@ -2194,6 +2331,8 @@ impl Render for WorkApp {
                             }))
                             .children(recent_sessions.into_iter().map(|summary| {
                                 let session_id = summary.session_id.clone();
+                                let pin_session_id = session_id.clone();
+                                let pinned = summary.pinned;
                                 let is_active = session_id == self.session.session_id;
                                 let title = if summary.task.trim().is_empty() {
                                     "New conversation".to_string()
@@ -2253,22 +2392,44 @@ impl Render for WorkApp {
                                             .text_color(cx.theme().muted_foreground)
                                             .child(summary_status),
                                     );
-                                Button::new(format!("session-{session_id}"))
-                                    .ghost()
-                                    .small()
-                                    .compact()
+                                h_flex()
                                     .w_full()
-                                    .justify_start()
-                                    .disabled(self.runtime_active)
-                                    .when(is_active, |button| {
-                                        button
-                                            .bg(cx.theme().accent.opacity(0.12))
-                                            .text_color(cx.theme().foreground)
-                                    })
-                                    .child(row)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.open_session(&session_id, window, cx);
-                                    }))
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(
+                                        Button::new(format!("session-{session_id}"))
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .justify_start()
+                                            .disabled(self.runtime_active)
+                                            .when(is_active, |button| {
+                                                button
+                                                    .bg(cx.theme().accent.opacity(0.12))
+                                                    .text_color(cx.theme().foreground)
+                                            })
+                                            .child(row)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.open_session(&session_id, window, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new(format!("pin-session-{pin_session_id}"))
+                                            .ghost()
+                                            .xsmall()
+                                            .compact()
+                                            .disabled(self.runtime_active)
+                                            .label(if pinned { "Unpin" } else { "Pin" })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.set_session_pinned(
+                                                    &pin_session_id,
+                                                    !pinned,
+                                                    cx,
+                                                );
+                                            })),
+                                    )
                             })),
                     )
                     .child(

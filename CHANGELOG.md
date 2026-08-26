@@ -27,6 +27,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - **Conversation search for MicroClaw Work.** The native recent-conversation
   rail now filters durable thread titles and Workspace paths without case
   sensitivity and presents an explicit empty-result state.
+- **Stable and pinnable Work conversations.** The desktop rail now keeps
+  conversations in creation order regardless of opens, drafts, or new turns;
+  pinned conversations remain above unpinned history until explicitly unpinned.
+- **Current model presets in Work Settings.** Popular providers now have quick
+  selection, current recommended model IDs, and provider endpoints while the
+  editable Provider, Model ID, and Base URL fields continue to support the full
+  catalog and custom OpenAI-compatible services.
 - **Recoverable Work conversation storage.** A damaged desktop session or
   index is preserved with a `.corrupt-*` suffix while Work rebuilds valid
   history and opens a usable conversation with an explicit recovery notice.

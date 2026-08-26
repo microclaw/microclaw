@@ -21,7 +21,11 @@ pub struct WorkSessionSummary {
     pub task: String,
     pub workspace: String,
     pub status: WorkStatus,
+    #[serde(default)]
+    pub created_at_ms: u64,
     pub updated_at_ms: u64,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 impl WorkSessionSummary {
@@ -44,7 +48,9 @@ impl From<&WorkSessionSnapshot> for WorkSessionSummary {
             },
             workspace: snapshot.workspace.clone(),
             status: snapshot.status,
+            created_at_ms: snapshot.created_at_ms,
             updated_at_ms: snapshot.updated_at_ms,
+            pinned: false,
         }
     }
 }
@@ -181,15 +187,18 @@ impl WorkSessionStore {
         snapshot.save(self.session_path(&snapshot.session_id))?;
 
         let mut index = self.load_index()?;
+        let pinned = index
+            .sessions
+            .iter()
+            .find(|entry| entry.session_id == snapshot.session_id)
+            .is_some_and(|entry| entry.pinned);
         index
             .sessions
             .retain(|entry| entry.session_id != snapshot.session_id);
-        index.sessions.push(WorkSessionSummary::from(snapshot));
-        index.sessions.sort_by(|a, b| {
-            b.updated_at_ms
-                .cmp(&a.updated_at_ms)
-                .then_with(|| b.session_id.cmp(&a.session_id))
-        });
+        let mut summary = WorkSessionSummary::from(snapshot);
+        summary.pinned = pinned;
+        index.sessions.push(summary);
+        sort_session_summaries(&mut index.sessions);
         index.sessions.truncate(Self::MAX_SESSIONS);
         index.active_session_id = Some(snapshot.session_id.clone());
         self.save_index(&index)
@@ -197,6 +206,19 @@ impl WorkSessionStore {
 
     pub fn list(&self) -> io::Result<Vec<WorkSessionSummary>> {
         Ok(self.load_index()?.sessions)
+    }
+
+    pub fn set_pinned(&self, session_id: &str, pinned: bool) -> io::Result<()> {
+        validate_session_id(session_id)?;
+        let mut index = self.load_index()?;
+        let entry = index
+            .sessions
+            .iter_mut()
+            .find(|entry| entry.session_id == session_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Work session not found"))?;
+        entry.pinned = pinned;
+        sort_session_summaries(&mut index.sessions);
+        self.save_index(&index)
     }
 
     pub fn root(&self) -> &Path {
@@ -212,7 +234,7 @@ impl WorkSessionStore {
             }
             Err(error) => return Err(error),
         };
-        let index: WorkSessionIndex = serde_json::from_slice(&bytes)
+        let mut index: WorkSessionIndex = serde_json::from_slice(&bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if index.schema_version != WorkSessionIndex::SCHEMA_VERSION {
             return Err(io::Error::new(
@@ -224,6 +246,14 @@ impl WorkSessionStore {
                 ),
             ));
         }
+        for entry in &mut index.sessions {
+            if entry.created_at_ms == 0
+                && let Ok(snapshot) = self.load(&entry.session_id)
+            {
+                entry.created_at_ms = snapshot.created_at_ms;
+            }
+        }
+        sort_session_summaries(&mut index.sessions);
         Ok(index)
     }
 
@@ -259,11 +289,7 @@ impl WorkSessionStore {
                 }
             }
         }
-        sessions.sort_by(|a, b| {
-            b.updated_at_ms
-                .cmp(&a.updated_at_ms)
-                .then_with(|| b.session_id.cmp(&a.session_id))
-        });
+        sort_session_summaries(&mut sessions);
         sessions.truncate(Self::MAX_SESSIONS);
         Ok(WorkSessionIndex {
             schema_version: WorkSessionIndex::SCHEMA_VERSION,
@@ -297,6 +323,15 @@ fn validate_session_id(session_id: &str) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn sort_session_summaries(sessions: &mut [WorkSessionSummary]) {
+    sessions.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| b.created_at_ms.cmp(&a.created_at_ms))
+            .then_with(|| b.session_id.cmp(&a.session_id))
+    });
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -378,10 +413,12 @@ mod tests {
         let store = WorkSessionStore::new(directory.path());
         let mut first = store.create("").unwrap();
         first.task = "first task".into();
-        first.updated_at_ms = 10;
+        first.created_at_ms = 10;
+        first.updated_at_ms = 100;
         store.save(&first).unwrap();
         let mut second = store.create("").unwrap();
         second.task = "second task".into();
+        second.created_at_ms = 20;
         second.updated_at_ms = 20;
         store.save(&second).unwrap();
 
@@ -393,6 +430,13 @@ mod tests {
             store.load_active_or_create().unwrap().session_id,
             second.session_id
         );
+
+        store.open(&first.session_id).unwrap();
+        assert_eq!(store.list().unwrap()[0].session_id, second.session_id);
+        store.set_pinned(&first.session_id, true).unwrap();
+        assert_eq!(store.list().unwrap()[0].session_id, first.session_id);
+        store.set_pinned(&first.session_id, false).unwrap();
+        assert_eq!(store.list().unwrap()[0].session_id, second.session_id);
     }
 
     #[test]
@@ -447,7 +491,9 @@ mod tests {
             task: "Refine Native Settings".into(),
             workspace: "/tmp/MicroClaw".into(),
             status: WorkStatus::Completed,
+            created_at_ms: 1,
             updated_at_ms: 1,
+            pinned: false,
         };
 
         assert!(summary.matches_query("native"));

@@ -55,6 +55,12 @@ network probe. **Demo** remains available for UI testing without credentials.
 Provider/runtime failures are shown as a terminal Work state instead of
 crashing the window.
 
+Model Settings includes quick choices for popular providers and current
+recommended model IDs sourced from the same preset catalog as Server setup.
+Selecting a provider fills its recommended model and endpoint; Provider, Model
+ID, and Base URL remain editable so less common and custom OpenAI-compatible
+services are not excluded.
+
 **Diagnostics** opens a native offline readiness report covering model
 configuration, active-workspace writes, conversation-storage writes, and
 credential-file permissions. Write probes use unique temporary files and remove
@@ -112,7 +118,9 @@ data directory, with an atomic bounded index for the conversation list. **New
 Chat** creates an independent Agent Engine conversation, and opening a recent
 chat restores its matching runtime session rather than sharing a global desktop
 conversation. The recent-conversation rail is searchable by conversation title
-or Workspace path and keeps an explicit empty-result state. Draft input is
+or Workspace path and keeps an explicit empty-result state. Its order is stable
+by creation time instead of recent clicks or saves, and explicit Pin / Unpin
+controls keep important conversations above the remaining history. Draft input is
 persisted after a short debounce. If the desktop
 process exits while a task is Running or Verifying, restart projects it as
 **Interrupted** and offers **Retry** even though the sent composer is empty;

@@ -12,7 +12,7 @@ use microclaw_core::runtime_event::RuntimeEventEnvelope;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs, io};
 
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
@@ -78,6 +78,7 @@ pub struct ModelSettings {
     pub model: String,
     pub base_url: String,
     pub has_api_key: bool,
+    pub recovery_backup: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +88,42 @@ pub struct ModelSettingsDraft {
     pub base_url: String,
     /// `None` preserves an existing key. `Some` replaces it.
     pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelProviderPreset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub default_base_url: &'static str,
+    pub models: &'static [&'static str],
+}
+
+pub fn popular_model_provider_presets() -> Vec<ModelProviderPreset> {
+    const POPULAR: &[&str] = &[
+        "openai",
+        "openai-codex",
+        "anthropic",
+        "google",
+        "deepseek",
+        "moonshot",
+        "alibaba",
+        "minimax",
+        "openrouter",
+        "ollama",
+        "xai",
+        "zhipu",
+    ];
+    let catalog = microclaw::setup::provider_catalog().collect::<Vec<_>>();
+    POPULAR
+        .iter()
+        .filter_map(|id| catalog.iter().find(|entry| entry.id == *id))
+        .map(|entry| ModelProviderPreset {
+            id: entry.id,
+            label: entry.label,
+            default_base_url: entry.default_base_url,
+            models: entry.models,
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,22 +285,49 @@ impl WorkRunSteering {
 #[derive(Debug, Clone)]
 pub struct WorkRuntimeService {
     config_path: PathBuf,
+    config_ownership: WorkConfigOwnership,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkConfigOwnership {
+    WorkOwned,
+    External,
 }
 
 impl WorkRuntimeService {
     /// Use an explicitly configured/shared Server config when one is present,
     /// otherwise fall back to Work's platform-local config path.
     pub fn discover(fallback_path: impl Into<PathBuf>) -> Self {
-        let config_path = std::env::var_os("MICROCLAW_WORK_CONFIG")
-            .map(PathBuf::from)
-            .or_else(|| Config::resolve_config_path().ok().flatten())
-            .unwrap_or_else(|| fallback_path.into());
-        Self { config_path }
+        let fallback_path = fallback_path.into();
+        if let Some(config_path) = std::env::var_os("MICROCLAW_WORK_CONFIG").map(PathBuf::from) {
+            return Self {
+                config_path,
+                config_ownership: WorkConfigOwnership::External,
+            };
+        }
+        if let Some(config_path) = Config::resolve_config_path().ok().flatten() {
+            return Self {
+                config_path,
+                config_ownership: WorkConfigOwnership::External,
+            };
+        }
+        Self {
+            config_path: fallback_path,
+            config_ownership: WorkConfigOwnership::WorkOwned,
+        }
     }
 
     pub fn new(config_path: impl Into<PathBuf>) -> Self {
         Self {
             config_path: config_path.into(),
+            config_ownership: WorkConfigOwnership::External,
+        }
+    }
+
+    pub fn new_work_owned(config_path: impl Into<PathBuf>) -> Self {
+        Self {
+            config_path: config_path.into(),
+            config_ownership: WorkConfigOwnership::WorkOwned,
         }
     }
 
@@ -496,6 +560,7 @@ impl WorkRuntimeService {
             model: config.model,
             base_url: config.llm_base_url.unwrap_or_default(),
             has_api_key: !config.api_key.trim().is_empty(),
+            recovery_backup: None,
         })
     }
 
@@ -560,9 +625,17 @@ impl WorkRuntimeService {
     }
 
     pub fn codex_default_model(&self) -> String {
-        codex_model_from_config(&microclaw::codex_auth::default_codex_config_path()).unwrap_or_else(
-            || microclaw::config::default_model_for_provider_name("openai-codex").to_string(),
-        )
+        codex_model_from_config(&microclaw::codex_auth::default_codex_config_path())
+            .or_else(|| {
+                popular_model_provider_presets()
+                    .into_iter()
+                    .find(|preset| preset.id == "openai-codex")
+                    .and_then(|preset| preset.models.first().copied())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| {
+                microclaw::config::default_model_for_provider_name("openai-codex").to_string()
+            })
     }
 
     pub fn save_model_settings(
@@ -586,7 +659,21 @@ impl WorkRuntimeService {
             }
         }
 
-        let existing = Config::load_from_path_for_headless(&self.config_path).ok();
+        let (existing, recovery_backup) = match Config::load_from_path_for_headless(
+            &self.config_path,
+        ) {
+            Ok(config) => (Some(config), None),
+            Err(_) if !self.config_path.exists() => (None, None),
+            Err(_) if self.config_ownership == WorkConfigOwnership::WorkOwned => {
+                let backup = quarantine_config_file(&self.config_path)?;
+                (None, Some(backup.display().to_string()))
+            }
+            Err(error) => {
+                return Err(ModelSettingsError::Config(format!(
+                    "{error}; this configuration is shared or explicitly selected and was not replaced"
+                )));
+            }
+        };
         let api_key = draft
             .api_key
             .map(|key| key.trim().to_string())
@@ -616,7 +703,9 @@ impl WorkRuntimeService {
         } else {
             write_new_config(&self.config_path, &provider, &model, &api_key, &base_url)?;
         }
-        self.model_settings()
+        let mut settings = self.model_settings()?;
+        settings.recovery_backup = recovery_backup;
+        Ok(settings)
     }
 
     pub fn start(&self, request: WorkRunRequest) -> WorkRunHandle {
@@ -938,6 +1027,28 @@ fn write_new_config(
     Ok(())
 }
 
+fn quarantine_config_file(path: &Path) -> io::Result<PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("microclaw.config.yaml");
+    for attempt in 0..100_u8 {
+        let backup = path.with_file_name(format!("{file_name}.corrupt-{timestamp}-{attempt}"));
+        if !backup.exists() {
+            fs::rename(path, &backup)?;
+            return Ok(backup);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a configuration recovery backup path",
+    ))
+}
+
 fn send_failure(message_tx: &Sender<WorkRuntimeMessage>, run_id: &str, message: String) {
     let _ = message_tx.send(WorkRuntimeMessage::Failed {
         run_id: run_id.to_string(),
@@ -1060,6 +1171,31 @@ mod tests {
 
         fs::write(&config, "model = \"\"\n").unwrap();
         assert_eq!(codex_model_from_config(&config), None);
+    }
+
+    #[test]
+    fn popular_provider_catalog_has_current_models_and_endpoints() {
+        let presets = popular_model_provider_presets();
+        assert_eq!(presets.len(), 12);
+        assert_eq!(presets[0].id, "openai");
+        assert_eq!(presets[0].models[0], "gpt-5.6-sol");
+        assert!(
+            presets
+                .iter()
+                .find(|preset| preset.id == "anthropic")
+                .unwrap()
+                .models
+                .contains(&"claude-opus-5")
+        );
+        assert_eq!(
+            presets
+                .iter()
+                .find(|preset| preset.id == "moonshot")
+                .unwrap()
+                .models[0],
+            "kimi-k3"
+        );
+        assert!(presets.iter().all(|preset| !preset.models.is_empty()));
     }
 
     #[test]
@@ -1230,6 +1366,48 @@ mod tests {
         assert!(raw.contains("# keep this comment"));
         assert!(raw.contains("existing-secret"));
         assert!(raw.contains("gpt-5-mini"));
+    }
+
+    #[test]
+    fn work_owned_invalid_config_is_preserved_before_model_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("microclaw.config.yaml");
+        fs::write(&path, "not: [valid yaml").unwrap();
+        let service = WorkRuntimeService::new_work_owned(&path);
+
+        let settings = service
+            .save_model_settings(ModelSettingsDraft {
+                provider: "ollama".into(),
+                model: "qwen3:8b".into(),
+                base_url: "".into(),
+                api_key: None,
+            })
+            .unwrap();
+
+        let backup = PathBuf::from(settings.recovery_backup.unwrap());
+        assert!(backup.is_file());
+        assert_eq!(fs::read_to_string(backup).unwrap(), "not: [valid yaml");
+        assert_eq!(service.model_settings().unwrap().model, "qwen3:8b");
+    }
+
+    #[test]
+    fn external_invalid_config_is_never_replaced_by_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("server.config.yaml");
+        fs::write(&path, "not: [valid yaml").unwrap();
+        let service = WorkRuntimeService::new(&path);
+
+        let error = service
+            .save_model_settings(ModelSettingsDraft {
+                provider: "ollama".into(),
+                model: "qwen3:8b".into(),
+                base_url: "".into(),
+                api_key: None,
+            })
+            .unwrap_err();
+
+        assert!(error.to_string().contains("was not replaced"));
+        assert_eq!(fs::read_to_string(path).unwrap(), "not: [valid yaml");
     }
 
     #[test]

@@ -57,6 +57,8 @@ Delivered:
   and same-thread follow-up;
 - Settings for local `SOUL.md` identity and project-context directory;
 - searchable durable conversation history by title or Workspace;
+- stable creation-time conversation ordering with explicit Pin / Unpin;
+- shared current-model presets and editable custom provider configuration;
 - recoverable conversation storage that preserves damaged snapshots for
   diagnosis and rebuilds valid history;
 - real Codex-account smoke coverage for completion, cancellation, retry,
