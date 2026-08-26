@@ -103,6 +103,7 @@ typst-pdf = "0.15"
 typst-layout = "0.15"
 
 [dev-dependencies]
+tempfile = "3"
 tower = "0.5"
 
 [target.'cfg(windows)'.dependencies]

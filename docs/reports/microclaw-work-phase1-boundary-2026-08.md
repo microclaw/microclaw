@@ -1,6 +1,6 @@
 # MicroClaw Work Phase 1 application-boundary report
 
-Status: **In progress — shared event boundary landed** · Date: **2026-08-25**
+Status: **In progress — real Agent Engine adapter landed** · Date: **2026-08-25**
 
 This report records the first Phase 1 increment from the active
 [`MicroClaw Work proposal`](../roadmap/microclaw-work-proposal-cn.md).
@@ -63,6 +63,25 @@ event stream or replay JSONL envelopes from standard input and emits the final
 Work session as JSON. It proves that GPUI is one projection consumer, not the
 owner of the task loop.
 
+The root runtime now also exposes `HeadlessRuntime`, a reusable application
+service extracted from the existing `microclaw run` path. It owns `AppState`,
+session persistence, the existing `process_with_agent_with_events` call, and
+the raw-event-to-envelope bridge. It starts no Server channels, Web server,
+scheduler, or gateway. The original CLI now delegates to this service.
+
+The harness has a `real` mode which:
+
+1. loads the normal MicroClaw provider configuration;
+2. uses the current directory as the Work workspace;
+3. starts the existing provider-neutral Agent Engine;
+4. projects every real envelope through `microclaw-work-app`;
+5. returns the completed Work session as JSON.
+
+An offline integration test replaces only the LLM provider with a deterministic
+fake. The database, session lifecycle, Agent Engine, event emission, envelope
+sequencing, and Work-facing application service remain real. This verifies the
+boundary without API credentials, network access, or model cost.
+
 ## Dependency evidence
 
 `cargo tree -p microclaw-work-app --depth 1 --locked` contains only:
@@ -87,13 +106,19 @@ cargo clippy -p microclaw-work --all-targets -- -D warnings     passed
 cargo check -p microclaw --lib --locked                          passed
 cargo test -p microclaw event_tap --lib --locked                 12 passed
 cargo test -p microclaw agent_engine::tests --lib --locked       43 passed
+cargo test -p microclaw headless::tests --lib --locked            2 passed
 cargo run -p microclaw-work-headless -- demo ...                 completed
+microclaw config check                                           passed
 ```
+
+A live, no-tool smoke request reached the configured external provider, but
+the provider rejected the repository's configured `gpt-5.3-codex` model for
+ChatGPT Account authentication with HTTP 400. This is configuration evidence,
+not a completed live-run result; the report does not count it as a passing
+end-to-end task. No private workspace file was sent during that request.
 
 ## Next boundary work
 
-- Identify the smallest existing Agent Engine surface that can execute one
-  prompt without importing channel startup or Web management code.
 - Add an application-service port for starting, approving, cancelling, and
   resuming a runtime run rather than only projecting its events.
 - Replace synthetic desktop events with an application-service port backed by

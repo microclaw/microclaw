@@ -6058,6 +6058,7 @@ dependencies = [
  "sha2 0.10.9",
  "shellexpand",
  "teloxide",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-native-tls",
@@ -6217,9 +6218,11 @@ dependencies = [
 name = "microclaw-work-headless"
 version = "0.1.0"
 dependencies = [
+ "microclaw",
  "microclaw-core",
  "microclaw-work-app",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

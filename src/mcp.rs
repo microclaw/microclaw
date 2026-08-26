@@ -26,6 +26,23 @@ const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Resolve the canonical MCP config plus sorted fragment files.
+pub fn collect_config_paths(data_root: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![data_root.join("mcp.json")];
+    let mut fragments = std::fs::read_dir(data_root.join("mcp.d"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    fragments.sort();
+    paths.extend(fragments);
+    paths
+}
+
 // --- MCP config types ---
 
 fn default_transport() -> String {
@@ -965,6 +982,23 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_config_paths_includes_canonical_file_and_sorted_fragments() {
+        let directory = tempfile::tempdir().unwrap();
+        let fragments = directory.path().join("mcp.d");
+        std::fs::create_dir_all(&fragments).unwrap();
+        std::fs::write(fragments.join("20-second.json"), "{}").unwrap();
+        std::fs::write(fragments.join("10-first.json"), "{}").unwrap();
+        std::fs::write(fragments.join("ignored.txt"), "{}").unwrap();
+
+        let paths = collect_config_paths(directory.path());
+
+        assert_eq!(paths[0], directory.path().join("mcp.json"));
+        assert_eq!(paths[1], fragments.join("10-first.json"));
+        assert_eq!(paths[2], fragments.join("20-second.json"));
+        assert_eq!(paths.len(), 3);
     }
 
     #[test]

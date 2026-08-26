@@ -1,5 +1,7 @@
 //! Headless proof that Work state is driven by shared runtime events, not GPUI.
 
+use microclaw::config::Config;
+use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
 use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
 use microclaw_work_app::session::{WorkCommand, WorkSessionSnapshot};
 use std::error::Error;
@@ -53,7 +55,52 @@ fn demo_events() -> Vec<RuntimeEventEnvelope> {
     ]
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+async fn run_real(task: String) -> Result<WorkSessionSnapshot, Box<dyn Error>> {
+    let workspace = std::env::current_dir()?.display().to_string();
+    let mut config = Config::load()?;
+    config.working_dir = workspace.clone();
+    let runtime = HeadlessRuntime::load(config).await?;
+    let epoch_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
+    let run_id = format!("work-{}-{epoch_millis}", std::process::id());
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut session = WorkSessionSnapshot::new(workspace);
+    session.apply(WorkCommand::StartTask { task: task.clone() })?;
+
+    let run = runtime.run(
+        HeadlessRunRequest::work(task, Some("work-default".into()), run_id),
+        Some(event_tx),
+    );
+    tokio::pin!(run);
+    let mut result = None;
+    loop {
+        tokio::select! {
+            event = event_rx.recv() => match event {
+                Some(event) => { session.apply(WorkCommand::ApplyRuntimeEvent(event))?; }
+                None => break,
+            },
+            completed = &mut run, if result.is_none() => {
+                result = Some(completed?);
+            }
+        }
+    }
+    let result = match result {
+        Some(result) => result,
+        None => run.await?,
+    };
+    if session.status != microclaw_work_app::session::WorkStatus::Completed {
+        return Err(format!(
+            "runtime completed without a final Work event: {}",
+            result.run_id
+        )
+        .into());
+    }
+    Ok(session)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().unwrap_or_else(|| "demo".into());
     let task = args
@@ -66,7 +113,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             .lines()
             .map(|line| Ok(serde_json::from_str(&line?)?))
             .collect::<Result<Vec<RuntimeEventEnvelope>, Box<dyn Error>>>()?,
-        _ => return Err(format!("unknown mode {mode:?}; expected demo or replay").into()),
+        "real" => {
+            let session = run_real(task).await?;
+            println!("{}", serde_json::to_string_pretty(&session)?);
+            return Ok(());
+        }
+        _ => return Err(format!("unknown mode {mode:?}; expected demo, replay, or real").into()),
     };
 
     let session = project_events(&task, events)?;

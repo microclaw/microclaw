@@ -1383,7 +1383,7 @@ fn check_mcp_dependencies(report: &mut DoctorReport) {
         Err(_) => PathBuf::from("./microclaw.data"),
     };
 
-    let mcp_paths = collect_mcp_config_paths(&data_root);
+    let mcp_paths = crate::mcp::collect_config_paths(&data_root);
     let existing_paths = mcp_paths
         .into_iter()
         .filter(|path| path.exists())
@@ -1511,22 +1511,6 @@ fn check_mcp_dependencies(report: &mut DoctorReport) {
             );
         }
     }
-}
-
-fn collect_mcp_config_paths(data_root: &Path) -> Vec<PathBuf> {
-    let mut paths = vec![data_root.join("mcp.json")];
-    let mcp_dir = data_root.join("mcp.d");
-    let mut fragments = match std::fs::read_dir(&mcp_dir) {
-        Ok(entries) => entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
-            .collect::<Vec<_>>(),
-        Err(_) => Vec::new(),
-    };
-    fragments.sort();
-    paths.extend(fragments);
-    paths
 }
 
 fn check_sandbox_config(report: &mut DoctorReport) {
