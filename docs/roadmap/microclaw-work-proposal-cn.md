@@ -2,6 +2,10 @@
 
 状态：**已批准，分阶段开发中** · 日期：**2026-08-25**
 
+> 执行范围已于 2026-08-26 收敛为 macOS-first。当前阶段、验收线和延期范围以
+> [`microclaw-work-macos-execution-plan.md`](./microclaw-work-macos-execution-plan.md)
+> 为准；本文保留为最初的双产品方向提案。
+
 本文是 [`product-direction-2026-08.md`](./product-direction-2026-08.md) 的中文实施提案，
 用于约束下一次大版本的产品边界和阶段验收；具体发布日期仍由各阶段验证结果决定。
 

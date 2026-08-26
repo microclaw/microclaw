@@ -140,6 +140,7 @@ struct WorkApp {
     work_home: PathBuf,
     recent_sessions: Vec<WorkSessionSummary>,
     persistence_message: String,
+    session_search_input: Entity<InputState>,
     task_input: Entity<TextareaState>,
     steer_input: Entity<TextareaState>,
     active_run_id: u64,
@@ -270,6 +271,8 @@ impl WorkApp {
         let diagnostics_report =
             runtime_service.local_diagnostics(Path::new(&session.workspace), session_store.root());
 
+        let session_search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations"));
         let task_input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 5)
@@ -324,6 +327,15 @@ impl WorkApp {
                 .placeholder("Directory containing project context Markdown files")
         });
         let _subscriptions = vec![
+            cx.subscribe_in(
+                &session_search_input,
+                window,
+                move |_, _, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            ),
             cx.subscribe_in(&task_input, window, {
                 let task_input = task_input.clone();
                 move |this, _, event: &InputEvent, window, cx| match event {
@@ -382,6 +394,7 @@ impl WorkApp {
             work_home,
             recent_sessions,
             persistence_message,
+            session_search_input,
             task_input,
             steer_input,
             active_run_id: 0,
@@ -2032,7 +2045,20 @@ impl Render for WorkApp {
                 | WorkStatus::Verifying => cx.theme().warning,
             }
         };
-        let recent_sessions = self.recent_sessions.clone();
+        let session_query = self
+            .session_search_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
+        let recent_sessions = self
+            .recent_sessions
+            .iter()
+            .filter(|summary| summary.matches_query(&session_query))
+            .take(50)
+            .cloned()
+            .collect::<Vec<_>>();
+        let has_session_results = !recent_sessions.is_empty();
         let process_activities = self.session.process_activities.clone();
         let file_changes = self.session.file_changes.clone();
         let subagents = self.session.subagents.clone();
@@ -2131,12 +2157,30 @@ impl Render for WorkApp {
                             .child("RECENT"),
                     )
                     .child(
+                        Input::new(&self.session_search_input)
+                            .small()
+                            .cleanable(true)
+                            .aria_label("Search conversations"),
+                    )
+                    .child(
                         v_flex()
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scrollbar()
                             .gap_1()
-                            .children(recent_sessions.into_iter().take(12).map(|summary| {
+                            .children((!has_session_results).then(|| {
+                                div()
+                                    .px_2()
+                                    .py_3()
+                                    .text_size(px(11.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(if session_query.is_empty() {
+                                        "No conversations yet"
+                                    } else {
+                                        "No matching conversations"
+                                    })
+                            }))
+                            .children(recent_sessions.into_iter().map(|summary| {
                                 let session_id = summary.session_id.clone();
                                 let is_active = session_id == self.session.session_id;
                                 let title = if summary.task.trim().is_empty() {

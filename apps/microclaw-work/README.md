@@ -111,7 +111,9 @@ Work sessions are stored as separate versioned snapshots under the application
 data directory, with an atomic bounded index for the conversation list. **New
 Chat** creates an independent Agent Engine conversation, and opening a recent
 chat restores its matching runtime session rather than sharing a global desktop
-conversation. Draft input is persisted after a short debounce. If the desktop
+conversation. The recent-conversation rail is searchable by conversation title
+or Workspace path and keeps an explicit empty-result state. Draft input is
+persisted after a short debounce. If the desktop
 process exits while a task is Running or Verifying, restart projects it as
 **Interrupted** and offers **Retry** even though the sent composer is empty;
 approval pauses remain resumable. Retry is a distinct application command: it

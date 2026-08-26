@@ -23,6 +23,15 @@ pub struct WorkSessionSummary {
     pub updated_at_ms: u64,
 }
 
+impl WorkSessionSummary {
+    pub fn matches_query(&self, query: &str) -> bool {
+        let query = query.trim().to_lowercase();
+        query.is_empty()
+            || self.task.to_lowercase().contains(&query)
+            || self.workspace.to_lowercase().contains(&query)
+    }
+}
+
 impl From<&WorkSessionSnapshot> for WorkSessionSummary {
     fn from(snapshot: &WorkSessionSnapshot) -> Self {
         Self {
@@ -319,5 +328,21 @@ mod tests {
         let summaries = store.list().unwrap();
         assert_eq!(summaries.len(), WorkSessionStore::MAX_SESSIONS);
         assert_eq!(summaries[0].task, "task 104");
+    }
+
+    #[test]
+    fn summary_search_matches_title_and_workspace_case_insensitively() {
+        let summary = WorkSessionSummary {
+            session_id: "session-1".into(),
+            task: "Refine Native Settings".into(),
+            workspace: "/tmp/MicroClaw".into(),
+            status: WorkStatus::Completed,
+            updated_at_ms: 1,
+        };
+
+        assert!(summary.matches_query("native"));
+        assert!(summary.matches_query(" MICROCLAW "));
+        assert!(summary.matches_query(""));
+        assert!(!summary.matches_query("server migration"));
     }
 }
