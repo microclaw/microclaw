@@ -27,6 +27,15 @@ pub struct PlanStep {
     pub status: RuntimePlanStepStatus,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkApproval {
+    pub approval_id: String,
+    pub tool: String,
+    pub reason: String,
+    pub options: Vec<microclaw_core::runtime_event::RuntimeApprovalOption>,
+    pub advisory: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkEventKind {
@@ -114,6 +123,9 @@ pub enum WorkCommand {
         reason: String,
     },
     Approve,
+    ResolveApproval {
+        value: String,
+    },
     ApplyRuntimeEvent(RuntimeEventEnvelope),
     FailRun {
         message: String,
@@ -139,6 +151,8 @@ pub enum WorkCommandError {
     EmptyTask,
     #[error("steering update must not be empty")]
     EmptySteering,
+    #[error("approval option is unavailable: {value}")]
+    UnknownApprovalOption { value: String },
     #[error("workspace is not an accessible directory: {path}")]
     InvalidWorkspace { path: String },
     #[error("cannot {command} while Work status is {actual:?}")]
@@ -179,6 +193,8 @@ pub struct WorkSessionSnapshot {
     pub status: WorkStatus,
     pub plan: Vec<PlanStep>,
     pub approval_reason: Option<String>,
+    #[serde(default)]
+    pub pending_approval: Option<WorkApproval>,
     pub diff_summary: String,
     #[serde(default)]
     pub tool_activities: Vec<ToolActivity>,
@@ -201,7 +217,7 @@ pub struct WorkSessionSnapshot {
 }
 
 impl WorkSessionSnapshot {
-    pub const SCHEMA_VERSION: u32 = 8;
+    pub const SCHEMA_VERSION: u32 = 9;
     pub const MAX_EVENTS: usize = 200;
     pub const MAX_TOOL_ACTIVITIES: usize = 100;
     pub const MAX_FILE_CHANGES: usize = 50;
@@ -220,6 +236,7 @@ impl WorkSessionSnapshot {
             status: WorkStatus::Planning,
             plan: Vec::new(),
             approval_reason: None,
+            pending_approval: None,
             diff_summary: String::new(),
             tool_activities: Vec::new(),
             file_changes: Vec::new(),
@@ -263,6 +280,7 @@ impl WorkSessionSnapshot {
                 },
             ],
             approval_reason: Some("Allow writes to apps/microclaw-work and run cargo check".into()),
+            pending_approval: Some(demo_approval()),
             diff_summary: "+ GPUI app shell\n+ resumable session projection\n+ approval surface"
                 .into(),
             tool_activities: vec![ToolActivity {
@@ -332,7 +350,11 @@ impl WorkSessionSnapshot {
             }
             WorkCommand::Approve => {
                 self.require_status("approve", WorkStatus::AwaitingApproval)?;
-                self.approve();
+                self.resolve_approval("1")?;
+            }
+            WorkCommand::ResolveApproval { value } => {
+                self.require_status("resolve approval", WorkStatus::AwaitingApproval)?;
+                self.resolve_approval(&value)?;
             }
             WorkCommand::ApplyRuntimeEvent(envelope) => self.apply_runtime_event(envelope)?,
             WorkCommand::FailRun { message } => self.fail_run(message),
@@ -376,6 +398,7 @@ impl WorkSessionSnapshot {
         }
         self.status = WorkStatus::Running;
         self.approval_reason = None;
+        self.pending_approval = None;
         self.runtime_run_id = None;
         self.last_runtime_sequence = 0;
         self.events.clear();
@@ -431,7 +454,15 @@ impl WorkSessionSnapshot {
 
     fn request_approval(&mut self, reason: impl Into<String>) {
         self.status = WorkStatus::AwaitingApproval;
-        self.approval_reason = Some(reason.into());
+        let reason = reason.into();
+        self.approval_reason = Some(reason.clone());
+        self.pending_approval = Some(WorkApproval {
+            approval_id: "local-approval".into(),
+            tool: "workspace changes".into(),
+            reason,
+            options: default_approval_options("workspace changes"),
+            advisory: None,
+        });
         self.push_event(
             WorkEventKind::Approval,
             "Waiting for approval to modify files",
@@ -457,22 +488,39 @@ impl WorkSessionSnapshot {
         Ok(())
     }
 
-    fn approve(&mut self) {
-        self.status = WorkStatus::Verifying;
+    fn resolve_approval(&mut self, value: &str) -> Result<(), WorkCommandError> {
+        let (label, decision) = self
+            .pending_approval
+            .as_ref()
+            .and_then(|approval| approval.options.iter().find(|option| option.value == value))
+            .map(|option| (option.label.clone(), option.decision))
+            .ok_or_else(|| WorkCommandError::UnknownApprovalOption {
+                value: value.to_string(),
+            })?;
+        self.status = if decision == microclaw_core::runtime_event::RuntimeApprovalDecision::Deny {
+            WorkStatus::Running
+        } else {
+            WorkStatus::Verifying
+        };
         self.approval_reason = None;
+        self.pending_approval = None;
         self.push_event(
             WorkEventKind::Approval,
-            "Write access approved; starting verification",
+            format!("Approval response: {label}"),
         );
-        self.push_event(
-            WorkEventKind::Verification,
-            "Queued cargo check -p microclaw-work for verification",
-        );
+        if self.status == WorkStatus::Verifying {
+            self.push_event(
+                WorkEventKind::Verification,
+                "Approved the requested action; resuming the Agent",
+            );
+        }
+        Ok(())
     }
 
     fn fail_run(&mut self, message: impl Into<String>) {
         self.status = WorkStatus::Failed;
         self.approval_reason = None;
+        self.pending_approval = None;
         self.push_event(
             WorkEventKind::System,
             format!("Task failed: {}", message.into()),
@@ -491,6 +539,7 @@ impl WorkSessionSnapshot {
         }
         self.status = WorkStatus::Cancelled;
         self.approval_reason = None;
+        self.pending_approval = None;
         self.push_event(
             WorkEventKind::System,
             "Requested cancellation of the current task",
@@ -507,6 +556,7 @@ impl WorkSessionSnapshot {
         }
         self.status = WorkStatus::Interrupted;
         self.approval_reason = None;
+        self.pending_approval = None;
         self.push_event(
             WorkEventKind::System,
             "The previous desktop process exited before this task finished",
@@ -674,6 +724,7 @@ impl WorkSessionSnapshot {
             RuntimeEvent::Cancelled { final_text } => {
                 self.status = WorkStatus::Cancelled;
                 self.approval_reason = None;
+                self.pending_approval = None;
                 self.push_event(
                     WorkEventKind::System,
                     format!("Task cancelled: {final_text}"),
@@ -692,6 +743,7 @@ impl WorkSessionSnapshot {
                             WorkReviewStatus::None
                         };
                     self.approval_reason = None;
+                    self.pending_approval = None;
                     self.push_event(WorkEventKind::System, format!("Task completed: {text}"));
                 }
             }
@@ -751,11 +803,20 @@ impl WorkSessionSnapshot {
                 approval_id,
                 tool,
                 preview,
-                ..
+                options,
+                advisory,
             } => {
                 self.status = WorkStatus::AwaitingApproval;
                 let reason = preview.unwrap_or_else(|| format!("Tool {tool} requested permission"));
                 self.approval_reason = Some(reason.clone());
+                let options = sanitize_approval_options(options, &tool);
+                self.pending_approval = Some(WorkApproval {
+                    approval_id: approval_id.clone(),
+                    tool,
+                    reason: reason.clone(),
+                    options,
+                    advisory: advisory.map(|text| trim_owned(text, 2_000)),
+                });
                 self.push_event(
                     WorkEventKind::Approval,
                     format!("Awaiting approval {approval_id}: {reason}"),
@@ -855,8 +916,95 @@ impl WorkSessionSnapshot {
         if snapshot.title.trim().is_empty() {
             snapshot.title = snapshot.task.clone();
         }
+        if snapshot.status == WorkStatus::AwaitingApproval && snapshot.pending_approval.is_none() {
+            let reason = snapshot
+                .approval_reason
+                .clone()
+                .unwrap_or_else(|| "The active task requested permission".into());
+            snapshot.pending_approval = Some(WorkApproval {
+                approval_id: "migrated-approval".into(),
+                tool: "pending action".into(),
+                reason,
+                options: default_approval_options("pending action"),
+                advisory: None,
+            });
+        }
         Ok(snapshot)
     }
+}
+
+fn default_approval_options(
+    tool: &str,
+) -> Vec<microclaw_core::runtime_event::RuntimeApprovalOption> {
+    use microclaw_core::runtime_event::{
+        RuntimeApprovalDecision, RuntimeApprovalOption, RuntimeApprovalOptionKind,
+    };
+    vec![
+        RuntimeApprovalOption {
+            value: "1".into(),
+            label: "Approve once".into(),
+            kind: RuntimeApprovalOptionKind::Primary,
+            decision: RuntimeApprovalDecision::Approve,
+        },
+        RuntimeApprovalOption {
+            value: "2".into(),
+            label: format!("Always allow '{tool}' in this chat"),
+            kind: RuntimeApprovalOptionKind::Secondary,
+            decision: RuntimeApprovalDecision::Approve,
+        },
+        RuntimeApprovalOption {
+            value: "3".into(),
+            label: "Deny".into(),
+            kind: RuntimeApprovalOptionKind::Danger,
+            decision: RuntimeApprovalDecision::Deny,
+        },
+    ]
+}
+
+fn demo_approval() -> WorkApproval {
+    WorkApproval {
+        approval_id: "demo-approval".into(),
+        tool: "workspace changes".into(),
+        reason: "Allow writes to apps/microclaw-work and run cargo check".into(),
+        options: default_approval_options("workspace changes"),
+        advisory: Some(
+            "Demo only: review the requested scope before choosing a durable allowance.".into(),
+        ),
+    }
+}
+
+fn sanitize_approval_options(
+    options: Vec<microclaw_core::runtime_event::RuntimeApprovalOption>,
+    tool: &str,
+) -> Vec<microclaw_core::runtime_event::RuntimeApprovalOption> {
+    let mut seen = std::collections::HashSet::new();
+    let options = options
+        .into_iter()
+        .filter_map(|mut option| {
+            option.value = trim_owned(option.value, 32);
+            option.label = trim_owned(option.label, 160);
+            if option.value.is_empty()
+                || option.label.is_empty()
+                || !seen.insert(option.value.clone())
+            {
+                None
+            } else {
+                Some(option)
+            }
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+    if options.is_empty() {
+        default_approval_options(tool)
+    } else {
+        options
+    }
+}
+
+fn trim_owned(value: String, max_bytes: usize) -> String {
+    let value = value.trim();
+    let end = microclaw_core::text::floor_char_boundary(value, value.len().min(max_bytes));
+    value[..end].to_string()
 }
 
 fn current_time_ms() -> u64 {
@@ -1078,6 +1226,48 @@ mod tests {
     }
 
     #[test]
+    fn structured_approval_rejects_unknown_values_and_denial_resumes_without_permission() {
+        let mut snapshot = WorkSessionSnapshot::new("");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "Run a guarded command".into(),
+            })
+            .unwrap();
+        snapshot
+            .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                "approval-run",
+                1,
+                RuntimeEvent::ApprovalRequired {
+                    approval_id: "approval-42".into(),
+                    tool: "bash".into(),
+                    preview: Some("rm generated.tmp".into()),
+                    options: default_approval_options("bash"),
+                    advisory: Some("This command removes a file".into()),
+                },
+            )))
+            .unwrap();
+
+        assert!(matches!(
+            snapshot.apply(WorkCommand::ResolveApproval {
+                value: "unknown".into(),
+            }),
+            Err(WorkCommandError::UnknownApprovalOption { .. })
+        ));
+        assert_eq!(snapshot.status, WorkStatus::AwaitingApproval);
+        assert!(snapshot.pending_approval.is_some());
+
+        snapshot
+            .apply(WorkCommand::ResolveApproval { value: "3".into() })
+            .unwrap();
+        assert_eq!(snapshot.status, WorkStatus::Running);
+        assert!(snapshot.pending_approval.is_none());
+        assert_eq!(
+            snapshot.events.last().unwrap().message,
+            "Approval response: Deny"
+        );
+    }
+
+    #[test]
     fn shared_runtime_events_drive_approval_diff_and_completion() {
         let mut snapshot = WorkSessionSnapshot::new("/workspace");
         snapshot
@@ -1097,8 +1287,8 @@ mod tests {
                 approval_id: "approval-1".into(),
                 tool: "bash".into(),
                 preview: Some("run cargo test".into()),
-                options: vec!["approve once".into(), "deny".into()],
-                advisory: None,
+                options: default_approval_options("bash"),
+                advisory: Some("Review the command scope".into()),
             },
         ];
         for (index, event) in events.into_iter().enumerate() {
@@ -1112,7 +1302,22 @@ mod tests {
         }
 
         assert_eq!(snapshot.status, WorkStatus::AwaitingApproval);
-        snapshot.apply(WorkCommand::Approve).unwrap();
+        assert_eq!(
+            snapshot.pending_approval.as_ref().unwrap().options[2].value,
+            "3"
+        );
+        assert_eq!(
+            snapshot
+                .pending_approval
+                .as_ref()
+                .unwrap()
+                .advisory
+                .as_deref(),
+            Some("Review the command scope")
+        );
+        snapshot
+            .apply(WorkCommand::ResolveApproval { value: "1".into() })
+            .unwrap();
         snapshot
             .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
                 "server-run-2",
@@ -1174,7 +1379,7 @@ mod tests {
                     approval_id: "approval-1".into(),
                     tool: "bash".into(),
                     preview: Some("run command".into()),
-                    options: vec!["approve".into(), "deny".into()],
+                    options: default_approval_options("bash"),
                     advisory: None,
                 },
             )))

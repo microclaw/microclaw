@@ -2811,9 +2811,24 @@ async fn process_with_agent_logic(
                         tool: tool_name.clone(),
                         preview: batch_ctx.waiting_approval_preview.clone(),
                         options: vec![
-                            "Approve once".to_string(),
-                            format!("Always allow '{tool_name}' in this chat"),
-                            "Deny".to_string(),
+                            microclaw_core::runtime_event::RuntimeApprovalOption {
+                                value: "1".into(),
+                                label: "Approve once".into(),
+                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Primary,
+                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Approve,
+                            },
+                            microclaw_core::runtime_event::RuntimeApprovalOption {
+                                value: "2".into(),
+                                label: format!("Always allow '{tool_name}' in this chat"),
+                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Secondary,
+                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Approve,
+                            },
+                            microclaw_core::runtime_event::RuntimeApprovalOption {
+                                value: "3".into(),
+                                label: "Deny".into(),
+                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Danger,
+                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Deny,
+                            },
                         ],
                         advisory: advisory.clone(),
                     });

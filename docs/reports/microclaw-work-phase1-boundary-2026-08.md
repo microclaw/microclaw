@@ -278,6 +278,29 @@ Accordingly, this increment claims native build/render coverage and the real
 Agent Engine integration test above, but does not claim a passing automated
 native `Send Update` click.
 
+## Structured approval cards
+
+Runtime Event protocol v5 replaces ambiguous approval label strings with
+`RuntimeApprovalOption { value, label, decision, kind }`. `value` is the stable response
+sent back to the same Agent Engine session; `kind` is Primary, Secondary, or
+Danger and lets every client present visual intent without guessing from
+English labels or array position. `decision` separately defines whether the
+choice grants or denies permission, so clients never infer authorization from
+styling. The Server emits explicit values for Approve Once, Always Allow, and
+Deny, and Web forwards the structured objects unchanged.
+
+Work session schema v9 durably projects the approval ID, tool, bounded reason,
+bounded advisory, and at most five validated choices. Duplicate or empty
+values are discarded, empty cards receive safe defaults, and an Awaiting
+Approval v5-v8 snapshot receives a recoverable migrated card. Unknown response
+values cannot mutate the pending state. A Deny decision resumes the Agent
+without presenting the action as approved or as verification; permitted
+responses enter Verifying and then resume through the existing session.
+
+The GPUI Approval panel now renders the advisory separately and uses native
+Primary, Secondary, and Danger buttons for each choice. It no longer collapses
+the shared card into one hard-coded `Allow and Continue` action.
+
 The desktop prevents starting a second real or demo run while a run is active.
 Superseding only the UI generation would leave the previous Agent executing
 side effects in the background, so parallel starts remain rejected. The Stop
@@ -294,8 +317,9 @@ a Finder-launched macOS app can have `/` as its process directory, making an
 automatic launch-directory fallback dangerously broad. A new install and a
 missing saved path now enter a safe unselected state and real execution is
 blocked until the user explicitly chooses a directory. The Work snapshot schema
-was first raised to v6 for structured artifacts and is now v7 for durable
-review state. Newly added fields default safely when loading v5/v6 snapshots,
+was first raised to v6 for structured artifacts, v7 for durable review state,
+v8 for Agent-owned plans, and is now v9 for structured approvals. Newly added
+fields default safely when loading v5-v8 snapshots,
 which are upgraded without losing the task. Earlier
 Phase 0 and transitional single-session snapshots migrate to a blank English
 local Work session with stable identity and timestamps.

@@ -18,6 +18,29 @@ pub struct RuntimePlanStep {
     pub status: RuntimePlanStepStatus,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeApprovalOptionKind {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeApprovalDecision {
+    Approve,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeApprovalOption {
+    pub value: String,
+    pub label: String,
+    pub kind: RuntimeApprovalOptionKind,
+    pub decision: RuntimeApprovalDecision,
+}
+
 /// An observable event emitted by the shared agent runtime.
 ///
 /// Keep provider-specific payloads behind the runtime boundary. Consumers
@@ -81,7 +104,7 @@ pub enum RuntimeEvent {
         approval_id: String,
         tool: String,
         preview: Option<String>,
-        options: Vec<String>,
+        options: Vec<RuntimeApprovalOption>,
         advisory: Option<String>,
     },
     CheckpointCreated {
@@ -103,7 +126,7 @@ pub struct RuntimeEventEnvelope {
 }
 
 impl RuntimeEventEnvelope {
-    pub const SCHEMA_VERSION: u32 = 4;
+    pub const SCHEMA_VERSION: u32 = 5;
 
     pub fn new(run_id: impl Into<String>, sequence: u64, event: RuntimeEvent) -> Self {
         Self {
@@ -159,6 +182,30 @@ mod tests {
         let json = serde_json::to_string(&expected).expect("serialize plan update");
         let actual: RuntimeEventEnvelope =
             serde_json::from_str(&json).expect("deserialize plan update");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn approval_options_round_trip_with_stable_values_and_intent() {
+        let expected = RuntimeEventEnvelope::new(
+            "run-approval",
+            3,
+            RuntimeEvent::ApprovalRequired {
+                approval_id: "approval-1".into(),
+                tool: "bash".into(),
+                preview: Some("cargo test".into()),
+                options: vec![RuntimeApprovalOption {
+                    value: "3".into(),
+                    label: "Deny".into(),
+                    kind: RuntimeApprovalOptionKind::Danger,
+                    decision: RuntimeApprovalDecision::Deny,
+                }],
+                advisory: Some("Review command scope".into()),
+            },
+        );
+        let json = serde_json::to_string(&expected).expect("serialize approval event");
+        let actual: RuntimeEventEnvelope =
+            serde_json::from_str(&json).expect("deserialize approval event");
         assert_eq!(actual, expected);
     }
 }

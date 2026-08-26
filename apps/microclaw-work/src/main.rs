@@ -527,7 +527,7 @@ impl WorkApp {
         .detach();
     }
 
-    fn approve(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn resolve_approval(&mut self, value: String, cx: &mut Context<Self>) {
         if !self.last_run_was_demo
             && (self.session.workspace.is_empty()
                 || !PathBuf::from(&self.session.workspace).is_dir())
@@ -536,7 +536,9 @@ impl WorkApp {
             cx.notify();
             return;
         }
-        if let Err(error) = self.session.apply(WorkCommand::Approve) {
+        if let Err(error) = self.session.apply(WorkCommand::ResolveApproval {
+            value: value.clone(),
+        }) {
             self.persistence_message = error.to_string();
             cx.notify();
             return;
@@ -561,7 +563,7 @@ impl WorkApp {
         self.persist();
         cx.notify();
         if !self.last_run_was_demo {
-            self.launch_runtime_prompt("1".into(), cx);
+            self.launch_runtime_prompt(value, cx);
         }
     }
 
@@ -1027,6 +1029,7 @@ impl Render for WorkApp {
         let subagents = self.session.subagents.clone();
         let final_response = self.session.final_response.clone();
         let review_status = self.session.review_status;
+        let pending_approval = self.session.pending_approval.clone();
         let composer_input = if self.runtime_active {
             &self.steer_input
         } else {
@@ -1329,25 +1332,56 @@ impl Render for WorkApp {
                                             .border_color(cx.theme().border)
                                             .child(div().text_lg().font_bold().child("Approval"))
                                             .child(
-                                                self.session
-                                                    .approval_reason
-                                                    .clone()
+                                                pending_approval
+                                                    .as_ref()
+                                                    .map(|approval| approval.reason.clone())
                                                     .unwrap_or_else(|| {
                                                         "No approval is pending.".into()
                                                     }),
                                             )
-                                            .child(
-                                                h_flex().gap_2().child(
-                                                    Button::new("approve")
-                                                        .primary()
+                                            .children(
+                                                pending_approval
+                                                    .as_ref()
+                                                    .and_then(|approval| approval.advisory.clone())
+                                                    .map(|advisory| {
+                                                        v_flex()
+                                                            .gap_1()
+                                                            .p_3()
+                                                            .rounded(cx.theme().radius)
+                                                            .bg(cx.theme().warning.opacity(0.12))
+                                                            .child(div().text_sm().font_bold().child("Advisory"))
+                                                            .child(div().text_sm().child(advisory))
+                                                    }),
+                                            )
+                                            .child(v_flex().gap_2().children(
+                                                pending_approval
+                                                    .map(|approval| approval.options)
+                                                    .unwrap_or_default()
+                                                    .into_iter()
+                                                    .map(|option| {
+                                                        let value = option.value.clone();
+                                                        let button = Button::new(format!(
+                                                            "approval-{}-{value}",
+                                                            self.session.session_id
+                                                        ))
+                                                        .w_full()
                                                         .disabled(
                                                             self.session.status
                                                                 != WorkStatus::AwaitingApproval,
                                                         )
-                                                        .label("Allow and Continue")
-                                                        .on_click(cx.listener(Self::approve)),
-                                                ),
-                                            ),
+                                                        .label(option.label);
+                                                        let button = match option.kind {
+                                                            microclaw_core::runtime_event::RuntimeApprovalOptionKind::Primary => button.primary(),
+                                                            microclaw_core::runtime_event::RuntimeApprovalOptionKind::Secondary => button.secondary(),
+                                                            microclaw_core::runtime_event::RuntimeApprovalOptionKind::Danger => button.danger(),
+                                                        };
+                                                        button.on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                this.resolve_approval(value.clone(), cx);
+                                                            },
+                                                        ))
+                                                    }),
+                                            )),
                                     )
                                     .child(
                                         v_flex()

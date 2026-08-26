@@ -22,6 +22,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   a foreground task is active. Guidance enters the existing Agent Engine
   mid-turn queue, is acknowledged only when the active session accepts it, and
   remains visible in the durable Work timeline.
+- **Structured native approvals.** Runtime Event v5 gives every approval choice
+  an explicit response value, Approve/Deny decision, and visual intent. Work
+  persists the complete approval card, renders advisory text and native choice
+  buttons, and resumes the same Agent session with the selected value.
 
 ## 0.5.0 - 2026-08-16
 
