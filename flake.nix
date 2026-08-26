@@ -56,7 +56,14 @@
             pname = "microclaw";
             version = "0.0.163";
             src = ./.;
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              # This project consumes pinned GPUI/Zed Git revisions from its
+              # workspace lockfile. Outside nixpkgs, importCargoLock supports
+              # fetching those exact revisions without maintaining one output
+              # hash entry for every crate in the upstream workspaces.
+              allowBuiltinFetchGit = true;
+            };
             buildFeatures = pkgs.lib.optionals pkgs.stdenv.isLinux [ "journald" "sqlite-vec" ];
             nativeBuildInputs = with pkgs; [
               pkg-config

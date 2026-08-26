@@ -91,15 +91,11 @@ fn parse_robots_txt(text: &str, our_agent: &str) -> RobotsRules {
                 };
                 for rules in targets {
                     match key.as_str() {
-                        "disallow" => {
-                            if !value.is_empty() {
-                                rules.disallow.push(value.clone());
-                            }
+                        "disallow" if !value.is_empty() => {
+                            rules.disallow.push(value.clone());
                         }
-                        "allow" => {
-                            if !value.is_empty() {
-                                rules.allow.push(value.clone());
-                            }
+                        "allow" if !value.is_empty() => {
+                            rules.allow.push(value.clone());
                         }
                         "crawl-delay" => {
                             if let Ok(n) = value.parse::<f64>() {
