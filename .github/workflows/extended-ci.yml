@@ -80,6 +80,8 @@ jobs:
       - run: cargo clippy -p microclaw-work-app --all-targets --locked -- -D warnings
       - run: cargo clippy -p microclaw-work --all-targets --no-deps --locked -- -D warnings
       - run: cargo clippy -p microclaw-work-headless --all-targets --no-deps --locked -- -D warnings
+      - name: Reclaim disk before release bundle
+        run: cargo clean
       - name: Build release macOS DMG preview
         run: scripts/build_work_macos_dmg.sh work-release
       - name: Launch-smoke macOS app bundle
