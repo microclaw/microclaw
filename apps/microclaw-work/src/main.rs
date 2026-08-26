@@ -14,8 +14,9 @@ use microclaw_work_app::session::{
 };
 use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary, startup_workspace};
 use microclaw_work_runtime::{
-    DiagnosticStatus, ModelSettingsDraft, RuntimeConfigSummary, WorkDiagnosticsReport,
-    WorkRunCancellation, WorkRunRequest, WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService,
+    AgentSettingsDraft, DiagnosticStatus, ModelSettingsDraft, RuntimeConfigSummary,
+    WorkDiagnosticsReport, WorkRunCancellation, WorkRunRequest, WorkRunSteering,
+    WorkRuntimeMessage, WorkRuntimeService,
 };
 use smol::Timer;
 use std::fs;
@@ -158,6 +159,10 @@ struct WorkApp {
     model_input: Entity<InputState>,
     base_url_input: Entity<InputState>,
     api_key_input: Entity<InputState>,
+    soul_path_input: Entity<InputState>,
+    soul_content_input: Entity<TextareaState>,
+    context_dir_input: Entity<InputState>,
+    agent_settings_message: String,
     last_run_was_demo: bool,
     connection_test_active: bool,
     connection_test_message: String,
@@ -209,6 +214,18 @@ impl WorkApp {
         let settings_has_api_key = model_settings
             .as_ref()
             .is_some_and(|value| value.has_api_key);
+        let agent_settings = runtime_service.agent_settings().ok();
+        let settings_soul_path = agent_settings.as_ref().map_or_else(
+            || work_data_root.join("SOUL.md").display().to_string(),
+            |value| value.soul_path.clone(),
+        );
+        let settings_soul_content = agent_settings
+            .as_ref()
+            .map_or_else(String::new, |value| value.soul_content.clone());
+        let settings_context_dir = agent_settings.as_ref().map_or_else(
+            || work_data_root.join("context").display().to_string(),
+            |value| value.context_dir.clone(),
+        );
         let codex_account_available = runtime_service.codex_account_available();
         let session_store = WorkSessionStore::new(session_root);
         let (mut session, persistence_message) = match session_store.load_active_or_create() {
@@ -290,6 +307,22 @@ impl WorkApp {
                     "API key"
                 })
         });
+        let soul_path_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(settings_soul_path)
+                .placeholder("Path to SOUL.md")
+        });
+        let soul_content_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(8, 18)
+                .default_value(settings_soul_content)
+                .placeholder("Describe the agent's identity, voice, values, and working style…")
+        });
+        let context_dir_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(settings_context_dir)
+                .placeholder("Directory containing project context Markdown files")
+        });
         let _subscriptions = vec![
             cx.subscribe_in(&task_input, window, {
                 let task_input = task_input.clone();
@@ -368,6 +401,11 @@ impl WorkApp {
             model_input,
             base_url_input,
             api_key_input,
+            soul_path_input,
+            soul_content_input,
+            context_dir_input,
+            agent_settings_message:
+                "Edit the personality and shared project context used by new turns.".into(),
             last_run_was_demo: false,
             connection_test_active: false,
             connection_test_message: "Save settings, then test the provider connection.".into(),
@@ -645,6 +683,17 @@ impl WorkApp {
         }
         self.api_key_input
             .update(cx, |input, cx| input.set_value("", window, cx));
+        if let Ok(settings) = self.runtime_service.agent_settings() {
+            self.soul_path_input.update(cx, |input, cx| {
+                input.set_value(settings.soul_path, window, cx)
+            });
+            self.soul_content_input.update(cx, |input, cx| {
+                input.set_value(settings.soul_content, window, cx)
+            });
+            self.context_dir_input.update(cx, |input, cx| {
+                input.set_value(settings.context_dir, window, cx)
+            });
+        }
         self.settings_open = true;
         self.diagnostics_open = false;
         cx.notify();
@@ -710,6 +759,27 @@ impl WorkApp {
                 false
             }
         }
+    }
+
+    fn save_agent_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let draft = AgentSettingsDraft {
+            soul_path: self.soul_path_input.read(cx).value().to_string(),
+            soul_content: self.soul_content_input.read(cx).value().to_string(),
+            context_dir: self.context_dir_input.read(cx).value().to_string(),
+        };
+        match self.runtime_service.save_agent_settings(draft) {
+            Ok(settings) => {
+                self.agent_settings_message =
+                    format!("Agent settings saved. SOUL.md: {}", settings.soul_path);
+                self.persistence_message =
+                    "Agent identity and project context configuration saved.".into();
+                self.runtime_config = self.runtime_service.config_summary();
+            }
+            Err(error) => {
+                self.agent_settings_message = format!("Could not save agent settings: {error}");
+            }
+        }
+        cx.notify();
     }
 
     fn save_and_test_model_settings(
@@ -1479,7 +1549,7 @@ impl WorkApp {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Appearance and model configuration for MicroClaw Work."),
+                                    .child("Appearance, agent identity, context, and model configuration."),
                             ),
                     )
                     .child(
@@ -1489,6 +1559,78 @@ impl WorkApp {
                             .disabled(self.connection_test_active)
                             .label("Back to Work")
                             .on_click(cx.listener(Self::close_model_settings)),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w(px(680.))
+                    .gap_3()
+                    .pt_4()
+                    .border_t_1()
+                    .border_color(cx.theme().border.opacity(0.72))
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(div().text_sm().font_semibold().child("Agent"))
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("SOUL.md defines stable personality and working style. Context Markdown adds durable project knowledge."),
+                            ),
+                    )
+                    .child(div().text_size(px(11.)).font_medium().child("SOUL.md file"))
+                    .child(
+                        Input::new(&self.soul_path_input)
+                            .aria_label("SOUL.md file path"),
+                    )
+                    .child(div().text_size(px(11.)).font_medium().child("Soul"))
+                    .child(
+                        div()
+                            .min_h(px(190.))
+                            .p_3()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().secondary.opacity(0.18))
+                            .child(
+                                Textarea::new(&self.soul_content_input)
+                                    .aria_label("Agent soul and personality"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Changes apply to new turns. Existing Server and channel-specific SOUL overrides remain supported."),
+                    )
+                    .child(div().text_size(px(11.)).font_medium().child("Project context directory"))
+                    .child(
+                        Input::new(&self.context_dir_input)
+                            .aria_label("Project context directory"),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                Button::new("save-agent-settings")
+                                    .primary()
+                                    .small()
+                                    .label("Save Agent Settings")
+                                    .on_click(cx.listener(Self::save_agent_settings)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(10.))
+                                    .text_color(if self.agent_settings_message.starts_with("Could not") {
+                                        cx.theme().danger
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(self.agent_settings_message.clone()),
+                            ),
                     ),
             )
             .child(

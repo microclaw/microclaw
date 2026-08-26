@@ -24,6 +24,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Agent identity settings for MicroClaw Work.** The native Settings page now
+  edits the active local `SOUL.md`, its file location, and the shared project
+  context directory alongside appearance and model configuration. Updates use
+  the shared Server configuration model, preserve YAML comments, and retain
+  channel-specific SOUL overrides.
 - **Homebrew Cask distribution for MicroClaw Work.** Stable releases now build,
   sign, notarize, and publish architecture-specific macOS DMGs, then update the
   `microclaw/tap` Cask automatically. Users can install and upgrade the native

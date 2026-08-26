@@ -82,6 +82,12 @@ credentials are never loaded into the UI and are explicitly removed from
 diagnostic errors before display. A successful response exposes **Start
 Chatting** so the first-use journey returns directly to the composer.
 
+The same native **Settings** page manages agent identity and durable context.
+The **Agent** section edits the active local `SOUL.md`, its file path, and the
+directory containing shared project-context Markdown files. These values use
+the normal MicroClaw configuration and Agent Engine loading paths, so Server
+configuration and channel-specific SOUL overrides continue to work unchanged.
+
 When an existing Codex login is detected through the presence of its auth file
 or access-token environment, Model Settings offers **Use Codex Account**. Work
 does not read the auth payload or copy a token into its config. It uses the

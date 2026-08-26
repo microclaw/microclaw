@@ -89,6 +89,20 @@ pub struct ModelSettingsDraft {
     pub api_key: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSettings {
+    pub soul_path: String,
+    pub soul_content: String,
+    pub context_dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSettingsDraft {
+    pub soul_path: String,
+    pub soul_content: String,
+    pub context_dir: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ModelSettingsError {
     #[error("provider is required")]
@@ -103,6 +117,62 @@ pub enum ModelSettingsError {
     Config(String),
     #[error("configuration I/O error: {0}")]
     Io(#[from] io::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentSettingsError {
+    #[error("SOUL.md path is required")]
+    MissingSoulPath,
+    #[error("SOUL.md must be a local file")]
+    RemoteSoulPath,
+    #[error("configuration error: {0}")]
+    Config(String),
+    #[error("configuration I/O error: {0}")]
+    Io(#[from] io::Error),
+}
+
+const DEFAULT_WORK_SOUL: &str = r#"# MicroClaw Work Soul
+
+## Identity
+
+You are a capable, dependable work partner. Be direct, calm, and practical.
+
+## Working style
+
+- Lead with the result or the next concrete action.
+- Use tools carefully and explain consequential changes.
+- Prefer concise answers unless detail materially helps the work.
+- Preserve user intent, local context, and existing project conventions.
+"#;
+
+fn editable_soul_path(config: &Config) -> PathBuf {
+    let Some(configured) = config
+        .soul_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return config.data_root_dir().join("SOUL.md");
+    };
+    let configured = PathBuf::from(configured);
+    if configured.is_absolute() || configured.exists() {
+        return configured;
+    }
+    if configured.components().count() == 1 {
+        let in_souls_dir = PathBuf::from(config.souls_data_dir()).join(&configured);
+        if in_souls_dir.exists() {
+            return in_souls_dir;
+        }
+    }
+    let in_data_dir = config.data_root_dir().join(&configured);
+    if in_data_dir.exists() {
+        return in_data_dir;
+    }
+    if configured.components().count() == 1 {
+        PathBuf::from(config.souls_data_dir()).join(configured)
+    } else {
+        in_data_dir
+    }
 }
 
 fn load_runtime_config_summary(path: &Path) -> RuntimeConfigSummary {
@@ -427,6 +497,59 @@ impl WorkRuntimeService {
             base_url: config.llm_base_url.unwrap_or_default(),
             has_api_key: !config.api_key.trim().is_empty(),
         })
+    }
+
+    pub fn agent_settings(&self) -> Result<AgentSettings, AgentSettingsError> {
+        let config = Config::load_from_path_for_headless(&self.config_path)
+            .map_err(|error| AgentSettingsError::Config(error.to_string()))?;
+        let soul_path = editable_soul_path(&config);
+        let soul_content =
+            fs::read_to_string(&soul_path).unwrap_or_else(|_| DEFAULT_WORK_SOUL.into());
+        let context_dir = config
+            .context_dir
+            .clone()
+            .filter(|path| !path.trim().is_empty())
+            .unwrap_or_else(|| config.data_root_dir().join("context").display().to_string());
+        Ok(AgentSettings {
+            soul_path: soul_path.display().to_string(),
+            soul_content,
+            context_dir,
+        })
+    }
+
+    pub fn save_agent_settings(
+        &self,
+        draft: AgentSettingsDraft,
+    ) -> Result<AgentSettings, AgentSettingsError> {
+        let soul_path = draft.soul_path.trim();
+        if soul_path.is_empty() {
+            return Err(AgentSettingsError::MissingSoulPath);
+        }
+        if url::Url::parse(soul_path).is_ok() {
+            return Err(AgentSettingsError::RemoteSoulPath);
+        }
+        let soul_path = PathBuf::from(soul_path);
+        if let Some(parent) = soul_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&soul_path, draft.soul_content.trim_end())?;
+
+        let mut config = Config::load_from_path_for_headless(&self.config_path)
+            .map_err(|error| AgentSettingsError::Config(error.to_string()))?;
+        let before = config.clone();
+        config.soul_path = Some(soul_path.display().to_string());
+        config.context_dir =
+            (!draft.context_dir.trim().is_empty()).then(|| draft.context_dir.trim().to_string());
+        microclaw::config_persistence::save_config_delta_preserving_comments(
+            &self.config_path,
+            &before,
+            &config,
+        )
+        .map_err(|error| AgentSettingsError::Config(error.to_string()))?;
+        self.agent_settings()
     }
 
     pub fn codex_account_available(&self) -> bool {
@@ -1107,6 +1230,85 @@ mod tests {
         assert!(raw.contains("# keep this comment"));
         assert!(raw.contains("existing-secret"));
         assert!(raw.contains("gpt-5-mini"));
+    }
+
+    #[test]
+    fn saves_agent_identity_and_project_context_without_rewriting_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("microclaw.config.yaml");
+        fs::write(
+            &path,
+            "# keep this comment\nllm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\n",
+        )
+        .unwrap();
+        let soul_path = directory.path().join("identity").join("SOUL.md");
+        let context_dir = directory.path().join("context");
+        let service = WorkRuntimeService::new(&path);
+
+        let saved = service
+            .save_agent_settings(AgentSettingsDraft {
+                soul_path: soul_path.display().to_string(),
+                soul_content: "# My Soul\n\nBe thoughtful.\n".into(),
+                context_dir: context_dir.display().to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(saved.soul_path, soul_path.display().to_string());
+        assert_eq!(saved.soul_content, "# My Soul\n\nBe thoughtful.");
+        assert_eq!(saved.context_dir, context_dir.display().to_string());
+        assert_eq!(fs::read_to_string(soul_path).unwrap(), saved.soul_content);
+        let raw = fs::read_to_string(path).unwrap();
+        assert!(raw.contains("# keep this comment"));
+        assert!(raw.contains("soul_path:"));
+        assert!(raw.contains("context_dir:"));
+    }
+
+    #[test]
+    fn agent_settings_reject_remote_soul_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("microclaw.config.yaml");
+        fs::write(
+            &path,
+            "llm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\n",
+        )
+        .unwrap();
+        let service = WorkRuntimeService::new(path);
+
+        let error = service
+            .save_agent_settings(AgentSettingsDraft {
+                soul_path: "https://example.com/SOUL.md".into(),
+                soul_content: "remote".into(),
+                context_dir: String::new(),
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, AgentSettingsError::RemoteSoulPath));
+    }
+
+    #[test]
+    fn agent_settings_resolve_named_soul_from_souls_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let souls_dir = directory.path().join("souls");
+        fs::create_dir_all(&souls_dir).unwrap();
+        fs::write(souls_dir.join("focused.md"), "# Focused\n").unwrap();
+        let path = directory.path().join("microclaw.config.yaml");
+        fs::write(
+            &path,
+            format!(
+                "llm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\ndata_dir: {}\nsouls_dir: {}\nsoul_path: focused.md\n",
+                directory.path().display(),
+                souls_dir.display()
+            ),
+        )
+        .unwrap();
+
+        let settings = WorkRuntimeService::new(path).agent_settings().unwrap();
+
+        assert_eq!(
+            settings.soul_path,
+            souls_dir.join("focused.md").display().to_string()
+        );
+        assert_eq!(settings.soul_content, "# Focused\n");
     }
 
     #[test]
