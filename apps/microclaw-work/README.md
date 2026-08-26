@@ -82,6 +82,11 @@ non-secret model selected in the local Codex `config.toml` when available, then
 runs the same Save & Test journey. This avoids assuming that the Server's
 fallback Codex model is enabled for every ChatGPT account.
 
+Codex Responses streaming is normalized at the shared provider boundary. If a
+terminal `response.done` event omits output items, visible
+`response.output_text.delta`/`done` text is retained and delivered to the Agent
+Engine instead of producing an empty-reply completion fallback.
+
 A packaged installation falls back to
 `<platform data directory>/microclaw-work/microclaw.config.yaml`, while an
 explicit `MICROCLAW_WORK_CONFIG` or discoverable shared Server config takes

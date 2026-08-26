@@ -1112,6 +1112,7 @@ pub(crate) fn parse_openai_codex_response_payload(
     }
 
     let mut from_done_event: Option<OaiResponsesResponse> = None;
+    let mut streamed_output_text = String::new();
     for line in text.lines() {
         let line = line.trim();
         if !line.starts_with("data:") {
@@ -1125,6 +1126,20 @@ pub(crate) fn parse_openai_codex_response_payload(
             continue;
         };
 
+        match value.get("type").and_then(|value| value.as_str()) {
+            Some("response.output_text.delta") => {
+                if let Some(delta) = value.get("delta").and_then(|value| value.as_str()) {
+                    streamed_output_text.push_str(delta);
+                }
+            }
+            Some("response.output_text.done") if streamed_output_text.is_empty() => {
+                if let Some(done) = value.get("text").and_then(|value| value.as_str()) {
+                    streamed_output_text.push_str(done);
+                }
+            }
+            _ => {}
+        }
+
         if let Some(response_value) = value.get("response") {
             if let Ok(parsed) =
                 serde_json::from_value::<OaiResponsesResponse>(response_value.clone())
@@ -1137,8 +1152,33 @@ pub(crate) fn parse_openai_codex_response_payload(
         }
     }
 
-    if let Some(parsed) = from_done_event {
+    if let Some(mut parsed) = from_done_event {
+        if !streamed_output_text.is_empty()
+            && !parsed.output.iter().any(|item| match item {
+                OaiResponsesOutputItem::Message { content } => content.iter().any(|part| {
+                    matches!(part, OaiResponsesOutputContentPart::OutputText { text } if !text.is_empty())
+                }),
+                _ => false,
+            })
+        {
+            parsed.output.push(OaiResponsesOutputItem::Message {
+                content: vec![OaiResponsesOutputContentPart::OutputText {
+                    text: streamed_output_text,
+                }],
+            });
+        }
         return Ok(parsed);
+    }
+
+    if !streamed_output_text.is_empty() {
+        return Ok(OaiResponsesResponse {
+            output: vec![OaiResponsesOutputItem::Message {
+                content: vec![OaiResponsesOutputContentPart::OutputText {
+                    text: streamed_output_text,
+                }],
+            }],
+            usage: None,
+        });
     }
 
     Err(MicroClawError::LlmApi(format!(
@@ -2254,6 +2294,38 @@ data: [DONE]
         match &translated.content[0] {
             ResponseContentBlock::Text { text } => assert_eq!(text, "From SSE"),
             _ => panic!("Expected text block"),
+        }
+    }
+
+    #[test]
+    fn test_parse_openai_codex_response_payload_recovers_streamed_text() {
+        let body = r#"data: {"type":"response.output_text.delta","delta":"Hello "}
+
+data: {"type":"response.output_text.delta","delta":"from stream"}
+
+data: {"type":"response.done","response":{"output":[],"usage":{"input_tokens":1,"output_tokens":2}}}
+
+data: [DONE]
+"#;
+        let parsed = parse_openai_codex_response_payload(body).unwrap();
+        let translated = translate_oai_responses_response(parsed);
+        match &translated.content[0] {
+            ResponseContentBlock::Text { text } => assert_eq!(text, "Hello from stream"),
+            _ => panic!("Expected recovered text block"),
+        }
+    }
+
+    #[test]
+    fn test_parse_openai_codex_response_payload_accepts_delta_only_stream() {
+        let body = r#"data: {"type":"response.output_text.delta","delta":"Visible"}
+
+data: [DONE]
+"#;
+        let parsed = parse_openai_codex_response_payload(body).unwrap();
+        let translated = translate_oai_responses_response(parsed);
+        match &translated.content[0] {
+            ResponseContentBlock::Text { text } => assert_eq!(text, "Visible"),
+            _ => panic!("Expected recovered text block"),
         }
     }
 }

@@ -6,6 +6,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Fixed
+
+- **Codex streamed final-text recovery.** The OpenAI Codex Responses parser now
+  retains `response.output_text.delta`/`done` text when the terminal
+  `response.done` payload omits visible output. This prevents a successfully
+  authenticated ChatGPT-backed Codex run from falling through to the Agent
+  Engine's empty-reply retry and completion fallback.
+
 ### Added
 
 - **One-click Codex account onboarding.** Work detects an existing local Codex
@@ -13,7 +21,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   It reuses the non-secret model selected by the Codex client, clears
   inapplicable API-key/base-URL fields, and immediately runs Save & Test. This
   was verified against a real ChatGPT-backed Codex session instead of assuming
-  the generic provider default is account-compatible.
+  the generic provider default is account-compatible. A real shared-Agent-
+  Engine diagnostic completed with three Work events and the expected visible
+  final response.
 - **Auto-growing Work composer.** The primary chat and in-run guidance fields
   now use GPUI Component's native multiline textarea. They grow with longer
   prompts, submit with Return, preserve Shift-Return for new lines, and retain

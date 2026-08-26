@@ -477,7 +477,9 @@ macOS Edit/Quit/Dock-reopen lifecycle, live plans, in-run steering, structured
 inline approvals, bounded process
 evidence, native multi-file diff review, visible subagent activity, checkpoint
 review, process-level crash/retry tests, and macOS development-bundle
-verification. The macOS bundle uses the website brand icon; local packaging has
+verification. The detected Codex-account path has completed a real shared Agent
+Engine first-response probe with visible final output after provider-level SSE
+normalization. The macOS bundle uses the website brand icon; local packaging has
 also produced a Developer ID-signed, Hardened Runtime application and signed,
 checksum-verified DMG that Gatekeeper accepts. CI builds the equivalent ad-hoc
 signed DMG preview and launch-smokes the packaged application. The release
