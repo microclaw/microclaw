@@ -113,6 +113,10 @@ precedence. Work-only configs may omit Server delivery channels. New files are
 written atomically and use mode `0600` on Unix; edits preserve existing YAML
 comments and retain a saved key unless the user explicitly replaces it.
 
+Development and acceptance runs can isolate all Work-owned state by setting
+`MICROCLAW_WORK_DATA_DIR` to an explicit directory. Packaged daily use should
+leave it unset and use the platform data directory.
+
 Work sessions are stored as separate versioned snapshots under the application
 data directory, with an atomic bounded index for the conversation list. **New
 Chat** creates an independent Agent Engine conversation, and opening a recent

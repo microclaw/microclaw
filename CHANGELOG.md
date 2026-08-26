@@ -38,6 +38,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   GPUI button primitive directly so status dots, titles, and pinned state stay
   left-aligned at every title length. The Workspace footer uses one clear
   project action and an equal-width Settings, Reload, and Checks toolbar.
+- **Isolated Work acceptance data.** Development and native-input acceptance
+  runs can set `MICROCLAW_WORK_DATA_DIR` so automated sessions never touch the
+  user's normal desktop history or configuration. The isolated macOS pass now
+  covers IME marked text, numbered candidate selection, draft persistence, and
+  relaunch recovery.
 - **Responsive long Work sessions.** The desktop progressively renders older
   messages, bounds persisted diff payloads, and limits native diff previews so
   long conversations and generated files do not make every frame expensive. A

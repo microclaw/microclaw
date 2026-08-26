@@ -196,9 +196,7 @@ impl WorkApp {
     }
 
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let work_data_root = dirs::data_local_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("microclaw-work");
+        let work_data_root = work_data_root();
         let work_home = work_data_root.join("workspace");
         let appearance_preferences_path = work_data_root.join("appearance");
         let appearance_preference = AppearancePreference::load(&appearance_preferences_path);
@@ -3310,6 +3308,29 @@ fn trim_text(text: &str, limit: usize) -> String {
     }
 }
 
+fn work_data_root() -> PathBuf {
+    resolve_work_data_root(
+        std::env::var_os("MICROCLAW_WORK_DATA_DIR"),
+        dirs::data_local_dir(),
+        std::env::temp_dir(),
+    )
+}
+
+fn resolve_work_data_root(
+    override_path: Option<std::ffi::OsString>,
+    platform_data_dir: Option<PathBuf>,
+    temporary_dir: PathBuf,
+) -> PathBuf {
+    override_path
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            platform_data_dir
+                .unwrap_or(temporary_dir)
+                .join("microclaw-work")
+        })
+}
+
 fn open_work_window(cx: &mut App) {
     if !cx.windows().is_empty() {
         cx.activate(true);
@@ -3345,4 +3366,39 @@ fn main() {
         configure_native_application(cx);
         open_work_window(cx);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_work_data_root;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn work_data_root_prefers_a_nonempty_explicit_directory() {
+        assert_eq!(
+            resolve_work_data_root(
+                Some(OsString::from("/private/tmp/isolated-work")),
+                Some(PathBuf::from("/platform-data")),
+                PathBuf::from("/temporary"),
+            ),
+            PathBuf::from("/private/tmp/isolated-work")
+        );
+    }
+
+    #[test]
+    fn work_data_root_uses_platform_or_temporary_fallback() {
+        assert_eq!(
+            resolve_work_data_root(
+                Some(OsString::new()),
+                Some(PathBuf::from("/platform-data")),
+                PathBuf::from("/temporary"),
+            ),
+            PathBuf::from("/platform-data/microclaw-work")
+        );
+        assert_eq!(
+            resolve_work_data_root(None, None, PathBuf::from("/temporary")),
+            PathBuf::from("/temporary/microclaw-work")
+        );
+    }
 }

@@ -62,6 +62,8 @@ Delivered:
 - named conversation controls and a repeatable macOS Accessibility-tree audit;
 - left-aligned conversation rows and a compact equal-width Workspace utility
   toolbar;
+- native macOS IME marked-text, candidate selection, draft persistence, and
+  relaunch recovery verified in an isolated Work data directory;
 - progressive long-conversation rendering and bounded large-diff persistence
   and previews;
 - a reproducible maximum-size session benchmark with local save/load budgets
@@ -78,7 +80,7 @@ Delivered:
 Remaining acceptance work:
 
 - sustained use with long multi-tool conversations;
-- direct VoiceOver and native Pinyin IME acceptance;
+- direct VoiceOver speech acceptance;
 
 Stage exit: seven consecutive days of daily macOS use without conversation
 loss, unsafe project mutation, or a required terminal workaround.

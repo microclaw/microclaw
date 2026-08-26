@@ -69,8 +69,14 @@ event does not repeat the accumulated text.
   found and fixed unnamed conversation buttons; conversation rows now expose
   their durable titles, and the regression check is reproducible with
   `scripts/audit_work_macos_accessibility.sh`.
-- Unicode Chinese text, persistence, Return-to-send, and Shift-Return multiline
-  input are verified. Native Pinyin candidate composition is not yet proven.
+- Unicode Chinese text, Return-to-send, and Shift-Return multiline input are
+  verified. A later isolated run set `MICROCLAW_WORK_DATA_DIR` to a disposable
+  `/private/tmp` directory, selected an enabled macOS Pinyin input source, and
+  physically entered `nihao`. GPUI displayed marked text, accepted the numbered
+  Chinese candidate `你哈哦`, persisted it as `composer_draft`, and restored the
+  same value after process termination and relaunch. The normal Work data
+  directory was not opened; the input source was restored to U.S. and the
+  disposable directory was removed after verification.
 - A signed build exists, but a live Apple notarization and stapling run still
   requires the release keychain profile.
 - Longer multi-tool tasks and multi-day survival remain separate acceptance
