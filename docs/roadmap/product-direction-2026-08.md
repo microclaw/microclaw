@@ -487,8 +487,8 @@ a Linux/macOS/Windows release-build matrix that runs the headless recovery harne
 and publishes unsigned preview artifacts. Hosted Linux and macOS jobs have completed successfully and produced
 non-expired preview artifacts; Windows hosted completion is still required
 before treating the three-platform gate as passed. The next gates remain real-provider end-to-end onboarding,
-Linux launch smoke, accessibility/IME testing, Apple notarization, and production
-Windows Authenticode evidence. Phase 1 is not complete until those gates have direct
+accessibility/IME testing, the physical GPU/display matrix, Apple notarization,
+and production Windows Authenticode evidence. Phase 1 is not complete until those gates have direct
 evidence.
 
 ### Phase 2 — persistent agents and teams

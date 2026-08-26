@@ -183,6 +183,10 @@ installers. A platform is not promoted to release quality until its native
 installer, signing, launch smoke test, IME/accessibility checks, and GPU/display
 matrix have direct evidence.
 
+The Linux preview job launches the release binary under Xvfb with Mesa's Vulkan
+software path and requires it to remain alive. This is a deterministic CI smoke,
+not yet evidence for the broader physical GPU/display matrix.
+
 The UI remains a workflow projection rather than an IDE. Conversation is the
 primary surface, with approvals rendered inline at the point where work pauses.
 Workspace, Plan, Tool Activity, bounded and redacted Process Output, File Changes,

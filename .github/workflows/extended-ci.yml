@@ -93,8 +93,11 @@ jobs:
             libx11-xcb-dev \
             libxkbcommon-x11-dev \
             libzstd-dev \
+            mesa-vulkan-drivers \
             pipewire \
-            xdg-desktop-portal
+            xauth \
+            xdg-desktop-portal \
+            xvfb
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
@@ -111,6 +114,9 @@ jobs:
       - name: Build release desktop binary
         if: runner.os != 'macOS'
         run: cargo build -p microclaw-work --release --locked
+      - name: Launch-smoke Linux desktop binary
+        if: runner.os == 'Linux'
+        run: xvfb-run -a scripts/smoke_work_linux_app.sh release
       - name: Build release macOS DMG preview
         if: runner.os == 'macOS'
         run: scripts/build_work_macos_dmg.sh release

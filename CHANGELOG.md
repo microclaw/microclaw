@@ -8,6 +8,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Linux Work launch gate.** Extended CI now starts the release GPUI desktop
+  under Xvfb with Mesa Vulkan support and requires the process to remain alive,
+  complementing the existing Linux compile, test, Clippy, and preview artifact
+  checks without overstating it as physical GPU coverage.
 - **Native MicroClaw Work Windows installer.** A dedicated Inno Setup package
   now installs the GPUI desktop per user with the website brand icon, Start menu
   entry, optional desktop shortcut, and clean uninstall. Its build path can
