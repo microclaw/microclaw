@@ -87,7 +87,8 @@ loss, unsafe project mutation, or a required terminal workaround.
 
 ## Stage 3 — macOS release
 
-Status: **notarized candidate complete; publication acceptance pending**
+Status: **notarized candidate and local Cask lifecycle complete; publication
+acceptance pending**
 
 Delivered:
 
@@ -100,7 +101,9 @@ Delivered:
 - a Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted
   local candidate with application and DMG submission evidence;
 - an automated release verifier covering bundle metadata, signatures,
-  notarization, Gatekeeper, DMG integrity, and installation contents.
+  notarization, Gatekeeper, DMG integrity, and installation contents;
+- an isolated local Homebrew Cask install, rebuild-revision upgrade, and
+  uninstall acceptance run that leaves `/Applications` untouched.
 
 Remaining release work:
 

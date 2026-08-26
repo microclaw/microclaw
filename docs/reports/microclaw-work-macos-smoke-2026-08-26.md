@@ -82,6 +82,13 @@ optimized `work-release` bundle and DMG:
   process remained healthy until the smoke harness stopped it, and the exact
   disposable directory was then removed. This is not a substitute for the
   remaining clean-user Homebrew acceptance run.
+- A disposable local Homebrew tap exercised the Cask lifecycle without writing
+  to `/Applications`: install placed the app in an isolated `/private/tmp`
+  appdir, a Cask rebuild revision exercised in-place upgrade, and uninstall
+  removed the app and Caskroom version. Homebrew reported versions `0.1.0` and
+  `0.1.0,1` at the expected points, and Gatekeeper accepted the installed and
+  upgraded copies as `Notarized Developer ID`. The tap, appdir, generated Cask,
+  and local tap repository were removed afterward.
 - `cargo test -p microclaw --lib --locked` passed 1,180 Server tests, with five
   explicitly ignored tests and no failures. Network tests were run with local
   loopback access; the A2A POST test that cannot bind inside the filesystem
@@ -112,7 +119,8 @@ Homebrew installation test.
   directory was not opened; the input source was restored to U.S. and the
   disposable directory was removed after verification.
 - A Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted
-  candidate exists. A clean-user installation and published Homebrew lifecycle
-  test remain release acceptance work.
+  candidate exists, and an isolated local Homebrew install/upgrade/uninstall
+  lifecycle passes. A clean-user test against the published Cask remains
+  release acceptance work.
 - Longer multi-tool tasks and multi-day survival remain separate acceptance
   runs.
