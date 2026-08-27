@@ -1135,6 +1135,35 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn open_release_page(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        cx.open_url("https://github.com/microclaw/microclaw/releases/latest");
+        self.persistence_message = "Opened the latest MicroClaw release.".into();
+        cx.notify();
+    }
+
+    fn reveal_workspace(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let workspace = Path::new(&self.session.workspace);
+        if !workspace.is_dir() {
+            self.persistence_message = "Select an available workspace first.".into();
+            cx.notify();
+            return;
+        }
+
+        match url::Url::from_directory_path(workspace) {
+            Ok(url) => {
+                cx.open_url(url.as_str());
+                self.persistence_message = format!("Opened workspace: {}", workspace.display());
+            }
+            Err(()) => {
+                self.persistence_message = format!(
+                    "Could not create a workspace URL for {}",
+                    workspace.display()
+                );
+            }
+        }
+        cx.notify();
+    }
+
     fn select_file_change(&mut self, path: String, cx: &mut Context<Self>) {
         match self.session.apply(WorkCommand::SelectFileChange { path }) {
             Ok(_) => self.persist(),
@@ -1907,6 +1936,36 @@ impl WorkApp {
                                 .on_click(cx.listener(Self::refresh_runtime_config)),
                         )
                         .into_any_element(),
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .pt_3()
+                        .border_t_1()
+                        .border_color(cx.theme().border.opacity(0.68))
+                        .child(
+                            v_flex()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .text_size(UI_TEXT_SIZE)
+                                        .font_medium()
+                                        .child(format!("MicroClaw Work {}", env!("CARGO_PKG_VERSION"))),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(UI_CAPTION_SIZE)
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Updates are delivered through signed GitHub releases and Homebrew."),
+                                ),
+                        )
+                        .child(
+                            Button::new("settings-view-latest-release")
+                                .outline()
+                                .small()
+                                .label("View Latest")
+                                .on_click(cx.listener(Self::open_release_page)),
+                        )
+                        .into_any_element(),
                 ],
                 cx,
             ))
@@ -2312,12 +2371,24 @@ impl WorkApp {
                                 ),
                         )
                         .child(
-                            Button::new("settings-choose-workspace")
-                                .outline()
-                                .small()
-                                .disabled(self.runtime_active)
-                                .label(if using_work_home { "Connect Folder" } else { "Change Folder" })
-                                .on_click(cx.listener(Self::choose_workspace)),
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("settings-reveal-workspace")
+                                        .ghost()
+                                        .small()
+                                        .disabled(self.session.workspace.is_empty())
+                                        .label("Open")
+                                        .on_click(cx.listener(Self::reveal_workspace)),
+                                )
+                                .child(
+                                    Button::new("settings-choose-workspace")
+                                        .outline()
+                                        .small()
+                                        .disabled(self.runtime_active)
+                                        .label(if using_work_home { "Connect Folder" } else { "Change Folder" })
+                                        .on_click(cx.listener(Self::choose_workspace)),
+                                ),
                         )
                         .into_any_element(),
                     div()

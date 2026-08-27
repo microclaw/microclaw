@@ -38,6 +38,10 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含�
 | MicroClaw Server | 常驻智能体、聊天渠道、Web/API、定时任务与远程自动化 | macOS、Linux 和 Windows |
 | MicroClaw Work | 原生本地对话、项目工作空间、工具审批、检查点与桌面设置 | Apple Silicon macOS 13+；Linux/Windows portable 预览包 |
 
+有关本地任务闭环、平台支持等级、原生设置、安全边界和打包方式，请阅读
+[MicroClaw Work 产品指南](site/docs/work.md)。当前权威规划是
+[Server + Work local-first 规划](docs/roadmap/work-server-local-first-plan-2026-08.md)。
+
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw 对话界面" width="45%" />
   &nbsp;&nbsp;

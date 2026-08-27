@@ -1,6 +1,6 @@
 # Product direction — MicroClaw Work and Server
 
-Status: **Active** · Date: **2026-08-24**
+Status: **Superseded by [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md)** · Date: **2026-08-24**
 
 This document records the product direction after reviewing MicroClaw's current
 capabilities, packaging boundary, recent competitor development, and public

@@ -8,7 +8,9 @@ first.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`product-direction-2026-08.md`](./product-direction-2026-08.md) | **Active** | Native GPUI-based `microclaw-work`, shared runtime/server boundaries, named agents, deployment, packaging tiers, and evidence gates. |
+| [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md) | **Active** | Canonical Server + local-first Work plan, covering macOS product completion, one shared kernel, Workspace depth, lightweight packaging, and Linux/Windows portable previews. |
+| [`product-direction-2026-08.md`](./product-direction-2026-08.md) | Superseded | Original direction that established the two-product boundary; replaced by the focused local-first delivery plan. |
+| [`microclaw-work-macos-execution-plan.md`](./microclaw-work-macos-execution-plan.md) | Superseded | macOS execution baseline; remaining gates are carried into the active local-first plan. |
 | [`microclaw-work-proposal-cn.md`](./microclaw-work-proposal-cn.md) | Proposal | Chinese proposal for the next major Work/Server product boundary; discussion only, not implementation authorization. |
 | [`next-direction-2026-08.md`](./next-direction-2026-08.md) | Superseded | Full-tree health review; open maintenance findings remain useful inputs to the active product direction. |
 | [`db-decomposition-plan.md`](./db-decomposition-plan.md) | Delivered | Split `db.rs` (17k lines / 237 methods) into domain modules behind the same facade; shipped in 0.5.0. |

@@ -1,7 +1,7 @@
 # MicroClaw Work macOS execution plan
 
-Status: **active**  
-Updated: **2026-08-26**
+Status: **superseded by [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md)**
+Updated: **2026-08-27**
 
 This document is the current delivery plan for MicroClaw Work. It narrows the
 older cross-platform proposal to one supported desktop product: macOS. Windows

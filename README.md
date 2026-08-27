@@ -38,6 +38,11 @@ It is designed for work that lasts longer than one request: multi-step tool use,
 | MicroClaw Server | Always-on agents, chat channels, Web/API access, scheduled work, and remote automation | macOS, Linux, and Windows |
 | MicroClaw Work | Native local conversations, project workspaces, approvals, checkpoints, and desktop settings | Apple Silicon macOS 13+; Linux/Windows portable previews |
 
+Read the [MicroClaw Work product guide](site/docs/work.md) for the local task
+loop, platform support levels, native settings, safety boundary, and packaging
+model. The active delivery plan is
+[Server + Work local-first](docs/roadmap/work-server-local-first-plan-2026-08.md).
+
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw conversation view" width="45%" />
   &nbsp;&nbsp;
