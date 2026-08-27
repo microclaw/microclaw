@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ConversationRole::Assistant
             },
             content: format!("message-{index}: {}", "m".repeat(4_000)),
+            attachments: Vec::new(),
         })
         .collect();
     snapshot.events = (0..WorkSessionSnapshot::MAX_EVENTS)

@@ -726,6 +726,95 @@ impl WorkApp {
         .detach();
     }
 
+    fn choose_attachments(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.runtime_active || self.session.workspace.is_empty() {
+            return;
+        }
+        let selection = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach files from the current workspace".into()),
+        });
+        let view = cx.entity();
+        cx.spawn_in(window, async move |_, window| {
+            let selected = match selection.await {
+                Ok(Ok(Some(paths))) => Ok(paths),
+                Ok(Ok(None)) => Ok(Vec::new()),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            window
+                .update(|_, cx| {
+                    view.update(cx, |this, cx| {
+                        match selected {
+                            Ok(paths) if !paths.is_empty() => {
+                                this.attach_workspace_paths(paths, cx);
+                            }
+                            Ok(_) => this.persistence_message = "Attachments unchanged.".into(),
+                            Err(error) => {
+                                this.persistence_message =
+                                    format!("Could not open the file picker: {error}");
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+                .ok()
+        })
+        .detach();
+    }
+
+    fn attach_workspace_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let count_before = self.session.composer_attachments.len();
+        let result = self.session.apply(WorkCommand::AttachWorkspaceFiles {
+            paths: paths
+                .into_iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+        });
+        match result {
+            Ok(_) => {
+                let added = self
+                    .session
+                    .composer_attachments
+                    .len()
+                    .saturating_sub(count_before);
+                self.persistence_message = if added == 0 {
+                    "No new workspace files were attached.".into()
+                } else {
+                    format!(
+                        "Attached {added} workspace file{}.",
+                        if added == 1 { "" } else { "s" }
+                    )
+                };
+                self.persist();
+            }
+            Err(error) => self.persistence_message = error.to_string(),
+        }
+        cx.notify();
+    }
+
+    fn handle_attachment_drop(
+        &mut self,
+        paths: &ExternalPaths,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.runtime_active {
+            self.attach_workspace_paths(paths.paths().to_vec(), cx);
+        }
+    }
+
+    fn remove_attachment(&mut self, path: &str, cx: &mut Context<Self>) {
+        let _ = self.session.apply(WorkCommand::RemoveComposerAttachment {
+            path: path.to_string(),
+        });
+        self.persistence_message = format!("Removed attachment: {path}");
+        self.persist();
+        cx.notify();
+    }
+
     fn refresh_runtime_config(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.runtime_config = self.runtime_service.config_summary();
         self.persistence_message = if self.runtime_config.ready {
@@ -1368,8 +1457,9 @@ impl WorkApp {
         self.task_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
         });
+        let runtime_prompt = self.session.runtime_task_prompt();
         self.persist();
-        self.launch_runtime_prompt(task, window, cx);
+        self.launch_runtime_prompt(runtime_prompt, window, cx);
     }
 
     fn primary_action(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -2872,6 +2962,7 @@ impl Render for WorkApp {
             .cloned()
             .collect::<Vec<_>>();
         let assistant_draft = self.session.assistant_draft.clone();
+        let composer_attachments = self.session.composer_attachments.clone();
         let retryable = matches!(
             self.session.status,
             WorkStatus::Interrupted | WorkStatus::Failed | WorkStatus::Cancelled
@@ -3404,7 +3495,23 @@ impl Render for WorkApp {
                                                             .font_semibold()
                                                             .child(speaker),
                                                     )
-                                                    .child(message.content),
+                                                    .child(message.content)
+                                                    .children(message.attachments.into_iter().enumerate().map(|(attachment_index, attachment)| {
+                                                        let path = attachment.path.clone();
+                                                        Button::new((
+                                                            "message-attachment",
+                                                            message_index
+                                                                .saturating_mul(8)
+                                                                .saturating_add(attachment_index),
+                                                        ))
+                                                            .ghost()
+                                                            .xsmall()
+                                                            .compact()
+                                                            .label(format!("▱  {}", attachment.path))
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.open_artifact(&path, cx);
+                                                            }))
+                                                    })),
                                             )
                                         },
                                     ))
@@ -3781,6 +3888,28 @@ impl Render for WorkApp {
                             .bg(cx.theme().secondary.opacity(0.28))
                             .border_1()
                             .border_color(cx.theme().border)
+                            .group("composer-drop")
+                            .group_drag_over::<ExternalPaths>("composer-drop", |style| {
+                                style.border_color(cx.theme().accent).bg(cx.theme().accent.opacity(0.08))
+                            })
+                            .on_drop(cx.listener(Self::handle_attachment_drop))
+                            .children((!composer_attachments.is_empty()).then(|| {
+                                h_flex()
+                                    .w_full()
+                                    .gap_1()
+                                    .flex_wrap()
+                                    .children(composer_attachments.into_iter().enumerate().map(|(attachment_index, attachment)| {
+                                        let path = attachment.path.clone();
+                                        Button::new(("composer-attachment", attachment_index))
+                                            .ghost()
+                                            .xsmall()
+                                            .compact()
+                                            .label(format!("▱  {}  ×", attachment.path))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.remove_attachment(&path, cx);
+                                            }))
+                                    }))
+                            }))
                             .child(
                                 div()
                                     .min_h(px(44.))
@@ -3800,6 +3929,18 @@ impl Render for WorkApp {
                                     .child(
                                         h_flex()
                                             .gap_2()
+                                            .child(
+                                                Button::new("attach-workspace-files")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .compact()
+                                                    .disabled(
+                                                        self.runtime_active
+                                                            || self.session.workspace.is_empty(),
+                                                    )
+                                                    .label("＋ Attach")
+                                                    .on_click(cx.listener(Self::choose_attachments)),
+                                            )
                                             .child(
                                                 div()
                                                     .px_2()

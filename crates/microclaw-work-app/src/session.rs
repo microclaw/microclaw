@@ -65,6 +65,14 @@ pub struct ConversationMessage {
     pub id: u64,
     pub role: ConversationRole,
     pub content: String,
+    #[serde(default)]
+    pub attachments: Vec<WorkAttachment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkAttachment {
+    /// Workspace-relative path. Absolute paths are intentionally never persisted.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +142,12 @@ pub enum WorkCommand {
     SetComposerDraft {
         draft: String,
     },
+    AttachWorkspaceFiles {
+        paths: Vec<String>,
+    },
+    RemoveComposerAttachment {
+        path: String,
+    },
     SetWorkspace {
         path: String,
     },
@@ -185,6 +199,8 @@ pub enum WorkCommandError {
     UnknownFileChange { path: String },
     #[error("workspace is not an accessible directory: {path}")]
     InvalidWorkspace { path: String },
+    #[error("attachment is unavailable or outside the selected workspace: {path}")]
+    InvalidAttachment { path: String },
     #[error("cannot {command} while Work status is {actual:?}")]
     InvalidStatus {
         command: &'static str,
@@ -222,6 +238,8 @@ pub struct WorkSessionSnapshot {
     pub task: String,
     #[serde(default)]
     pub composer_draft: String,
+    #[serde(default)]
+    pub composer_attachments: Vec<WorkAttachment>,
     pub status: WorkStatus,
     pub plan: Vec<PlanStep>,
     pub approval_reason: Option<String>,
@@ -277,6 +295,7 @@ impl WorkSessionSnapshot {
             title: String::new(),
             task: String::new(),
             composer_draft: String::new(),
+            composer_attachments: Vec::new(),
             status: WorkStatus::Planning,
             plan: Vec::new(),
             approval_reason: None,
@@ -309,6 +328,7 @@ impl WorkSessionSnapshot {
             title: "Build a native desktop workflow for MicroClaw Work".into(),
             task: "Build a native desktop workflow for MicroClaw Work".into(),
             composer_draft: String::new(),
+            composer_attachments: Vec::new(),
             status: WorkStatus::AwaitingApproval,
             plan: vec![
                 PlanStep {
@@ -376,17 +396,28 @@ impl WorkSessionSnapshot {
                 id: 1,
                 role: ConversationRole::User,
                 content: "Build a native desktop workflow for MicroClaw Work".into(),
+                attachments: Vec::new(),
             }],
             assistant_draft: "I mapped the shared runtime and prepared a native Work shell. I need your approval before writing the desktop files and running verification.".into(),
         }
     }
 
     fn push_message(&mut self, role: ConversationRole, content: impl Into<String>) {
+        self.push_message_with_attachments(role, content, Vec::new());
+    }
+
+    fn push_message_with_attachments(
+        &mut self,
+        role: ConversationRole,
+        content: impl Into<String>,
+        attachments: Vec<WorkAttachment>,
+    ) {
         let id = self.messages.last().map_or(1, |message| message.id + 1);
         self.messages.push(ConversationMessage {
             id,
             role,
             content: trim_owned(content.into(), 64_000),
+            attachments,
         });
         trim_front(&mut self.messages, Self::MAX_MESSAGES);
     }
@@ -410,6 +441,10 @@ impl WorkSessionSnapshot {
             WorkCommand::StartTask { task } => self.start_task(task)?,
             WorkCommand::RetryTask => self.retry_task()?,
             WorkCommand::SetComposerDraft { draft } => self.composer_draft = draft,
+            WorkCommand::AttachWorkspaceFiles { paths } => self.attach_workspace_files(paths)?,
+            WorkCommand::RemoveComposerAttachment { path } => {
+                self.composer_attachments.retain(|item| item.path != path)
+            }
             WorkCommand::SetWorkspace { path } => self.set_workspace(path)?,
             WorkCommand::SelectFileChange { path } => self.select_file_change(path)?,
             WorkCommand::RecordProgress {
@@ -473,7 +508,8 @@ impl WorkSessionSnapshot {
         if self.title.trim().is_empty() {
             self.title = self.task.clone();
         }
-        self.push_message(ConversationRole::User, self.task.clone());
+        let attachments = std::mem::take(&mut self.composer_attachments);
+        self.push_message_with_attachments(ConversationRole::User, self.task.clone(), attachments);
         self.prepare_run_projection();
         self.push_event(WorkEventKind::System, "Created a foreground Work task");
         Ok(())
@@ -540,11 +576,67 @@ impl WorkSessionSnapshot {
             return Err(WorkCommandError::InvalidWorkspace { path });
         }
         self.workspace = canonical.display().to_string();
+        self.composer_attachments.clear();
         self.push_event(
             WorkEventKind::System,
             format!("Workspace changed to {}", self.workspace),
         );
         Ok(())
+    }
+
+    fn attach_workspace_files(&mut self, paths: Vec<String>) -> Result<(), WorkCommandError> {
+        const MAX_ATTACHMENTS: usize = 8;
+        let workspace = Path::new(&self.workspace).canonicalize().map_err(|_| {
+            WorkCommandError::InvalidWorkspace {
+                path: self.workspace.clone(),
+            }
+        })?;
+        for path in paths {
+            let candidate = Path::new(&path)
+                .canonicalize()
+                .map_err(|_| WorkCommandError::InvalidAttachment { path: path.clone() })?;
+            if !candidate.starts_with(&workspace) || !candidate.is_file() {
+                return Err(WorkCommandError::InvalidAttachment { path });
+            }
+            let relative = candidate
+                .strip_prefix(&workspace)
+                .map_err(|_| WorkCommandError::InvalidAttachment { path: path.clone() })?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !self
+                .composer_attachments
+                .iter()
+                .any(|attachment| attachment.path == relative)
+                && self.composer_attachments.len() < MAX_ATTACHMENTS
+            {
+                self.composer_attachments
+                    .push(WorkAttachment { path: relative });
+            }
+        }
+        Ok(())
+    }
+
+    /// Build the provider prompt for the latest user turn while keeping persisted paths relative.
+    pub fn runtime_task_prompt(&self) -> String {
+        let attachments = self
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == ConversationRole::User)
+            .map(|message| message.attachments.as_slice())
+            .unwrap_or_default();
+        if attachments.is_empty() {
+            return self.task.clone();
+        }
+        let mut prompt = self.task.clone();
+        prompt.push_str("\n\nWorkspace files attached to this request:\n");
+        for attachment in attachments {
+            prompt.push_str("- ");
+            prompt.push_str(&attachment.path);
+            prompt.push('\n');
+        }
+        prompt.push_str("Use the shared filesystem tools to inspect these files when relevant.");
+        prompt
     }
 
     fn select_file_change(&mut self, path: String) -> Result<(), WorkCommandError> {
@@ -2048,5 +2140,43 @@ mod tests {
             snapshot.resolve_artifact_path("missing.txt").unwrap_err(),
             WorkArtifactError::Unavailable { .. }
         ));
+    }
+
+    #[test]
+    fn workspace_attachments_are_relative_persisted_and_added_to_runtime_prompt() {
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let attached = source.join("main.rs");
+        std::fs::write(&attached, "fn main() {}").unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let mut snapshot = WorkSessionSnapshot::new(workspace.path().display().to_string());
+
+        snapshot
+            .apply(WorkCommand::AttachWorkspaceFiles {
+                paths: vec![attached.display().to_string()],
+            })
+            .unwrap();
+        assert_eq!(snapshot.composer_attachments[0].path, "src/main.rs");
+        assert!(matches!(
+            snapshot
+                .apply(WorkCommand::AttachWorkspaceFiles {
+                    paths: vec![outside.path().display().to_string()],
+                })
+                .unwrap_err(),
+            WorkCommandError::InvalidAttachment { .. }
+        ));
+
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "Review this file".into(),
+            })
+            .unwrap();
+        assert!(snapshot.composer_attachments.is_empty());
+        assert_eq!(snapshot.messages[0].attachments[0].path, "src/main.rs");
+        assert_eq!(
+            snapshot.runtime_task_prompt(),
+            "Review this file\n\nWorkspace files attached to this request:\n- src/main.rs\nUse the shared filesystem tools to inspect these files when relevant."
+        );
     }
 }
