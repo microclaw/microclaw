@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 dirs = "6"
-microclaw = { path = "../.." }
+microclaw = { path = "../..", default-features = false }
 microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"

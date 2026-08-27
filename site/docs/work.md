@@ -88,10 +88,11 @@ microclaw-work-runtime   foreground worker, cancellation, runtime event bridge
 shared MicroClaw Agent Engine, providers, tools, policy, memory, checkpoints
 ```
 
-The Work bundle contains no Web frontend. Model calls, checkpoints, restore,
-and other blocking work run off the GPUI thread. Server continues to own Web,
-channels, schedules, remote delivery, and long-running automation.
+The Work runtime disables the root crate's `embedded-web-ui` feature, so its
+binary and app bundle contain no React operator-console distribution. Model
+calls, checkpoints, restore, and other blocking work run off the GPUI thread.
+Server enables the feature by default and continues to own Web, channels,
+schedules, remote delivery, and long-running automation.
 
 See the [architecture guide](./architecture) for the complete Server/Work
 boundary and the public [roadmap](./roadmap) for current acceptance gates.
-

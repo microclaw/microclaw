@@ -11,6 +11,11 @@ cancellation live in `microclaw-work-runtime`. This desktop package owns only
 GPUI/platform adaptation and must not duplicate the provider-neutral Agent
 Engine or runtime control.
 
+The runtime dependency explicitly disables MicroClaw's `embedded-web-ui`
+feature. Server builds continue to embed the React operator console by default,
+but Work carries only its GPUI presentation while retaining the same Agent
+Engine and execution policy.
+
 Run on a supported desktop host:
 
 ```sh

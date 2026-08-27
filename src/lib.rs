@@ -53,6 +53,10 @@ pub mod turn_recovery;
 pub mod voice;
 pub mod web;
 
+/// Whether this build embeds the React operator console. Server builds enable
+/// it by default; native Work builds deliberately disable it.
+pub const EMBEDDED_WEB_UI_ENABLED: bool = cfg!(feature = "embedded-web-ui");
+
 pub use channels::discord;
 pub use channels::telegram;
 pub use microclaw_app::builtin_skills;

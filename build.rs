@@ -19,6 +19,7 @@ fn main() {
         println!("cargo:rerun-if-changed={path}");
     }
     println!("cargo:rerun-if-env-changed=MICROCLAW_SKIP_WEB_BUILD");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EMBEDDED_WEB_UI");
     println!("cargo:rerun-if-env-changed=NPM");
 
     ensure_web_assets();
@@ -28,6 +29,11 @@ fn main() {
 }
 
 fn ensure_web_assets() {
+    if env::var_os("CARGO_FEATURE_EMBEDDED_WEB_UI").is_none() {
+        write_embedded_web_assets(false, Path::new("web/dist"));
+        return;
+    }
+
     let source_dist = Path::new("web/dist");
     let skip_web_build = env::var_os("MICROCLAW_SKIP_WEB_BUILD").is_some();
 
@@ -44,7 +50,12 @@ fn ensure_web_assets() {
 
     assert_web_assets_ready(source_dist);
 
-    let out_dist = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set")).join("web-dist");
+    write_embedded_web_assets(true, source_dist);
+}
+
+fn write_embedded_web_assets(include_assets: bool, source_dist: &Path) {
+    let output_root = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set"));
+    let out_dist = output_root.join("web-dist");
     if out_dist.exists() {
         fs::remove_dir_all(&out_dist).unwrap_or_else(|err| {
             panic!(
@@ -53,16 +64,24 @@ fn ensure_web_assets() {
             )
         });
     }
-    copy_dir_all(source_dist, &out_dist).unwrap_or_else(|err| {
-        panic!(
-            "failed to copy web assets from {} to {}: {err}",
-            source_dist.display(),
-            out_dist.display()
-        )
-    });
+    if include_assets {
+        copy_dir_all(source_dist, &out_dist).unwrap_or_else(|err| {
+            panic!(
+                "failed to copy web assets from {} to {}: {err}",
+                source_dist.display(),
+                out_dist.display()
+            )
+        });
+    } else {
+        fs::create_dir_all(&out_dist).unwrap_or_else(|err| {
+            panic!(
+                "failed to create empty Web asset directory {}: {err}",
+                out_dist.display()
+            )
+        });
+    }
 
-    let web_assets_rs =
-        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set")).join("web_assets.rs");
+    let web_assets_rs = output_root.join("web_assets.rs");
     let web_assets_source = format!(
         "static WEB_ASSETS: Dir<'_> = include_dir!({:?});\n",
         out_dist.to_string_lossy()

@@ -106,6 +106,8 @@ Server is optional and belongs to a later phase.
 Goal: Work ships only what the foreground desktop product needs.
 
 - GPUI + Rust render every Work screen; no bundled React Web console;
+- Server enables `embedded-web-ui` by default while Work explicitly disables
+  it at the shared-runtime dependency boundary;
 - Work has a dedicated `work-release` profile, bundle builder, and release
   artifacts;
 - Server Web UI and channel adapters stay in the Server product;

@@ -35,7 +35,8 @@ license = "MIT"
 default-run = "microclaw"
 
 [features]
-default = []
+default = ["embedded-web-ui"]
+embedded-web-ui = []
 sqlite-vec = ["microclaw-storage/sqlite-vec"]
 journald = ["microclaw-app/journald"]
 channel-matrix = ["dep:matrix-sdk"]

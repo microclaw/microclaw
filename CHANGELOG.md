@@ -4,6 +4,20 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Changed
+
+- **Truly lightweight Work builds.** Server builds continue to embed the React
+  operator console by default, while `microclaw-work` now disables that asset
+  feature at its runtime dependency boundary. Work keeps the shared Agent
+  Engine, providers, tools, policy, memory, and checkpoints without carrying
+  the Server Web distribution.
+- **Local-first Work product surface.** Native Settings now shows the packaged
+  Work version, links to signed release updates, and can open the active
+  Workspace. The public site has a dedicated Work guide and one canonical
+  Server + Work delivery plan.
+
 ## 0.5.3 - 2026-08-27
 
 ### Added
