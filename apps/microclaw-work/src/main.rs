@@ -42,6 +42,55 @@ const INITIAL_VISIBLE_MESSAGES: usize = 60;
 const MESSAGE_LOAD_BATCH: usize = 60;
 const MAX_VISIBLE_DIFF_LINES: usize = 400;
 
+const SIDEBAR_WIDTH: Pixels = px(242.);
+const CONTENT_MAX_WIDTH: Pixels = px(800.);
+const SETTINGS_NAV_WIDTH: Pixels = px(172.);
+const SETTINGS_CONTENT_WIDTH: Pixels = px(640.);
+const UI_TEXT_SIZE: Pixels = px(12.);
+const UI_CAPTION_SIZE: Pixels = px(11.);
+const UI_PAGE_TITLE_SIZE: Pixels = px(17.);
+
+fn sidebar_width_for(viewport_width: Pixels) -> Pixels {
+    if viewport_width < px(1_000.) {
+        px(224.)
+    } else {
+        SIDEBAR_WIDTH
+    }
+}
+
+fn inspector_fits(viewport_width: Pixels) -> bool {
+    viewport_width >= px(1_100.)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SettingsSection {
+    General,
+    Appearance,
+    #[default]
+    Models,
+    Agent,
+    Workspace,
+    Diagnostics,
+}
+
+impl SettingsSection {
+    const ALL: [(Self, &'static str, &'static str); 6] = [
+        (Self::General, "General", "⌘"),
+        (Self::Appearance, "Appearance", "◐"),
+        (Self::Models, "Models", "◇"),
+        (Self::Agent, "Agent", "✦"),
+        (Self::Workspace, "Workspace", "▱"),
+        (Self::Diagnostics, "Diagnostics", "✓"),
+    ];
+
+    fn title(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find_map(|(section, title, _)| (*section == self).then_some(*title))
+            .unwrap_or("Settings")
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum AppearancePreference {
     #[default]
@@ -157,6 +206,7 @@ struct WorkApp {
     diagnostics_open: bool,
     diagnostics_report: WorkDiagnosticsReport,
     settings_open: bool,
+    settings_section: SettingsSection,
     appearance_preference: AppearancePreference,
     appearance_preferences_path: PathBuf,
     settings_has_api_key: bool,
@@ -439,6 +489,7 @@ impl WorkApp {
             diagnostics_open: false,
             diagnostics_report,
             settings_open: false,
+            settings_section: SettingsSection::default(),
             appearance_preference,
             appearance_preferences_path,
             settings_has_api_key,
@@ -700,8 +751,9 @@ impl WorkApp {
         if self.reject_if_runtime_busy(cx) {
             return;
         }
-        self.diagnostics_open = true;
-        self.settings_open = false;
+        self.settings_section = SettingsSection::Diagnostics;
+        self.settings_open = true;
+        self.diagnostics_open = false;
         self.refresh_diagnostics(event, window, cx);
     }
 
@@ -714,8 +766,9 @@ impl WorkApp {
         if self.reject_if_runtime_busy(cx) {
             return;
         }
-        self.diagnostics_open = true;
-        self.settings_open = false;
+        self.settings_section = SettingsSection::Diagnostics;
+        self.settings_open = true;
+        self.diagnostics_open = false;
         self.refresh_diagnostics_state(cx);
     }
 
@@ -1639,343 +1692,815 @@ impl WorkApp {
         .detach();
     }
 
-    fn render_model_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_settings_navigation(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w(SETTINGS_NAV_WIDTH)
+            .h_full()
+            .flex_shrink_0()
+            .p_3()
+            .gap_1()
+            .bg(cx.theme().secondary.opacity(0.32))
+            .border_r_1()
+            .border_color(cx.theme().border.opacity(0.72))
+            .child(
+                h_flex()
+                    .h(px(42.))
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .child(
+                        div()
+                            .size(px(24.))
+                            .rounded_full()
+                            .bg(cx.theme().foreground)
+                            .text_color(cx.theme().background)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(UI_CAPTION_SIZE)
+                            .font_semibold()
+                            .child("μ"),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_size(UI_TEXT_SIZE)
+                                    .font_semibold()
+                                    .child("MicroClaw Work"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("SETTINGS"),
+                            ),
+                    ),
+            )
+            .child(div().h(px(8.)))
+            .children(
+                SettingsSection::ALL
+                    .into_iter()
+                    .map(|(section, title, icon)| {
+                        BaseButton::new(format!("settings-nav-{title}"))
+                            .w_full()
+                            .h(px(32.))
+                            .px_2()
+                            .gap_2()
+                            .items_center()
+                            .justify_start()
+                            .rounded(px(7.))
+                            .when(self.settings_section == section, |button| {
+                                button.bg(cx.theme().accent.opacity(0.16))
+                            })
+                            .hover(|style| style.bg(cx.theme().accent.opacity(0.10)))
+                            .child(
+                                div()
+                                    .w(px(18.))
+                                    .text_center()
+                                    .text_size(UI_CAPTION_SIZE)
+                                    .text_color(if self.settings_section == section {
+                                        cx.theme().foreground
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(icon),
+                            )
+                            .child(
+                                div()
+                                    .text_size(UI_TEXT_SIZE)
+                                    .font_weight(if self.settings_section == section {
+                                        FontWeight::SEMIBOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .child(title),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.settings_section = section;
+                                if section == SettingsSection::Diagnostics {
+                                    this.refresh_diagnostics_state(cx);
+                                } else {
+                                    cx.notify();
+                                }
+                            }))
+                    }),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .px_2()
+                    .pb_1()
+                    .text_size(px(10.))
+                    .line_height(relative(1.35))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Settings are stored locally on this Mac."),
+            )
+    }
+
+    fn settings_page_header(
+        &self,
+        subtitle: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .gap_1()
+            .pb_4()
+            .child(
+                div()
+                    .text_size(UI_PAGE_TITLE_SIZE)
+                    .font_semibold()
+                    .child(self.settings_section.title()),
+            )
+            .child(
+                div()
+                    .text_size(UI_CAPTION_SIZE)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(subtitle),
+            )
+    }
+
+    fn settings_group(&self, children: Vec<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .w_full()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(cx.theme().border.opacity(0.78))
+            .bg(cx.theme().secondary.opacity(0.18))
+            .p_4()
+            .gap_3()
+            .children(children)
+            .into_any_element()
+    }
+
+    fn settings_label(&self, label: &'static str) -> AnyElement {
+        div()
+            .text_size(UI_CAPTION_SIZE)
+            .font_medium()
+            .child(label)
+            .into_any_element()
+    }
+
+    fn render_general_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(self.settings_page_header(
+                "Core desktop behavior and local configuration.",
+                cx,
+            ))
+            .child(self.settings_group(
+                vec![
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            v_flex()
+                                .gap_0p5()
+                                .child(div().text_size(UI_TEXT_SIZE).font_medium().child("Local-first runtime"))
+                                .child(
+                                    div()
+                                        .text_size(UI_CAPTION_SIZE)
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Work runs against the shared MicroClaw core on this Mac."),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded_full()
+                                .bg(cx.theme().success.opacity(0.14))
+                                .text_color(cx.theme().success)
+                                .text_size(px(10.))
+                                .font_semibold()
+                                .child("ACTIVE"),
+                        )
+                        .into_any_element(),
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .pt_3()
+                        .border_t_1()
+                        .border_color(cx.theme().border.opacity(0.68))
+                        .child(
+                            v_flex()
+                                .gap_0p5()
+                                .child(div().text_size(UI_TEXT_SIZE).font_medium().child("Configuration"))
+                                .child(
+                                    div()
+                                        .max_w(px(430.))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .text_size(UI_CAPTION_SIZE)
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(self.runtime_service.config_path().display().to_string()),
+                                ),
+                        )
+                        .child(
+                            Button::new("settings-general-reload")
+                                .ghost()
+                                .small()
+                                .label("Reload")
+                                .on_click(cx.listener(Self::refresh_runtime_config)),
+                        )
+                        .into_any_element(),
+                ],
+                cx,
+            ))
+            .child(
+                div()
+                    .text_size(UI_CAPTION_SIZE)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Server configuration and channel adapters are unchanged by Work preferences."),
+            )
+            .into_any_element()
+    }
+
+    fn render_appearance_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(self.settings_page_header("Choose how MicroClaw Work looks on this Mac.", cx))
+            .child(self.settings_group(
+                vec![
+                        self.settings_label("Color scheme"),
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .children(
+                                [
+                                    (
+                                        "appearance-system",
+                                        "System",
+                                        "Follow macOS",
+                                        AppearancePreference::System,
+                                    ),
+                                    (
+                                        "appearance-light",
+                                        "Light",
+                                        "Always light",
+                                        AppearancePreference::Light,
+                                    ),
+                                    (
+                                        "appearance-dark",
+                                        "Dark",
+                                        "Always dark",
+                                        AppearancePreference::Dark,
+                                    ),
+                                ]
+                                .into_iter()
+                                .map(
+                                    |(id, label, detail, preference)| {
+                                        BaseButton::new(id)
+                                            .flex_1()
+                                            .h(px(76.))
+                                            .p_3()
+                                            .items_start()
+                                            .justify_start()
+                                            .rounded(px(9.))
+                                            .border_1()
+                                            .border_color(
+                                                if self.appearance_preference == preference {
+                                                    cx.theme().primary.opacity(0.72)
+                                                } else {
+                                                    cx.theme().border
+                                                },
+                                            )
+                                            .bg(if self.appearance_preference == preference {
+                                                cx.theme().accent.opacity(0.14)
+                                            } else {
+                                                cx.theme().background.opacity(0.48)
+                                            })
+                                            .hover(|style| {
+                                                style.bg(cx.theme().accent.opacity(0.10))
+                                            })
+                                            .child(
+                                                v_flex()
+                                                    .gap_1()
+                                                    .child(
+                                                        h_flex()
+                                                            .w_full()
+                                                            .justify_between()
+                                                            .child(
+                                                                div()
+                                                                    .text_size(UI_TEXT_SIZE)
+                                                                    .font_semibold()
+                                                                    .child(label),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .size(px(10.))
+                                                                    .rounded_full()
+                                                                    .border_1()
+                                                                    .border_color(
+                                                                        cx.theme().primary,
+                                                                    )
+                                                                    .when(
+                                                                        self.appearance_preference
+                                                                            == preference,
+                                                                        |dot| {
+                                                                            dot.bg(cx
+                                                                                .theme()
+                                                                                .primary)
+                                                                        },
+                                                                    ),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(UI_CAPTION_SIZE)
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .child(detail),
+                                                    ),
+                                            )
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.set_appearance_preference(
+                                                    preference, window, cx,
+                                                );
+                                            }))
+                                    },
+                                ),
+                            )
+                            .into_any_element(),
+                    ],
+                cx,
+            ))
+            .child(
+                div()
+                    .text_size(UI_CAPTION_SIZE)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        "System is recommended and follows macOS appearance changes automatically.",
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_model_settings_content(&self, cx: &mut Context<Self>) -> AnyElement {
         let provider_presets = popular_model_provider_presets();
         let selected_provider = self.provider_input.read(cx).value().trim().to_lowercase();
         let selected_preset = provider_presets
             .iter()
             .copied()
             .find(|preset| preset.id == selected_provider);
+
         v_flex()
-            .size_full()
-            .items_center()
-            .overflow_y_scrollbar()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .p_6()
+            .w_full()
             .gap_4()
-            .text_size(px(12.))
-            .child(
-                h_flex()
-                    .w(px(760.))
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(div().text_lg().font_semibold().child("Settings"))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Appearance, agent identity, context, and model configuration."),
-                            ),
-                    )
-                    .child(
-                        Button::new("close-model-settings")
-                            .ghost()
-                            .small()
-                            .disabled(self.connection_test_active)
-                            .label("Back to Work")
-                            .on_click(cx.listener(Self::close_model_settings)),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .w(px(680.))
-                    .gap_3()
-                    .pt_4()
-                    .border_t_1()
-                    .border_color(cx.theme().border.opacity(0.72))
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(div().text_sm().font_semibold().child("Agent"))
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("SOUL.md defines stable personality and working style. Context Markdown adds durable project knowledge."),
-                            ),
-                    )
-                    .child(div().text_size(px(11.)).font_medium().child("SOUL.md file"))
-                    .child(
-                        Input::new(&self.soul_path_input)
-                            .aria_label("SOUL.md file path"),
-                    )
-                    .child(div().text_size(px(11.)).font_medium().child("Soul"))
-                    .child(
-                        div()
-                            .min_h(px(190.))
-                            .p_3()
-                            .rounded(cx.theme().radius)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().secondary.opacity(0.18))
-                            .child(
-                                Textarea::new(&self.soul_content_input)
-                                    .aria_label("Agent soul and personality"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Changes apply to new turns. Existing Server and channel-specific SOUL overrides remain supported."),
-                    )
-                    .child(div().text_size(px(11.)).font_medium().child("Project context directory"))
-                    .child(
-                        Input::new(&self.context_dir_input)
-                            .aria_label("Project context directory"),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                Button::new("save-agent-settings")
-                                    .primary()
-                                    .small()
-                                    .label("Save Agent Settings")
-                                    .on_click(cx.listener(Self::save_agent_settings)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(px(10.))
-                                    .text_color(if self.agent_settings_message.starts_with("Could not") {
-                                        cx.theme().danger
-                                    } else {
-                                        cx.theme().muted_foreground
-                                    })
-                                    .child(self.agent_settings_message.clone()),
-                            ),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .w(px(680.))
-                    .gap_3()
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(div().text_sm().font_semibold().child("Appearance"))
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("System follows the current macOS appearance automatically."),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_1()
-                            .p_1()
-                            .rounded_lg()
-                            .bg(cx.theme().secondary.opacity(0.55))
-                            .children([
-                                ("appearance-system", "System", AppearancePreference::System),
-                                ("appearance-light", "Light", AppearancePreference::Light),
-                                ("appearance-dark", "Dark", AppearancePreference::Dark),
-                            ].into_iter().map(|(id, label, preference)| {
-                                Button::new(id)
-                                    .ghost()
-                                    .small()
-                                    .w_full()
-                                    .when(self.appearance_preference == preference, |button| {
-                                        button
-                                            .bg(cx.theme().background)
-                                            .shadow_xs()
-                                            .font_semibold()
-                                    })
-                                    .label(label)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.set_appearance_preference(preference, window, cx);
-                                    }))
-                            })),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .w(px(680.))
-                    .gap_3()
-                    .pt_4()
-                    .border_t_1()
-                    .border_color(cx.theme().border.opacity(0.72))
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(div().text_sm().font_semibold().child("Model"))
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Configure the provider used for conversations and tools."),
-                            ),
-                    )
-                    .when(self.codex_account_available, |this| {
-                        this.child(
-                            h_flex()
-                                .items_center()
-                                .justify_between()
-                                .gap_4()
-                                .p_3()
-                                .rounded_lg()
-                                .bg(cx.theme().accent.opacity(0.26))
-                                .child(
-                                    v_flex()
-                                        .gap_1()
-                                        .child(div().text_size(px(12.)).font_semibold().child("Codex account available"))
-                                        .child(
-                                            div()
-                                                .text_size(px(10.))
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child("Use the existing account on this Mac. No API key is copied into Work."),
-                                        ),
-                                )
-                                .child(
-                                    Button::new("use-codex-account")
-                                        .primary()
-                                        .small()
-                                        .disabled(self.connection_test_active)
-                                        .label("Use Account")
-                                        .on_click(cx.listener(Self::use_codex_account)),
-                                ),
-                        )
-                    })
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .font_medium()
-                                    .child("Popular providers"),
-                            )
-                            .children(provider_presets.chunks(4).map(|row| {
-                                h_flex().w_full().gap_1().children(row.iter().copied().map(
-                                    |preset| {
-                                        let selected = preset.id == selected_provider;
-                                        Button::new(format!("provider-preset-{}", preset.id))
-                                            .ghost()
-                                            .small()
-                                            .w_full()
-                                            .when(selected, |button| {
-                                                button
-                                                    .bg(cx.theme().accent.opacity(0.18))
-                                                    .font_semibold()
-                                            })
-                                            .label(preset.id)
-                                            .on_click(cx.listener(
-                                                move |this, _, window, cx| {
-                                                    this.apply_model_provider_preset(
-                                                        preset, window, cx,
-                                                    );
-                                                },
-                                            ))
-                                    },
-                                ))
-                            })),
-                    )
-                    .child(div().text_size(px(11.)).font_medium().child("Provider"))
-                    .child(Input::new(&self.provider_input).aria_label("Model provider"))
-                    .child(div().text_size(px(11.)).font_medium().child("Model ID"))
-                    .child(Input::new(&self.model_input).aria_label("Model ID"))
-                    .when_some(selected_preset, |this, preset| {
-                        this.child(
+            .child(self.settings_page_header(
+                "Select the provider and model used for conversations and tools.",
+                cx,
+            ))
+            .when(self.codex_account_available, |this| {
+                this.child(
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_4()
+                        .p_3()
+                        .rounded(px(9.))
+                        .bg(cx.theme().success.opacity(0.10))
+                        .border_1()
+                        .border_color(cx.theme().success.opacity(0.24))
+                        .child(
                             v_flex()
-                                .gap_1()
+                                .gap_0p5()
+                                .child(div().text_size(UI_TEXT_SIZE).font_semibold().child("Codex account available"))
                                 .child(
                                     div()
-                                        .text_size(px(10.))
+                                        .text_size(UI_CAPTION_SIZE)
                                         .text_color(cx.theme().muted_foreground)
-                                        .child("Recommended current models"),
-                                )
-                                .children(preset.models.iter().copied().map(|model| {
-                                    Button::new(format!("model-suggestion-{model}"))
-                                        .ghost()
-                                        .xsmall()
-                                        .w_full()
-                                        .justify_start()
-                                        .label(model)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.apply_model_suggestion(model, window, cx);
-                                        }))
-                                })),
+                                        .child("Use the signed-in account on this Mac without copying an API key."),
+                                ),
                         )
-                    })
-                    .child(div().text_size(px(11.)).font_medium().child("Base URL (optional)"))
-                    .child(
-                        Input::new(&self.base_url_input)
-                            .aria_label("Provider base URL")
-                            .content_type(InputContentType::Url),
-                    )
-                    .child(div().text_size(px(11.)).font_medium().child("API key"))
-                    .child(
-                        Input::new(&self.api_key_input)
-                            .aria_label("Provider API key")
-                            .content_type(InputContentType::Password)
-                            .mask_toggle(),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(if self.settings_has_api_key {
-                                "A key is already saved. Leave this field blank to keep it."
-                            } else {
-                                "Ollama and account-authenticated providers may not require a key."
-                            }),
-                    )
-                    .child(
-                        h_flex().gap_3().child(
-                            Button::new("save-and-test-model-settings")
+                        .child(
+                            Button::new("use-codex-account")
                                 .primary()
                                 .small()
                                 .disabled(self.connection_test_active)
-                                .label(if self.connection_test_active {
-                                    "Saving & Testing…"
-                                } else {
-                                    "Save & Test"
-                                })
-                                .on_click(cx.listener(Self::save_and_test_model_settings)),
+                                .label("Use Account")
+                                .on_click(cx.listener(Self::use_codex_account)),
                         ),
-                    ),
+                )
+            })
+            .child(self.settings_group(
+                vec![
+                    self.settings_label("Provider"),
+                    h_flex()
+                        .w_full()
+                        .gap_1()
+                        .children(provider_presets.iter().take(6).copied().map(|preset| {
+                            let selected = preset.id == selected_provider;
+                            Button::new(format!("provider-preset-{}", preset.id))
+                                .ghost()
+                                .xsmall()
+                                .flex_1()
+                                .when(selected, |button| {
+                                    button.bg(cx.theme().accent.opacity(0.18)).font_semibold()
+                                })
+                                .label(preset.id)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.apply_model_provider_preset(preset, window, cx);
+                                }))
+                        }))
+                        .into_any_element(),
+                    Input::new(&self.provider_input)
+                        .aria_label("Model provider")
+                        .into_any_element(),
+                    self.settings_label("Model"),
+                    Input::new(&self.model_input)
+                        .aria_label("Model ID")
+                        .into_any_element(),
+                    v_flex()
+                        .gap_1()
+                        .children(selected_preset.into_iter().flat_map(|preset| {
+                            preset.models.iter().take(4).copied().map(|model| {
+                                Button::new(format!("model-suggestion-{model}"))
+                                    .ghost()
+                                    .xsmall()
+                                    .w_full()
+                                    .justify_start()
+                                    .label(model)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.apply_model_suggestion(model, window, cx);
+                                    }))
+                            })
+                        }))
+                        .into_any_element(),
+                ],
+                cx,
+            ))
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_size(UI_CAPTION_SIZE)
+                            .font_semibold()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("ADVANCED"),
+                    )
+                    .child(self.settings_group(
+                        vec![
+                            self.settings_label("Base URL"),
+                            Input::new(&self.base_url_input)
+                                .aria_label("Provider base URL")
+                                .content_type(InputContentType::Url)
+                                .into_any_element(),
+                            self.settings_label("API key"),
+                            Input::new(&self.api_key_input)
+                                .aria_label("Provider API key")
+                                .content_type(InputContentType::Password)
+                                .mask_toggle()
+                                .into_any_element(),
+                            div()
+                                .text_size(UI_CAPTION_SIZE)
+                                .text_color(cx.theme().muted_foreground)
+                                .child(if self.settings_has_api_key {
+                                    "A key is already saved. Leave this field blank to keep it."
+                                } else {
+                                    "Local and account-authenticated providers may not require a key."
+                                })
+                                .into_any_element(),
+                        ],
+                        cx,
+                    )),
             )
             .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(if self.connection_test_message.starts_with("Connected") {
-                        cx.theme().success
-                    } else if self.connection_test_message.contains("failed") {
-                        cx.theme().danger
-                    } else {
-                        cx.theme().muted_foreground
-                    })
-                    .child(self.connection_test_message.clone()),
-            )
-            .when(
-                self.connection_test_message.starts_with("Connected"),
-                |this| {
-                    this.child(
-                        Button::new("model-settings-start-chatting")
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(UI_CAPTION_SIZE)
+                            .text_color(if self.connection_test_message.starts_with("Connected") {
+                                cx.theme().success
+                            } else if self.connection_test_message.contains("failed") {
+                                cx.theme().danger
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(self.connection_test_message.clone()),
+                    )
+                    .child(
+                        Button::new("save-and-test-model-settings")
                             .primary()
                             .small()
-                            .label("Start Chatting")
-                            .on_click(cx.listener(Self::close_model_settings)),
-                    )
-                },
+                            .disabled(self.connection_test_active)
+                            .label(if self.connection_test_active {
+                                "Saving & Testing…"
+                            } else {
+                                "Save & Test"
+                            })
+                            .on_click(cx.listener(Self::save_and_test_model_settings)),
+                    ),
             )
-            .child(div().text_size(px(11.)).child(self.persistence_message.clone()))
+            .into_any_element()
+    }
+
+    fn render_agent_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(self.settings_page_header(
+                "Shape the stable identity, voice, and working style used for new turns.",
+                cx,
+            ))
+            .child(self.settings_group(
+                vec![
+                    self.settings_label("SOUL.md file"),
+                    Input::new(&self.soul_path_input)
+                        .aria_label("SOUL.md file path")
+                        .into_any_element(),
+                    self.settings_label("Soul"),
+                    div()
+                        .min_h(px(220.))
+                        .p_2()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().background.opacity(0.62))
+                        .child(
+                            Textarea::new(&self.soul_content_input)
+                                .aria_label("Agent soul and personality"),
+                        )
+                        .into_any_element(),
+                    div()
+                        .text_size(UI_CAPTION_SIZE)
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Changes apply to new turns. Server and channel-specific SOUL overrides remain supported.")
+                        .into_any_element(),
+                ],
+                cx,
+            ))
             .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!(
-                        "Configuration file: {}",
-                        self.runtime_service.config_path().display()
-                    )),
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(UI_CAPTION_SIZE)
+                            .text_color(if self.agent_settings_message.starts_with("Could not") {
+                                cx.theme().danger
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(self.agent_settings_message.clone()),
+                    )
+                    .child(
+                        Button::new("save-agent-settings")
+                            .primary()
+                            .small()
+                            .label("Save Agent")
+                            .on_click(cx.listener(Self::save_agent_settings)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_workspace_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let using_work_home = Path::new(&self.session.workspace) == self.work_home;
+        let workspace = if self.session.workspace.is_empty() {
+            "No folder selected".to_string()
+        } else {
+            self.session.workspace.clone()
+        };
+
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(self.settings_page_header(
+                "Control the project folder and durable context available to Work.",
+                cx,
+            ))
+            .child(self.settings_group(
+                vec![
+                    self.settings_label("Current workspace"),
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .text_size(UI_TEXT_SIZE)
+                                        .font_medium()
+                                        .child(workspace),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(UI_CAPTION_SIZE)
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(if using_work_home { "Private Work Home" } else { "Connected project folder" }),
+                                ),
+                        )
+                        .child(
+                            Button::new("settings-choose-workspace")
+                                .outline()
+                                .small()
+                                .disabled(self.runtime_active)
+                                .label(if using_work_home { "Connect Folder" } else { "Change Folder" })
+                                .on_click(cx.listener(Self::choose_workspace)),
+                        )
+                        .into_any_element(),
+                    div()
+                        .pt_3()
+                        .border_t_1()
+                        .border_color(cx.theme().border.opacity(0.68))
+                        .into_any_element(),
+                    self.settings_label("Project context directory"),
+                    Input::new(&self.context_dir_input)
+                        .aria_label("Project context directory")
+                        .into_any_element(),
+                    div()
+                        .text_size(UI_CAPTION_SIZE)
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Markdown files in this directory provide durable project knowledge.")
+                        .into_any_element(),
+                ],
+                cx,
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .child(
+                        Button::new("save-workspace-agent-settings")
+                            .primary()
+                            .small()
+                            .label("Save Context")
+                            .on_click(cx.listener(Self::save_agent_settings)),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_settings_diagnostics(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(self.settings_page_header(
+                "Review local readiness without contacting external services.",
+                cx,
+            ))
+            .child(
+                self.settings_group(
+                    self.diagnostics_report
+                        .checks
+                        .iter()
+                        .map(|check| {
+                            let (symbol, color) = match check.status {
+                                DiagnosticStatus::Pass => ("✓", cx.theme().success),
+                                DiagnosticStatus::Warning => ("!", cx.theme().warning),
+                                DiagnosticStatus::Fail => ("×", cx.theme().danger),
+                            };
+                            h_flex()
+                                .items_start()
+                                .gap_3()
+                                .py_1()
+                                .child(
+                                    div()
+                                        .size(px(20.))
+                                        .rounded_full()
+                                        .bg(color.opacity(0.12))
+                                        .text_color(color)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(UI_CAPTION_SIZE)
+                                        .font_semibold()
+                                        .child(symbol),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .gap_0p5()
+                                        .child(
+                                            div()
+                                                .text_size(UI_TEXT_SIZE)
+                                                .font_medium()
+                                                .child(check.label),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(UI_CAPTION_SIZE)
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(check.detail.clone()),
+                                        ),
+                                )
+                                .into_any_element()
+                        })
+                        .collect(),
+                    cx,
+                ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(UI_CAPTION_SIZE)
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Provider testing remains an explicit action under Models."),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("settings-run-demo")
+                                    .ghost()
+                                    .small()
+                                    .disabled(self.runtime_active)
+                                    .label("Run UI Demo")
+                                    .on_click(cx.listener(Self::start_demo)),
+                            )
+                            .child(
+                                Button::new("settings-refresh-diagnostics")
+                                    .outline()
+                                    .small()
+                                    .label("Run Checks")
+                                    .on_click(cx.listener(Self::refresh_diagnostics)),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_model_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let content = match self.settings_section {
+            SettingsSection::General => self.render_general_settings(cx),
+            SettingsSection::Appearance => self.render_appearance_settings(cx),
+            SettingsSection::Models => self.render_model_settings_content(cx),
+            SettingsSection::Agent => self.render_agent_settings(cx),
+            SettingsSection::Workspace => self.render_workspace_settings(cx),
+            SettingsSection::Diagnostics => self.render_settings_diagnostics(cx),
+        };
+
+        h_flex()
+            .size_full()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .text_size(UI_TEXT_SIZE)
+            .child(self.render_settings_navigation(cx))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(
+                        h_flex()
+                            .h(px(52.))
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_end()
+                            .px_5()
+                            .border_b_1()
+                            .border_color(cx.theme().border.opacity(0.68))
+                            .child(
+                                Button::new("close-model-settings")
+                                    .ghost()
+                                    .small()
+                                    .disabled(self.connection_test_active)
+                                    .label("Done")
+                                    .on_click(cx.listener(Self::close_model_settings)),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_h_0()
+                            .items_center()
+                            .overflow_y_scrollbar()
+                            .px_6()
+                            .py_5()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .max_w(SETTINGS_CONTENT_WIDTH)
+                                    .pb_6()
+                                    .child(content),
+                            ),
+                    ),
             )
     }
 
@@ -2154,7 +2679,7 @@ impl WorkApp {
 }
 
 impl Render for WorkApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.settings_open {
             return div()
                 .size_full()
@@ -2260,6 +2785,10 @@ impl Render for WorkApp {
             self.session.workspace.clone()
         };
         let work_view = cx.entity();
+        let viewport_width = window.viewport_size().width;
+        let sidebar_width = sidebar_width_for(viewport_width);
+        let show_inspector =
+            self.inspector_open && has_inspector_content && inspector_fits(viewport_width);
 
         h_flex()
             .size_full()
@@ -2272,11 +2801,11 @@ impl Render for WorkApp {
             .text_color(cx.theme().foreground)
             .child(
                 v_flex()
-                    .w(px(250.))
+                    .w(sidebar_width)
                     .h_full()
                     .p_3()
                     .gap_2()
-                    .text_size(px(13.))
+                    .text_size(UI_TEXT_SIZE)
                     .bg(cx.theme().secondary.opacity(0.26))
                     .border_r_1()
                     .border_color(cx.theme().border)
@@ -2422,10 +2951,10 @@ impl Render for WorkApp {
                                     .children(pinned.then(|| {
                                         div()
                                             .flex_shrink_0()
-                                            .text_size(px(9.))
+                                            .text_size(px(10.))
                                             .font_semibold()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child("PIN")
+                                            .child("◆")
                                     }))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.open_session(&session_id, window, cx);
@@ -2497,38 +3026,20 @@ impl Render for WorkApp {
                             )
                             .child(
                                 Button::new("choose-workspace")
-                                    .outline()
+                                    .ghost()
                                     .small()
                                     .w_full()
                                     .disabled(self.runtime_active)
                                     .label(if using_work_home {
-                                        "Connect Project Folder"
+                                        "▱  Connect Project Folder"
                                     } else {
-                                        "Change Folder"
+                                        "▱  Change Folder"
                                     })
                                     .on_click(cx.listener(Self::choose_workspace)),
                             )
                             .child(
-                                Button::new("model-settings")
-                                    .outline()
-                                    .small()
-                                    .w_full()
-                                    .disabled(self.runtime_active)
-                                    .label("Settings")
-                                    .on_click(cx.listener(Self::open_model_settings)),
-                            )
-                            .child(
                                 h_flex()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("refresh-config")
-                                            .ghost()
-                                            .xsmall()
-                                            .compact()
-                                            .flex_1()
-                                            .label("Reload")
-                                            .on_click(cx.listener(Self::refresh_runtime_config)),
-                                    )
+                                    .gap_1()
                                     .child(
                                         Button::new("diagnostics")
                                             .ghost()
@@ -2536,8 +3047,18 @@ impl Render for WorkApp {
                                             .compact()
                                             .flex_1()
                                             .disabled(self.runtime_active)
-                                            .label("Checks")
+                                            .label("✓  Diagnostics")
                                             .on_click(cx.listener(Self::open_diagnostics)),
+                                    )
+                                    .child(
+                                        Button::new("model-settings")
+                                            .ghost()
+                                            .xsmall()
+                                            .compact()
+                                            .flex_1()
+                                            .disabled(self.runtime_active)
+                                            .label("⚙  Settings")
+                                            .on_click(cx.listener(Self::open_model_settings)),
                                     ),
                             )
                             .child(
@@ -2553,15 +3074,12 @@ impl Render for WorkApp {
                                         self.runtime_config.provider, self.runtime_config.model
                                     )),
                             )
-                            .child(
+                            .children((!self.runtime_config.ready).then(|| {
                                 div()
-                                    .max_h(px(30.))
-                                    .overflow_hidden()
                                     .text_size(px(10.))
-                                    .line_height(relative(1.35))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(self.persistence_message.clone()),
-                            ),
+                                    .text_color(cx.theme().warning)
+                                    .child("Model setup required")
+                            })),
                     ),
             )
             .child(
@@ -2569,11 +3087,13 @@ impl Render for WorkApp {
                     .flex_1()
                     .min_w_0()
                     .h_full()
+                    .items_center()
                     .p_4()
-                    .text_size(px(13.))
+                    .text_size(UI_TEXT_SIZE)
                     .gap_3()
                     .child(
                         h_flex()
+                            .w_full()
                             .items_center()
                             .gap_3()
                             .child(
@@ -2628,10 +3148,10 @@ impl Render for WorkApp {
                                     .children(has_inspector_content.then(|| {
                                         Button::new("toggle-inspector")
                                             .outline()
-                                            .label(if self.inspector_open {
-                                                "Hide Details"
-                                            } else {
-                                                "Show Details"
+                                        .label(if show_inspector {
+                                            "Hide Details"
+                                        } else {
+                                            "Show Details"
                                             })
                                             .on_click(cx.listener(Self::toggle_inspector))
                                     })),
@@ -2639,6 +3159,7 @@ impl Render for WorkApp {
                     )
                     .child(
                         h_flex()
+                            .w_full()
                             .flex_1()
                             .min_h_0()
                             .gap_3()
@@ -2647,6 +3168,7 @@ impl Render for WorkApp {
                                     .flex_1()
                                     .min_w_0()
                                     .min_h_0()
+                                    .items_center()
                                     .overflow_y_scrollbar()
                                     .gap_3()
                                     .px_4()
@@ -2672,7 +3194,7 @@ impl Render for WorkApp {
                                             )
                                             .child(
                                                 div()
-                                                    .text_xl()
+                                            .text_size(UI_PAGE_TITLE_SIZE)
                                                     .font_semibold()
                                                     .child("What would you like to get done?"),
                                             )
@@ -2770,30 +3292,35 @@ impl Render for WorkApp {
                                         let speaker = if is_user { "You" } else { "MicroClaw" };
                                         let accessibility_label =
                                             format!("{speaker}: {}", message.content);
-                                        let row = h_flex().w_full();
+                                        let row = h_flex().w_full().max_w(CONTENT_MAX_WIDTH);
                                         let row = if is_user { row.justify_end() } else { row };
                                         row.child(
                                                 v_flex()
                                                     .id(("conversation-message", message_index))
                                                     .role(Role::Paragraph)
                                                     .aria_label(accessibility_label)
-                                                    .max_w(px(if is_user { 620. } else { 760. }))
+                                                    .max_w(px(if is_user { 560. } else { 720. }))
                                                     .gap_1()
-                                                    .px_4()
-                                                    .py_3()
-                                                    .rounded(cx.theme().radius)
+                                                    .px_3()
+                                                    .py_2()
+                                                    .rounded(px(9.))
                                                     .bg(if is_user {
                                                         cx.theme().accent
                                                     } else {
-                                                        cx.theme().secondary.opacity(0.35)
+                                                        cx.theme().background
                                                     })
                                                     .border_1()
                                                     .border_color(if is_user {
                                                         cx.theme().accent
                                                     } else {
-                                                        cx.theme().border
+                                                        cx.theme().background
                                                     })
-                                                    .child(div().text_xs().font_bold().child(speaker))
+                                                    .child(
+                                                        div()
+                                                            .text_size(UI_CAPTION_SIZE)
+                                                            .font_semibold()
+                                                            .child(speaker),
+                                                    )
                                                     .child(message.content),
                                             )
                                         },
@@ -2872,7 +3399,7 @@ impl Render for WorkApp {
                                             ))
                                     })),
                             )
-                            .children((self.inspector_open && has_inspector_content).then(|| {
+                            .children(show_inspector.then(|| {
                                 v_flex()
                                     .w(px(360.))
                                     .flex_shrink_0()
@@ -3162,9 +3689,11 @@ impl Render for WorkApp {
                     )
                     .child(
                         v_flex()
+                            .w_full()
+                            .max_w(CONTENT_MAX_WIDTH)
                             .gap_3()
-                            .p_4()
-                            .rounded(cx.theme().radius)
+                            .p_3()
+                            .rounded(px(10.))
                             .bg(cx.theme().secondary.opacity(0.28))
                             .border_1()
                             .border_color(cx.theme().border)
@@ -3220,15 +3749,9 @@ impl Render for WorkApp {
                                         h_flex()
                                             .gap_2()
                                             .child(
-                                                Button::new("run-demo")
-                                                    .outline()
-                                                    .disabled(self.runtime_active)
-                                                    .label("Try Demo")
-                                                    .on_click(cx.listener(Self::start_demo)),
-                                            )
-                                            .child(
                                                 Button::new("stop-runtime")
-                                                    .outline()
+                                                    .ghost()
+                                                    .small()
                                                     .disabled(
                                                         !self.runtime_active
                                                             && self.session.status
@@ -3240,6 +3763,7 @@ impl Render for WorkApp {
                                             .child(
                                                 Button::new("run-runtime")
                                                     .primary()
+                                                    .small()
                                                     .disabled(if self.runtime_active {
                                                         self.steer_input
                                                             .read(cx)
@@ -3370,7 +3894,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_work_data_root;
+    use super::{SettingsSection, inspector_fits, resolve_work_data_root, sidebar_width_for};
+    use gpui::px;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -3400,5 +3925,35 @@ mod tests {
             resolve_work_data_root(None, None, PathBuf::from("/temporary")),
             PathBuf::from("/temporary/microclaw-work")
         );
+    }
+
+    #[test]
+    fn settings_navigation_is_complete_and_defaults_to_models() {
+        let titles = SettingsSection::ALL
+            .into_iter()
+            .map(|(_, title, _)| title)
+            .collect::<Vec<_>>();
+
+        assert_eq!(SettingsSection::default(), SettingsSection::Models);
+        assert_eq!(titles.len(), 6);
+        assert_eq!(
+            titles,
+            [
+                "General",
+                "Appearance",
+                "Models",
+                "Agent",
+                "Workspace",
+                "Diagnostics",
+            ]
+        );
+    }
+
+    #[test]
+    fn desktop_layout_adapts_to_supported_window_widths() {
+        assert_eq!(sidebar_width_for(px(900.)), px(224.));
+        assert_eq!(sidebar_width_for(px(1_280.)), px(242.));
+        assert!(!inspector_fits(px(900.)));
+        assert!(inspector_fits(px(1_280.)));
     }
 }
