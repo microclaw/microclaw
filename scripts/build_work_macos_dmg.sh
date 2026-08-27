@@ -7,6 +7,9 @@ work_profile="${1:-release}"
 work_signing_identity="${MICROCLAW_WORK_SIGNING_IDENTITY:--}"
 work_notary_profile="${MICROCLAW_WORK_NOTARY_PROFILE:-}"
 work_notary_keychain="${MICROCLAW_WORK_NOTARY_KEYCHAIN:-}"
+work_notary_apple_id="${MICROCLAW_WORK_NOTARY_APPLE_ID:-}"
+work_notary_password="${MICROCLAW_WORK_NOTARY_PASSWORD:-}"
+work_notary_team_id="${MICROCLAW_WORK_NOTARY_TEAM_ID:-}"
 work_reclaim_build_artifacts="${MICROCLAW_WORK_RECLAIM_BUILD_ARTIFACTS:-0}"
 
 case "$work_profile" in
@@ -59,7 +62,10 @@ if [[ "$work_reclaim_build_artifacts" == "1" ]]; then
   df -h "$work_repo_root"
 fi
 
+work_notarize=false
+work_notary_auth=()
 if [[ -n "$work_notary_profile" ]]; then
+  work_notarize=true
   if [[ "$work_signing_identity" == "-" ]]; then
     echo "MICROCLAW_WORK_NOTARY_PROFILE requires a Developer ID signing identity" >&2
     exit 2
@@ -72,6 +78,24 @@ if [[ -n "$work_notary_profile" ]]; then
     fi
     work_notary_auth+=(--keychain "$work_notary_keychain")
   fi
+elif [[ -n "$work_notary_apple_id" || -n "$work_notary_password" || -n "$work_notary_team_id" ]]; then
+  if [[ -z "$work_notary_apple_id" || -z "$work_notary_password" || -z "$work_notary_team_id" ]]; then
+    echo "direct notarization requires MICROCLAW_WORK_NOTARY_APPLE_ID, MICROCLAW_WORK_NOTARY_PASSWORD, and MICROCLAW_WORK_NOTARY_TEAM_ID" >&2
+    exit 2
+  fi
+  if [[ "$work_signing_identity" == "-" ]]; then
+    echo "direct notarization requires a Developer ID signing identity" >&2
+    exit 2
+  fi
+  work_notarize=true
+  work_notary_auth=(
+    --apple-id "$work_notary_apple_id"
+    --password "$work_notary_password"
+    --team-id "$work_notary_team_id"
+  )
+fi
+
+if [[ "$work_notarize" == true ]]; then
   work_notary_archive="$(mktemp /tmp/microclaw-work-notary.XXXXXX.zip)"
   trap 'rm -f "$work_notary_archive"' EXIT
   ditto -c -k --keepParent "$work_bundle" "$work_notary_archive"
@@ -104,7 +128,7 @@ if [[ "$work_signing_identity" != "-" ]]; then
   codesign --verify --verbose=2 "$work_dmg"
 fi
 
-if [[ -n "$work_notary_profile" ]]; then
+if [[ "$work_notarize" == true ]]; then
   xcrun notarytool submit "$work_dmg" \
     "${work_notary_auth[@]}" \
     --wait

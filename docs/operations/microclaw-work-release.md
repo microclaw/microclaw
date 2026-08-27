@@ -75,6 +75,12 @@ MICROCLAW_WORK_REQUIRE_NOTARIZATION=1 \
 scripts/verify_work_macos_release.sh work-release
 ```
 
+For a one-off local release without storing another Keychain profile, set
+`MICROCLAW_WORK_NOTARY_APPLE_ID`, `MICROCLAW_WORK_NOTARY_PASSWORD`, and
+`MICROCLAW_WORK_NOTARY_TEAM_ID` instead of
+`MICROCLAW_WORK_NOTARY_PROFILE`. The script passes these values only to the
+current `notarytool` processes and never writes them into release assets.
+
 For non-interactive local release shells that cannot write the login Keychain,
 create and unlock a temporary keychain, store the profile there with
 `notarytool store-credentials --keychain <path>`, and pass the same path as
