@@ -4,6 +4,18 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## 0.5.2 - 2026-08-26
+
+### Changed
+
+- **Refined MicroClaw Work desktop experience.** Work now uses a compact,
+  responsive navigation rail, centered conversation layout, lighter message
+  treatment, and a cleaner composer that adapts to 900px-wide macOS windows.
+- **Desktop-style Work Settings.** General, Appearance, Models, Agent,
+  Workspace, and Diagnostics now have dedicated settings sections with
+  consistent typography, spacing, controls, light and dark themes, and direct
+  access to model, SOUL, context, and local readiness configuration.
+
 ## 0.5.1 - 2026-08-26
 
 ### Fixed
