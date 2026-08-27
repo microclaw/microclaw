@@ -51,6 +51,23 @@ const UI_TEXT_SIZE: Pixels = px(12.);
 const UI_CAPTION_SIZE: Pixels = px(11.);
 const UI_PAGE_TITLE_SIZE: Pixels = px(17.);
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct WorkspaceContext {
+    name: String,
+    branch: Option<String>,
+    is_repository: bool,
+}
+
+impl WorkspaceContext {
+    fn subtitle(&self) -> String {
+        match self.branch.as_deref() {
+            Some(branch) => format!("Git · {branch}"),
+            None if self.is_repository => "Git repository · detached HEAD".into(),
+            None => "Local folder".into(),
+        }
+    }
+}
+
 fn work_logo() -> Arc<Image> {
     static LOGO: OnceLock<Arc<Image>> = OnceLock::new();
     LOGO.get_or_init(|| {
@@ -204,6 +221,7 @@ struct WorkApp {
     session: WorkSessionSnapshot,
     session_store: WorkSessionStore,
     work_home: PathBuf,
+    workspace_context: WorkspaceContext,
     recent_sessions: Vec<WorkSessionSummary>,
     persistence_message: String,
     session_search_input: Entity<InputState>,
@@ -354,6 +372,7 @@ impl WorkApp {
             }
         };
         let recent_sessions = session_store.list().unwrap_or_default();
+        let workspace_context = inspect_workspace(Path::new(&session.workspace));
         let diagnostics_report =
             runtime_service.local_diagnostics(Path::new(&session.workspace), session_store.root());
 
@@ -487,6 +506,7 @@ impl WorkApp {
             session,
             session_store,
             work_home,
+            workspace_context,
             recent_sessions,
             persistence_message,
             session_search_input,
@@ -580,6 +600,7 @@ impl WorkApp {
             || !session.file_changes.is_empty()
             || !session.subagents.is_empty();
         self.session = session;
+        self.workspace_context = inspect_workspace(Path::new(&self.session.workspace));
         self.visible_message_limit = INITIAL_VISIBLE_MESSAGES;
         let task = self.session.composer_draft.clone();
         self.task_input.update(cx, |input, cx| {
@@ -709,6 +730,8 @@ impl WorkApp {
                                     Ok(_) => this.persist(),
                                     Err(error) => this.persistence_message = error.to_string(),
                                 }
+                                this.workspace_context =
+                                    inspect_workspace(Path::new(&this.session.workspace));
                             }
                             Ok(None) => {
                                 this.persistence_message = "Workspace unchanged.".into();
@@ -2459,6 +2482,11 @@ impl WorkApp {
         } else {
             self.session.workspace.clone()
         };
+        let workspace_kind = if using_work_home {
+            "Private Work Home".to_string()
+        } else {
+            self.workspace_context.subtitle()
+        };
 
         v_flex()
             .w_full()
@@ -2492,7 +2520,7 @@ impl WorkApp {
                                     div()
                                         .text_size(UI_CAPTION_SIZE)
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(if using_work_home { "Private Work Home" } else { "Connected project folder" }),
+                                        .child(workspace_kind),
                                 ),
                         )
                         .child(
@@ -2515,6 +2543,22 @@ impl WorkApp {
                                         .on_click(cx.listener(Self::choose_workspace)),
                                 ),
                         )
+                        .into_any_element(),
+                    div()
+                        .pt_3()
+                        .border_t_1()
+                        .border_color(cx.theme().border.opacity(0.68))
+                        .into_any_element(),
+                    self.settings_label("Local access boundary"),
+                    div()
+                        .p_3()
+                        .rounded(px(8.))
+                        .bg(cx.theme().accent.opacity(0.08))
+                        .border_1()
+                        .border_color(cx.theme().accent.opacity(0.24))
+                        .text_size(UI_CAPTION_SIZE)
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Work can inspect attached files and create changes only through the shared runtime's workspace guards. Attachments outside this folder are rejected.")
                         .into_any_element(),
                     div()
                         .pt_3()
@@ -3207,7 +3251,31 @@ impl Render for WorkApp {
                                     .whitespace_nowrap()
                                     .text_size(px(12.))
                                     .font_medium()
-                                    .child(workspace_label.clone()),
+                                    .child(if using_work_home {
+                                        workspace_label.clone()
+                                    } else {
+                                        self.workspace_context.name.clone()
+                                    }),
+                            )
+                            .children((!using_work_home && !self.session.workspace.is_empty()).then(|| {
+                                div()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(self.workspace_context.subtitle())
+                            }))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Access: current folder only"),
                             )
                             .child(
                                 Button::new("choose-workspace")
@@ -4057,6 +4125,50 @@ fn trim_text(text: &str, limit: usize) -> String {
     }
 }
 
+fn inspect_workspace(workspace: &Path) -> WorkspaceContext {
+    let name = workspace
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Workspace")
+        .to_string();
+    let dot_git = workspace.join(".git");
+    let git_dir = if dot_git.is_dir() {
+        Some(dot_git)
+    } else if dot_git.is_file() {
+        fs::read_to_string(&dot_git).ok().and_then(|contents| {
+            contents
+                .trim()
+                .strip_prefix("gitdir:")
+                .map(str::trim)
+                .map(PathBuf::from)
+                .map(|path| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        workspace.join(path)
+                    }
+                })
+        })
+    } else {
+        None
+    };
+    let branch = git_dir.as_ref().and_then(|git_dir| {
+        fs::read_to_string(git_dir.join("HEAD"))
+            .ok()
+            .and_then(|head| {
+                head.trim()
+                    .strip_prefix("ref: refs/heads/")
+                    .map(str::to_string)
+            })
+    });
+    WorkspaceContext {
+        name,
+        branch,
+        is_repository: git_dir.is_some(),
+    }
+}
+
 fn work_data_root() -> PathBuf {
     resolve_work_data_root(
         std::env::var_os("MICROCLAW_WORK_DATA_DIR"),
@@ -4119,7 +4231,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{SettingsSection, inspector_fits, resolve_work_data_root, sidebar_width_for};
+    use super::{
+        SettingsSection, inspect_workspace, inspector_fits, resolve_work_data_root,
+        sidebar_width_for,
+    };
     use gpui::px;
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -4180,5 +4295,21 @@ mod tests {
         assert_eq!(sidebar_width_for(px(1_280.)), px(242.));
         assert!(!inspector_fits(px(900.)));
         assert!(inspector_fits(px(1_280.)));
+    }
+
+    #[test]
+    fn workspace_context_identifies_git_branch_without_running_git() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir(workspace.path().join(".git")).unwrap();
+        std::fs::write(
+            workspace.path().join(".git/HEAD"),
+            "ref: refs/heads/feature/work\n",
+        )
+        .unwrap();
+
+        let context = inspect_workspace(workspace.path());
+        assert!(context.is_repository);
+        assert_eq!(context.branch.as_deref(), Some("feature/work"));
+        assert_eq!(context.subtitle(), "Git · feature/work");
     }
 }

@@ -6206,6 +6206,7 @@ dependencies = [
  "microclaw-work-runtime",
  "serde_json",
  "smol",
+ "tempfile",
  "url",
 ]
 
