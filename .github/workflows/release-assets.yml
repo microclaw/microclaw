@@ -499,6 +499,24 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Include locally notarized Work DMG when present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          WORK_DMG="microclaw-work-${RELEASE_TAG#v}-arm64-macos.dmg"
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 \
+            && gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --json assets --jq '.assets[].name' | grep -Fxq "${WORK_DMG}"; then
+            gh release download "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${WORK_DMG}" \
+              --dir dist \
+              --clobber
+          else
+            echo "No locally notarized Work DMG is present for ${RELEASE_TAG}."
+          fi
+
       - name: Generate checksums
         shell: bash
         run: |
