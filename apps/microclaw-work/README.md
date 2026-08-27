@@ -250,20 +250,23 @@ The release path enables Hardened Runtime, requests trusted timestamps,
 submits both the application and disk image to Apple, staples their tickets,
 and validates the finished DMG. Auto-update remains later release work.
 
-macOS is the only current product, CI, packaging, and release-acceptance target.
-Windows and Linux support is deferred; dormant experimental build helpers do
-not represent supported products or release commitments.
+macOS remains the only fully supported product and release-acceptance target.
+Tag releases additionally build and launch-smoke portable previews for Linux
+x86_64/arm64 and Windows x86_64. These archives contain the Work executable,
+license, and this README; they are preview deliverables rather than a claim of
+completed native platform acceptance or installer integration.
 
 `work-release` is the canonical desktop distribution profile. It keeps release
 optimization and symbol stripping but disables Thin LTO and uses parallel code
 generation without changing the Server release profile.
 This is a deliberate product boundary, not a debug or compatibility build.
 
-Extended CI checks Work only on the current GitHub-hosted macOS runner. It runs
+Extended CI checks Work on the current GitHub-hosted macOS runner. It runs
 the framework-independent session and process-recovery tests, Cargo check and
 Clippy for the GPUI application, builds the branded DMG, launch-smokes the
 packaged application, and uploads a short-lived preview. Stable releases add
-Developer ID signing, notarization, stapling, and Homebrew Cask publication.
+Developer ID signing, notarization, stapling, Homebrew Cask publication, and
+launch-smoked Linux/Windows portable archives.
 Server CI remains independent and continues to cover Ubuntu, macOS, and Windows.
 
 Primary controls expose native AccessKit roles and stable labels. The chat
@@ -308,7 +311,8 @@ IME composition, VoiceOver navigation, GPU compatibility, notarized release
 packaging, and sustained daily use. Real provider first response, cancellation,
 retry, restart recovery, selected-project tools, diff/revert, and high-risk
 approval already have dated live evidence in the macOS smoke report. Windows
-and Linux release validation belongs to a later milestone.
+and Linux portable builds receive automated launch smoke, but direct IME,
+accessibility, installer, and long-session acceptance remain later milestones.
 
 The workspace uses Rust 1.95 because the pinned GPUI revision relies on stable
 standard-library APIs that are unavailable in Rust 1.93.

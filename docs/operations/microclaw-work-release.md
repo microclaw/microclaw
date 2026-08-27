@@ -1,7 +1,7 @@
-# MicroClaw Work macOS release and Homebrew Cask
+# MicroClaw Work desktop release and Homebrew Cask
 
-MicroClaw Work ships as architecture-specific, signed, notarized, and stapled
-DMGs attached to the normal MicroClaw GitHub release. The release finalizer then
+MicroClaw Work ships as a locally built, signed, notarized, and stapled Apple
+Silicon DMG attached to the normal MicroClaw GitHub release. The release finalizer then
 updates `Casks/microclaw-work.rb` in `microclaw/homebrew-tap`.
 
 Users install or upgrade the desktop application with:
@@ -12,21 +12,19 @@ brew install --cask microclaw-work
 brew upgrade --cask microclaw-work
 ```
 
-## Required GitHub Actions secrets
+## Local Apple credentials
 
-The `Release Assets` workflow intentionally fails the Work jobs when any Apple
-release credential is missing. Configure these repository secrets:
+Apple signing and notarization intentionally run on the release Mac rather than
+GitHub Actions. The local environment needs:
 
-- `APPLE_CERTIFICATE_BASE64`: base64-encoded Developer ID Application `.p12`
-- `APPLE_CERTIFICATE_PASSWORD`: password protecting the `.p12`
-- `APPLE_ID`: Apple account used by `notarytool`
-- `APPLE_TEAM_ID`: Apple Developer team identifier
-- `APPLE_APP_PASSWORD`: app-specific password used by `notarytool`
+- an installed `Developer ID Application` identity;
+- an Apple ID, team ID, and app-specific password stored in a `notarytool`
+  keychain profile.
 
-The workflow imports the certificate into an ephemeral runner keychain, derives
-the Developer ID identity, stores a temporary `notarytool` profile, and runs
-`scripts/build_work_macos_dmg.sh work-release`. Both the application bundle and
-DMG are submitted, stapled, and validated before upload.
+The release operator runs `scripts/build_work_macos_dmg.sh work-release`. Both
+the application bundle and DMG are submitted, stapled, and validated locally
+before the DMG is uploaded to the GitHub release. No Apple credentials are
+stored in repository secrets.
 
 ## Release assets
 
@@ -34,18 +32,29 @@ For a tag such as `v0.6.0`, the workflow publishes:
 
 ```text
 microclaw-work-0.6.0-arm64-macos.dmg
-microclaw-work-0.6.0-x86_64-macos.dmg
+microclaw-work-0.6.0-x86_64-linux-gnu.tar.gz
+microclaw-work-0.6.0-aarch64-linux-gnu.tar.gz
+microclaw-work-0.6.0-x86_64-windows-msvc.zip
 ```
 
 `MICROCLAW_WORK_VERSION_OVERRIDE` binds the application bundle and DMG version
 to the release tag without requiring the desktop crate to duplicate the Server
 package version between releases.
 
+The macOS DMGs are the supported desktop distribution and pass Developer ID
+signing, Apple notarization, stapling, bundle verification, and launch smoke.
+The Linux and Windows archives are portable previews: the release matrix builds
+them with the pinned Rust toolchain, launch-smokes them on their native GitHub
+runners, and includes them in `SHA256SUMS.txt`. Linux archives contain a GNU
+dynamically linked executable and therefore still depend on compatible system
+glibc, Vulkan, font, and windowing libraries. Windows portable binaries are not
+code-signed installers and can trigger SmartScreen until that release path is
+promoted to supported status.
+
 ## Tap update
 
-The existing `scripts/release_homebrew.sh` entry point invokes
-`scripts/release_finalize.sh`. The finalizer waits for both Work DMGs, reads the
-official GitHub asset digests, and writes a multi-architecture Homebrew Cask.
+The release finalizer waits for the Apple Silicon Work DMG, reads the official
+GitHub asset digest, and writes an Apple Silicon Homebrew Cask.
 It pushes the Server formulas and Work Cask together, so a release cannot update
 the tap with missing or unverified desktop assets.
 

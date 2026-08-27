@@ -36,7 +36,7 @@ It is designed for work that lasts longer than one request: multi-step tool use,
 | Product | Best for | Availability |
 |---|---|---|
 | MicroClaw Server | Always-on agents, chat channels, Web/API access, scheduled work, and remote automation | macOS, Linux, and Windows |
-| MicroClaw Work | Native local conversations, project workspaces, approvals, checkpoints, and desktop settings | Apple Silicon macOS 13+; Windows and Linux coming soon |
+| MicroClaw Work | Native local conversations, project workspaces, approvals, checkpoints, and desktop settings | Apple Silicon macOS 13+; Linux/Windows portable previews |
 
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw conversation view" width="45%" />
@@ -53,7 +53,10 @@ brew tap microclaw/tap
 brew install --cask microclaw-work
 ```
 
-Windows and Linux versions of MicroClaw Work are coming soon.
+Linux x86_64/arm64 and Windows x86_64 portable previews are available from the
+[v0.5.3 release](https://github.com/microclaw/microclaw/releases/tag/v0.5.3).
+macOS remains the officially supported Work desktop platform while the preview
+builds complete platform acceptance.
 
 To run MicroClaw Server, install on macOS or Linux:
 
@@ -77,7 +80,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.5.2**. It includes the refined MicroClaw Work desktop experience and settings architecture while preserving the complete Server runtime. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.5.2).
+The latest release is **v0.5.3**. It includes the corrected MicroClaw Work identity, Server + Work architecture documentation, and portable Work previews for Linux and Windows while preserving the complete Server runtime. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.5.3).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -146,7 +149,7 @@ Anthropic has a native provider path. OpenAI, OpenAI Codex, OpenRouter, Ollama, 
 
 The prebuilt Linux binary has glibc and OpenSSL requirements. Read [Getting started](docs/getting-started.md) before installing on an older distribution.
 
-MicroClaw Work currently ships for Apple Silicon macOS. Native Windows and Linux desktop releases are coming soon; MicroClaw Server remains supported on all three platforms.
+MicroClaw Work is officially supported on Apple Silicon macOS. Linux and Windows portable previews are published automatically with each release while native platform acceptance continues. MicroClaw Server remains supported on all three platforms.
 
 ## Documentation
 

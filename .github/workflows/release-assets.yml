@@ -247,30 +247,50 @@ jobs:
           path: ${{ env.ASSET_NAME }}
           if-no-files-found: error
 
-  build-work-macos-assets:
-    name: Build MicroClaw Work (${{ matrix.arch }})
+  build-work-portable-assets:
+    name: Build MicroClaw Work portable (${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
     needs: verify-ci
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-      MICROCLAW_WORK_NOTARY_PROFILE: microclaw-work-ci
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: arm64
-            runner: macos-14
-          - arch: x86_64
-            runner: macos-15-intel
+          - label: linux-x86_64
+            runner: ubuntu-latest
+            asset_triple: x86_64-linux-gnu
+            archive_ext: tar.gz
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+            asset_triple: aarch64-linux-gnu
+            archive_ext: tar.gz
+          - label: windows-x86_64
+            runner: windows-latest
+            asset_triple: x86_64-windows-msvc
+            archive_ext: zip
 
     steps:
       - name: Checkout tag
         uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+
+      - name: Install Linux desktop build and smoke dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libfontconfig-dev \
+            libssl-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxkbcommon-x11-dev \
+            mesa-vulkan-drivers \
+            xvfb
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -279,64 +299,59 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: microclaw-work-release-${{ matrix.arch }}
+          shared-key: microclaw-work-portable-${{ matrix.label }}
 
-      - name: Require Apple release credentials
-        env:
-          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      - name: Build portable Work binary
+        shell: bash
+        run: cargo build -p microclaw-work --profile work-release --locked
+
+      - name: Launch-smoke Linux portable binary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: xvfb-run -a scripts/smoke_work_linux_app.sh work-release
+
+      - name: Launch-smoke Windows portable binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = Resolve-Path 'target/work-release/microclaw-work.exe'
+          $process = Start-Process -FilePath $binary -PassThru
+          Start-Sleep -Seconds 3
+          if ($process.HasExited) {
+            throw "MicroClaw Work portable exited during launch smoke with $($process.ExitCode)"
+          }
+          Stop-Process -Id $process.Id
+          $process.WaitForExit()
+
+      - name: Package Linux portable archive
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          for value in APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD; do
-            if [[ -z "${!value:-}" ]]; then
-              echo "Missing required release secret: ${value}" >&2
-              exit 1
-            fi
-          done
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          ASSET_NAME="microclaw-work-${RELEASE_VERSION}-${{ matrix.asset_triple }}.tar.gz"
+          mkdir -p work-portable/microclaw-work work-release-assets
+          cp target/work-release/microclaw-work work-portable/microclaw-work/
+          cp LICENSE work-portable/microclaw-work/LICENSE.txt
+          cp apps/microclaw-work/README.md work-portable/microclaw-work/README.md
+          tar -czf "work-release-assets/${ASSET_NAME}" -C work-portable microclaw-work
 
-      - name: Import Developer ID certificate
-        uses: apple-actions/import-codesign-certs@v7
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-
-      - name: Configure Apple notarization
-        shell: bash
+      - name: Package Windows portable archive
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          SIGNING_IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n1)"
-          if [[ -z "${SIGNING_IDENTITY}" ]]; then
-            echo "Developer ID Application identity was not imported" >&2
-            exit 1
-          fi
-          xcrun notarytool store-credentials "${MICROCLAW_WORK_NOTARY_PROFILE}" \
-            --apple-id "${APPLE_ID}" \
-            --team-id "${APPLE_TEAM_ID}" \
-            --password "${APPLE_APP_PASSWORD}"
-          echo "MICROCLAW_WORK_SIGNING_IDENTITY=${SIGNING_IDENTITY}" >> "${GITHUB_ENV}"
-          echo "MICROCLAW_WORK_VERSION_OVERRIDE=${RELEASE_TAG#v}" >> "${GITHUB_ENV}"
+          $releaseVersion = $env:RELEASE_TAG -replace '^v', ''
+          $assetName = "microclaw-work-${releaseVersion}-${{ matrix.asset_triple }}.zip"
+          New-Item -ItemType Directory -Force -Path 'work-portable/microclaw-work', 'work-release-assets' | Out-Null
+          Copy-Item 'target/work-release/microclaw-work.exe' 'work-portable/microclaw-work/'
+          Copy-Item 'LICENSE' 'work-portable/microclaw-work/LICENSE.txt'
+          Copy-Item 'apps/microclaw-work/README.md' 'work-portable/microclaw-work/README.md'
+          Compress-Archive -Path 'work-portable/microclaw-work' -DestinationPath "work-release-assets/$assetName" -Force
 
-      - name: Build signed and notarized DMG
-        shell: bash
-        run: scripts/build_work_macos_dmg.sh work-release
-
-      - name: Verify signed and notarized Work release
-        shell: bash
-        env:
-          MICROCLAW_WORK_REQUIRE_NOTARIZATION: "1"
-        run: scripts/verify_work_macos_release.sh work-release
-
-      - name: Stage release asset
-        shell: bash
-        run: |
-          mkdir -p work-release-assets
-          cp "target/microclaw-work-installer/work-release/MicroClaw-Work-${MICROCLAW_WORK_VERSION_OVERRIDE}-macos.dmg" \
-            "work-release-assets/microclaw-work-${MICROCLAW_WORK_VERSION_OVERRIDE}-${{ matrix.arch }}-macos.dmg"
-
-      - name: Upload Work release artifact
+      - name: Upload Work portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: microclaw-work-macos-${{ matrix.arch }}
-          path: work-release-assets/*.dmg
+          name: microclaw-work-portable-${{ matrix.label }}
+          path: work-release-assets/*
           if-no-files-found: error
 
   publish-container:
@@ -466,7 +481,7 @@ jobs:
   publish-assets:
     name: Upload to GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-assets, build-work-macos-assets, reliability-scorecard]
+    needs: [build-assets, build-work-portable-assets, reliability-scorecard]
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 

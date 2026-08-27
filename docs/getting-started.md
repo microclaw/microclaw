@@ -42,8 +42,12 @@ brew tap microclaw/tap
 brew install --cask microclaw-work
 ```
 
-MicroClaw Work for Windows and Linux is coming soon. The Server remains
-available on macOS, Linux, and Windows.
+MicroClaw Work is officially supported on Apple Silicon macOS. Each GitHub
+release also includes launch-smoked portable previews for Linux x86_64/arm64
+and Windows x86_64. Download and extract the archive for your platform from the
+[release page](https://github.com/microclaw/microclaw/releases); these previews
+are not yet covered by the full native acceptance matrix. The Server remains
+supported on macOS, Linux, and Windows.
 
 Install MicroClaw Server:
 

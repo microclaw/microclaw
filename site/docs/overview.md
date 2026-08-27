@@ -14,15 +14,16 @@ two product surfaces:
   for macOS, Linux, and Windows.
 - **MicroClaw Work** is a native GPUI desktop application for local
   conversations, project workspaces, approvals, checkpoints, and settings. It
-  currently ships for Apple Silicon macOS 13+. Windows and Linux are coming
-  soon.
+  is officially supported on Apple Silicon macOS 13+; launch-smoked Linux and
+  Windows portable previews are published with each release while native
+  platform acceptance continues.
 
 Both surfaces share the Agent Engine, provider abstraction, tool registry,
 policy and approval path, memory, skills, MCP integration, checkpoints, and
 runtime event protocol. Work is not a packaged copy of the Web console, and it
 does not maintain a desktop-only agent loop.
 
-The latest release is **v0.5.2**. Use the `stable` branch for conservative
+The latest release is **v0.5.3**. Use the `stable` branch for conservative
 production deployments; `main` is the active development branch.
 
 ## What makes it different

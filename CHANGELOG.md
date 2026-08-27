@@ -4,14 +4,30 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
-## 0.5.2 - 2026-08-26
+## 0.5.3 - 2026-08-27
+
+### Added
+
+- **Portable MicroClaw Work previews.** Tag releases now build, launch-smoke,
+  checksum, and publish Work archives for Linux x86_64, Linux arm64, and
+  Windows x86_64 alongside the signed and notarized macOS DMGs. macOS remains
+  the supported desktop release; Linux and Windows archives are previews while
+  platform acceptance and installer work continue.
 
 ### Changed
 
+- **Server + Work architecture documentation.** The README and public website
+  now distinguish the fully cross-platform Server from the shared-core native
+  Work application, including current platform availability and installation.
 - **Consistent MicroClaw Work identity.** The native sidebar, Settings header,
   and empty-conversation state now use the website's MicroClaw artwork instead
   of the temporary `μ` badge. The macOS bundle uses a dedicated rounded version
   of the same artwork so the system no longer adds a generic gray enclosure.
+
+## 0.5.2 - 2026-08-26
+
+### Changed
+
 - **Refined MicroClaw Work desktop experience.** Work now uses a compact,
   responsive navigation rail, centered conversation layout, lighter message
   treatment, and a cleaner composer that adapts to 900px-wide macOS windows.

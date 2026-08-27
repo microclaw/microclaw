@@ -40,6 +40,8 @@ Use this checklist before merge and release.
 - [ ] Metrics pipeline verified (`/api/metrics`, `/api/metrics/history`, OTLP export if enabled).
 - [ ] Config self-check reviewed (`/api/config/self_check`) with no unaccepted `high` warnings.
 - [ ] macOS, Linux, and Windows release assets are present and checksummed.
+- [ ] The locally signed/notarized Apple Silicon Work DMG is uploaded and its Homebrew Cask digest matches.
+- [ ] Linux x86_64/arm64 and Windows x86_64 Work portable previews passed their native launch-smoke jobs.
 - [ ] Official container image tags are published and pull successfully (`ghcr.io/microclaw/microclaw`, Docker Hub mirror if enabled).
 - [ ] `nix build .#microclaw` passes (Linux required; Darwin strongly recommended).
 - [ ] Nixpkgs status reviewed/updated (`docs/releases/nixpkgs-upstream-guide.md`).

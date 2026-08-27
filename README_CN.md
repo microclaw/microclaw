@@ -36,7 +36,7 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含�
 | 产品 | 适用场景 | 当前支持 |
 |---|---|---|
 | MicroClaw Server | 常驻智能体、聊天渠道、Web/API、定时任务与远程自动化 | macOS、Linux 和 Windows |
-| MicroClaw Work | 原生本地对话、项目工作空间、工具审批、检查点与桌面设置 | Apple Silicon macOS 13+；Windows 和 Linux 即将推出 |
+| MicroClaw Work | 原生本地对话、项目工作空间、工具审批、检查点与桌面设置 | Apple Silicon macOS 13+；Linux/Windows portable 预览包 |
 
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw 对话界面" width="45%" />
@@ -53,7 +53,9 @@ brew tap microclaw/tap
 brew install --cask microclaw-work
 ```
 
-MicroClaw Work 的 Windows 和 Linux 版本即将推出。
+Linux x86_64/arm64 与 Windows x86_64 portable 预览包可从
+[v0.5.3 版本页面](https://github.com/microclaw/microclaw/releases/tag/v0.5.3)下载。
+macOS 仍是 Work 当前正式支持的桌面平台，其他平台继续完成验收。
 
 如需运行 MicroClaw Server，在 macOS 或 Linux 上安装：
 
@@ -77,7 +79,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.5.2**，包含更加精致的 MicroClaw Work 桌面体验和设置架构，同时完整保留 Server 运行时能力。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.5.2)。
+最新版本为 **v0.5.3**，包含修正后的 MicroClaw Work 品牌图标、Server + Work 架构说明，以及 Linux 和 Windows 的 Work portable 预览包，同时完整保留 Server 运行时能力。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.5.3)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -146,7 +148,7 @@ Anthropic 使用原生 provider 通路。OpenAI、OpenAI Codex、OpenRouter、Ol
 
 预编译 Linux 二进制对 glibc 和 OpenSSL 有版本要求。旧发行版安装前请先阅读[快速上手指南](docs/getting-started.md)。
 
-MicroClaw Work 当前正式支持 Apple Silicon macOS；Windows 和 Linux 原生桌面版本即将推出。MicroClaw Server 继续支持这三个平台。
+MicroClaw Work 当前正式支持 Apple Silicon macOS；Linux 和 Windows portable 预览包随每个版本自动发布，原生平台验收仍在继续。MicroClaw Server 继续支持这三个平台。
 
 ## 文档
 

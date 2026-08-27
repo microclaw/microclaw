@@ -56,7 +56,7 @@ calls and tool execution never run on the GPUI thread.
 | Primary role | Always-on service and delivery hub | Local desktop workspace | Agent execution and policy |
 | Interface | Chat adapters, Web UI, HTTP/SSE/WebSocket, A2A/ACP | Native GPUI conversation and settings | Provider-neutral messages and runtime events |
 | Lifecycle | Long-running channels, schedules, background tasks | Foreground local runs and durable Work sessions | Recovery, cancellation, checkpoints, tool loop |
-| Platform | macOS, Linux, Windows | Apple Silicon macOS 13+; Windows/Linux coming soon | Portable Rust crates |
+| Platform | macOS, Linux, Windows | Apple Silicon macOS 13+ supported; Linux/Windows portable previews | Portable Rust crates |
 
 ## Recommended reading order
 
