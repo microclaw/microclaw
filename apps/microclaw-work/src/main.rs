@@ -2,11 +2,12 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_base::Button as BaseButton;
 use gpui_component::{
-    ActiveTheme, Disableable, Root, Sizable, StyledExt, Theme, ThemeMode,
+    ActiveTheme, Disableable, Root, Sizable, StyledExt, Theme, ThemeMode, WindowExt,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputContentType, InputEvent, InputState, Textarea, TextareaState},
     menu::{ContextMenuExt, PopupMenuItem},
+    notification::Notification,
     scroll::ScrollableElement,
     v_flex,
 };
@@ -1276,7 +1277,7 @@ impl WorkApp {
         .detach();
     }
 
-    fn resolve_approval(&mut self, value: String, cx: &mut Context<Self>) {
+    fn resolve_approval(&mut self, value: String, window: &mut Window, cx: &mut Context<Self>) {
         if !self.last_run_was_demo
             && (self.session.workspace.is_empty()
                 || !PathBuf::from(&self.session.workspace).is_dir())
@@ -1330,7 +1331,7 @@ impl WorkApp {
         self.persist();
         cx.notify();
         if !self.last_run_was_demo {
-            self.launch_runtime_prompt(value, cx);
+            self.launch_runtime_prompt(value, window, cx);
         }
     }
 
@@ -1368,7 +1369,7 @@ impl WorkApp {
             input.set_value("", window, cx);
         });
         self.persist();
-        self.launch_runtime_prompt(task, cx);
+        self.launch_runtime_prompt(task, window, cx);
     }
 
     fn primary_action(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1418,7 +1419,12 @@ impl WorkApp {
         cx.notify();
     }
 
-    fn launch_runtime_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
+    fn launch_runtime_prompt(
+        &mut self,
+        prompt: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.active_run_id = self.active_run_id.saturating_add(1);
         self.runtime_active = true;
         let generation = self.active_run_id;
@@ -1431,6 +1437,7 @@ impl WorkApp {
         self.runtime_cancellation = Some(handle.cancellation);
         self.runtime_steering = Some(handle.steering);
         self.persistence_message = "Connecting to the MicroClaw runtime…".into();
+        let window_handle = window.window_handle();
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -1442,12 +1449,11 @@ impl WorkApp {
                             WorkRuntimeMessage::Completed { .. }
                                 | WorkRuntimeMessage::Failed { .. }
                         );
-                        if this
-                            .update(cx, |this, cx| {
+                        let update_result = this.update(cx, |this, cx| {
                                 if this.active_run_id != generation {
-                                    return;
+                                    return None;
                                 }
-                                match message {
+                                let notification = match message {
                                     WorkRuntimeMessage::Envelope(envelope) => {
                                         if let Err(error) = this
                                             .session
@@ -1455,6 +1461,7 @@ impl WorkApp {
                                         {
                                             this.persistence_message = error.to_string();
                                         }
+                                        None
                                     }
                                     WorkRuntimeMessage::SteeringResult {
                                         run_id,
@@ -1478,20 +1485,30 @@ impl WorkApp {
                                                 "Runtime {run_id} rejected the guidance: {message}"
                                             );
                                         }
+                                        None
                                     }
                                     WorkRuntimeMessage::Completed { run_id } => {
                                         this.runtime_active = false;
                                         this.runtime_cancellation = None;
                                         this.runtime_steering = None;
-                                        this.persistence_message = match this.session.status {
+                                        let (message, notification) = match this.session.status {
                                             WorkStatus::AwaitingApproval => {
-                                                format!("Runtime {run_id} paused for approval.")
+                                                (format!("Runtime {run_id} paused for approval."), None)
                                             }
                                             WorkStatus::Cancelled => {
-                                                format!("Runtime {run_id} stopped.")
+                                                (format!("Runtime {run_id} stopped."), None)
                                             }
-                                            _ => format!("Runtime {run_id} completed."),
+                                            _ => (
+                                                format!("Runtime {run_id} completed."),
+                                                Some((
+                                                    "MicroClaw Work finished",
+                                                    "Your task is ready to review.",
+                                                    true,
+                                                )),
+                                            ),
                                         };
+                                        this.persistence_message = message;
+                                        notification
                                     }
                                     WorkRuntimeMessage::Failed { run_id, message } => {
                                         this.runtime_active = false;
@@ -1502,16 +1519,34 @@ impl WorkApp {
                                             message: message.clone(),
                                         });
                                         this.persistence_message = display;
+                                        Some((
+                                            "MicroClaw Work needs attention",
+                                            "The task stopped before completion. Open Work for details.",
+                                            false,
+                                        ))
                                     }
-                                }
+                                };
                                 if let Err(error) = this.save_session() {
                                     this.persistence_message = format!("Save failed: {error}");
                                 }
                                 cx.notify();
-                            })
-                            .is_err()
-                        {
+                                notification
+                            });
+                        let Ok(notification) = update_result else {
                             return;
+                        };
+                        if let Some((title, message, success)) = notification {
+                            let _ = window_handle.update(cx, move |_, window, cx| {
+                                let notification = if success {
+                                    Notification::success(message)
+                                } else {
+                                    Notification::error(message)
+                                };
+                                window.push_notification(
+                                    notification.title(title).in_app_and_system(),
+                                    cx,
+                                );
+                            });
                         }
                         if terminal {
                             return;
@@ -3436,9 +3471,10 @@ impl Render for WorkApp {
                                                         microclaw_core::runtime_event::RuntimeApprovalOptionKind::Danger => button.danger(),
                                                     };
                                                     button.on_click(cx.listener(
-                                                        move |this, _, _, cx| {
+                                                        move |this, _, window, cx| {
                                                             this.resolve_approval(
                                                                 value.clone(),
+                                                                window,
                                                                 cx,
                                                             );
                                                         },

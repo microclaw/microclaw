@@ -47,6 +47,8 @@ Delivered baseline:
 - durable chats, search, creation-time ordering, right-click pinning, drafts,
   restart recovery, cancellation, retry, steering, diagnostics, and explicit
   provider tests;
+- native in-app and operating-system notifications for completed and failed
+  tasks, excluding approval pauses and deliberate cancellation;
 - bounded long-thread, diff, process-output, and artifact projections;
 - branded bundle, app icon, release verification, and local Cask lifecycle.
 
@@ -55,7 +57,7 @@ Acceptance gate:
 - clean macOS account install, first task, upgrade, and uninstall evidence;
 - seven consecutive days of daily use without conversation loss, unsafe
   mutation, or a required terminal workaround;
-- VoiceOver speech pass for the primary journey and completion notification;
+- VoiceOver speech pass for the primary journey;
 - update discovery and release handoff remain visible inside Settings.
 
 ### 2. Server and Work share one kernel

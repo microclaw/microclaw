@@ -15,8 +15,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   the Server Web distribution.
 - **Local-first Work product surface.** Native Settings now shows the packaged
   Work version, links to signed release updates, and can open the active
-  Workspace. The public site has a dedicated Work guide and one canonical
-  Server + Work delivery plan.
+  Workspace. Completed and failed tasks produce native in-app and operating
+  system notifications so background work is visible. The public site has a
+  dedicated Work guide and one canonical Server + Work delivery plan.
 
 ## 0.5.3 - 2026-08-27
 

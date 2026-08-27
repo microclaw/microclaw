@@ -58,6 +58,11 @@ desktop environment, GPU, and launch logs.
 7. Continue in the same conversation; drafts, task state, and runtime session
    survive relaunch.
 
+Completed and failed runs post native in-app and operating-system
+notifications. Approval pauses and deliberate cancellation stay quiet. On
+macOS, Notification Center controls authorization and presentation for the
+signed application bundle.
+
 Artifacts are opened only after their canonical path resolves inside the
 selected Workspace. Missing files, absolute escapes, and symlink escapes are
 rejected. Work uses the shared tool risk, authorization, path, hook, and audit

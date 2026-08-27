@@ -85,6 +85,12 @@ button, the empty home offers small starter prompts, status badges use semantic
 colors, and supporting setup/diagnostic surfaces use consistent cards, spacing,
 and hierarchy instead of exposing a dense engineering dashboard.
 
+When a real runtime task completes or fails, Work posts a native GPUI
+notification both inside the app and to the operating-system notification
+center. On macOS, system delivery is available to the signed application
+bundle and follows the user's Notification Center permission; approval pauses
+and deliberate cancellations do not generate misleading completion alerts.
+
 Model onboarding uses one **Save & Test** action. It persists the settings and
 runs a connection test off the GPUI thread through the same
 provider implementation used by the Agent Engine, times out after 20 seconds,
