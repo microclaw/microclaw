@@ -2,12 +2,19 @@
 set -euo pipefail
 
 work_process_name="${1:-microclaw-work}"
+work_process_id="${2:-}"
 work_tree="$({
-  osascript - "$work_process_name" <<'APPLESCRIPT'
+  osascript - "$work_process_name" "$work_process_id" <<'APPLESCRIPT'
 on run arguments
   set processName to item 1 of arguments
+  set processId to item 2 of arguments
   tell application "System Events"
-    tell process processName
+    if processId is not "" then
+      set targetProcess to first process whose unix id is (processId as integer)
+    else
+      set targetProcess to first process whose name is processName
+    end if
+    tell targetProcess
       return entire contents of front window
     end tell
   end tell
@@ -15,15 +22,20 @@ end run
 APPLESCRIPT
 } 2>&1)" || {
   printf '%s\n' "$work_tree" >&2
-  echo "Could not read the Work accessibility tree. Launch the app and grant Accessibility permission to the terminal." >&2
+  echo "Could not read the Work accessibility tree. Launch the app and grant Accessibility permission to the terminal. Pass the target PID as the second argument when multiple builds are running." >&2
   exit 1
 }
+
+if [[ "${WORK_ACCESSIBILITY_DUMP:-0}" == "1" ]]; then
+  printf '%s\n' "$work_tree"
+fi
 
 required_nodes=(
   "button +  New chat"
   "text field Search conversations"
-  "button Settings"
+  "button ⚙  Settings"
   "text area Message MicroClaw Work"
+  "button ＋ Attach"
   "button Send"
 )
 
