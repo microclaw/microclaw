@@ -23,7 +23,7 @@ policy and approval path, memory, skills, MCP integration, checkpoints, and
 runtime event protocol. Work is not a packaged copy of the Web console, and it
 does not maintain a desktop-only agent loop.
 
-The latest release is **v0.5.3**. Use the `stable` branch for conservative
+The latest release is **v0.5.4**. Use the `stable` branch for conservative
 production deployments; `main` is the active development branch.
 
 ## What makes it different

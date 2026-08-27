@@ -6,6 +6,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.5.4 - 2026-08-27
+
 ### Changed
 
 - **Workspace-aware native Work conversations.** The composer accepts files

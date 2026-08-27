@@ -10,7 +10,7 @@ MicroClaw develops around a small set of durable priorities instead of promising
 
 ## Current baseline
 
-Version **v0.5.3** defines two product surfaces on one execution model. MicroClaw Server is the supported cross-platform, deployable Agent Runtime. MicroClaw Work is the local-first native GPUI desktop coworker, formally supported on Apple Silicon macOS with Linux and Windows portable previews published on every release.
+Version **v0.5.4** defines two product surfaces on one execution model. MicroClaw Server is the supported cross-platform, deployable Agent Runtime. MicroClaw Work is the local-first native GPUI desktop coworker, formally supported on Apple Silicon macOS with Linux and Windows portable previews published on every release.
 
 ## Active priorities
 
