@@ -92,6 +92,7 @@ For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service 
 ## Why MicroClaw
 
 - **One core, two product surfaces.** Server and Work share the same Agent Engine, provider layer, tools, memory, policy, and recovery model.
+- **A local-first native Workspace.** Work shows project and Git branch context, supports native Workspace-file drag and drop, and keeps attachment access inside the shared runtime's folder guards.
 - **Execution that can continue.** Sessions, safe tool boundaries, scheduled work, and outbound delivery survive process restarts.
 - **Provider freedom.** Use native Anthropic or a broad set of OpenAI-compatible and local providers through one internal message model.
 - **Extensible by design.** Add skills, MCP servers, plugins, hooks, tools, or channel adapters without replacing the core runtime.

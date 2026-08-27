@@ -90,6 +90,7 @@ Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装
 ## 为什么选择 MicroClaw
 
 - **一套内核，两种产品形态。** Server 与 Work 共享同一套 Agent Engine、provider 层、工具、记忆、安全策略和恢复模型。
+- **Local-first 原生工作空间。** Work 展示项目与 Git 分支上下文，支持原生拖放 Workspace 文件，并让附件访问继续受共享运行时的目录边界保护。
 - **执行可以持续。** 会话、安全工具边界、定时任务和消息投递都可以在进程重启后继续。
 - **不绑定模型提供商。** 原生支持 Anthropic，并通过统一内部消息模型兼容大量 OpenAI-compatible 和本地服务。
 - **扩展边界清晰。** 技能、MCP Server、插件、Hook、工具和渠道适配器都能独立扩展，无需替换核心运行时。

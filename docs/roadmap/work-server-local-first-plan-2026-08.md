@@ -95,13 +95,18 @@ choose a folder -> describe work -> inspect plan and activity
 Delivered baseline includes a private Work Home fallback, canonical folder
 selection, per-conversation Workspace persistence, file and symlink escape
 protection, shared tool guardrails, pre-task checkpoints, multi-file review,
-safe artifact opening, accept/revert, and same-session follow-up.
+safe artifact opening, accept/revert, and same-session follow-up. Work also
+shows local project identity and Git branch context, labels its current-folder
+access boundary, and accepts up to eight Workspace files through the native
+picker or drag and drop. Attachments persist as relative paths, appear in the
+conversation, and are passed to the shared Agent Engine without copying file
+contents into desktop state; outside-Workspace files are rejected.
 
-Next depth comes from better Workspace orientation rather than an embedded
-IDE: recent project identity, repository status and branch context, clearer
-permission scope, drag/drop attachments, native file reveal, and background
-task visibility. Local execution remains the default; connecting a user-owned
-Server is optional and belongs to a later phase.
+Next depth remains deliberately smaller than an embedded IDE: richer
+repository-change orientation, recent projects, file reveal from attachment
+chips, and stronger background-task visibility. Local execution remains the
+default; connecting a user-owned Server is optional and belongs to a later
+phase.
 
 ### 4. lightweight native architecture
 

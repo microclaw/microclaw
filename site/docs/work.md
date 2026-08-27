@@ -49,7 +49,9 @@ desktop environment, GPU, and launch logs.
 1. Configure a provider and model in native Settings, or use a detected Codex
    account without copying its token into Work configuration.
 2. Keep the private Work Home or connect a project folder.
-3. Start a durable conversation and describe the outcome you want.
+3. Start a durable conversation and describe the outcome you want. Attach up
+   to eight files from the current Workspace with the native picker, or drag
+   them onto the composer.
 4. Inspect streamed plans, tool activity, process verification, subagents,
    approvals, file changes, and artifacts.
 5. Approve a sensitive action once, allow it for the chat, or deny it.
@@ -68,6 +70,13 @@ selected Workspace. Missing files, absolute escapes, and symlink escapes are
 rejected. Work uses the shared tool risk, authorization, path, hook, and audit
 boundaries rather than desktop-only bypasses.
 
+The Workspace rail shows the connected project name, Git branch when
+available, and the effective `current folder only` access scope. File
+attachments follow the same rule: Work stores only Workspace-relative paths,
+rejects external files, shows references in the durable conversation, and
+asks the shared Agent Engine to inspect them through its governed filesystem
+tools. File contents are not copied into the desktop session database.
+
 ## Native settings
 
 Settings includes:
@@ -77,7 +86,8 @@ Settings includes:
 - masked API-key replacement that never loads an existing secret into the UI;
 - local `SOUL.md` content and path plus the shared project-context directory;
 - system, light, and dark appearance (system is the default);
-- active Workspace and Work Home controls;
+- active Workspace and Work Home controls, repository context, and the local
+  access boundary;
 - offline filesystem/configuration diagnostics and explicit provider and full
   first-response tests.
 

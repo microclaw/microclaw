@@ -58,6 +58,12 @@ calls and tool execution never run on the GPUI thread.
 | Lifecycle | Long-running channels, schedules, background tasks | Foreground local runs and durable Work sessions | Recovery, cancellation, checkpoints, tool loop |
 | Platform | macOS, Linux, Windows | Apple Silicon macOS 13+ supported; Linux/Windows portable previews | Portable Rust crates |
 
+Work attachment handling follows the same boundary. GPUI receives native file
+drops, while `microclaw-work-app` canonicalizes each path against the selected
+Workspace, persists only the relative reference, and rejects escapes. The
+runtime then adds those references to the provider-neutral task request so the
+existing governed filesystem tools—not the view—read any content.
+
 ## Recommended reading order
 
 1. [Context Lifecycle](./architecture-context)

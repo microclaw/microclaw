@@ -8,6 +8,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Workspace-aware native Work conversations.** The composer accepts files
+  through the macOS picker or native drag and drop, persists only relative
+  Workspace paths, rejects files outside the active folder, and carries those
+  references into the shared Agent Engine request. The sidebar and Workspace
+  Settings now show project identity, Git branch context, and the explicit
+  current-folder access boundary.
+
 - **Truly lightweight Work builds.** Server builds continue to embed the React
   operator console by default, while `microclaw-work` now disables that asset
   feature at its runtime dependency boundary. Work keeps the shared Agent
