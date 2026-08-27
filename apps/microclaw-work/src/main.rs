@@ -23,7 +23,7 @@ use microclaw_work_runtime::{
 use smol::Timer;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::TryRecvError;
+use std::sync::{Arc, OnceLock, mpsc::TryRecvError};
 use std::time::Duration;
 
 actions!(
@@ -49,6 +49,17 @@ const SETTINGS_CONTENT_WIDTH: Pixels = px(640.);
 const UI_TEXT_SIZE: Pixels = px(12.);
 const UI_CAPTION_SIZE: Pixels = px(11.);
 const UI_PAGE_TITLE_SIZE: Pixels = px(17.);
+
+fn work_logo() -> Arc<Image> {
+    static LOGO: OnceLock<Arc<Image>> = OnceLock::new();
+    LOGO.get_or_init(|| {
+        Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            include_bytes!("../../../site/static/img/logo.png").to_vec(),
+        ))
+    })
+    .clone()
+}
 
 fn sidebar_width_for(viewport_width: Pixels) -> Pixels {
     if viewport_width < px(1_000.) {
@@ -1708,19 +1719,7 @@ impl WorkApp {
                     .items_center()
                     .gap_2()
                     .px_2()
-                    .child(
-                        div()
-                            .size(px(24.))
-                            .rounded_full()
-                            .bg(cx.theme().foreground)
-                            .text_color(cx.theme().background)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(UI_CAPTION_SIZE)
-                            .font_semibold()
-                            .child("μ"),
-                    )
+                    .child(img(work_logo()).size(px(24.)))
                     .child(
                         v_flex()
                             .gap_0p5()
@@ -2815,18 +2814,7 @@ impl Render for WorkApp {
                             .gap_2()
                             .px_1()
                             .py_1()
-                            .child(
-                                div()
-                                    .size(px(28.))
-                                    .rounded_full()
-                                    .bg(cx.theme().foreground)
-                                    .text_color(cx.theme().background)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .font_bold()
-                                    .child("μ"),
-                            )
+                            .child(img(work_logo()).size(px(28.)))
                             .child(
                                 v_flex()
                                     .gap_0p5()
@@ -3180,18 +3168,7 @@ impl Render for WorkApp {
                                             .justify_center()
                                             .gap_3()
                                             .p_6()
-                                            .child(
-                                                div()
-                                                    .size(px(46.))
-                                                    .rounded_full()
-                                                    .bg(cx.theme().accent)
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_base()
-                                                    .font_bold()
-                                                    .child("μ"),
-                                            )
+                                            .child(img(work_logo()).size(px(46.)))
                                             .child(
                                                 div()
                                             .text_size(UI_PAGE_TITLE_SIZE)

@@ -220,8 +220,10 @@ The validated bundle is written to
 `target/microclaw-work-app/debug/MicroClaw Work.app`. Use `release` instead of
 `debug` for a Server-style LTO build, or `work-release` for the official desktop
 distribution profile. Development bundles are ad-hoc signed for
-local execution. The bundle icon is generated from the same `logo.png` used by
-the documentation website. Build and verify an ad-hoc signed DMG preview with:
+local execution. Work embeds the website logo in its native interface and uses
+a macOS-specific rounded icon derived from the same artwork, preventing the
+system from adding a generic gray enclosure around the transparent logo. Build
+and verify an ad-hoc signed DMG preview with:
 
 ```sh
 scripts/build_work_macos_dmg.sh work-release

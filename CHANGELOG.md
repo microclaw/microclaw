@@ -8,6 +8,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Consistent MicroClaw Work identity.** The native sidebar, Settings header,
+  and empty-conversation state now use the website's MicroClaw artwork instead
+  of the temporary `μ` badge. The macOS bundle uses a dedicated rounded version
+  of the same artwork so the system no longer adds a generic gray enclosure.
 - **Refined MicroClaw Work desktop experience.** Work now uses a compact,
   responsive navigation rail, centered conversation layout, lighter message
   treatment, and a cleaner composer that adapts to 900px-wide macOS windows.

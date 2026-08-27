@@ -17,9 +17,10 @@ work_version="${MICROCLAW_WORK_VERSION_OVERRIDE:-$(awk -F '"' '/^version = / { p
 work_bundle="$work_repo_root/target/microclaw-work-app/$work_profile/MicroClaw Work.app"
 work_plist="$work_bundle/Contents/Info.plist"
 work_binary="$work_bundle/Contents/MacOS/microclaw-work"
+work_icon="$work_bundle/Contents/Resources/MicroClawWork.icns"
 work_dmg="$work_repo_root/target/microclaw-work-installer/$work_profile/MicroClaw-Work-$work_version-macos.dmg"
 
-for work_path in "$work_plist" "$work_binary" "$work_dmg"; do
+for work_path in "$work_plist" "$work_binary" "$work_icon" "$work_dmg"; do
   if [[ ! -e "$work_path" ]]; then
     echo "missing release artifact: $work_path" >&2
     exit 1

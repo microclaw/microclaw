@@ -33,7 +33,7 @@ work_bundle="$work_output_root/MicroClaw Work.app"
 work_contents="$work_bundle/Contents"
 work_binary="$work_repo_root/target/$work_profile/microclaw-work"
 work_plist_template="$work_repo_root/packaging/microclaw-work/macos/Info.plist.in"
-work_icon_source="$work_repo_root/site/static/img/logo.png"
+work_icon_source="$work_repo_root/packaging/microclaw-work/macos/MicroClawWork.png"
 
 cd "$work_repo_root"
 cargo "${work_cargo_args[@]}"
