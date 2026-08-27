@@ -11,7 +11,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'MicroClaw',
-  tagline: 'A dependable Rust agent runtime for every conversation surface.',
+  tagline: 'One shared Rust agent core for MicroClaw Server and native desktop Work.',
   favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future

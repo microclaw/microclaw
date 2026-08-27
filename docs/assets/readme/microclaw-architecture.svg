@@ -1,6 +1,6 @@
 <svg width="1400" height="900" viewBox="0 0 1400 900" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">MicroClaw Architecture</title>
-  <desc id="desc">MicroClaw architecture overview with channels, shared agent loop, memory, tools, scheduler, and observability.</desc>
+  <desc id="desc">MicroClaw Server and Work architecture overview with two product surfaces sharing one Agent Engine, provider layer, tools, policy, memory, and runtime services.</desc>
 
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1400" y2="900" gradientUnits="userSpaceOnUse">
@@ -32,17 +32,17 @@
   </g>
 
   <text x="140" y="132" fill="#0F172A" font-size="42" font-weight="700" font-family="Segoe UI, Arial, sans-serif">MicroClaw Architecture</text>
-  <text x="140" y="168" fill="#475569" font-size="22" font-family="Segoe UI, Arial, sans-serif">Channel-agnostic runtime with a shared tool loop, persistent memory, and background automation.</text>
+  <text x="140" y="168" fill="#475569" font-size="22" font-family="Segoe UI, Arial, sans-serif">One shared Rust agent core powering an always-on Server and native desktop Work.</text>
 
   <rect x="138" y="214" width="252" height="212" rx="24" fill="#DBEAFE"/>
-  <text x="166" y="258" fill="#1E3A8A" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Channels</text>
-  <text x="166" y="294" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">Telegram</text>
-  <text x="166" y="326" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">Discord</text>
-  <text x="166" y="358" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">Web (axum + SSE)</text>
-  <text x="166" y="390" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">delivery + splitting</text>
+  <text x="166" y="258" fill="#1E3A8A" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Server</text>
+  <text x="166" y="294" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">chat channels</text>
+  <text x="166" y="326" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">Web + APIs</text>
+  <text x="166" y="358" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">schedules + protocols</text>
+  <text x="166" y="390" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">macOS / Linux / Windows</text>
 
   <rect x="420" y="214" width="330" height="212" rx="24" fill="#DCFCE7"/>
-  <text x="450" y="258" fill="#166534" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Agent Runtime Core</text>
+  <text x="450" y="258" fill="#166534" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Shared Agent Core</text>
   <text x="450" y="294" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">load session/history</text>
   <text x="450" y="326" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">build prompt + memory context</text>
   <text x="450" y="358" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">LLM call with tool schemas</text>
@@ -86,10 +86,10 @@
   <text x="558" y="774" fill="#4D7C0F" font-size="20" font-family="Segoe UI, Arial, sans-serif">reflector loop + task history</text>
 
   <rect x="914" y="634" width="350" height="166" rx="24" fill="#F3E8FF"/>
-  <text x="946" y="678" fill="#6B21A8" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Web + Observability</text>
-  <text x="946" y="714" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">chat stream + sessions API</text>
-  <text x="946" y="744" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">usage + memory observability</text>
-  <text x="946" y="774" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">config + history endpoints</text>
+  <text x="946" y="678" fill="#6B21A8" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Work Projection</text>
+  <text x="946" y="714" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">Work Runtime bridge</text>
+  <text x="946" y="744" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">durable Work state</text>
+  <text x="946" y="774" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">native GPUI · macOS now</text>
 
   <path d="M380 602V632" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>
   <path d="M710 602V632" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>

@@ -358,6 +358,58 @@
   font-size: 0.9rem;
 }
 
+.productSection {
+  padding: 5.3rem 0;
+  background: var(--mc-surface-alt);
+}
+
+.productGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.productCard {
+  border-radius: 12px;
+  padding: 1.55rem;
+  background: linear-gradient(150deg, #ffffff, #f0f3ff);
+  border: 1px solid rgba(52, 95, 232, 0.14);
+  box-shadow: 0 16px 34px rgba(22, 38, 77, 0.1);
+}
+
+.productCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.productCardHeader h3 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.productCardHeader span {
+  border-radius: 999px;
+  padding: 0.3rem 0.68rem;
+  background: rgba(122, 162, 247, 0.14);
+  color: #345fe8;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.productCard p {
+  margin: 0.8rem 0 0;
+  color: rgba(23, 25, 39, 0.78);
+}
+
+.productAvailability {
+  margin: 1rem 0 0.7rem;
+  color: rgba(23, 25, 39, 0.66);
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
 .section {
   padding: 5.3rem 0;
   background: var(--mc-surface);
@@ -569,15 +621,29 @@
   background: var(--mc-surface-alt);
 }
 
+:global([data-theme='dark']) .productSection {
+  background: var(--mc-surface-alt);
+}
+
 /* Cards need a visible lightness step above the page plus a real shadow.
    Matching the page tone and dropping the shadow made them disappear. */
 :global([data-theme='dark']) .capabilityCard,
+:global([data-theme='dark']) .productCard,
 :global([data-theme='dark']) .stepCard,
 :global([data-theme='dark']) .useCaseCard,
 :global([data-theme='dark']) .archVisualCard {
   background: var(--mc-card);
   border-color: var(--mc-hairline);
   box-shadow: var(--mc-card-shadow);
+}
+
+:global([data-theme='dark']) .productCardHeader h3 {
+  color: #f3f5ff;
+}
+
+:global([data-theme='dark']) .productCard p,
+:global([data-theme='dark']) .productAvailability {
+  color: var(--mc-muted);
 }
 
 :global([data-theme='dark']) .capabilityCard h3,
@@ -592,6 +658,7 @@
 
 @media (max-width: 1120px) {
   .proofGrid,
+  .productGrid,
   .capabilityGrid,
   .useCaseGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

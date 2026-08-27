@@ -18,8 +18,8 @@
 </p>
 
 <p align="center">
-  <strong>面向所有对话入口的可靠智能体运行时。</strong><br />
-  工具、记忆、定时任务、技能、MCP、子智能体和本地控制面，在聊天、Web 与智能体协议之间共享。
+  <strong>一套共享 Rust 智能体内核，两种产品形态。</strong><br />
+  MicroClaw Server 面向持续运行的渠道与自动化，MicroClaw Work 面向原生桌面工作空间。
 </p>
 
 <p align="center">
@@ -29,9 +29,14 @@
   <a href="#文档">文档</a>
 </p>
 
-MicroClaw 是一个用 Rust 编写、可自行托管的智能体运行时。统一的渠道无关 agent loop 和 provider 无关 LLM 层，可以同时服务 Telegram、Discord、Slack、飞书/Lark、Web 及其他适配器，而不必在每个渠道重复实现核心逻辑。
+MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含两种产品形态。**MicroClaw Server** 持续运行，承载聊天渠道、Web、API、调度和自动化；**MicroClaw Work** 是面向本地项目工作的原生 GPUI 桌面应用。两者共享同一套渠道无关 Agent Engine、provider 抽象、工具、安全策略、记忆、技能和运行时事件。
 
 它面向的不只是一次问答，而是能够持续完成的工作：多步工具调用、可恢复会话、可靠投递、持久记忆、定时任务和受治理的扩展能力都运行在同一个系统中。
+
+| 产品 | 适用场景 | 当前支持 |
+|---|---|---|
+| MicroClaw Server | 常驻智能体、聊天渠道、Web/API、定时任务与远程自动化 | macOS、Linux 和 Windows |
+| MicroClaw Work | 原生本地对话、项目工作空间、工具审批、检查点与桌面设置 | Apple Silicon macOS 13+；Windows 和 Linux 即将推出 |
 
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw 对话界面" width="45%" />
@@ -41,7 +46,16 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体运行时。统�
 
 ## 快速开始
 
-macOS 或 Linux 安装：
+在 Apple Silicon macOS 13+ 上安装原生 MicroClaw Work：
+
+```sh
+brew tap microclaw/tap
+brew install --cask microclaw-work
+```
+
+MicroClaw Work 的 Windows 和 Linux 版本即将推出。
+
+如需运行 MicroClaw Server，在 macOS 或 Linux 上安装：
 
 ```sh
 curl -fsSL https://microclaw.org/install.sh | bash
@@ -63,13 +77,13 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-当前稳定版本为 **v0.5.0**，包含运行时超大模块拆分、React 19/Vite 8 Web 技术栈，以及全面更新的操作控制台。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.5.0)。
+最新版本为 **v0.5.2**，包含更加精致的 MicroClaw Work 桌面体验和设置架构，同时完整保留 Server 运行时能力。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.5.2)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
 ## 为什么选择 MicroClaw
 
-- **一个运行时，多种入口。** 所有渠道共享同一套 agent loop、工具、记忆、策略和恢复模型。
+- **一套内核，两种产品形态。** Server 与 Work 共享同一套 Agent Engine、provider 层、工具、记忆、安全策略和恢复模型。
 - **执行可以持续。** 会话、安全工具边界、定时任务和消息投递都可以在进程重启后继续。
 - **不绑定模型提供商。** 原生支持 Anthropic，并通过统一内部消息模型兼容大量 OpenAI-compatible 和本地服务。
 - **扩展边界清晰。** 技能、MCP Server、插件、Hook、工具和渠道适配器都能独立扩展，无需替换核心运行时。
@@ -100,7 +114,7 @@ Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装
   <img src="docs/assets/readme/microclaw-architecture.svg" alt="MicroClaw 架构概览" width="96%" />
 </p>
 
-渠道适配器只负责输入转换和结果投递，不维护自己的 agent loop，也不承载 provider 特例。
+Server 渠道适配器只负责输入转换和结果投递；Work 通过 `microclaw-work-runtime` 与 `microclaw-work-app` 把同一套运行时事件投影成原生 GPUI 状态。两种产品形态都不维护独立的 agent loop，也不重复实现 provider 逻辑。
 
 ## 能力地图
 
@@ -110,7 +124,7 @@ Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装
 | 连续性 | 会话恢复、上下文压缩、检查点、可靠投递、定时任务和取消 | [并发模型](docs/operations/concurrency-and-responsiveness.md)、[任务生命周期](docs/scheduled-task-lifecycle.md) |
 | 记忆与学习 | 文件和 SQLite 记忆、语义召回、时序知识图谱、经验凭证与受治理的技能演化 | [长期学习](docs/long-horizon-learning.md)、[Learning Foundry](docs/learning-foundry.md) |
 | 扩展 | 技能、Manifest 插件、Hook、MCP、ClawHub、A2A 与 ACP | [插件](docs/plugins/overview.md)、[MCP](docs/integrations/mcp.md)、[ClawHub](docs/clawhub/overview.md)、[A2A](docs/a2a.md) |
-| 交互入口 | 本地 Web UI、HTTP/SSE/WebSocket API、聊天渠道与智能体协议 | [Web UI](docs/operations/web-ui.md)、[HTTP 触发](docs/operations/http-hook-trigger.md)、[ACP](docs/operations/acp-stdio.md) |
+| 交互入口 | 原生 MicroClaw Work、本地 Web UI、HTTP/SSE/WebSocket API、聊天渠道与智能体协议 | [Work 发布](docs/operations/microclaw-work-release.md)、[Web UI](docs/operations/web-ui.md)、[HTTP 触发](docs/operations/http-hook-trigger.md)、[ACP](docs/operations/acp-stdio.md) |
 | 安全与运维 | 工具确认、能力授权、Docker 沙箱、出口策略、凭证脱敏、指标、链路追踪与诊断 | [执行模型](docs/security/execution-model.md)、[安全运行时](docs/security/secure-runtime.md)、[运维手册](docs/operations/runbook.md) |
 
 ### 渠道与模型提供商
@@ -126,11 +140,13 @@ Anthropic 使用原生 provider 通路。OpenAI、OpenAI Codex、OpenRouter、Ol
 | 安装脚本 | 最快完成 macOS/Linux 安装 | `curl -fsSL https://microclaw.org/install.sh \| bash` |
 | PowerShell | 最快完成 Windows 安装 | `iwr https://microclaw.org/install.ps1 -UseBasicParsing \| iex` |
 | Homebrew | 在 macOS 上管理升级 | `brew tap microclaw/tap && brew install microclaw` |
-| Homebrew Cask | 原生 MicroClaw Work 桌面端 | `brew tap microclaw/tap && brew install --cask microclaw-work` |
+| Homebrew Cask | Apple Silicon macOS 13+ 原生 MicroClaw Work | `brew tap microclaw/tap && brew install --cask microclaw-work` |
 | 容器 | 隔离部署 | `ghcr.io/microclaw/microclaw:latest` |
 | 源码 | 开发或启用自定义 feature | `cargo build --release` |
 
 预编译 Linux 二进制对 glibc 和 OpenSSL 有版本要求。旧发行版安装前请先阅读[快速上手指南](docs/getting-started.md)。
+
+MicroClaw Work 当前正式支持 Apple Silicon macOS；Windows 和 Linux 原生桌面版本即将推出。MicroClaw Server 继续支持这三个平台。
 
 ## 文档
 

@@ -15,6 +15,12 @@ const SYSTEMS = [
 const INSTALL_OPTIONS_BY_SYSTEM = {
   macos: [
     {
+      id: 'work-cask',
+      labelKey: 'work',
+      command: 'brew tap microclaw/tap && brew install --cask microclaw-work',
+      hintKey: 'work',
+    },
+    {
       id: 'install-script',
       labelKey: 'script',
       command: 'curl -fsSL https://microclaw.org/install.sh | bash',
@@ -148,7 +154,7 @@ function HomepageHeader() {
         <div className={styles.heroLayout}>
           <div className={styles.heroContent}>
             <div className={styles.eyebrow}>{messages.eyebrow}</div>
-            <Link className={styles.releasePill} href="https://github.com/microclaw/microclaw/releases/tag/v0.5.0">
+            <Link className={styles.releasePill} href="https://github.com/microclaw/microclaw/releases/tag/v0.5.2">
               {messages.release} <span aria-hidden="true">→</span>
             </Link>
             <Heading as="h1" className={styles.heroTitle}>
@@ -260,6 +266,28 @@ export default function Home() {
                   <span className={styles.proofLabel}>{label}</span>
                   <p>{text}</p>
                 </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.productSection}>
+          <div className="container">
+            <div className={styles.sectionHeader}>
+              <Heading as="h2">{messages.productsTitle}</Heading>
+              <p>{messages.productsText}</p>
+            </div>
+            <div className={styles.productGrid}>
+              {messages.products.map(([name, badge, text, availability, href]) => (
+                <article key={name} className={styles.productCard}>
+                  <div className={styles.productCardHeader}>
+                    <h3>{name}</h3>
+                    <span>{badge}</span>
+                  </div>
+                  <p>{text}</p>
+                  <div className={styles.productAvailability}>{availability}</div>
+                  <Link to={href}>{messages.productAction}</Link>
+                </article>
               ))}
             </div>
           </div>

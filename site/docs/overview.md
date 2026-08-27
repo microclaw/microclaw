@@ -6,13 +6,29 @@ sidebar_position: 1
 
 # MicroClaw
 
-MicroClaw is a self-hosted Rust agent runtime for chat channels, the local Web console, and agent protocols. It combines one shared agent loop, one provider abstraction, persistent memory, background scheduling, governed extensions, and a local control plane in a single binary.
+MicroClaw is a self-hosted Rust agent platform with one shared agent core and
+two product surfaces:
 
-The current stable release is **v0.5.0**. Use the `stable` branch for production deployments; `main` is the active development branch.
+- **MicroClaw Server** is the always-on runtime for chat channels, the local
+  Web console, APIs, schedules, background work, and agent protocols. It ships
+  for macOS, Linux, and Windows.
+- **MicroClaw Work** is a native GPUI desktop application for local
+  conversations, project workspaces, approvals, checkpoints, and settings. It
+  currently ships for Apple Silicon macOS 13+. Windows and Linux are coming
+  soon.
+
+Both surfaces share the Agent Engine, provider abstraction, tool registry,
+policy and approval path, memory, skills, MCP integration, checkpoints, and
+runtime event protocol. Work is not a packaged copy of the Web console, and it
+does not maintain a desktop-only agent loop.
+
+The latest release is **v0.5.2**. Use the `stable` branch for conservative
+production deployments; `main` is the active development branch.
 
 ## What makes it different
 
-- Channel-agnostic agent loop instead of separate bot implementations per surface
+- One shared agent loop across Server channels, Web, protocols, and native Work
+- A native Rust/GPUI desktop workspace without a bundled browser or duplicated runtime
 - Humanlike chat surface: short-first / multi-bubble replies, mood-adaptive tone, group etiquette
 - A concurrent **specialist sub-agent team** (mathematician, illustrator, researcher, coder, writer, analyst) with named tasks and colleague-style progress reports
 - Long-lived memory backed by `AGENTS.md` files plus structured SQLite memory, with graph-augmented recall over a temporal knowledge graph
@@ -70,5 +86,6 @@ MicroClaw enters an agentic loop for every message. LLM can call tools, inspect 
 - Conversation archiving (automatic before compaction, manual via `/archive`)
 - Typing indicator that stays active during tool use
 - Local Web operator console with chat, session controls, task history, configuration, governance, usage, skills, and diagnostics
+- Native MicroClaw Work desktop with durable conversations, project workspaces, inline approvals, checkpoints, model and SOUL settings, and light/dark themes
 
 Continue with the Quickstart to get a bot running in minutes.

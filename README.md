@@ -18,8 +18,8 @@
 </p>
 
 <p align="center">
-  <strong>One dependable agent runtime for every conversation surface.</strong><br />
-  Tools, memory, scheduled work, skills, MCP, subagents, and a local control plane—shared across chat, web, and agent protocols.
+  <strong>One shared Rust agent core. Two product surfaces.</strong><br />
+  Run MicroClaw Server for always-on channels and automation, or use MicroClaw Work as a native desktop workspace.
 </p>
 
 <p align="center">
@@ -29,9 +29,14 @@
   <a href="#documentation">Documentation</a>
 </p>
 
-MicroClaw is a self-hosted Rust agent runtime. One channel-independent agent loop and one provider-independent LLM layer power Telegram, Discord, Slack, Feishu/Lark, Web, and other adapters without duplicating behavior at each boundary.
+MicroClaw is a self-hosted Rust agent platform with two product surfaces. **MicroClaw Server** runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Work** is a native GPUI desktop application for local, workspace-centered agent work. Both use the same channel-independent Agent Engine, provider abstraction, tools, policy, memory, skills, and runtime events.
 
 It is designed for work that lasts longer than one request: multi-step tool use, resumable sessions, durable delivery, persistent memory, scheduled tasks, and governed extensions all run in the same runtime.
+
+| Product | Best for | Availability |
+|---|---|---|
+| MicroClaw Server | Always-on agents, chat channels, Web/API access, scheduled work, and remote automation | macOS, Linux, and Windows |
+| MicroClaw Work | Native local conversations, project workspaces, approvals, checkpoints, and desktop settings | Apple Silicon macOS 13+; Windows and Linux coming soon |
 
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw conversation view" width="45%" />
@@ -41,7 +46,16 @@ It is designed for work that lasts longer than one request: multi-step tool use,
 
 ## Quick start
 
-Install on macOS or Linux:
+Install the native MicroClaw Work desktop app on Apple Silicon macOS 13+:
+
+```sh
+brew tap microclaw/tap
+brew install --cask microclaw-work
+```
+
+Windows and Linux versions of MicroClaw Work are coming soon.
+
+To run MicroClaw Server, install on macOS or Linux:
 
 ```sh
 curl -fsSL https://microclaw.org/install.sh | bash
@@ -63,13 +77,13 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The current stable release is **v0.5.0**. It includes the decomposed runtime modules, React 19/Vite 8 web stack, and the refreshed operator console. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.5.0).
+The latest release is **v0.5.2**. It includes the refined MicroClaw Work desktop experience and settings architecture while preserving the complete Server runtime. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.5.2).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
 ## Why MicroClaw
 
-- **One runtime, many surfaces.** The same agent loop, tools, memory, policy, and recovery model work across channels.
+- **One core, two product surfaces.** Server and Work share the same Agent Engine, provider layer, tools, memory, policy, and recovery model.
 - **Execution that can continue.** Sessions, safe tool boundaries, scheduled work, and outbound delivery survive process restarts.
 - **Provider freedom.** Use native Anthropic or a broad set of OpenAI-compatible and local providers through one internal message model.
 - **Extensible by design.** Add skills, MCP servers, plugins, hooks, tools, or channel adapters without replacing the core runtime.
@@ -100,7 +114,7 @@ Every message follows the same flow:
   <img src="docs/assets/readme/microclaw-architecture.svg" alt="MicroClaw architecture overview" width="96%" />
 </p>
 
-Channel adapters translate ingress and delivery events only. They do not carry their own agent loops or provider-specific behavior.
+Server channel adapters translate ingress and delivery events only. Work projects the same runtime events into native GPUI state through `microclaw-work-runtime` and `microclaw-work-app`. Neither surface carries a separate agent loop or provider implementation.
 
 ## Capabilities
 
@@ -110,7 +124,7 @@ Channel adapters translate ingress and delivery events only. They do not carry t
 | Continuity | Resumable sessions, context compaction, checkpoints, durable outbound delivery, scheduling, and cancellation | [Concurrency](docs/operations/concurrency-and-responsiveness.md), [task lifecycle](docs/scheduled-task-lifecycle.md) |
 | Memory and learning | File and SQLite memory, semantic recall, temporal knowledge graph, experience evidence, and governed skill evolution | [Long-horizon learning](docs/long-horizon-learning.md), [Learning Foundry](docs/learning-foundry.md) |
 | Extension | Skills, manifest plugins, hooks, MCP, ClawHub, A2A, and ACP | [Plugins](docs/plugins/overview.md), [MCP](docs/integrations/mcp.md), [ClawHub](docs/clawhub/overview.md), [A2A](docs/a2a.md) |
-| Interfaces | Local Web UI, HTTP/SSE/WebSocket APIs, chat adapters, and agent protocols | [Web UI](docs/operations/web-ui.md), [HTTP triggers](docs/operations/http-hook-trigger.md), [ACP](docs/operations/acp-stdio.md) |
+| Interfaces | Native MicroClaw Work, local Web UI, HTTP/SSE/WebSocket APIs, chat adapters, and agent protocols | [Work release](docs/operations/microclaw-work-release.md), [Web UI](docs/operations/web-ui.md), [HTTP triggers](docs/operations/http-hook-trigger.md), [ACP](docs/operations/acp-stdio.md) |
 | Safety and operations | Tool approvals, scoped capability grants, Docker sandboxing, egress policy, secret redaction, metrics, traces, and diagnostics | [Execution model](docs/security/execution-model.md), [secure runtime](docs/security/secure-runtime.md), [runbook](docs/operations/runbook.md) |
 
 ### Channels and providers
@@ -126,11 +140,13 @@ Anthropic has a native provider path. OpenAI, OpenAI Codex, OpenRouter, Ollama, 
 | Installer | Fastest macOS/Linux setup | `curl -fsSL https://microclaw.org/install.sh \| bash` |
 | PowerShell | Fastest Windows setup | `iwr https://microclaw.org/install.ps1 -UseBasicParsing \| iex` |
 | Homebrew | Managed macOS upgrades | `brew tap microclaw/tap && brew install microclaw` |
-| Homebrew Cask | Native MicroClaw Work desktop | `brew tap microclaw/tap && brew install --cask microclaw-work` |
+| Homebrew Cask | Native MicroClaw Work desktop on Apple Silicon macOS 13+ | `brew tap microclaw/tap && brew install --cask microclaw-work` |
 | Container | Isolated deployment | `ghcr.io/microclaw/microclaw:latest` |
 | Source | Development or custom features | `cargo build --release` |
 
 The prebuilt Linux binary has glibc and OpenSSL requirements. Read [Getting started](docs/getting-started.md) before installing on an older distribution.
+
+MicroClaw Work currently ships for Apple Silicon macOS. Native Windows and Linux desktop releases are coming soon; MicroClaw Server remains supported on all three platforms.
 
 ## Documentation
 

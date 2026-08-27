@@ -27,26 +27,26 @@
     </marker>
   </defs>
   <rect width="1680" height="1770" fill="url(#bg)" />
-  <text class="title" x="64" y="138.0">MicroClaw Runtime Architecture</text>
-  <text class="subtitle" x="64" y="195.0">Channel adapters + shared engine + provider abstraction + tool execution + memory + observability</text>
-  <text class="group" x="76" y="312.0">Ingress Channels</text>
+  <text class="title" x="64" y="138.0">MicroClaw Server + Work Architecture</text>
+  <text class="subtitle" x="64" y="195.0">Two product surfaces + one shared Agent Engine + provider abstraction + tools + memory + policy</text>
+  <text class="group" x="76" y="312.0">Product Surfaces</text>
   <rect x="70" y="348.0" width="260" height="159.0" rx="18" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3" />
-  <text class="h" x="136" y="438.0">Telegram</text>
-  <text class="xs" x="114" y="474.0">mentions + catch-up</text>
+  <text class="h" x="111" y="438.0">Server Channels</text>
+  <text class="xs" x="104" y="474.0">chat + durable delivery</text>
   <rect x="70" y="540.0" width="260" height="159.0" rx="18" fill="#c4b5fd" stroke="#6d28d9" stroke-width="3" />
-  <text class="h" x="149" y="630.0">Discord</text>
-  <text class="xs" x="134" y="666.0">split delivery</text>
+  <text class="h" x="132" y="630.0">Web + APIs</text>
+  <text class="xs" x="112" y="666.0">SSE + WebSocket + HTTP</text>
   <rect x="70" y="732.0" width="260" height="159.0" rx="18" fill="#67e8f9" stroke="#0e7490" stroke-width="3" />
-  <text class="h" x="176" y="822.0">Web</text>
-  <text class="xs" x="127" y="858.0">SSE + stream replay</text>
+  <text class="h" x="112" y="822.0">Work (macOS)</text>
+  <text class="xs" x="106" y="858.0">native GPUI desktop</text>
   <rect x="70" y="924.0" width="260" height="159.0" rx="18" fill="#86efac" stroke="#15803d" stroke-width="3" />
-  <text class="h" x="172" y="1014.0">Slack</text>
-  <text class="xs" x="132" y="1050.0">adapter extension</text>
+  <text class="h" x="118" y="1014.0">Agent Protocols</text>
+  <text class="xs" x="130" y="1050.0">ACP + A2A + MCP</text>
   <rect x="70" y="1116.0" width="260" height="159.0" rx="18" fill="#f9a8d4" stroke="#be185d" stroke-width="3" />
-  <text class="h" x="166" y="1206.0">Feishu</text>
-  <text class="xs" x="144" y="1242.0">platform parity</text>
+  <text class="h" x="123" y="1206.0">Work Platforms</text>
+  <text class="xs" x="108" y="1242.0">Windows + Linux soon</text>
   <rect x="384" y="270.0" width="906" height="1380.0" rx="28" fill="url(#coreBg)" stroke="#334155" stroke-width="3" />
-  <text class="group" x="728" y="342.0">Shared Core (Rust)</text>
+  <text class="group" x="688" y="342.0">Shared Agent Core (Rust)</text>
   <rect x="420" y="384.0" width="834" height="111.0" rx="14" fill="#fde68a" stroke="#b45309" stroke-width="2.5" />
   <text class="h" x="612" y="453.0">Agent Engine (`process_with_agent`)</text>
   <rect x="420" y="525.0" width="272" height="180.0" rx="14" fill="#bfdbfe" stroke="#1d4ed8" stroke-width="2.5" />
@@ -89,7 +89,7 @@
   <rect x="420" y="1371.0" width="834" height="231.0" rx="14" fill="#99f6e4" stroke="#0f766e" stroke-width="2.4" />
   <text class="h" x="448" y="1434.0">Runtime Services</text>
   <text class="s" x="452" y="1482.0">scheduler runner  ·  memory reflector loop  ·  usage report API  ·  web gateway routes</text>
-  <text class="s" x="452" y="1530.0">outbound delivery helpers  ·  doctor diagnostics  ·  setup wizard  ·  config + migrations</text>
+  <text class="s" x="452" y="1530.0">Server delivery  ·  Work event projection  ·  diagnostics  ·  config + migrations</text>
   <text class="group" x="1320" y="312.0">External Systems</text>
   <rect x="1320" y="357.0" width="292" height="171.0" rx="18" fill="#fca5a5" stroke="#b91c1c" stroke-width="3" />
   <text class="s" x="1382" y="442.5">SQLite Storage</text>
@@ -104,8 +104,8 @@
   <text class="s" x="1376" y="1081.5">Observability</text>
   <text class="xs" x="1363" y="1117.5">usage + memory metrics</text>
   <rect x="1320" y="1209.0" width="292" height="171.0" rx="18" fill="#93c5fd" stroke="#1d4ed8" stroke-width="3" />
-  <text class="s" x="1388" y="1294.5">Web API / UI</text>
-  <text class="xs" x="1363" y="1330.5">chat + history + config</text>
+  <text class="s" x="1360" y="1294.5">Product State</text>
+  <text class="xs" x="1348" y="1330.5">Server + durable Work</text>
   <path class="a" d="M330 427.5 L384 427.5" />
   <path class="a" d="M330 619.5 L384 619.5" />
   <path class="a" d="M330 811.5 L384 811.5" />
