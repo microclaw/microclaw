@@ -6,6 +6,7 @@ work_repo_root="$(cd "$work_script_dir/.." && pwd)"
 work_profile="${1:-release}"
 work_signing_identity="${MICROCLAW_WORK_SIGNING_IDENTITY:--}"
 work_notary_profile="${MICROCLAW_WORK_NOTARY_PROFILE:-}"
+work_notary_keychain="${MICROCLAW_WORK_NOTARY_KEYCHAIN:-}"
 work_reclaim_build_artifacts="${MICROCLAW_WORK_RECLAIM_BUILD_ARTIFACTS:-0}"
 
 case "$work_profile" in
@@ -63,11 +64,19 @@ if [[ -n "$work_notary_profile" ]]; then
     echo "MICROCLAW_WORK_NOTARY_PROFILE requires a Developer ID signing identity" >&2
     exit 2
   fi
+  work_notary_auth=(--keychain-profile "$work_notary_profile")
+  if [[ -n "$work_notary_keychain" ]]; then
+    if [[ ! -f "$work_notary_keychain" ]]; then
+      echo "MICROCLAW_WORK_NOTARY_KEYCHAIN does not exist: $work_notary_keychain" >&2
+      exit 2
+    fi
+    work_notary_auth+=(--keychain "$work_notary_keychain")
+  fi
   work_notary_archive="$(mktemp /tmp/microclaw-work-notary.XXXXXX.zip)"
   trap 'rm -f "$work_notary_archive"' EXIT
   ditto -c -k --keepParent "$work_bundle" "$work_notary_archive"
   xcrun notarytool submit "$work_notary_archive" \
-    --keychain-profile "$work_notary_profile" \
+    "${work_notary_auth[@]}" \
     --wait
   xcrun stapler staple "$work_bundle"
   xcrun stapler validate "$work_bundle"
@@ -97,7 +106,7 @@ fi
 
 if [[ -n "$work_notary_profile" ]]; then
   xcrun notarytool submit "$work_dmg" \
-    --keychain-profile "$work_notary_profile" \
+    "${work_notary_auth[@]}" \
     --wait
   xcrun stapler staple "$work_dmg"
   xcrun stapler validate "$work_dmg"

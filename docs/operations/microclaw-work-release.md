@@ -75,6 +75,13 @@ MICROCLAW_WORK_REQUIRE_NOTARIZATION=1 \
 scripts/verify_work_macos_release.sh work-release
 ```
 
+For non-interactive local release shells that cannot write the login Keychain,
+create and unlock a temporary keychain, store the profile there with
+`notarytool store-credentials --keychain <path>`, and pass the same path as
+`MICROCLAW_WORK_NOTARY_KEYCHAIN`. The build script supplies that keychain to
+both application and DMG submissions. Delete the temporary keychain after the
+release completes.
+
 Do not publish the ad-hoc signed preview produced when these release credentials
 are absent.
 
