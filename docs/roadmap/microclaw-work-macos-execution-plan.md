@@ -3,10 +3,11 @@
 Status: **superseded by [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md)**
 Updated: **2026-08-27**
 
-This document is the current delivery plan for MicroClaw Work. It narrows the
-older cross-platform proposal to one supported desktop product: macOS. Windows
-and Linux remain possible future ports, but their compatibility, packaging,
-and acceptance work must not delay the first complete macOS product.
+This document records the completed macOS-first execution phase for MicroClaw
+Work. The canonical roadmap linked above now governs current delivery. macOS
+is the only fully supported Work desktop platform; Linux and Windows portable
+previews are published for testing, but their compatibility, packaging, and
+acceptance work must not delay macOS product completeness.
 
 MicroClaw Server remains a separate, supported product. Work and Server share
 the provider-neutral Agent Engine, tools, safety policy, memory, storage, and
@@ -134,7 +135,9 @@ user-owned MicroClaw Server.
 
 ## Deferred scope
 
-- Windows and Linux binaries, installers, signing, and UI compatibility;
+- formal Windows and Linux support, including installers, signing, desktop
+  integration, accessibility, and sustained compatibility acceptance; portable
+  preview binaries are already delivered under the canonical roadmap;
 - native mobile clients;
 - a second desktop Agent Loop;
 - plugin marketplace and complete IDE/terminal emulation;
