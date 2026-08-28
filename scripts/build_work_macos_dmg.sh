@@ -116,9 +116,22 @@ mkdir -p "$work_staging"
 ditto "$work_bundle" "$work_staging/MicroClaw Work.app"
 ln -s /Applications "$work_staging/Applications"
 
+# hdiutil's implicit srcfolder sizing can underestimate application bundles
+# with signed Mach-O files and extended attributes. Give the temporary image
+# explicit headroom so the copy does not exhaust the image even when the host
+# volume itself has ample free space.
+work_staging_kib="$(du -sk "$work_staging" | awk '{ print $1 }')"
+if [[ ! "$work_staging_kib" =~ ^[0-9]+$ || "$work_staging_kib" -eq 0 ]]; then
+  echo "failed to measure DMG staging size: $work_staging_kib" >&2
+  exit 1
+fi
+work_dmg_size_kib="$((work_staging_kib * 2 + 262144))"
+echo "Creating DMG with ${work_dmg_size_kib} KiB capacity for ${work_staging_kib} KiB of staged content"
+
 hdiutil create \
   -volname "MicroClaw Work" \
   -srcfolder "$work_staging" \
+  -size "${work_dmg_size_kib}k" \
   -ov \
   -format UDZO \
   "$work_dmg"
