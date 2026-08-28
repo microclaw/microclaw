@@ -9,8 +9,28 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
+        # importCargoLock in the pinned nixpkgs revision downloads crates via
+        # crates.io's API redirect endpoint. GitHub-hosted runners can receive
+        # intermittent 403 responses from that endpoint, while Cargo itself
+        # uses the stable static crate endpoint. Rewrite only those fetches;
+        # fetchurl still verifies every archive against its Cargo.lock checksum.
+        cratesIoStaticOverlay = final: prev: {
+          fetchurl = args:
+            let
+              originalUrl = args.url or "";
+              crateMatch = builtins.match
+                "https://crates\\.io/api/v1/crates/([^/]+)/([^/]+)/download"
+                originalUrl;
+              crateName = if crateMatch == null then "" else builtins.elemAt crateMatch 0;
+              crateVersion = if crateMatch == null then "" else builtins.elemAt crateMatch 1;
+            in
+            prev.fetchurl (args // prev.lib.optionalAttrs (crateMatch != null) {
+              url = "https://static.crates.io/crates/${crateName}/${crateName}-${crateVersion}.crate";
+            });
+        };
         pkgs = import nixpkgs {
           inherit system;
+          overlays = [ cratesIoStaticOverlay ];
         };
         webAssets = pkgs.buildNpmPackage {
           pname = "microclaw-web-assets";
