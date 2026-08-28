@@ -24,9 +24,11 @@
               crateName = if crateMatch == null then "" else builtins.elemAt crateMatch 0;
               crateVersion = if crateMatch == null then "" else builtins.elemAt crateMatch 1;
             in
-            prev.fetchurl (args // prev.lib.optionalAttrs (crateMatch != null) {
-              url = "https://static.crates.io/crates/${crateName}/${crateName}-${crateVersion}.crate";
-            });
+            prev.fetchurl (
+              if crateMatch == null then args else args // {
+                url = "https://static.crates.io/crates/${crateName}/${crateName}-${crateVersion}.crate";
+              }
+            );
         };
         pkgs = import nixpkgs {
           inherit system;
