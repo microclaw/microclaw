@@ -60,6 +60,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v19
       - uses: DeterminateSystems/magic-nix-cache-action@v13
+        with:
+          use-gha-cache: enabled
+          use-flakehub: disabled
       - run: nix build .#microclaw
 
   work-desktop:
