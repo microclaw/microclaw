@@ -87,8 +87,7 @@ loss, unsafe project mutation, or a required terminal workaround.
 
 ## Stage 3 — macOS release
 
-Status: **notarized candidate and local Cask lifecycle complete; publication
-acceptance pending**
+Status: **published release complete; clean-account acceptance pending**
 
 Delivered:
 
@@ -100,6 +99,12 @@ Delivered:
   settings;
 - a Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted
   local candidate with application and DMG submission evidence;
+- the public v0.5.4 release, including the notarized Apple Silicon DMG at the
+  immutable SHA-256
+  `be82d6d7e8f4a648dcf673984ed0c0e30f0f8b3fae6642b09a17099e9d2c2b8d`;
+- the `microclaw/tap/microclaw-work` Cask at v0.5.4, verified through an
+  installed v0.5.3 to v0.5.4 upgrade plus signature, stapling, Gatekeeper, and
+  launch checks;
 - an automated release verifier covering bundle metadata, signatures,
   notarization, Gatekeeper, DMG integrity, and installation contents;
 - an isolated local Homebrew Cask install, rebuild-revision upgrade, and
@@ -107,9 +112,8 @@ Delivered:
 
 Remaining release work:
 
-- install that candidate on a clean macOS user account;
-- publish one prerelease and verify Homebrew install, upgrade, and uninstall;
-- record the immutable checksums of the published architecture-specific assets.
+- install the published Cask on a clean macOS user account, complete a real
+  first task, and uninstall it from that account.
 
 Stage exit: the published Homebrew Cask installs a notarized app, completes a
 real first task, upgrades in place, and leaves Server artifacts unaffected.
