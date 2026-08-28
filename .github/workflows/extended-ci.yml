@@ -16,8 +16,8 @@ jobs:
     name: Rust (windows-latest)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -34,8 +34,8 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -47,7 +47,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-llvm-cov --locked
       - run: cargo llvm-cov -p microclaw --all-features --lcov --output-path target/llvm-cov.lcov
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
           path: target/llvm-cov.lcov
@@ -57,7 +57,7 @@ jobs:
     name: Nix Build (flake)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v19
       - uses: DeterminateSystems/magic-nix-cache-action@v13
         with:
@@ -69,7 +69,7 @@ jobs:
     name: MicroClaw Work (macos-latest)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
@@ -94,7 +94,7 @@ jobs:
       - name: Launch-smoke macOS app bundle
         run: scripts/smoke_work_macos_app.sh work-release
       - name: Upload macOS preview
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: microclaw-work-macos-dmg
           path: target/microclaw-work-installer/work-release/*.dmg
