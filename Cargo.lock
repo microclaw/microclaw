@@ -6009,7 +6009,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "aes",
  "agent-client-protocol",
@@ -6193,7 +6193,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-work"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "dirs",
  "embed-resource",

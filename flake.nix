@@ -76,7 +76,7 @@
         packages = {
           microclaw = pkgs.rustPlatform.buildRustPackage {
             pname = "microclaw";
-            version = "0.5.4";
+            version = "0.5.5";
             src = ./.;
             cargoLock = {
               lockFile = ./Cargo.lock;

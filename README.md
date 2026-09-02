@@ -59,7 +59,7 @@ brew install --cask microclaw-work
 ```
 
 Linux x86_64/arm64 and Windows x86_64 portable previews are available from the
-[v0.5.4 release](https://github.com/microclaw/microclaw/releases/tag/v0.5.4).
+[v0.5.5 release](https://github.com/microclaw/microclaw/releases/tag/v0.5.5).
 macOS remains the officially supported Work desktop platform while the preview
 builds complete platform acceptance.
 
@@ -85,7 +85,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.5.4**. It adds Workspace-aware native file attachments, project and Git context, explicit local access boundaries, task notifications, and a lighter Work bundle while preserving the complete cross-platform Server runtime. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.5.4).
+The latest release is **v0.5.5**. It adds native Work Skills import and management, durable observable Subagents, cancellation, and a single-writer Workspace safety model. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.5.5).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 

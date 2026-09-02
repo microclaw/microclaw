@@ -154,7 +154,7 @@ function HomepageHeader() {
         <div className={styles.heroLayout}>
           <div className={styles.heroContent}>
             <div className={styles.eyebrow}>{messages.eyebrow}</div>
-            <Link className={styles.releasePill} href="https://github.com/microclaw/microclaw/releases/tag/v0.5.4">
+            <Link className={styles.releasePill} href="https://github.com/microclaw/microclaw/releases/tag/v0.5.5">
               {messages.release} <span aria-hidden="true">→</span>
             </Link>
             <Heading as="h1" className={styles.heroTitle}>

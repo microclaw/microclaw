@@ -58,7 +58,7 @@ brew install --cask microclaw-work
 ```
 
 Linux x86_64/arm64 与 Windows x86_64 portable 预览包可从
-[v0.5.4 版本页面](https://github.com/microclaw/microclaw/releases/tag/v0.5.4)下载。
+[v0.5.5 版本页面](https://github.com/microclaw/microclaw/releases/tag/v0.5.5)下载。
 macOS 仍是 Work 当前正式支持的桌面平台，其他平台继续完成验收。
 
 如需运行 MicroClaw Server，在 macOS 或 Linux 上安装：
@@ -83,7 +83,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.5.4**，新增 Workspace 原生文件附件、项目与 Git 上下文、明确的本地访问边界、任务通知和更轻量的 Work 安装包，同时完整保留跨平台 Server 运行时能力。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.5.4)。
+最新版本为 **v0.5.5**，新增原生 Work Skills 导入与管理、可持久化观测和取消的 Subagent，以及单写者 Workspace 安全模型。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.5.5)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 

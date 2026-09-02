@@ -4,7 +4,7 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
-## Unreleased
+## 0.5.5 - 2026-09-02
 
 ### Added
 
