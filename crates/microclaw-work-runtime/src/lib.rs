@@ -140,6 +140,18 @@ pub struct AgentSettingsDraft {
     pub context_dir: String,
 }
 
+/// UI-safe projection of one locally installed Agent Skill.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkSkill {
+    pub name: String,
+    pub description: String,
+    pub source: String,
+    pub version: Option<String>,
+    pub enabled: bool,
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ModelSettingsError {
     #[error("provider is required")]
@@ -165,6 +177,16 @@ pub enum AgentSettingsError {
     #[error("configuration error: {0}")]
     Config(String),
     #[error("configuration I/O error: {0}")]
+    Io(#[from] io::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SkillSettingsError {
+    #[error("configuration error: {0}")]
+    Config(String),
+    #[error("skill error: {0}")]
+    Skill(String),
+    #[error("skills I/O error: {0}")]
     Io(#[from] io::Error),
 }
 
@@ -580,6 +602,58 @@ impl WorkRuntimeService {
             soul_content,
             context_dir,
         })
+    }
+
+    /// List the skills visible to Work using the exact same config, runtime
+    /// state, compatibility checks, and ClawHub verification as Agent Engine.
+    pub fn skills(&self) -> Result<Vec<WorkSkill>, SkillSettingsError> {
+        let config = Config::load_from_path_for_headless(&self.config_path)
+            .map_err(|error| SkillSettingsError::Config(error.to_string()))?;
+        let skills_dir = config.skills_data_dir();
+        microclaw::builtin_skills::ensure_builtin_skills(Path::new(&skills_dir))?;
+        let manager = microclaw::skills::SkillManager::from_skills_and_runtime(
+            &skills_dir,
+            &config.runtime_data_dir(),
+        )
+        .with_config_verification(&config);
+
+        Ok(manager
+            .discover_skills_with_status(true)
+            .into_iter()
+            .map(|skill| {
+                let user_disabled =
+                    skill.reason.as_deref() == Some("Skill is disabled for this runtime.");
+                WorkSkill {
+                    name: skill.meta.name,
+                    description: skill.meta.description,
+                    source: skill.meta.source,
+                    version: skill.meta.version,
+                    enabled: !user_disabled,
+                    available: skill.available,
+                    reason: skill.reason,
+                }
+            })
+            .collect())
+    }
+
+    /// Change only Work's runtime-scoped enablement state. Skill files are
+    /// never rewritten or removed by this operation.
+    pub fn set_skill_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+    ) -> Result<Vec<WorkSkill>, SkillSettingsError> {
+        let config = Config::load_from_path_for_headless(&self.config_path)
+            .map_err(|error| SkillSettingsError::Config(error.to_string()))?;
+        let manager = microclaw::skills::SkillManager::from_skills_and_runtime(
+            &config.skills_data_dir(),
+            &config.runtime_data_dir(),
+        )
+        .with_config_verification(&config);
+        manager
+            .set_enabled(name, enabled)
+            .map_err(SkillSettingsError::Skill)?;
+        self.skills()
     }
 
     pub fn save_agent_settings(
@@ -1666,5 +1740,60 @@ mod tests {
             "before"
         );
         assert!(!workspace.join("created.txt").exists());
+    }
+
+    #[test]
+    fn work_skills_list_and_toggle_runtime_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().join("data");
+        let skills_dir = directory.path().join("skills");
+        let config_path = directory.path().join("microclaw.config.yaml");
+        fs::create_dir_all(skills_dir.join("fixture-skill")).unwrap();
+        fs::write(
+            skills_dir.join("fixture-skill/SKILL.md"),
+            "---\nname: fixture-skill\ndescription: Work skill fixture\nsource: local\n---\nUse the fixture.\n",
+        )
+        .unwrap();
+        fs::write(
+            &config_path,
+            format!(
+                "llm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\ndata_dir: '{}'\nskills_dir: '{}'\n",
+                data_dir.display(),
+                skills_dir.display()
+            ),
+        )
+        .unwrap();
+        let service = WorkRuntimeService::new(config_path);
+
+        let listed = service.skills().unwrap();
+        let fixture = listed
+            .iter()
+            .find(|skill| skill.name == "fixture-skill")
+            .unwrap();
+        assert!(fixture.enabled);
+        assert!(fixture.available);
+
+        let disabled = service.set_skill_enabled("fixture-skill", false).unwrap();
+        let fixture = disabled
+            .iter()
+            .find(|skill| skill.name == "fixture-skill")
+            .unwrap();
+        assert!(!fixture.enabled);
+        assert!(!fixture.available);
+        assert_eq!(
+            fixture.reason.as_deref(),
+            Some("Skill is disabled for this runtime.")
+        );
+
+        let state = fs::read_to_string(data_dir.join("runtime/skills_state.json")).unwrap();
+        assert!(state.contains("fixture-skill"));
+
+        let enabled = service.set_skill_enabled("fixture-skill", true).unwrap();
+        let fixture = enabled
+            .iter()
+            .find(|skill| skill.name == "fixture-skill")
+            .unwrap();
+        assert!(fixture.enabled);
+        assert!(fixture.available);
     }
 }

@@ -1,7 +1,7 @@
 # MicroClaw Server + Work local-first plan
 
 Status: **Active**
-Updated: **2026-08-27**
+Updated: **2026-09-02**
 
 > MicroClaw Server is a cross-platform, deployable Agent Runtime. MicroClaw
 > Work is a native, local-first desktop coworker built on the same core.
@@ -108,7 +108,36 @@ chips, and stronger background-task visibility. Local execution remains the
 default; connecting a user-owned Server is optional and belongs to a later
 phase.
 
-### 4. lightweight native architecture
+### 4. Main Agent, Subagents, and Skills
+
+Goal: increase useful autonomy without turning Work into a general-purpose
+multi-agent platform.
+
+- **Main Agent** owns the conversation, plan, approvals, Workspace write
+  boundary, and final response. This is the user-visible agent in every Work
+  thread; it is not a separately configured "Mate" role.
+- **Subagents** are bounded workers created by the Main Agent for research,
+  analysis, or other parallelizable subtasks. Work shows their task, status,
+  elapsed time, result, and cancellation control. Subagents do not create a
+  second user-facing conversation hierarchy.
+- **Skills** are the primary extension mechanism. Work lists installed skills,
+  explains compatibility or trust failures, and lets the user enable or
+  disable them through the shared runtime state. Installation and updates must
+  reuse the existing local, plugin, and ClawHub governance paths rather than a
+  desktop-only package format.
+- The Main Agent may delegate automatically when a task benefits from it, but
+  all Workspace mutations pass through one writer and the existing approval,
+  hook, sandbox, audit, and cancellation boundaries.
+- Long-running work must survive the foreground turn lifecycle and surface a
+  durable state instead of depending on an untracked background task.
+
+Acceptance gate: a user can select Skills without editing configuration, see
+why an unavailable Skill cannot run, observe and cancel a delegated Subagent,
+and review one ordered set of file changes produced under the Main Agent's
+authority. Restart and cancellation tests prove that no worker becomes an
+orphan and no two workers concurrently write the same Workspace.
+
+### 5. lightweight native architecture
 
 Goal: Work ships only what the foreground desktop product needs.
 
@@ -125,7 +154,7 @@ Goal: Work ships only what the foreground desktop product needs.
 Acceptance gate: release inspection proves the app bundle contains no `web/`
 distribution, and size/dependency reports are recorded for each major release.
 
-### 5. Linux and Windows portable previews
+### 6. Linux and Windows portable previews
 
 Goal: make ports observable and testable without overstating support.
 
@@ -145,12 +174,18 @@ desktop-integration target is selected from evidence.
 
 ## Sequence
 
-1. Finish the macOS acceptance gates and daily-use feedback loop.
-2. Deepen Workspace orientation and native desktop affordances.
-3. Measure and reduce Work-only package/dependency weight.
-4. Keep portable preview builds green and collect platform-specific defects.
-5. Add optional pairing with a user-owned MicroClaw Server only after the
+1. Ship Work Skills discovery and enablement on the shared runtime boundary.
+2. Make Main Agent delegation visible and controllable; enforce one Workspace
+   writer and one approval path for all Subagent work.
+3. Make delegated and long-running work durable across foreground turn and app
+   lifecycle transitions.
+4. Finish the macOS acceptance gates and daily-use feedback loop.
+5. Deepen Workspace orientation and native desktop affordances.
+6. Measure and reduce Work-only package/dependency weight.
+7. Keep portable preview builds green and collect platform-specific defects.
+8. Add optional pairing with a user-owned MicroClaw Server only after the
    standalone Work loop is dependable.
 
-Native mobile, managed multi-tenant cloud, a free-form multi-agent canvas,
-and a complete IDE remain outside this plan.
+Named Agent teams, nested Subagent trees, a free-form multi-agent canvas,
+native mobile, managed multi-tenant cloud, and a complete IDE remain outside
+this plan.

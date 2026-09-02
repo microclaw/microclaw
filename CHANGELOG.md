@@ -6,6 +6,19 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Added
+
+- **Work Skills management.** Native Work Settings now lists skills discovered
+  by the shared runtime, explains unavailable skills, and lets users enable or
+  disable them without editing configuration files.
+
+### Changed
+
+- **Focused Work agent roadmap.** The canonical plan now defines one visible
+  Main Agent, bounded and observable Subagents, Skills as the extension model,
+  and a single-writer Workspace rule. Named agent teams and a free-form
+  multi-agent canvas remain explicitly out of scope.
+
 ## 0.5.4 - 2026-08-27
 
 ### Changed

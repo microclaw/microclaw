@@ -19,7 +19,8 @@ use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary, startup_wo
 use microclaw_work_runtime::{
     AgentSettingsDraft, DiagnosticStatus, ModelProviderPreset, ModelSettingsDraft,
     RuntimeConfigSummary, WorkDiagnosticsReport, WorkRunCancellation, WorkRunRequest,
-    WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService, popular_model_provider_presets,
+    WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService, WorkSkill,
+    popular_model_provider_presets,
 };
 use smol::Timer;
 use std::fs;
@@ -98,16 +99,18 @@ enum SettingsSection {
     #[default]
     Models,
     Agent,
+    Skills,
     Workspace,
     Diagnostics,
 }
 
 impl SettingsSection {
-    const ALL: [(Self, &'static str, &'static str); 6] = [
+    const ALL: [(Self, &'static str, &'static str); 7] = [
         (Self::General, "General", "⌘"),
         (Self::Appearance, "Appearance", "◐"),
         (Self::Models, "Models", "◇"),
         (Self::Agent, "Agent", "✦"),
+        (Self::Skills, "Skills", "◇"),
         (Self::Workspace, "Workspace", "▱"),
         (Self::Diagnostics, "Diagnostics", "✓"),
     ];
@@ -249,6 +252,8 @@ struct WorkApp {
     soul_content_input: Entity<TextareaState>,
     context_dir_input: Entity<InputState>,
     agent_settings_message: String,
+    skills: Vec<WorkSkill>,
+    skills_message: String,
     last_run_was_demo: bool,
     connection_test_active: bool,
     connection_test_message: String,
@@ -308,6 +313,13 @@ impl WorkApp {
             .as_ref()
             .is_some_and(|value| value.has_api_key);
         let agent_settings = runtime_service.agent_settings().ok();
+        let (skills, skills_message) = match runtime_service.skills() {
+            Ok(skills) => {
+                let message = format!("{} skills installed.", skills.len());
+                (skills, message)
+            }
+            Err(error) => (Vec::new(), format!("Could not load skills: {error}")),
+        };
         let settings_soul_path = agent_settings.as_ref().map_or_else(
             || work_data_root.join("SOUL.md").display().to_string(),
             |value| value.soul_path.clone(),
@@ -535,6 +547,8 @@ impl WorkApp {
             context_dir_input,
             agent_settings_message:
                 "Edit the personality and shared project context used by new turns.".into(),
+            skills,
+            skills_message,
             last_run_was_demo: false,
             connection_test_active: false,
             connection_test_message: "Save settings, then test the provider connection.".into(),
@@ -1067,6 +1081,33 @@ impl WorkApp {
             }
             Err(error) => {
                 self.agent_settings_message = format!("Could not save agent settings: {error}");
+            }
+        }
+        cx.notify();
+    }
+
+    fn refresh_skills(&mut self, cx: &mut Context<Self>) {
+        match self.runtime_service.skills() {
+            Ok(skills) => {
+                self.skills_message = format!("{} skills installed.", skills.len());
+                self.skills = skills;
+            }
+            Err(error) => self.skills_message = format!("Could not load skills: {error}"),
+        }
+        cx.notify();
+    }
+
+    fn set_skill_enabled(&mut self, name: String, enabled: bool, cx: &mut Context<Self>) {
+        match self.runtime_service.set_skill_enabled(&name, enabled) {
+            Ok(skills) => {
+                self.skills = skills;
+                self.skills_message = format!(
+                    "Skill {name} {}.",
+                    if enabled { "enabled" } else { "disabled" }
+                );
+            }
+            Err(error) => {
+                self.skills_message = format!("Could not update skill {name}: {error}");
             }
         }
         cx.notify();
@@ -1957,6 +1998,8 @@ impl WorkApp {
                                 this.settings_section = section;
                                 if section == SettingsSection::Diagnostics {
                                     this.refresh_diagnostics_state(cx);
+                                } else if section == SettingsSection::Skills {
+                                    this.refresh_skills(cx);
                                 } else {
                                     cx.notify();
                                 }
@@ -2592,6 +2635,133 @@ impl WorkApp {
             .into_any_element()
     }
 
+    fn render_skills_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let rows = self
+            .skills
+            .iter()
+            .cloned()
+            .map(|skill| {
+                let name = skill.name.clone();
+                let next_enabled = !skill.enabled;
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border.opacity(0.48))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_size(UI_TEXT_SIZE)
+                                            .font_medium()
+                                            .child(skill.name),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .rounded_full()
+                                            .text_size(px(10.))
+                                            .bg(if skill.available {
+                                                cx.theme().success.opacity(0.12)
+                                            } else {
+                                                cx.theme().warning.opacity(0.12)
+                                            })
+                                            .text_color(if skill.available {
+                                                cx.theme().success
+                                            } else {
+                                                cx.theme().warning
+                                            })
+                                            .child(if skill.available {
+                                                "READY"
+                                            } else {
+                                                "UNAVAILABLE"
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(UI_CAPTION_SIZE)
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(skill.description),
+                            )
+                            .children(skill.reason.map(|reason| {
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().warning)
+                                    .child(reason)
+                            })),
+                    )
+                    .child(
+                        Button::new(format!("toggle-skill-{name}"))
+                            .outline()
+                            .small()
+                            .label(if skill.enabled { "Disable" } else { "Enable" })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.set_skill_enabled(name.clone(), next_enabled, cx);
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(
+                self.settings_page_header(
+                    "Choose the Agent Skills available to new Work turns.",
+                    cx,
+                ),
+            )
+            .child(self.settings_group(
+                if rows.is_empty() {
+                    vec![
+                        div()
+                            .text_size(UI_CAPTION_SIZE)
+                            .text_color(cx.theme().muted_foreground)
+                            .child("No skills are installed for this runtime.")
+                            .into_any_element(),
+                    ]
+                } else {
+                    rows
+                },
+                cx,
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(UI_CAPTION_SIZE)
+                            .text_color(if self.skills_message.starts_with("Could not") {
+                                cx.theme().danger
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .child(self.skills_message.clone()),
+                    )
+                    .child(
+                        Button::new("refresh-skills")
+                            .ghost()
+                            .small()
+                            .label("Refresh")
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh_skills(cx))),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_settings_diagnostics(&self, cx: &mut Context<Self>) -> AnyElement {
         v_flex()
             .w_full()
@@ -2691,6 +2861,7 @@ impl WorkApp {
             SettingsSection::Appearance => self.render_appearance_settings(cx),
             SettingsSection::Models => self.render_model_settings_content(cx),
             SettingsSection::Agent => self.render_agent_settings(cx),
+            SettingsSection::Skills => self.render_skills_settings(cx),
             SettingsSection::Workspace => self.render_workspace_settings(cx),
             SettingsSection::Diagnostics => self.render_settings_diagnostics(cx),
         };
@@ -4275,7 +4446,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(SettingsSection::default(), SettingsSection::Models);
-        assert_eq!(titles.len(), 6);
+        assert_eq!(titles.len(), 7);
         assert_eq!(
             titles,
             [
@@ -4283,6 +4454,7 @@ mod tests {
                 "Appearance",
                 "Models",
                 "Agent",
+                "Skills",
                 "Workspace",
                 "Diagnostics",
             ]
