@@ -301,6 +301,19 @@ impl SubagentRuntime {
 
 static RUNTIME: LazyLock<Mutex<Option<Arc<SubagentRuntime>>>> = LazyLock::new(|| Mutex::new(None));
 
+// Subagent runs must outlive the Tokio runtime of the foreground caller. Work
+// intentionally creates a short-lived runtime for each turn; spawning on that
+// runtime used to abort accepted background runs as soon as the Main Agent
+// finished. A process-lifetime executor gives Server and Work the same durable
+// in-process lifecycle while SQLite remains the restart recovery authority.
+static TASK_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("microclaw-subagent")
+        .build()
+        .expect("failed to create process-lifetime subagent runtime")
+});
+
 fn subagent_runtime(config: &Config) -> Arc<SubagentRuntime> {
     let mut guard = match RUNTIME.lock() {
         Ok(g) => g,
@@ -312,6 +325,22 @@ fn subagent_runtime(config: &Config) -> Arc<SubagentRuntime> {
     let runtime = Arc::new(SubagentRuntime::new(config.subagents.max_concurrent));
     *guard = Some(runtime.clone());
     runtime
+}
+
+/// Shared cancellation boundary for product UIs that already resolved and
+/// authorized the owning chat. The database flag survives process failure;
+/// the in-memory flag interrupts a currently executing run promptly.
+pub fn request_subagent_cancel(
+    config: &Config,
+    db: &Database,
+    chat_id: i64,
+    run_id: &str,
+) -> Result<bool, microclaw_core::error::MicroClawError> {
+    let requested = db.request_subagent_cancel(run_id, chat_id)?;
+    if requested {
+        subagent_runtime(config).cancel_run(run_id);
+    }
+    Ok(requested)
 }
 
 async fn log_subagent_event(
@@ -1449,7 +1478,7 @@ impl Tool for SessionsSpawnTool {
         let subagent_channel_registry = self.channel_registry.clone();
         let fan_in_channel_registry = self.channel_registry.clone();
         let caller_channel_for_event = auth.caller_channel.clone();
-        tokio::spawn(async move {
+        TASK_RUNTIME.spawn(async move {
             let run_id_for_finish = run_id_async.clone();
             let _ = call_blocking(db.clone(), {
                 let run_id = run_id_async.clone();
@@ -3120,5 +3149,23 @@ mod tests {
     fn test_compute_child_token_budget_rejects_exhausted_parent() {
         let err = compute_child_token_budget(None, Some(1500), 120000).unwrap_err();
         assert!(err.contains("budget exhausted"));
+    }
+
+    #[test]
+    fn process_lifetime_executor_outlives_foreground_runtime() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let foreground = tokio::runtime::Runtime::new().unwrap();
+            foreground.block_on(async {
+                TASK_RUNTIME.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                    tx.send("finished").unwrap();
+                });
+            });
+        }
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(),
+            "finished"
+        );
     }
 }

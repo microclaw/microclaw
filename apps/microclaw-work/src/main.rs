@@ -19,7 +19,7 @@ use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary, startup_wo
 use microclaw_work_runtime::{
     AgentSettingsDraft, DiagnosticStatus, ModelProviderPreset, ModelSettingsDraft,
     RuntimeConfigSummary, WorkDiagnosticsReport, WorkRunCancellation, WorkRunRequest,
-    WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService, WorkSkill,
+    WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService, WorkSkill, WorkSubagent,
     popular_model_provider_presets,
 };
 use smol::Timer;
@@ -254,6 +254,9 @@ struct WorkApp {
     agent_settings_message: String,
     skills: Vec<WorkSkill>,
     skills_message: String,
+    skill_import_input: Entity<InputState>,
+    skill_import_active: bool,
+    durable_subagents: Vec<WorkSubagent>,
     last_run_was_demo: bool,
     connection_test_active: bool,
     connection_test_message: String,
@@ -383,6 +386,9 @@ impl WorkApp {
                 )
             }
         };
+        let durable_subagents = runtime_service
+            .subagents(&session.session_id)
+            .unwrap_or_default();
         let recent_sessions = session_store.list().unwrap_or_default();
         let workspace_context = inspect_workspace(Path::new(&session.workspace));
         let diagnostics_report =
@@ -442,6 +448,10 @@ impl WorkApp {
             InputState::new(window, cx)
                 .default_value(settings_context_dir)
                 .placeholder("Directory containing project context Markdown files")
+        });
+        let skill_import_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Local folder, GitHub URL, owner/repo/skill, or ClawHub slug")
         });
         let _subscriptions = vec![
             cx.subscribe_in(
@@ -549,6 +559,9 @@ impl WorkApp {
                 "Edit the personality and shared project context used by new turns.".into(),
             skills,
             skills_message,
+            skill_import_input,
+            skill_import_active: false,
+            durable_subagents,
             last_run_was_demo: false,
             connection_test_active: false,
             connection_test_message: "Save settings, then test the provider connection.".into(),
@@ -644,6 +657,10 @@ impl WorkApp {
         match self.session_store.create(workspace) {
             Ok(session) => {
                 self.replace_session(session, window, cx);
+                self.durable_subagents = self
+                    .runtime_service
+                    .subagents(&self.session.session_id)
+                    .unwrap_or_default();
                 self.recent_sessions = self.session_store.list().unwrap_or_default();
                 self.persistence_message = "Created a new Work session.".into();
             }
@@ -1097,6 +1114,25 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn refresh_subagents(&mut self, cx: &mut Context<Self>) {
+        if let Ok(subagents) = self.runtime_service.subagents(&self.session.session_id) {
+            self.durable_subagents = subagents;
+        }
+        cx.notify();
+    }
+
+    fn cancel_subagent(&mut self, run_id: String, cx: &mut Context<Self>) {
+        match self
+            .runtime_service
+            .cancel_subagent(&self.session.session_id, &run_id)
+        {
+            Ok(true) => self.persistence_message = format!("Cancellation requested for {run_id}."),
+            Ok(false) => self.persistence_message = format!("Subagent {run_id} already finished."),
+            Err(error) => self.persistence_message = format!("Could not cancel {run_id}: {error}"),
+        }
+        self.refresh_subagents(cx);
+    }
+
     fn set_skill_enabled(&mut self, name: String, enabled: bool, cx: &mut Context<Self>) {
         match self.runtime_service.set_skill_enabled(&name, enabled) {
             Ok(skills) => {
@@ -1110,6 +1146,66 @@ impl WorkApp {
                 self.skills_message = format!("Could not update skill {name}: {error}");
             }
         }
+        cx.notify();
+    }
+
+    fn import_skill(&mut self, cx: &mut Context<Self>) {
+        if self.skill_import_active {
+            return;
+        }
+        let reference = self.skill_import_input.read(cx).value().trim().to_string();
+        if reference.is_empty() {
+            self.skills_message = "Enter a local folder, GitHub reference, or ClawHub slug.".into();
+            cx.notify();
+            return;
+        }
+        self.skill_import_active = true;
+        self.skills_message = format!("Importing {reference}…");
+        let receiver = self.runtime_service.install_skill_background(reference);
+        cx.spawn(async move |this, cx| {
+            loop {
+                match receiver.try_recv() {
+                    Ok(Ok(result)) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.skill_import_active = false;
+                            this.skills = result.skills;
+                            this.skills_message = if result.warnings.is_empty() {
+                                result.message
+                            } else {
+                                format!(
+                                    "{} Warnings: {}",
+                                    result.message,
+                                    result.warnings.join("; ")
+                                )
+                            };
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Ok(Err(error)) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.skill_import_active = false;
+                            this.skills_message = format!("Could not import skill: {error}");
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => {
+                        Timer::after(Duration::from_millis(50)).await;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.skill_import_active = false;
+                            this.skills_message =
+                                "Skill import worker stopped unexpectedly.".into();
+                            cx.notify();
+                        });
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -1615,6 +1711,10 @@ impl WorkApp {
                                         {
                                             this.persistence_message = error.to_string();
                                         }
+                                        this.durable_subagents = this
+                                            .runtime_service
+                                            .subagents(&this.session.session_id)
+                                            .unwrap_or_default();
                                         None
                                     }
                                     WorkRuntimeMessage::SteeringResult {
@@ -1645,6 +1745,10 @@ impl WorkApp {
                                         this.runtime_active = false;
                                         this.runtime_cancellation = None;
                                         this.runtime_steering = None;
+                                        this.durable_subagents = this
+                                            .runtime_service
+                                            .subagents(&this.session.session_id)
+                                            .unwrap_or_default();
                                         let (message, notification) = match this.session.status {
                                             WorkStatus::AwaitingApproval => {
                                                 (format!("Runtime {run_id} paused for approval."), None)
@@ -1703,7 +1807,30 @@ impl WorkApp {
                             });
                         }
                         if terminal {
-                            return;
+                            loop {
+                                Timer::after(Duration::from_millis(500)).await;
+                                let active = this.update(cx, |this, cx| {
+                                    let Ok(subagents) = this
+                                        .runtime_service
+                                        .subagents(&this.session.session_id)
+                                    else {
+                                        return false;
+                                    };
+                                    let active = subagents.iter().any(|agent| {
+                                        matches!(
+                                            agent.status.as_str(),
+                                            "accepted" | "queued" | "running"
+                                        )
+                                    });
+                                    this.durable_subagents = subagents;
+                                    cx.notify();
+                                    active
+                                });
+                                match active {
+                                    Ok(true) => continue,
+                                    Ok(false) | Err(_) => return,
+                                }
+                            }
                         }
                     }
                     Err(TryRecvError::Empty) => {
@@ -2723,6 +2850,30 @@ impl WorkApp {
                 ),
             )
             .child(self.settings_group(
+                vec![
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_size(UI_TEXT_SIZE).font_medium().child("Import or update"))
+                        .child(Input::new(&self.skill_import_input).small())
+                        .child(
+                            div()
+                                .text_size(UI_CAPTION_SIZE)
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Local folders must contain SKILL.md. GitHub and ClawHub imports run existing security and compatibility checks."),
+                        )
+                        .child(
+                            Button::new("import-skill")
+                                .primary()
+                                .small()
+                                .disabled(self.skill_import_active)
+                                .label(if self.skill_import_active { "Importing…" } else { "Import Skill" })
+                                .on_click(cx.listener(|this, _, _, cx| this.import_skill(cx))),
+                        )
+                        .into_any_element(),
+                ],
+                cx,
+            ))
+            .child(self.settings_group(
                 if rows.is_empty() {
                     vec![
                         div()
@@ -3159,7 +3310,7 @@ impl Render for WorkApp {
         let has_session_results = !recent_sessions.is_empty();
         let process_activities = self.session.process_activities.clone();
         let file_changes = self.session.file_changes.clone();
-        let subagents = self.session.subagents.clone();
+        let subagents = self.durable_subagents.clone();
         let has_inspector_content = !self.session.plan.is_empty()
             || !process_activities.is_empty()
             || !file_changes.is_empty()
@@ -3873,6 +4024,8 @@ impl Render for WorkApp {
                                             .border_color(cx.theme().border)
                                             .child(div().text_lg().font_bold().child("Agents"))
                                             .children(subagents.into_iter().map(|agent| {
+                                                let run_id = agent.run_id.clone();
+                                                let active = matches!(agent.status.as_str(), "accepted" | "queued" | "running") && !agent.cancel_requested;
                                                 h_flex()
                                                     .items_center()
                                                     .justify_between()
@@ -3893,20 +4046,23 @@ impl Render for WorkApp {
                                                                         cx.theme()
                                                                             .muted_foreground,
                                                                     )
-                                                                    .child(trim_text(
-                                                                        &agent.run_id,
-                                                                        28,
+                                                                    .child(format!(
+                                                                        "{} · {}",
+                                                                        trim_text(&agent.run_id, 28),
+                                                                        format_elapsed(agent.elapsed_seconds)
                                                                     )),
-                                                            ),
+                                                            )
+                                                            .child(div().text_xs().child(trim_text(&agent.task, 180)))
+                                                            .children(agent.progress.map(|progress| div().text_xs().text_color(cx.theme().muted_foreground).child(progress)))
+                                                            .children(agent.result.map(|result| div().text_xs().child(trim_text(&result, 180))))
+                                                            .children(agent.error.map(|error| div().text_xs().text_color(cx.theme().danger).child(trim_text(&error, 180)))),
                                                     )
                                                     .child(
-                                                        div()
-                                                            .px_2()
-                                                            .py_1()
-                                                            .rounded_full()
-                                                            .bg(cx.theme().accent)
-                                                            .text_xs()
-                                                            .child(agent.status),
+                                                        v_flex()
+                                                            .items_end()
+                                                            .gap_1()
+                                                            .child(div().px_2().py_1().rounded_full().bg(cx.theme().accent).text_xs().child(agent.status))
+                                                            .children(active.then(|| Button::new(format!("cancel-subagent-{run_id}")).danger().xsmall().label("Cancel").on_click(cx.listener(move |this, _, _, cx| this.cancel_subagent(run_id.clone(), cx))))),
                                                     )
                                             }))
                                     }))
@@ -4296,6 +4452,16 @@ fn trim_text(text: &str, limit: usize) -> String {
     }
 }
 
+fn format_elapsed(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h {}m", seconds / 3600, (seconds % 3600) / 60)
+    }
+}
+
 fn inspect_workspace(workspace: &Path) -> WorkspaceContext {
     let name = workspace
         .file_name()
@@ -4403,7 +4569,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        SettingsSection, inspect_workspace, inspector_fits, resolve_work_data_root,
+        SettingsSection, format_elapsed, inspect_workspace, inspector_fits, resolve_work_data_root,
         sidebar_width_for,
     };
     use gpui::px;
@@ -4467,6 +4633,13 @@ mod tests {
         assert_eq!(sidebar_width_for(px(1_280.)), px(242.));
         assert!(!inspector_fits(px(900.)));
         assert!(inspector_fits(px(1_280.)));
+    }
+
+    #[test]
+    fn subagent_elapsed_time_is_compact() {
+        assert_eq!(format_elapsed(9), "9s");
+        assert_eq!(format_elapsed(125), "2m 5s");
+        assert_eq!(format_elapsed(7_320), "2h 2m");
     }
 
     #[test]

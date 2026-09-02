@@ -4,11 +4,15 @@
 //! Agent Engine to versioned runtime events. UI packages consume this port;
 //! they do not create Tokio runtimes or call the Agent Engine directly.
 
+use microclaw::clawhub::service::{ClawHubGateway, RegistryClawHubGateway};
 use microclaw::config::{Config, WorkingDirIsolation};
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
 use microclaw::llm::create_provider;
+use microclaw::tools::{Tool, sync_skills::SyncSkillsTool};
+use microclaw_clawhub::install::InstallOptions;
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
+use microclaw_storage::db::Database;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -150,6 +154,28 @@ pub struct WorkSkill {
     pub enabled: bool,
     pub available: bool,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillInstallResult {
+    pub message: String,
+    pub warnings: Vec<String>,
+    pub skills: Vec<WorkSkill>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkSubagent {
+    pub run_id: String,
+    pub label: String,
+    pub task: String,
+    pub status: String,
+    pub progress: Option<String>,
+    pub result: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub finished_at: Option<String>,
+    pub elapsed_seconds: u64,
+    pub cancel_requested: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -656,6 +682,122 @@ impl WorkRuntimeService {
         self.skills()
     }
 
+    /// Install or update a Skill from a local directory, GitHub reference, or
+    /// ClawHub slug. The source is intentionally inferred so Work needs one
+    /// compact import control rather than three package-manager screens.
+    pub fn install_skill(&self, reference: &str) -> Result<SkillInstallResult, SkillSettingsError> {
+        let reference = reference.trim();
+        if reference.is_empty() {
+            return Err(SkillSettingsError::Skill("skill source is required".into()));
+        }
+        let config = Config::load_from_path_for_headless(&self.config_path)
+            .map_err(|error| SkillSettingsError::Config(error.to_string()))?;
+        let skills_dir = PathBuf::from(config.skills_data_dir());
+        fs::create_dir_all(&skills_dir)?;
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|error| SkillSettingsError::Skill(error.to_string()))?;
+
+        let (message, warnings) = if Path::new(reference).is_dir() {
+            (
+                import_local_skill(Path::new(reference), &skills_dir)?,
+                Vec::new(),
+            )
+        } else if reference.contains("github.com/") || reference.split('/').count() >= 3 {
+            let result = runtime.block_on(
+                SyncSkillsTool::new(&config.skills_data_dir())
+                    .execute(serde_json::json!({"skill_name": reference})),
+            );
+            if result.is_error {
+                return Err(SkillSettingsError::Skill(result.content));
+            }
+            (result.content, Vec::new())
+        } else {
+            let gateway = RegistryClawHubGateway::from_config(&config);
+            let result = runtime
+                .block_on(gateway.install(
+                    reference,
+                    None,
+                    &skills_dir,
+                    &config.clawhub_lockfile_path(),
+                    &InstallOptions {
+                        force: true,
+                        skip_gates: false,
+                        skip_security: false,
+                    },
+                ))
+                .map_err(|error| SkillSettingsError::Skill(error.to_string()))?;
+            if !result.success {
+                return Err(SkillSettingsError::Skill(result.message));
+            }
+            (result.message, result.warnings)
+        };
+        Ok(SkillInstallResult {
+            message,
+            warnings,
+            skills: self.skills()?,
+        })
+    }
+
+    pub fn install_skill_background(
+        &self,
+        reference: String,
+    ) -> Receiver<Result<SkillInstallResult, SkillSettingsError>> {
+        let (tx, rx) = mpsc::channel();
+        let service = self.clone();
+        std::thread::Builder::new()
+            .name("microclaw-skill-import".into())
+            .spawn(move || {
+                let _ = tx.send(service.install_skill(&reference));
+            })
+            .expect("failed to start skill import worker");
+        rx
+    }
+
+    pub fn subagents(&self, session: &str) -> Result<Vec<WorkSubagent>, SkillSettingsError> {
+        let config = Config::load_from_path_for_headless(&self.config_path)
+            .map_err(|error| SkillSettingsError::Config(error.to_string()))?;
+        let db = Database::new(&config.runtime_data_dir())
+            .map_err(|error| SkillSettingsError::Skill(error.to_string()))?;
+        let Some(chat_id) = find_work_session_chat_id(&db, session)? else {
+            return Ok(Vec::new());
+        };
+        db.list_subagent_runs(chat_id, 100)
+            .map_err(|error| SkillSettingsError::Skill(error.to_string()))
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|row| {
+                        let elapsed_seconds =
+                            subagent_elapsed_seconds(&row.created_at, row.finished_at.as_deref());
+                        WorkSubagent {
+                            run_id: row.run_id,
+                            label: row.label.unwrap_or_else(|| "Subagent".into()),
+                            task: row.task,
+                            status: row.status,
+                            progress: row.progress_text,
+                            result: row.result_text,
+                            error: row.error_text,
+                            created_at: row.created_at,
+                            finished_at: row.finished_at,
+                            elapsed_seconds,
+                            cancel_requested: row.cancel_requested,
+                        }
+                    })
+                    .collect()
+            })
+    }
+
+    pub fn cancel_subagent(&self, session: &str, run_id: &str) -> Result<bool, SkillSettingsError> {
+        let config = Config::load_from_path_for_headless(&self.config_path)
+            .map_err(|error| SkillSettingsError::Config(error.to_string()))?;
+        let db = Database::new(&config.runtime_data_dir())
+            .map_err(|error| SkillSettingsError::Skill(error.to_string()))?;
+        let Some(chat_id) = find_work_session_chat_id(&db, session)? else {
+            return Ok(false);
+        };
+        microclaw::tools::subagents::request_subagent_cancel(&config, &db, chat_id, run_id)
+            .map_err(|error| SkillSettingsError::Skill(error.to_string()))
+    }
+
     pub fn save_agent_settings(
         &self,
         draft: AgentSettingsDraft,
@@ -1043,6 +1185,108 @@ fn configure_work_runtime(mut config: Config, workspace: String) -> Config {
     config.working_dir_isolation = WorkingDirIsolation::Direct;
     config.checkpoints_enabled = true;
     config
+}
+
+fn import_local_skill(source: &Path, skills_dir: &Path) -> Result<String, SkillSettingsError> {
+    let name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        })
+        .ok_or_else(|| SkillSettingsError::Skill("invalid local skill directory name".into()))?;
+    if !source.join("SKILL.md").is_file() {
+        return Err(SkillSettingsError::Skill(
+            "local skill directory must contain SKILL.md".into(),
+        ));
+    }
+    let staging = skills_dir.join(format!(".{name}.work-import"));
+    if staging.exists() {
+        fs::remove_dir_all(&staging)?;
+    }
+    copy_skill_tree(source, &staging)?;
+    let target = skills_dir.join(name);
+    let backup = skills_dir.join(format!(".{name}.work-backup"));
+    if backup.exists() {
+        fs::remove_dir_all(&backup)?;
+    }
+    if target.exists() {
+        fs::rename(&target, &backup)?;
+    }
+    if let Err(error) = fs::rename(&staging, &target) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, &target);
+        }
+        return Err(error.into());
+    }
+    if backup.exists() {
+        fs::remove_dir_all(&backup)?;
+    }
+    Ok(format!(
+        "Imported local skill {name} from {}",
+        source.display()
+    ))
+}
+
+#[cfg(test)]
+fn work_session_chat_id(db: &Database, session: &str) -> Result<i64, SkillSettingsError> {
+    let session = session.trim();
+    if session.is_empty() {
+        return Err(SkillSettingsError::Skill("Work session is required".into()));
+    }
+    db.resolve_or_create_chat_id(
+        "headless",
+        &format!("headless:{session}"),
+        Some(&format!("headless-{session}")),
+        "headless",
+    )
+    .map_err(|error| SkillSettingsError::Skill(error.to_string()))
+}
+
+fn find_work_session_chat_id(
+    db: &Database,
+    session: &str,
+) -> Result<Option<i64>, SkillSettingsError> {
+    let session = session.trim();
+    if session.is_empty() {
+        return Err(SkillSettingsError::Skill("Work session is required".into()));
+    }
+    db.find_chat_id("headless", &format!("headless:{session}"))
+        .map_err(|error| SkillSettingsError::Skill(error.to_string()))
+}
+
+fn subagent_elapsed_seconds(created_at: &str, finished_at: Option<&str>) -> u64 {
+    let Ok(created) = chrono::DateTime::parse_from_rfc3339(created_at) else {
+        return 0;
+    };
+    let finished = finished_at
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .unwrap_or_else(|| chrono::Utc::now().fixed_offset());
+    finished.signed_duration_since(created).num_seconds().max(0) as u64
+}
+
+fn copy_skill_tree(source: &Path, target: &Path) -> Result<(), SkillSettingsError> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            return Err(SkillSettingsError::Skill(format!(
+                "local skill contains unsupported symlink: {}",
+                entry.path().display()
+            )));
+        }
+        let destination = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_skill_tree(&entry.path(), &destination)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
 }
 
 fn codex_account_available_at(home: Option<&Path>, access_token_present: bool) -> bool {
@@ -1728,7 +1972,7 @@ mod tests {
         fs::write(workspace.join("tracked.txt"), "after").unwrap();
         fs::write(workspace.join("created.txt"), "created").unwrap();
 
-        let service = WorkRuntimeService::new(config_path);
+        let service = WorkRuntimeService::new(&config_path);
         service
             .restore_workspace(workspace.clone(), commit)
             .recv_timeout(Duration::from_secs(10))
@@ -1795,5 +2039,179 @@ mod tests {
             .unwrap();
         assert!(fixture.enabled);
         assert!(fixture.available);
+    }
+
+    #[test]
+    fn work_imports_and_updates_local_skill_trees() {
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().join("data");
+        let skills_dir = directory.path().join("skills");
+        let source = directory.path().join("local-skill");
+        let config_path = directory.path().join("microclaw.config.yaml");
+        fs::create_dir_all(source.join("scripts")).unwrap();
+        fs::write(
+            source.join("SKILL.md"),
+            "---\nname: local-skill\ndescription: Local fixture\nsource: local\n---\nUse it.\n",
+        )
+        .unwrap();
+        fs::write(source.join("scripts/helper.txt"), "v1").unwrap();
+        fs::write(
+            &config_path,
+            format!(
+                "llm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\ndata_dir: '{}'\nskills_dir: '{}'\n",
+                data_dir.display(),
+                skills_dir.display()
+            ),
+        )
+        .unwrap();
+        let service = WorkRuntimeService::new(config_path);
+
+        let result = service.install_skill(source.to_str().unwrap()).unwrap();
+        assert!(
+            result
+                .skills
+                .iter()
+                .any(|skill| skill.name == "local-skill")
+        );
+        assert_eq!(
+            fs::read_to_string(skills_dir.join("local-skill/scripts/helper.txt")).unwrap(),
+            "v1"
+        );
+
+        fs::write(source.join("scripts/helper.txt"), "v2").unwrap();
+        service.install_skill(source.to_str().unwrap()).unwrap();
+        assert_eq!(
+            fs::read_to_string(skills_dir.join("local-skill/scripts/helper.txt")).unwrap(),
+            "v2"
+        );
+        assert!(!skills_dir.join(".local-skill.work-backup").exists());
+        assert!(!skills_dir.join(".local-skill.work-import").exists());
+    }
+
+    #[test]
+    fn work_lists_and_cancels_durable_subagents() {
+        use microclaw_storage::db::subagents::CreateSubagentRunParams;
+
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().join("data");
+        let config_path = directory.path().join("config.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "llm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\ndata_dir: '{}'\n",
+                data_dir.display()
+            ),
+        )
+        .unwrap();
+        let service = WorkRuntimeService::new(config_path);
+        let config = Config::load_from_path_for_headless(service.config_path()).unwrap();
+        let db = Database::new(&config.runtime_data_dir()).unwrap();
+        let chat_id = work_session_chat_id(&db, "session-1").unwrap();
+        db.create_subagent_run(CreateSubagentRunParams {
+            run_id: "subrun-fixture",
+            parent_run_id: None,
+            depth: 1,
+            token_budget: 1000,
+            chat_id,
+            caller_channel: "work",
+            task: "inspect the project",
+            context: "",
+            provider: "ollama",
+            model: "local",
+            label: Some("Inspector"),
+        })
+        .unwrap();
+
+        let runs = service.subagents("session-1").unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].label, "Inspector");
+        assert_eq!(runs[0].status, "accepted");
+        assert!(
+            service
+                .cancel_subagent("session-1", "subrun-fixture")
+                .unwrap()
+        );
+        assert!(service.subagents("session-1").unwrap()[0].cancel_requested);
+    }
+
+    #[test]
+    #[ignore = "requires OPENAI_APIKEY and live network access"]
+    fn live_openai_work_first_response() {
+        let api_key = std::env::var("OPENAI_APIKEY")
+            .or_else(|_| std::env::var("OPENAI_API_KEY"))
+            .expect("set OPENAI_APIKEY or OPENAI_API_KEY");
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.yaml");
+        let service = WorkRuntimeService::new(&config_path);
+        service
+            .save_model_settings(ModelSettingsDraft {
+                provider: "openai".into(),
+                model: "gpt-5-mini".into(),
+                base_url: String::new(),
+                api_key: Some(api_key),
+            })
+            .unwrap();
+        let mut config = fs::read_to_string(&config_path).unwrap();
+        config.push_str(&format!(
+            "data_dir: {}\n",
+            directory.path().join("runtime-data").display()
+        ));
+        fs::write(&config_path, config).unwrap();
+        let workspace = directory.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+
+        let report = service
+            .test_first_response(workspace)
+            .recv_timeout(Duration::from_secs(90))
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.provider, "openai");
+        assert_eq!(report.model, "gpt-5-mini");
+        assert!(report.event_count > 0);
+        assert!(report.response_preview.contains("first response ok"));
+    }
+
+    #[test]
+    #[ignore = "requires live GitHub and ClawHub network access"]
+    fn live_remote_skill_imports() {
+        let directory = tempfile::tempdir().unwrap();
+        let data_dir = directory.path().join("data");
+        let skills_dir = directory.path().join("skills");
+        let config_path = directory.path().join("config.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "llm_provider: ollama\napi_key: ''\nmodel: local\nweb_enabled: false\ndata_dir: '{}'\nskills_dir: '{}'\n",
+                data_dir.display(),
+                skills_dir.display()
+            ),
+        )
+        .unwrap();
+        let service = WorkRuntimeService::new(&config_path);
+
+        let github = service
+            .install_skill("https://github.com/vercel-labs/skills/tree/main/skills/find-skills")
+            .unwrap();
+        assert!(
+            github
+                .skills
+                .iter()
+                .any(|skill| skill.name == "find-skills")
+        );
+
+        let clawhub = service.install_skill("skills-weather").unwrap();
+        assert!(
+            clawhub
+                .skills
+                .iter()
+                .any(|skill| skill.name == "skills-weather")
+        );
+        assert!(
+            config_path
+                .parent()
+                .unwrap()
+                .join("data/clawhub.lock.json")
+                .is_file()
+        );
     }
 }

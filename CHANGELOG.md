@@ -10,7 +10,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 - **Work Skills management.** Native Work Settings now lists skills discovered
   by the shared runtime, explains unavailable skills, and lets users enable or
-  disable them without editing configuration files.
+  disable them without editing configuration files. One import field installs
+  or updates a local Skill tree, GitHub Skill reference, or ClawHub slug while
+  reusing runtime compatibility, security, and lockfile verification.
+- **Durable Work Subagent controls.** Work now reads Subagent state from SQLite,
+  continues refreshing workers after the Main Agent turn finishes, and exposes
+  cancellation with progress, result, and error details in the inspector.
 
 ### Changed
 
@@ -18,6 +23,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   Main Agent, bounded and observable Subagents, Skills as the extension model,
   and a single-writer Workspace rule. Named agent teams and a free-form
   multi-agent canvas remain explicitly out of scope.
+- **Single-writer Work execution.** Work Subagents are enforced read-only at
+  the shared tool choke point, leaving Workspace mutation and approval with the
+  Main Agent. Accepted background runs execute on a process-lifetime Tokio
+  runtime instead of being aborted when a foreground Work turn exits.
 
 ## 0.5.4 - 2026-08-27
 

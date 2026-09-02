@@ -81,6 +81,9 @@ tools. File contents are not copied into the desktop session database.
 
 Settings includes:
 
+- Skills discovery, compatibility status, enable/disable controls, and one
+  import field for local directories, GitHub references, or ClawHub slugs;
+
 - provider presets, current model suggestions, custom model ID and compatible
   base URL;
 - masked API-key replacement that never loads an existing secret into the UI;

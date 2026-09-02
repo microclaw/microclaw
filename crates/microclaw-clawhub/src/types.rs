@@ -19,8 +19,9 @@ pub struct ApiSearchResult {
     #[serde(rename = "displayName")]
     pub display_name: String,
     pub summary: String,
-    pub version: String,
-    #[serde(rename = "updatedAt")]
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default, rename = "updatedAt")]
     pub updated_at: i64,
 }
 
@@ -64,13 +65,17 @@ pub struct SearchItem {
 /// Skill statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillStats {
+    #[serde(default)]
     pub comments: i32,
+    #[serde(default)]
     pub downloads: i32,
-    #[serde(rename = "installsAllTime")]
+    #[serde(default, rename = "installsAllTime", alias = "installs")]
     pub installs_all_time: i32,
-    #[serde(rename = "installsCurrent")]
+    #[serde(default, rename = "installsCurrent")]
     pub installs_current: i32,
+    #[serde(default)]
     pub stars: i32,
+    #[serde(default)]
     pub versions: i32,
 }
 

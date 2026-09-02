@@ -107,6 +107,21 @@ impl Database {
         Ok(conn.last_insert_rowid())
     }
 
+    pub fn find_chat_id(
+        &self,
+        channel: &str,
+        external_chat_id: &str,
+    ) -> Result<Option<i64>, MicroClawError> {
+        let conn = self.lock_conn();
+        conn.query_row(
+            "SELECT chat_id FROM chats WHERE channel = ?1 AND external_chat_id = ?2 LIMIT 1",
+            params![channel, external_chat_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
     pub fn store_message(&self, msg: &StoredMessage) -> Result<(), MicroClawError> {
         let conn = self.lock_conn();
         conn.execute(
@@ -1135,6 +1150,9 @@ mod tests {
             .resolve_or_create_chat_id("discord", "12345", Some("discord-12345"), "discord")
             .unwrap();
         assert_ne!(tg, discord);
+        assert_eq!(db.find_chat_id("telegram", "12345").unwrap(), Some(tg));
+        assert_eq!(db.find_chat_id("discord", "12345").unwrap(), Some(discord));
+        assert_eq!(db.find_chat_id("work", "12345").unwrap(), None);
         assert_eq!(
             db.get_chat_external_id(discord).unwrap().as_deref(),
             Some("12345")

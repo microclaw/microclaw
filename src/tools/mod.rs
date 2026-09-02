@@ -650,6 +650,37 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
+        if auth.caller_channel == "work"
+            && auth.principal.starts_with("subagent:")
+            && !matches!(
+                name,
+                "web_search"
+                    | "web_fetch"
+                    | "deep_research"
+                    | "read_memory"
+                    | "structured_memory_search"
+                    | "session_search"
+                    | "read_file"
+                    | "grep"
+                    | "glob"
+                    | "time_math"
+                    | "get_current_time"
+                    | "compare_time"
+                    | "calculate"
+                    | "osv_check"
+                    | "fetch_artifact"
+                    | "describe_image"
+                    | "consult_specialist"
+                    | "report_progress"
+                    | "subagents_list"
+                    | "subagents_info"
+            )
+        {
+            return ToolResult::error(format!(
+                "Tool `{name}` is not available to Work Subagents; Workspace writes are owned by the Main Agent"
+            ))
+            .with_error_type("work_subagent_read_only");
+        }
         if auth.principal == "learning_foundry"
             && !matches!(
                 name,
@@ -1122,6 +1153,52 @@ mod tests {
             .execute_with_auth("web_search", json!({}), &auth)
             .await;
         assert!(!search.is_error);
+    }
+
+    #[tokio::test]
+    async fn work_subagent_is_read_only_but_main_agent_can_write() {
+        let make_registry = || ToolRegistry {
+            config: crate::config::Config::test_defaults(),
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
+            tools: vec![
+                Box::new(DummyTool {
+                    tool_name: "write_file".into(),
+                }),
+                Box::new(DummyTool {
+                    tool_name: "read_file".into(),
+                }),
+            ],
+        };
+        let mut auth = ToolAuthContext {
+            caller_channel: "work".into(),
+            caller_chat_id: 1,
+            principal: "subagent:run-1".into(),
+            control_chat_ids: vec![],
+            env_files: vec![],
+        };
+
+        let denied = make_registry()
+            .execute_with_auth("write_file", json!({}), &auth)
+            .await;
+        assert!(denied.is_error);
+        assert_eq!(
+            denied.error_type.as_deref(),
+            Some("work_subagent_read_only")
+        );
+        let read = make_registry()
+            .execute_with_auth("read_file", json!({}), &auth)
+            .await;
+        assert!(!read.is_error);
+
+        auth.principal = "main".into();
+        let write = make_registry()
+            .execute_with_auth("write_file", json!({}), &auth)
+            .await;
+        assert!(!write.is_error);
     }
 
     #[tokio::test]
