@@ -5,15 +5,18 @@
 //! they do not create Tokio runtimes or call the Agent Engine directly.
 
 use microclaw::clawhub::service::{ClawHubGateway, RegistryClawHubGateway};
-use microclaw::config::{Config, WorkingDirIsolation};
+use microclaw::config::Config;
+#[cfg(test)]
+use microclaw::config::WorkingDirIsolation;
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
 use microclaw::llm::create_provider;
 use microclaw::tools::{Tool, sync_skills::SyncSkillsTool};
 use microclaw_clawhub::install::InstallOptions;
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
-use microclaw_core::run_protocol::{AgentProfile, RunId, RunRequest, SessionId};
+use microclaw_core::run_protocol::{RunId, RunRequest, SessionId};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
-use microclaw_sdk::engine as microclaw;
+use microclaw_engine as microclaw;
+use microclaw_sdk::MicroClaw;
 use microclaw_storage::db::Database;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1104,22 +1107,18 @@ fn run_worker(
     };
 
     let result = tokio_runtime.block_on(async {
-        let config = configure_work_runtime(
-            Config::load_from_path_for_headless(&config_path)?,
-            request.workspace,
-        );
-        let headless_runtime = HeadlessRuntime::load(config).await?;
-        let embedded_runtime = headless_runtime.clone().into_embedded_runtime("work", 1)?;
+        let embedded_runtime = MicroClaw::builder(config_path)
+            .caller_channel("work")
+            .workspace(request.workspace)
+            .max_concurrent_runs(1)
+            .build()
+            .await?;
 
         let mut runtime_request = RunRequest::new(request.task);
         runtime_request.run_id = Some(RunId::new(run_id.clone()));
         runtime_request.session_id = Some(SessionId::new(request.session));
-        let mut run = embedded_runtime
-            .agent(AgentProfile {
-                name: "MicroClaw Work".into(),
-                ..AgentProfile::default()
-            })
-            .run(runtime_request);
+        let agent = embedded_runtime.agent("MicroClaw Work").build()?;
+        let mut run = agent.run_request(runtime_request);
         let controller = run.controller();
         'run_loop: loop {
             tokio::select! {
@@ -1168,6 +1167,7 @@ fn run_worker(
     }
 }
 
+#[cfg(test)]
 fn configure_work_runtime(mut config: Config, workspace: String) -> Config {
     config.working_dir = workspace;
     // Work is an explicit foreground project session. Its tools must operate

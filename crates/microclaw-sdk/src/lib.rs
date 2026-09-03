@@ -104,6 +104,12 @@ impl MicroClaw {
         MicroClawBuilder::from_config_file(config_path)
     }
 
+    /// Start configuring a full Agent Engine using MicroClaw's normal configuration discovery.
+    #[cfg(feature = "full")]
+    pub fn builder_from_environment() -> MicroClawBuilder {
+        MicroClawBuilder::from_environment()
+    }
+
     pub fn runtime(&self) -> &Runtime {
         &self.runtime
     }
@@ -126,9 +132,10 @@ impl MicroClaw {
 /// Builder for the configured Agent Engine exposed by the `full` SDK preset.
 #[cfg(feature = "full")]
 pub struct MicroClawBuilder {
-    config_path: PathBuf,
+    config_path: Option<PathBuf>,
     data_dir: Option<PathBuf>,
     skills_dir: Option<PathBuf>,
+    workspace: Option<PathBuf>,
     caller_channel: String,
     max_concurrent_runs: usize,
 }
@@ -137,9 +144,21 @@ pub struct MicroClawBuilder {
 impl MicroClawBuilder {
     pub fn from_config_file(path: impl Into<PathBuf>) -> Self {
         Self {
-            config_path: path.into(),
+            config_path: Some(path.into()),
             data_dir: None,
             skills_dir: None,
+            workspace: None,
+            caller_channel: "embedded-app".into(),
+            max_concurrent_runs: 4,
+        }
+    }
+
+    pub fn from_environment() -> Self {
+        Self {
+            config_path: None,
+            data_dir: None,
+            skills_dir: None,
+            workspace: None,
             caller_channel: "embedded-app".into(),
             max_concurrent_runs: 4,
         }
@@ -152,6 +171,14 @@ impl MicroClawBuilder {
 
     pub fn skills_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.skills_dir = Some(path.into());
+        self
+    }
+
+    /// Select the direct working directory for an embedded foreground Agent.
+    ///
+    /// This enables checkpoints and keeps file tools rooted in the selected workspace.
+    pub fn workspace(mut self, path: impl Into<PathBuf>) -> Self {
+        self.workspace = Some(path.into());
         self
     }
 
@@ -169,13 +196,21 @@ impl MicroClawBuilder {
         use microclaw_engine::config::Config;
         use microclaw_engine::headless::HeadlessRuntime;
 
-        let mut config = Config::load_from_path_for_headless(Path::new(&self.config_path))
-            .map_err(|error| SdkError::Configuration(error.to_string()))?;
+        let mut config = match self.config_path {
+            Some(path) => Config::load_from_path_for_headless(Path::new(&path)),
+            None => Config::load(),
+        }
+        .map_err(|error| SdkError::Configuration(error.to_string()))?;
         if let Some(path) = self.data_dir {
             config.data_dir = path.to_string_lossy().into_owned();
         }
         if let Some(path) = self.skills_dir {
             config.skills_dir = Some(path.to_string_lossy().into_owned());
+        }
+        if let Some(path) = self.workspace {
+            config.working_dir = path.to_string_lossy().into_owned();
+            config.working_dir_isolation = microclaw_engine::config::WorkingDirIsolation::Direct;
+            config.checkpoints_enabled = true;
         }
         let engine = HeadlessRuntime::load(config)
             .await

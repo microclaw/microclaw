@@ -1,8 +1,6 @@
 //! Headless proof that Work state is driven by shared runtime events, not GPUI.
 
-use microclaw::config::Config;
-use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
-use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
+use microclaw_sdk::{MicroClaw, RunId, RunRequest, RuntimeEvent, RuntimeEventEnvelope, SessionId};
 use microclaw_work_app::session::{WorkCommand, WorkSessionSnapshot};
 use microclaw_work_app::store::WorkSessionStore;
 use std::error::Error;
@@ -98,38 +96,28 @@ fn recovery_resume(root: &str, retry: bool) -> Result<WorkSessionSnapshot, Box<d
 
 async fn run_real(task: String) -> Result<WorkSessionSnapshot, Box<dyn Error>> {
     let workspace = std::env::current_dir()?.display().to_string();
-    let mut config = Config::load()?;
-    config.working_dir = workspace.clone();
-    let runtime = HeadlessRuntime::load(config).await?;
+    let microclaw = MicroClaw::builder_from_environment()
+        .caller_channel("work-headless")
+        .workspace(&workspace)
+        .max_concurrent_runs(1)
+        .build()
+        .await?;
     let epoch_millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis();
     let run_id = format!("work-{}-{epoch_millis}", std::process::id());
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut session = WorkSessionSnapshot::new(workspace);
     session.apply(WorkCommand::StartTask { task: task.clone() })?;
 
-    let run = runtime.run(
-        HeadlessRunRequest::work(task, Some("work-default".into()), run_id),
-        Some(event_tx),
-    );
-    tokio::pin!(run);
-    let mut result = None;
-    loop {
-        tokio::select! {
-            event = event_rx.recv() => match event {
-                Some(event) => { session.apply(WorkCommand::ApplyRuntimeEvent(event))?; }
-                None => break,
-            },
-            completed = &mut run, if result.is_none() => {
-                result = Some(completed?);
-            }
-        }
+    let agent = microclaw.agent("MicroClaw Work Headless").build()?;
+    let mut request = RunRequest::new(task);
+    request.run_id = Some(RunId::new(run_id));
+    request.session_id = Some(SessionId::new("work-default"));
+    let mut run = agent.run_request(request);
+    while let Some(event) = run.next_event().await {
+        session.apply(WorkCommand::ApplyRuntimeEvent(event))?;
     }
-    let result = match result {
-        Some(result) => result,
-        None => run.await?,
-    };
+    let result = run.result().await?;
     if session.status != microclaw_work_app::session::WorkStatus::Completed {
         return Err(format!(
             "runtime completed without a final Work event: {}",

@@ -6311,8 +6311,7 @@ dependencies = [
 name = "microclaw-work-headless"
 version = "0.1.0"
 dependencies = [
- "microclaw",
- "microclaw-core",
+ "microclaw-sdk",
  "microclaw-work-app",
  "serde_json",
  "tempfile",
@@ -6328,6 +6327,7 @@ dependencies = [
  "dirs",
  "microclaw-clawhub",
  "microclaw-core",
+ "microclaw-engine",
  "microclaw-runtime",
  "microclaw-sdk",
  "microclaw-storage",

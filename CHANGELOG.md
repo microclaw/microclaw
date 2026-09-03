@@ -26,6 +26,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   execution now enter the existing Agent Engine through the same embeddable
   Runtime contract while preserving session persistence, cancellation,
   steering, and versioned events.
+- **Work dogfoods the stable SDK.** Native Work and its headless acceptance
+  runner now create foreground Agents through `MicroClawBuilder` instead of
+  assembling `HeadlessRuntime` themselves. CI rejects a regression back to the
+  root Server package or around the SDK execution boundary.
 - **One execution lifecycle for every product surface.** Server channels, Web,
   ACP, Scheduler, headless, and Work now enter Agent execution through the same
   `RunRequest`, `RunHandle`, and `RunResult` path. Runtime controls support
