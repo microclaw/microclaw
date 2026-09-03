@@ -4,7 +4,7 @@
 //! concurrency, control routing, terminal results, and the provider-neutral event stream.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -214,6 +214,8 @@ impl RuntimeBuilder {
             inner: Arc::new(RuntimeInner {
                 executor,
                 permits: Arc::new(Semaphore::new(self.max_concurrent_runs)),
+                max_concurrent_runs: self.max_concurrent_runs,
+                active_runs: Arc::new(AtomicUsize::new(0)),
             }),
         })
     }
@@ -222,6 +224,8 @@ impl RuntimeBuilder {
 struct RuntimeInner {
     executor: Arc<dyn RunExecutor>,
     permits: Arc<Semaphore>,
+    max_concurrent_runs: usize,
+    active_runs: Arc<AtomicUsize>,
 }
 
 #[derive(Clone)]
@@ -243,6 +247,14 @@ impl Runtime {
 
     pub fn capabilities(&self) -> RuntimeCapabilities {
         self.inner.executor.capabilities()
+    }
+
+    pub fn max_concurrent_runs(&self) -> usize {
+        self.inner.max_concurrent_runs
+    }
+
+    pub fn active_runs(&self) -> usize {
+        self.inner.active_runs.load(Ordering::Acquire)
     }
 }
 
@@ -268,6 +280,7 @@ impl AgentHandle {
         let next_sequence = Arc::new(AtomicU64::new(0));
         let executor = self.runtime.inner.executor.clone();
         let permits = self.runtime.inner.permits.clone();
+        let active_runs = self.runtime.inner.active_runs.clone();
         let profile = self.profile.clone();
         let task_run_id = run_id.clone();
         let fallback_session_id = request
@@ -294,6 +307,7 @@ impl AgentHandle {
                     return;
                 }
             };
+            let _active_run = ActiveRunGuard::new(active_runs);
             let context = ExecutionContext {
                 run_id: task_run_id.clone(),
                 event_tx: event_tx.clone(),
@@ -357,6 +371,23 @@ impl AgentHandle {
             control_tx,
             result_rx,
         }
+    }
+}
+
+struct ActiveRunGuard {
+    active_runs: Arc<AtomicUsize>,
+}
+
+impl ActiveRunGuard {
+    fn new(active_runs: Arc<AtomicUsize>) -> Self {
+        active_runs.fetch_add(1, Ordering::AcqRel);
+        Self { active_runs }
+    }
+}
+
+impl Drop for ActiveRunGuard {
+    fn drop(&mut self) {
+        self.active_runs.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -559,12 +590,8 @@ pub struct LocalWorker {
 }
 
 impl LocalWorker {
-    pub fn new(
-        runtime: Runtime,
-        id: impl Into<WorkerId>,
-        name: impl Into<String>,
-        max_concurrent_runs: usize,
-    ) -> Self {
+    pub fn new(runtime: Runtime, id: impl Into<WorkerId>, name: impl Into<String>) -> Self {
+        let max_concurrent_runs = runtime.max_concurrent_runs();
         Self {
             descriptor: WorkerDescriptor {
                 id: id.into(),
@@ -585,11 +612,20 @@ impl Worker for LocalWorker {
     }
 
     fn health(&self) -> WorkerHealth {
+        let active_runs = self.runtime.active_runs();
         WorkerHealth {
             worker_id: self.descriptor.id.clone(),
-            status: WorkerHealthStatus::Ready,
-            active_runs: 0,
-            observed_at: String::new(),
+            status: if active_runs >= self.descriptor.max_concurrent_runs {
+                WorkerHealthStatus::Busy
+            } else {
+                WorkerHealthStatus::Ready
+            },
+            active_runs,
+            observed_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .to_string(),
         }
     }
 
@@ -826,14 +862,50 @@ mod tests {
     #[tokio::test]
     async fn local_worker_uses_the_same_runtime_contract() {
         let runtime = Runtime::builder().executor(EchoExecutor).build().unwrap();
-        let worker = LocalWorker::new(runtime, "local", "Local worker", 4);
+        let worker = LocalWorker::new(runtime, "local", "Local worker");
         let descriptor = worker.descriptor();
         assert_eq!(descriptor.id, WorkerId::new("local"));
+        assert_eq!(descriptor.max_concurrent_runs, 4);
         assert!(descriptor.capabilities.streaming);
         let run = worker
             .submit(AgentProfile::default(), RunRequest::new("worker task"))
             .await;
         assert_eq!(run.result().await.unwrap().final_text, "worker task");
+    }
+
+    #[tokio::test]
+    async fn local_worker_health_reports_runtime_capacity_and_activity() {
+        let runtime = Runtime::builder()
+            .executor(ConcurrentExecutor {
+                active: Arc::new(AtomicUsize::new(0)),
+                peak: Arc::new(AtomicUsize::new(0)),
+            })
+            .max_concurrent_runs(1)
+            .build()
+            .unwrap();
+        let worker = LocalWorker::new(runtime, "local", "Local worker");
+        let run = worker
+            .submit(AgentProfile::default(), RunRequest::new("worker task"))
+            .await;
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let health = worker.health();
+                if health.active_runs == 1 {
+                    assert_eq!(health.status, WorkerHealthStatus::Busy);
+                    assert!(!health.observed_at.is_empty());
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("worker should report its active run");
+
+        run.result().await.unwrap();
+        let health = worker.health();
+        assert_eq!(health.active_runs, 0);
+        assert_eq!(health.status, WorkerHealthStatus::Ready);
     }
 
     struct RelationshipExecutor;
@@ -865,7 +937,7 @@ mod tests {
             .executor(RelationshipExecutor)
             .build()
             .unwrap();
-        let worker = LocalWorker::new(runtime, "local", "Local worker", 2);
+        let worker = LocalWorker::new(runtime, "local", "Local worker");
         let profile = AgentProfile {
             id: Some(microclaw_core::run_protocol::AgentId::new("reviewer")),
             ..AgentProfile::default()

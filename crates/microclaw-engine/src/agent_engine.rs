@@ -3360,7 +3360,7 @@ async fn checkpoint_turn_state(
     }
 }
 
-pub(crate) fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::PathBuf {
+pub fn effective_runtime_data_dir(config: &crate::config::Config) -> std::path::PathBuf {
     let data_dir = std::path::PathBuf::from(&config.data_dir);
     let is_runtime_dir = data_dir
         .file_name()
@@ -3572,7 +3572,7 @@ pub(crate) fn load_soul_content(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_system_prompt(
+pub fn build_system_prompt(
     bot_username: &str,
     caller_channel: &str,
     memory_context: &str,
@@ -3800,10 +3800,7 @@ fn append_plugin_context_sections(
     }
 }
 
-pub(crate) fn history_to_claude_messages(
-    history: &[StoredMessage],
-    _bot_username: &str,
-) -> Vec<Message> {
+pub fn history_to_claude_messages(history: &[StoredMessage], _bot_username: &str) -> Vec<Message> {
     let mut messages = Vec::new();
 
     for msg in history {
@@ -3875,7 +3872,7 @@ fn format_mid_turn_injection(pending: &[PendingMessage]) -> String {
 #[allow(dead_code)]
 /// Strip `<think>...</think>` and `<thought>...</thought>` blocks from model output.
 /// Handles multiline content and multiple blocks.
-pub(crate) fn strip_thinking(text: &str) -> String {
+pub fn strip_thinking(text: &str) -> String {
     fn strip_tag_blocks(input: &str, open: &str, close: &str) -> String {
         let mut result = String::with_capacity(input.len());
         let mut rest = input;
@@ -3908,7 +3905,7 @@ pub(crate) fn sanitize_user_visible_text(text: &str) -> String {
 }
 
 /// Extract text content from a Message for summarization/display.
-pub(crate) fn message_to_text(msg: &Message) -> String {
+pub fn message_to_text(msg: &Message) -> String {
     match &msg.content {
         MessageContent::Text(t) => t.clone(),
         MessageContent::Blocks(blocks) => {
@@ -3950,7 +3947,7 @@ pub(crate) fn message_to_text(msg: &Message) -> String {
 }
 
 /// Replace Image content blocks with text placeholders to avoid storing base64 data in sessions.
-pub(crate) fn strip_images_for_session(messages: &mut [Message]) {
+pub fn strip_images_for_session(messages: &mut [Message]) {
     for msg in messages.iter_mut() {
         if let MessageContent::Blocks(blocks) = &mut msg.content {
             for block in blocks.iter_mut() {
@@ -4273,7 +4270,6 @@ mod tests {
     use crate::runtime::AppState;
     use crate::skills::SkillManager;
     use crate::tools::ToolRegistry;
-    use crate::web::WebAdapter;
     use microclaw_channels::channel::ConversationKind;
     use microclaw_channels::channel_adapter::ChannelAdapter;
     use microclaw_channels::channel_adapter::ChannelRegistry;
@@ -4288,6 +4284,23 @@ mod tests {
     use std::sync::Arc;
 
     struct DummyLlm;
+
+    struct TestAdapter;
+
+    #[async_trait::async_trait]
+    impl ChannelAdapter for TestAdapter {
+        fn name(&self) -> &str {
+            "web"
+        }
+
+        fn chat_type_routes(&self) -> Vec<(&str, ConversationKind)> {
+            vec![("web", ConversationKind::Private)]
+        }
+
+        async fn send_text(&self, _external_chat_id: &str, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
 
     #[async_trait::async_trait]
     impl LlmProvider for DummyLlm {
@@ -4492,7 +4505,7 @@ mod tests {
         let db = Arc::new(Database::new(runtime_dir.to_str().unwrap()).unwrap());
         let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
         let mut registry = ChannelRegistry::new();
-        registry.register(Arc::new(WebAdapter));
+        registry.register(Arc::new(TestAdapter));
         let channel_registry = Arc::new(registry);
         Arc::new(AppState {
             config: cfg.clone(),
@@ -5566,7 +5579,7 @@ mod tests {
             attachment_path: attachment_path.to_string_lossy().to_string(),
         };
         let mut registry = ChannelRegistry::new();
-        registry.register(Arc::new(WebAdapter));
+        registry.register(Arc::new(TestAdapter));
         registry.register(Arc::new(LocalOnlyFeishuAdapter));
         let state = test_state_with_llm_and_registry(&base_dir, Box::new(llm), Arc::new(registry));
         let chat_id = state

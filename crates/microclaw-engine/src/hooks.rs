@@ -146,7 +146,7 @@ impl HookManager {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests() -> Self {
         let tmp = std::env::temp_dir().join(format!("microclaw-hooks-{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&tmp);

@@ -35,9 +35,7 @@ use crate::channels::{
 use crate::chat_turn_queue::ChatTurnQueue;
 use crate::config::normalize_model_name;
 use crate::config::Config;
-use crate::embedding::EmbeddingProvider;
 use crate::hooks::HookManager;
-use crate::llm::LlmProvider;
 use crate::memory::MemoryManager;
 use crate::memory_backend::MemoryBackend;
 use crate::skills::SkillManager;
@@ -59,26 +57,7 @@ fn warn_missing_feature(config: &Config, channel_key: &str, feature_name: &str) 
     }
 }
 
-#[derive(Clone)]
-pub struct AppState {
-    pub config: Config,
-    pub channel_registry: Arc<ChannelRegistry>,
-    pub db: Arc<Database>,
-    pub memory: Arc<MemoryManager>,
-    pub skills: Arc<SkillManager>,
-    pub hooks: Arc<HookManager>,
-    pub llm: Arc<dyn LlmProvider>,
-    pub llm_provider_overrides: Arc<RwLock<HashMap<String, String>>>,
-    pub llm_model_overrides: Arc<RwLock<HashMap<String, String>>>,
-    pub embedding: Option<Arc<dyn EmbeddingProvider>>,
-    pub memory_backend: Arc<MemoryBackend>,
-    pub tools: Arc<ToolRegistry>,
-    pub chat_turn_queue: Arc<ChatTurnQueue>,
-    pub skill_review_queue: crate::skill_review::SkillReviewQueue,
-    pub metric_exporter: Option<Arc<OtlpMetricExporter>>,
-    pub trace_exporter: Option<Arc<OtlpTraceExporter>>,
-    pub log_exporter: Option<Arc<OtlpLogExporter>>,
-}
+pub use microclaw_engine::runtime::AppState;
 
 fn prepare_channel_runtimes<T, Build, Register, ModelOverride>(
     config: &Config,

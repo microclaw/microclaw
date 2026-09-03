@@ -4,10 +4,10 @@
 //! depending on MicroClaw's internal capability crates individually.
 
 pub use microclaw_core::run_protocol::{
-    AgentId, AgentProfile, CallerContext, RunId, RunRequest, RunResult, RunStatus,
-    RuntimeCapabilities, RuntimeControl, RuntimeError, RuntimeErrorCode, SessionId, ToolPolicy,
-    WorkerCommand, WorkerDescriptor, WorkerFrame, WorkerHealth, WorkerHealthStatus, WorkerId,
-    WORKER_PROTOCOL_VERSION,
+    validate_worker_protocol_version, AgentId, AgentProfile, CallerContext, RunId, RunRequest,
+    RunResult, RunStatus, RuntimeCapabilities, RuntimeControl, RuntimeError, RuntimeErrorCode,
+    SessionId, ToolPolicy, WorkerCommand, WorkerDescriptor, WorkerFrame, WorkerHealth,
+    WorkerHealthStatus, WorkerId, WORKER_PROTOCOL_VERSION,
 };
 pub use microclaw_core::runtime_event::{
     RuntimeApprovalDecision, RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeEvent,
@@ -25,9 +25,9 @@ pub mod core {
 
 /// Supported default MicroClaw services for applications using the `full` preset.
 ///
-/// The compatibility facade keeps product internals out of ordinary SDK imports while the
-/// concrete Agent Engine continues its physical crate extraction.
+/// The facade exposes the concrete Agent Engine without pulling in the Server, Web console,
+/// concrete channel adapters, or native Work UI.
 #[cfg(feature = "full")]
 pub mod engine {
-    pub use microclaw::*;
+    pub use microclaw_engine::*;
 }

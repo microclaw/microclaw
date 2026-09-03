@@ -1121,7 +1121,7 @@ fn run_worker(
             })
             .run(runtime_request);
         let controller = run.controller();
-        let result = 'run_loop: loop {
+        'run_loop: loop {
             tokio::select! {
                 event = run.next_event() => {
                     match event {
@@ -1134,13 +1134,11 @@ fn run_worker(
                     }
                 }
                 signal = cancel_rx.recv() => {
-                    if signal.is_some() {
-                        if controller.cancel_confirmed().await.is_ok() {
-                            while let Some(envelope) = run.next_event().await {
-                                let _ = message_tx.send(WorkRuntimeMessage::Envelope(envelope));
-                            }
-                            break 'run_loop run.result().await.map_err(anyhow::Error::from);
+                    if signal.is_some() && controller.cancel_confirmed().await.is_ok() {
+                        while let Some(envelope) = run.next_event().await {
+                            let _ = message_tx.send(WorkRuntimeMessage::Envelope(envelope));
                         }
+                        break 'run_loop run.result().await.map_err(anyhow::Error::from);
                     }
                 }
                 update = steer_rx.recv() => {
@@ -1157,8 +1155,7 @@ fn run_worker(
                     }
                 }
             }
-        };
-        result
+        }
     });
 
     match result {

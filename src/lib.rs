@@ -1,57 +1,24 @@
-pub mod a2a;
 pub mod acp;
-pub mod acp_subagent;
-pub mod agent_engine;
-pub mod alerts;
 pub mod canary;
 pub mod channels;
-pub mod chat_commands;
-pub mod chat_turn_queue;
-pub mod checkpoint;
-pub mod clawhub;
-pub mod codex_auth;
-pub mod completion_contract;
-pub mod config;
-pub mod config_persistence;
-pub mod context_references;
 pub mod doctor;
-pub mod embedding;
 pub mod eval;
 pub mod gateway;
-pub mod headless;
-pub mod hooks;
-pub mod http_client;
-pub mod learning_foundry;
-pub mod llm;
-pub mod mcp;
-pub mod memory_backend;
-pub mod memory_service;
-pub mod messages;
-pub mod mood;
 pub mod outbox;
-pub mod plugins;
-pub mod prompt_cache;
-pub mod relationship;
-pub(crate) mod run_control;
 pub mod runtime;
-pub mod schedule_lifecycle;
 pub mod scheduler;
 pub mod setup;
-pub mod setup_def;
-pub mod skill_audit;
-pub mod skill_review;
-pub mod skills;
-pub mod subdirectory_hints;
-pub mod supervision;
-pub mod title_generator;
 pub mod tls;
-pub mod tool_executor;
-pub mod tool_guardrails;
-pub mod tools;
-pub mod trust_report;
-pub mod turn_recovery;
-pub mod voice;
 pub mod web;
+
+pub use microclaw_engine::{
+    a2a, acp_subagent, agent_engine, alerts, chat_commands, chat_turn_queue, checkpoint, clawhub,
+    codex_auth, completion_contract, config, config_persistence, context_references, embedding,
+    headless, hooks, http_client, learning_foundry, llm, mcp, memory_backend, memory_service,
+    messages, mood, plugins, prompt_cache, relationship, run_control, schedule_lifecycle,
+    setup_def, skill_audit, skill_review, skills, subdirectory_hints, supervision, title_generator,
+    tool_executor, tool_guardrails, tools, trust_report, turn_recovery, voice,
+};
 
 /// Whether this build embeds the React operator console. Server builds enable
 /// it by default; native Work builds deliberately disable it.

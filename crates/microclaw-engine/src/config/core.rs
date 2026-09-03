@@ -921,8 +921,8 @@ impl Config {
         overrides
     }
 
-    #[cfg(test)]
-    pub(crate) fn test_defaults() -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_defaults() -> Self {
         Self {
             telegram_bot_token: "tok".into(),
             bot_username: "bot".into(),
@@ -1302,7 +1302,7 @@ impl Config {
     }
 
     /// Apply post-deserialization normalization and validation.
-    pub(crate) fn post_deserialize(&mut self) -> Result<(), MicroClawError> {
+    pub fn post_deserialize(&mut self) -> Result<(), MicroClawError> {
         self.llm_provider = self.llm_provider.trim().to_lowercase();
 
         self.model = resolve_model_name_with_fallback(&self.llm_provider, Some(&self.model), None);

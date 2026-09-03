@@ -29,7 +29,7 @@ function writeIfChanged(file, content) {
 }
 
 function parseBuiltinTools() {
-  const toolsDir = path.join(ROOT, 'src/tools');
+  const toolsDir = path.join(ROOT, 'crates/microclaw-engine/src/tools');
   const files = fs
     .readdirSync(toolsDir)
     .filter((f) => f.endsWith('.rs'))
@@ -57,12 +57,12 @@ function inferSerdeDefault(typeName) {
 }
 
 function parseConfigDefaults() {
-  const configDir = path.join(ROOT, 'src/config');
+  const configDir = path.join(ROOT, 'crates/microclaw-engine/src/config');
   const text = fs
     .readdirSync(configDir)
     .filter((f) => f.endsWith('.rs'))
     .sort()
-    .map((f) => read(path.join('src/config', f)))
+    .map((f) => read(path.join('crates/microclaw-engine/src/config', f)))
     .join('\n');
 
   const fnDefaults = new Map();
@@ -119,7 +119,7 @@ function parseConfigDefaults() {
 }
 
 function parseProviderPresets() {
-  const text = read('src/setup/presets.rs');
+  const text = read('crates/microclaw-engine/src/setup/presets.rs');
   const arrMatch = text.match(/const\s+PROVIDER_PRESETS:\s*&\[ProviderPreset\]\s*=\s*&\[([\s\S]*?)\n\];/);
   if (!arrMatch) {
     throw new Error('Failed to parse PROVIDER_PRESETS');

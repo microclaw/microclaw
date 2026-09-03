@@ -10,7 +10,7 @@ use crate::runtime::AppState;
 use microclaw_storage::db::{call_blocking, Database, KgTriple, Memory};
 use microclaw_storage::memory_quality;
 
-pub(crate) struct ReflectorApplyOutcome {
+pub struct ReflectorApplyOutcome {
     pub inserted: usize,
     pub updated: usize,
     pub skipped: usize,
@@ -87,7 +87,7 @@ fn is_cjk(c: char) -> bool {
     )
 }
 
-pub(crate) fn jaccard_similar(a: &str, b: &str, threshold: f64) -> bool {
+pub fn jaccard_similar(a: &str, b: &str, threshold: f64) -> bool {
     use std::collections::HashSet;
     let a_words: HashSet<&str> = a.split_whitespace().collect();
     let b_words: HashSet<&str> = b.split_whitespace().collect();
@@ -101,7 +101,7 @@ pub(crate) fn jaccard_similar(a: &str, b: &str, threshold: f64) -> bool {
 
 /// A minimal view of a memory for sleep-time consolidation.
 #[derive(Debug, Clone)]
-pub(crate) struct ConsolidationItem {
+pub struct ConsolidationItem {
     pub id: i64,
     pub content: String,
     pub category: String,
@@ -113,7 +113,7 @@ pub(crate) struct ConsolidationItem {
 /// first): the first member of each duplicate group is kept and later same-category
 /// near-duplicates are archived. PROFILE memories are always kept (they describe the
 /// user's identity). Returns the ids to archive, capped at `max`.
-pub(crate) fn select_duplicate_memories_to_archive(
+pub fn select_duplicate_memories_to_archive(
     items: &[ConsolidationItem],
     threshold: f64,
     max: usize,
@@ -185,12 +185,12 @@ fn looks_like_broken_behavior_fact(content: &str) -> bool {
     broken_cues.iter().any(|cue| lower.contains(cue))
 }
 
-pub(crate) fn should_skip_memory_poisoning_risk(content: &str) -> bool {
+pub fn should_skip_memory_poisoning_risk(content: &str) -> bool {
     looks_like_broken_behavior_fact(content) && !is_corrective_action_item(content)
 }
 
 #[cfg(feature = "sqlite-vec")]
-pub(crate) async fn upsert_memory_embedding(
+pub async fn upsert_memory_embedding(
     state: &Arc<AppState>,
     memory_id: i64,
     content: &str,
@@ -740,7 +740,7 @@ pub(crate) async fn build_db_memory_context(
     out
 }
 
-pub(crate) async fn apply_reflector_extractions(
+pub async fn apply_reflector_extractions(
     state: &Arc<AppState>,
     chat_id: i64,
     existing: &[Memory],

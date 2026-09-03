@@ -247,8 +247,7 @@ impl Tool for A2ASendTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{extract::State, routing::post, Json, Router};
-    use serde_json::Value;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     #[tokio::test]
@@ -300,35 +299,44 @@ mod tests {
 
     #[tokio::test]
     async fn test_a2a_send_posts_to_peer() {
-        async fn handler(
-            State(expected): State<String>,
-            headers: axum::http::HeaderMap,
-            Json(body): Json<Value>,
-        ) -> Json<A2AMessageResponse> {
-            assert_eq!(
-                headers
-                    .get("authorization")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or_default(),
-                format!("Bearer {expected}")
-            );
-            assert_eq!(body["message"], "do work");
-            Json(A2AMessageResponse {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let bytes_read = stream.read(&mut buffer).await.unwrap();
+                if bytes_read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..bytes_read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") && request.ends_with(b"}")
+                {
+                    break;
+                }
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with(&format!("POST {A2A_MESSAGE_PATH} HTTP/1.1")));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer secret"));
+            assert!(request.contains("\"message\":\"do work\""));
+
+            let response = serde_json::to_vec(&A2AMessageResponse {
                 ok: true,
                 protocol_version: A2A_PROTOCOL_VERSION.to_string(),
                 agent_name: "Worker".into(),
                 session_key: "a2a:worker".into(),
                 response: "done".into(),
             })
-        }
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let app = Router::new()
-            .route(A2A_MESSAGE_PATH, post(handler))
-            .with_state("secret".to_string());
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
+            .unwrap();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                response.len()
+            );
+            stream.write_all(headers.as_bytes()).await.unwrap();
+            stream.write_all(&response).await.unwrap();
         });
 
         let mut cfg = Config::test_defaults();

@@ -356,7 +356,6 @@ impl Tool for SendMessageTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::web::WebAdapter;
     use microclaw_channels::channel::ConversationKind;
     use microclaw_channels::channel_adapter::ChannelAdapter;
     use microclaw_channels::channel_adapter::ChannelRegistry;
@@ -375,7 +374,7 @@ mod tests {
 
     fn test_registry() -> Arc<ChannelRegistry> {
         let mut registry = ChannelRegistry::new();
-        registry.register(Arc::new(WebAdapter));
+        registry.register(Arc::new(LocalOnlyAdapter { name: "web".into() }));
         Arc::new(registry)
     }
 
@@ -390,11 +389,20 @@ mod tests {
         }
 
         fn chat_type_routes(&self) -> Vec<(&str, ConversationKind)> {
-            vec![("private", ConversationKind::Private)]
+            match self.name.as_str() {
+                "web" => vec![("web", ConversationKind::Private)],
+                "telegram" | "telegram.sales" => vec![("private", ConversationKind::Private)],
+                "feishu" => vec![("feishu_dm", ConversationKind::Private)],
+                _ => Vec::new(),
+            }
         }
 
         fn is_local_only(&self) -> bool {
-            true
+            self.name == "web"
+        }
+
+        fn allows_cross_chat(&self) -> bool {
+            self.name != "web"
         }
 
         async fn send_text(&self, _external_chat_id: &str, _text: &str) -> Result<(), String> {
@@ -407,7 +415,11 @@ mod tests {
             _file_path: &Path,
             _caption: Option<&str>,
         ) -> Result<String, String> {
-            Ok("attachment".to_string())
+            if self.name == "web" {
+                Err("attachments not supported for web".to_string())
+            } else {
+                Ok("attachment".to_string())
+            }
         }
     }
 
@@ -512,26 +524,10 @@ mod tests {
 
         // Need telegram adapter registered for "private" chat type
         let mut registry = ChannelRegistry::new();
-        registry.register(Arc::new(WebAdapter));
-        // Register a minimal telegram adapter to resolve "private" chat type
-        use crate::channels::telegram::TelegramChannelConfig;
-        use crate::channels::TelegramAdapter;
-        let tg_adapter = TelegramAdapter::new(
-            "telegram".into(),
-            teloxide::Bot::new("123456:TEST_TOKEN"),
-            TelegramChannelConfig {
-                bot_token: "123456:TEST_TOKEN".into(),
-                bot_username: "bot".into(),
-                allowed_groups: vec![],
-                allowed_user_ids: vec![],
-                model: None,
-                accounts: std::collections::HashMap::new(),
-                default_account: None,
-                streaming: crate::channels::telegram::TelegramStreamingConfig::default(),
-                topic_routing: crate::channels::telegram::TelegramTopicRoutingConfig::default(),
-            },
-        );
-        registry.register(Arc::new(tg_adapter));
+        registry.register(Arc::new(LocalOnlyAdapter { name: "web".into() }));
+        registry.register(Arc::new(LocalOnlyAdapter {
+            name: "telegram".into(),
+        }));
         let registry = Arc::new(registry);
 
         let tool =

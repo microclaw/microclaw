@@ -1,0 +1,39 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
+
+use crate::config::Config;
+use crate::embedding::EmbeddingProvider;
+use crate::hooks::HookManager;
+use crate::llm::LlmProvider;
+use crate::memory::MemoryManager;
+use crate::memory_backend::MemoryBackend;
+use crate::skills::SkillManager;
+use crate::tools::ToolRegistry;
+use microclaw_channels::channel_adapter::ChannelRegistry;
+use microclaw_observability::logs::OtlpLogExporter;
+use microclaw_observability::metrics::OtlpMetricExporter;
+use microclaw_observability::traces::OtlpTraceExporter;
+use microclaw_storage::db::Database;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Config,
+    pub channel_registry: Arc<ChannelRegistry>,
+    pub db: Arc<Database>,
+    pub memory: Arc<MemoryManager>,
+    pub skills: Arc<SkillManager>,
+    pub hooks: Arc<HookManager>,
+    pub llm: Arc<dyn LlmProvider>,
+    pub llm_provider_overrides: Arc<RwLock<HashMap<String, String>>>,
+    pub llm_model_overrides: Arc<RwLock<HashMap<String, String>>>,
+    pub embedding: Option<Arc<dyn EmbeddingProvider>>,
+    pub memory_backend: Arc<MemoryBackend>,
+    pub tools: Arc<ToolRegistry>,
+    pub chat_turn_queue: Arc<crate::chat_turn_queue::ChatTurnQueue>,
+    pub skill_review_queue: crate::skill_review::SkillReviewQueue,
+    pub metric_exporter: Option<Arc<OtlpMetricExporter>>,
+    pub trace_exporter: Option<Arc<OtlpTraceExporter>>,
+    pub log_exporter: Option<Arc<OtlpLogExporter>>,
+}

@@ -1,28 +1,29 @@
 # RFC 0008: Embeddable Runtime, SDK, and Worker Boundary
 
-- Status: In Progress
+- Status: Implemented
 - Owner: runtime/application
 - Created: 2026-09-03
 
 ## Context
 
-MicroClaw already has one provider-neutral Agent Loop and separate crates for foundational types,
-storage, tools, channels, ClawHub, observability, and Work projections. However, the reusable Agent
-Loop, provider assembly, prompt construction, recovery, skills, hooks, and tool registry still live
-inside the root product package. `microclaw-work-runtime` consequently depends on the whole root
-`microclaw` package through `HeadlessRuntime`.
+Before this extraction, MicroClaw already had one provider-neutral Agent Loop and separate crates
+for foundational types, storage, tools, channels, ClawHub, observability, and Work projections.
+However, the reusable Agent Loop, provider assembly, prompt construction, recovery, skills, hooks,
+and tool registry lived inside the root product package. `microclaw-work-runtime` consequently
+depended on the whole root `microclaw` package through `HeadlessRuntime`.
 
-This makes embedding possible but expensive and unstable: an application must accept the Server's
+That made embedding possible but expensive and unstable: an application had to accept the Server's
 concrete `Config`, `AppState`, SQLite setup, channel registry, and product defaults instead of
-supplying only the capabilities it needs.
+supplying only the capabilities it needed.
 
 ## Decision
 
-Create three explicit public layers:
+Create four explicit public layers:
 
 1. `microclaw-core`: stable serializable contracts and dependency-light foundational types.
 2. `microclaw-runtime`: the UI- and channel-independent Agent Runtime and run lifecycle.
-3. `microclaw-sdk`: an ergonomic facade with supported defaults and feature presets.
+3. `microclaw-engine`: the concrete provider-neutral Agent Loop and default services.
+4. `microclaw-sdk`: an ergonomic facade with supported defaults and feature presets.
 
 Server, Work, headless clients, local workers, and future remote workers consume the same
 `RunRequest`, `RunHandle`, `RuntimeEventEnvelope`, and `RunResult` contracts. No product surface may
@@ -31,10 +32,15 @@ implement or copy its own Agent Loop.
 ## Dependency Direction
 
 ```text
-product apps -> microclaw-sdk -> microclaw-runtime -> capability crates -> microclaw-core
+product apps -> microclaw-sdk -> microclaw-engine -> microclaw-runtime
+                                      |                  |
+                                      v                  v
+                              capability crates -> microclaw-core
 ```
 
-The Runtime must not depend on Axum, GPUI, Teloxide, Serenity, or concrete channel adapters.
+The Runtime must not depend on Axum, GPUI, Teloxide, Serenity, or channel adapters. The Engine may
+depend on the channel-neutral `microclaw-channels` delivery contract, but never on concrete channel
+adapters.
 Channel adapters translate ingress and delivery at the Server boundary. Work owns its GUI/runtime
 thread bridge. A Worker is an execution host for runs; it is not an Agent identity or a Subagent.
 
@@ -50,10 +56,10 @@ The supported embedding surface consists of:
 - `RuntimeEventEnvelope`: versioned replayable progress stream;
 - `RunResult`: terminal status, response, error, and metadata.
 
-The first replaceable service ports are `ModelProvider`, `ToolExecutor`, `SessionStore`,
-`ApprovalHandler`, and `EventSink`. Memory, skills, hooks, and subagent supervision may initially
-ship as Runtime-owned default services and become replaceable only when a real consumer requires
-it.
+V1 makes the whole `RunExecutor` replaceable at the lifecycle boundary. The full Engine keeps its
+existing provider, tool, storage, approval, event, memory, skills, hooks, and supervision seams;
+those lower-level seams become stable SDK ports only when a real embedding consumer needs to
+replace them. This keeps the dependency-light Runtime honest instead of copying Engine assembly.
 
 ## Worker Model
 
@@ -69,9 +75,10 @@ initial extraction. They must not be simulated by process-global state.
 
 ## Feature Policy
 
-`microclaw-runtime` keeps the core loop independent of product surfaces. Supported feature presets
-are `minimal`, `default`, and `full`; individual capabilities may include SQLite, built-in tools,
-skills, MCP, ClawHub, subagents, hooks, scheduler integration, media, and observability.
+`microclaw-runtime` keeps lifecycle contracts independent of product surfaces. Supported SDK and
+Runtime feature presets are `minimal`, `standard` (the default), and `full`; the full SDK facade
+adds the configured Engine and its SQLite, built-in tools, skills, MCP, ClawHub, subagents, hooks,
+media, and observability services.
 
 Only supported presets are required in CI initially. UI and channel dependencies are never Runtime
 features.
@@ -79,16 +86,17 @@ features.
 ## Migration
 
 1. Add stable run, Agent, worker, error, and capability contracts to `microclaw-core`.
-2. Split the concrete `AppState` into Runtime services, optional Runtime features, and per-run
-   context while preserving behavior.
+2. Move the concrete `AppState` and default services into `microclaw-engine`; keep per-run context,
+   handles, controls, capacity, and lifecycle state in `microclaw-runtime`.
 3. Extract the Agent Loop, prompt/compaction, execution, completion, control, and recovery modules
-   into `microclaw-runtime`.
+   into `microclaw-engine`, keeping lifecycle and serializable contracts in Runtime/Core.
 4. Introduce `RuntimeBuilder`, `Runtime`, `AgentHandle`, and `RunHandle` and preserve temporary root
    re-exports.
 5. Migrate headless, Work, and Server in that order.
 6. Add `microclaw-sdk`, supported feature presets, and compiling embedding examples.
 7. Add `LocalWorker`; add a remote worker transport only after the local contract is proven.
-8. Remove compatibility paths once all internal consumers and documentation use the public API.
+8. Keep documented root compatibility re-exports for the current release; remove them only in a
+   future breaking release.
 
 ## Compatibility
 
@@ -112,14 +120,27 @@ The extraction is complete only when:
 
 1. Server, Work, and headless execution all consume the same Runtime API.
 2. `microclaw-work-runtime` no longer depends on the root `microclaw` package.
-3. `microclaw-runtime` has no Web, channel, or GUI dependencies.
+3. `microclaw-runtime` has no Web, channel, Engine, or GUI dependencies, and `microclaw-engine`
+   has no Server, Web, concrete channel, or GUI dependencies.
 4. A third-party example starts a skilled Agent and receives events in no more than roughly 50
    lines of application code.
 5. Contract tests cover execution, tool pairing, recovery, compaction, cancellation, steering,
    approval, and parent/child runs across supported consumers.
 6. Dependency-boundary checks run in CI.
-7. Minimal, default, and full feature presets compile and pass their relevant tests.
+7. Minimal, standard/default, and full feature presets compile and pass their relevant tests.
 8. Existing workspace tests, Clippy, Web build, and generated documentation checks pass.
+
+The contract coverage is intentionally layered:
+
+| Contract | Authoritative coverage |
+|---|---|
+| Execution and ordered events | `microclaw-runtime::runtime_streams_events_and_returns_a_result`; `microclaw-engine::headless::reusable_runtime_executes_real_agent_loop_and_emits_envelopes` |
+| Tool pairing and compaction boundary | `microclaw-engine::llm::test_sanitize_messages_removes_orphaned_tool_results`; `microclaw-engine::agent_engine::safe_compact_split_lands_on_plain_user_message` |
+| Recovery | `microclaw-engine::turn_recovery::checkpoint_validation_rejects_dangling_tool_use`; workspace recovery tests |
+| Cancellation and steering | Runtime control tests plus real Engine cancellation and post-tool steering tests in `headless` |
+| Approval | acknowledged Runtime control tests plus Agent Engine high-risk approval/deny tests |
+| Parent/child runs and Worker placement | `parent_child_identity_survives_local_worker_submission`; subagent persistence/cancellation tests in Work Runtime |
+| Skills and tool policy | `embedded_agent_profile_applies_prompt_and_selected_skills`; `embedded_read_only_profile_hides_mutating_tools`; Work Skill import/toggle tests |
 
 ## Rollback
 

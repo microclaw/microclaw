@@ -15,6 +15,20 @@ use crate::runtime_event::RuntimeEventEnvelope;
 
 pub const WORKER_PROTOCOL_VERSION: u16 = 1;
 
+pub fn validate_worker_protocol_version(protocol_version: u16) -> Result<(), RuntimeError> {
+    if protocol_version == WORKER_PROTOCOL_VERSION {
+        Ok(())
+    } else {
+        Err(RuntimeError {
+            code: RuntimeErrorCode::InvalidRequest,
+            message: format!(
+                "unsupported Worker protocol version {protocol_version}; expected {WORKER_PROTOCOL_VERSION}"
+            ),
+            retryable: false,
+        })
+    }
+}
+
 macro_rules! string_id {
     ($name:ident) => {
         #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -256,7 +270,7 @@ pub enum WorkerCommand {
     Submit {
         protocol_version: u16,
         profile: AgentProfile,
-        request: RunRequest,
+        request: Box<RunRequest>,
     },
     Control {
         protocol_version: u16,
@@ -284,6 +298,10 @@ impl WorkerCommand {
                 protocol_version, ..
             } => *protocol_version,
         }
+    }
+
+    pub fn validate_protocol(&self) -> Result<(), RuntimeError> {
+        validate_worker_protocol_version(self.protocol_version())
     }
 }
 
@@ -349,6 +367,10 @@ impl WorkerFrame {
             } => *protocol_version,
         }
     }
+
+    pub fn validate_protocol(&self) -> Result<(), RuntimeError> {
+        validate_worker_protocol_version(self.protocol_version())
+    }
 }
 
 #[cfg(test)]
@@ -394,7 +416,7 @@ mod tests {
                 skills: vec!["rust-review".into()],
                 ..AgentProfile::default()
             },
-            request,
+            request: Box::new(request),
         };
         let encoded = serde_json::to_string(&command).unwrap();
         let decoded: WorkerCommand = serde_json::from_str(&encoded).unwrap();
@@ -428,6 +450,24 @@ mod tests {
         assert!(RunStatus::Failed.is_terminal());
         assert!(RunStatus::TimedOut.is_terminal());
         assert!(RunStatus::Cancelled.is_terminal());
+    }
+
+    #[test]
+    fn worker_protocol_rejects_incompatible_versions() {
+        let command = WorkerCommand::Describe {
+            protocol_version: WORKER_PROTOCOL_VERSION + 1,
+        };
+        let error = command.validate_protocol().unwrap_err();
+        assert_eq!(error.code, RuntimeErrorCode::InvalidRequest);
+        assert!(error
+            .message
+            .contains("unsupported Worker protocol version"));
+
+        let frame = WorkerFrame::Accepted {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            run_id: RunId::new("run-1"),
+        };
+        frame.validate_protocol().unwrap();
     }
 
     #[test]

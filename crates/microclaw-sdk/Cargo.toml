@@ -8,12 +8,12 @@ license = "MIT"
 default = ["standard"]
 minimal = ["microclaw-runtime/minimal"]
 standard = ["microclaw-runtime/standard"]
-full = ["microclaw-runtime/full", "dep:microclaw"]
+full = ["microclaw-runtime/full", "dep:microclaw-engine"]
 
 [dependencies]
 microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
 microclaw-runtime = { version = "0.1.0", path = "../microclaw-runtime" }
-microclaw = { version = "0.5.5", path = "../..", default-features = false, optional = true }
+microclaw-engine = { version = "0.1.0", path = "../microclaw-engine", optional = true }
 
 [[example]]
 name = "configured_skilled_agent"

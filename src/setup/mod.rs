@@ -49,11 +49,19 @@ pub mod validate;
 pub mod values;
 pub mod wizard;
 
+pub use microclaw_engine::setup::{
+    default_base_url_for_provider, provider_catalog, ProviderCatalogEntry,
+};
+pub(crate) use microclaw_engine::setup::{
+    default_model_for_provider, find_provider_preset, normalize_setup_provider_id,
+    provider_display, provider_protocol, ProviderPreset, ProviderProtocol, PROVIDER_PRESETS,
+};
+
 pub(crate) use self::app::*;
 pub(crate) use self::keys::*;
 pub(crate) use self::overrides::*;
 pub(crate) use self::pickers::*;
-pub use self::presets::*;
+pub(crate) use self::presets::*;
 pub(crate) use self::save::*;
 pub(crate) use self::ui::*;
 pub(crate) use self::validate::*;

@@ -28,7 +28,7 @@ macOS / Linux / Windows                  macOS supported; Linux/Windows preview
 Work is not a WebView distribution of the Server console. The desktop bundle
 does not embed the React application. GPUI owns presentation and native input;
 `microclaw-work-app` owns framework-independent commands and projections;
-`microclaw-work-runtime` bridges those commands to the existing Agent Engine.
+`microclaw-work-runtime` bridges those commands through `microclaw-sdk` to the shared Agent Engine.
 There is one provider-neutral Agent Loop.
 
 ## Delivery tracks
@@ -67,7 +67,7 @@ forking model or tool behavior.
 
 Required invariants:
 
-- `src/agent_engine.rs` remains the only conversation/tool-use loop;
+- `crates/microclaw-engine/src/agent_engine.rs` remains the only conversation/tool-use loop;
 - provider translation remains in the shared LLM boundary;
 - Work launches through `microclaw-work-runtime`, never directly from a GPUI
   view into provider or tool implementations;

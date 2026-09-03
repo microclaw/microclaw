@@ -13,12 +13,22 @@ for forbidden in axum gpui teloxide serenity microclaw-channels microclaw-work-r
 done
 
 for preset in minimal standard full; do
-  cargo check -p microclaw-runtime --no-default-features --features "$preset"
-  cargo check -p microclaw-sdk --no-default-features --features "$preset"
+  cargo test -p microclaw-runtime --no-default-features --features "$preset" --lib
+  cargo test -p microclaw-sdk --no-default-features --features "$preset" --lib --examples
 done
 
-work_direct_tree="$(cargo tree -p microclaw-work-runtime -e normal --depth 1 --prefix none)"
-if printf '%s\n' "$work_direct_tree" | cut -d' ' -f1 | grep -Fxq microclaw; then
-  printf 'microclaw-work-runtime must consume the SDK instead of depending directly on microclaw\n' >&2
-  exit 1
-fi
+for consumer in microclaw-sdk microclaw-work-runtime; do
+  consumer_tree="$(cargo tree -p "$consumer" -e normal --all-features --prefix none)"
+  if printf '%s\n' "$consumer_tree" | cut -d' ' -f1 | grep -Fxq microclaw; then
+    printf '%s must consume microclaw-engine and must not depend on the root product package\n' "$consumer" >&2
+    exit 1
+  fi
+done
+
+engine_direct_tree="$(cargo tree -p microclaw-engine -e normal --depth 1 --prefix none)"
+for forbidden in microclaw axum gpui teloxide serenity; do
+  if printf '%s\n' "$engine_direct_tree" | cut -d' ' -f1 | grep -Fxq "$forbidden"; then
+    printf 'microclaw-engine must not directly depend on product/UI package %s\n' "$forbidden" >&2
+    exit 1
+  fi
+done

@@ -1002,15 +1002,42 @@ impl Tool for GetTaskHistoryTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::web::WebAdapter;
+    use microclaw_channels::channel::ConversationKind;
+    use microclaw_channels::channel_adapter::ChannelAdapter;
     use microclaw_channels::channel_adapter::ChannelRegistry;
     use microclaw_storage::db::Database;
     use serde_json::json;
 
     fn test_registry() -> Arc<ChannelRegistry> {
         let mut registry = ChannelRegistry::new();
-        registry.register(Arc::new(WebAdapter));
+        registry.register(Arc::new(WebPolicyAdapter));
         Arc::new(registry)
+    }
+
+    struct WebPolicyAdapter;
+    const TEST_WEB_CHANNEL: &str = "web";
+
+    #[async_trait::async_trait]
+    impl ChannelAdapter for WebPolicyAdapter {
+        fn name(&self) -> &str {
+            TEST_WEB_CHANNEL
+        }
+
+        fn chat_type_routes(&self) -> Vec<(&str, ConversationKind)> {
+            vec![("web", ConversationKind::Private)]
+        }
+
+        fn is_local_only(&self) -> bool {
+            true
+        }
+
+        fn allows_cross_chat(&self) -> bool {
+            false
+        }
+
+        async fn send_text(&self, _external_chat_id: &str, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     fn test_db() -> (Arc<Database>, std::path::PathBuf) {

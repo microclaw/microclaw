@@ -1,6 +1,6 @@
 <svg width="1400" height="900" viewBox="0 0 1400 900" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">MicroClaw Architecture</title>
-  <desc id="desc">MicroClaw Server and Work architecture overview with two product surfaces sharing one Agent Engine, provider layer, tools, policy, memory, and runtime services.</desc>
+  <desc id="desc">MicroClaw Server, Work, and third-party Rust applications share one SDK, Agent Engine, runtime lifecycle, and capability layer.</desc>
 
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1400" y2="900" gradientUnits="userSpaceOnUse">
@@ -32,64 +32,65 @@
   </g>
 
   <text x="140" y="132" fill="#0F172A" font-size="42" font-weight="700" font-family="Segoe UI, Arial, sans-serif">MicroClaw Architecture</text>
-  <text x="140" y="168" fill="#475569" font-size="22" font-family="Segoe UI, Arial, sans-serif">One shared Rust agent core powering an always-on Server and native desktop Work.</text>
+  <text x="140" y="168" fill="#475569" font-size="22" font-family="Segoe UI, Arial, sans-serif">One embeddable Rust Agent Engine for Server, native Work, Workers, and third-party apps.</text>
 
   <rect x="138" y="214" width="252" height="212" rx="24" fill="#DBEAFE"/>
-  <text x="166" y="258" fill="#1E3A8A" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Server</text>
-  <text x="166" y="294" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">chat channels</text>
-  <text x="166" y="326" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">Web + APIs</text>
-  <text x="166" y="358" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">schedules + protocols</text>
-  <text x="166" y="390" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">macOS / Linux / Windows</text>
+  <text x="166" y="258" fill="#1E3A8A" font-size="29" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Product Apps</text>
+  <text x="166" y="294" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">MicroClaw Server</text>
+  <text x="166" y="326" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">MicroClaw Work</text>
+  <text x="166" y="358" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">third-party Rust apps</text>
+  <text x="166" y="390" fill="#1D4ED8" font-size="21" font-family="Segoe UI, Arial, sans-serif">channel adapters</text>
 
   <rect x="420" y="214" width="330" height="212" rx="24" fill="#DCFCE7"/>
-  <text x="450" y="258" fill="#166534" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Shared Agent Core</text>
-  <text x="450" y="294" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">load session/history</text>
-  <text x="450" y="326" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">build prompt + memory context</text>
-  <text x="450" y="358" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">LLM call with tool schemas</text>
-  <text x="450" y="390" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">tool_use loop until end_turn</text>
+  <text x="450" y="258" fill="#166534" font-size="30" font-weight="700" font-family="Segoe UI, Arial, sans-serif">microclaw-sdk</text>
+  <text x="450" y="294" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">stable embedding facade</text>
+  <text x="450" y="326" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">AgentProfile + RunRequest</text>
+  <text x="450" y="358" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">minimal / standard / full</text>
+  <text x="450" y="390" fill="#15803D" font-size="20" font-family="Segoe UI, Arial, sans-serif">events + controls + results</text>
 
   <rect x="780" y="214" width="244" height="212" rx="24" fill="#FCE7F3"/>
-  <text x="812" y="258" fill="#9D174D" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">LLM Layer</text>
-  <text x="812" y="294" fill="#BE185D" font-size="20" font-family="Segoe UI, Arial, sans-serif">Anthropic</text>
-  <text x="812" y="326" fill="#BE185D" font-size="20" font-family="Segoe UI, Arial, sans-serif">OpenAI-compatible</text>
-  <text x="812" y="358" fill="#BE185D" font-size="20" font-family="Segoe UI, Arial, sans-serif">stream + usage logging</text>
+  <text x="812" y="258" fill="#9D174D" font-size="28" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Agent Engine</text>
+  <text x="812" y="294" fill="#BE185D" font-size="20" font-family="Segoe UI, Arial, sans-serif">one Agent Loop</text>
+  <text x="812" y="326" fill="#BE185D" font-size="20" font-family="Segoe UI, Arial, sans-serif">providers + prompts</text>
+  <text x="812" y="358" fill="#BE185D" font-size="20" font-family="Segoe UI, Arial, sans-serif">skills + recovery</text>
+  <text x="812" y="390" fill="#BE185D" font-size="20" font-family="Segoe UI, Arial, sans-serif">tools + policy</text>
 
   <rect x="1052" y="214" width="212" height="212" rx="24" fill="#EDE9FE"/>
-  <text x="1080" y="258" fill="#5B21B6" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Tools</text>
-  <text x="1080" y="294" fill="#6D28D9" font-size="20" font-family="Segoe UI, Arial, sans-serif">bash / files</text>
-  <text x="1080" y="326" fill="#6D28D9" font-size="20" font-family="Segoe UI, Arial, sans-serif">web / schedule</text>
-  <text x="1080" y="358" fill="#6D28D9" font-size="20" font-family="Segoe UI, Arial, sans-serif">sub-agent / todo</text>
-  <text x="1080" y="390" fill="#6D28D9" font-size="20" font-family="Segoe UI, Arial, sans-serif">skills / MCP</text>
+  <text x="1080" y="258" fill="#5B21B6" font-size="27" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Runtime</text>
+  <text x="1080" y="294" fill="#6D28D9" font-size="20" font-family="Segoe UI, Arial, sans-serif">RunHandle</text>
+  <text x="1080" y="326" fill="#6D28D9" font-size="20" font-family="Segoe UI, Arial, sans-serif">cancel + steer</text>
+  <text x="1080" y="358" fill="#6D28D9" font-size="20" font-family="Segoe UI, Arial, sans-serif">LocalWorker</text>
+  <text x="1080" y="390" fill="#6D28D9" font-size="20" font-family="Segoe UI, Arial, sans-serif">capacity + events</text>
 
   <path d="M390 320H418" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>
   <path d="M750 320H778" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>
   <path d="M1024 320H1050" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>
 
   <rect x="214" y="470" width="972" height="132" rx="26" fill="#FEF3C7"/>
-  <text x="252" y="516" fill="#92400E" font-size="32" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Multi-step Tool Loop</text>
-  <text x="252" y="550" fill="#A16207" font-size="21" font-family="Segoe UI, Arial, sans-serif">model call -> tool_use -> execute -> tool_result -> repeat (max iterations configurable)</text>
-  <text x="252" y="582" fill="#A16207" font-size="21" font-family="Segoe UI, Arial, sans-serif">on end_turn: persist session, emit final response, update usage metrics</text>
+  <text x="252" y="516" fill="#92400E" font-size="32" font-weight="700" font-family="Segoe UI, Arial, sans-serif">One Run Lifecycle</text>
+  <text x="252" y="550" fill="#A16207" font-size="21" font-family="Segoe UI, Arial, sans-serif">request -> model -> tool_use -> guarded execution -> tool_result -> repeat</text>
+  <text x="252" y="582" fill="#A16207" font-size="21" font-family="Segoe UI, Arial, sans-serif">versioned events -> persistence -> terminal RunResult</text>
 
   <path d="M1146 426V466" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>
   <path d="M588 426V466" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>
 
   <rect x="138" y="634" width="366" height="166" rx="24" fill="#E0F2FE"/>
-  <text x="170" y="678" fill="#0C4A6E" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Memory Stack</text>
-  <text x="170" y="714" fill="#075985" font-size="20" font-family="Segoe UI, Arial, sans-serif">AGENTS.md (global + per chat)</text>
-  <text x="170" y="744" fill="#075985" font-size="20" font-family="Segoe UI, Arial, sans-serif">structured SQLite memories</text>
-  <text x="170" y="774" fill="#075985" font-size="20" font-family="Segoe UI, Arial, sans-serif">reflector + quality + observability</text>
+  <text x="170" y="678" fill="#0C4A6E" font-size="29" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Core + Storage</text>
+  <text x="170" y="714" fill="#075985" font-size="20" font-family="Segoe UI, Arial, sans-serif">stable protocol types</text>
+  <text x="170" y="744" fill="#075985" font-size="20" font-family="Segoe UI, Arial, sans-serif">SQLite sessions + memory</text>
+  <text x="170" y="774" fill="#075985" font-size="20" font-family="Segoe UI, Arial, sans-serif">checkpoints + recovery</text>
 
   <rect x="526" y="634" width="366" height="166" rx="24" fill="#ECFCCB"/>
-  <text x="558" y="678" fill="#365314" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Scheduler</text>
-  <text x="558" y="714" fill="#4D7C0F" font-size="20" font-family="Segoe UI, Arial, sans-serif">cron + one-time tasks</text>
-  <text x="558" y="744" fill="#4D7C0F" font-size="20" font-family="Segoe UI, Arial, sans-serif">background task runner</text>
-  <text x="558" y="774" fill="#4D7C0F" font-size="20" font-family="Segoe UI, Arial, sans-serif">reflector loop + task history</text>
+  <text x="558" y="678" fill="#365314" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Capabilities</text>
+  <text x="558" y="714" fill="#4D7C0F" font-size="20" font-family="Segoe UI, Arial, sans-serif">tools + sandbox</text>
+  <text x="558" y="744" fill="#4D7C0F" font-size="20" font-family="Segoe UI, Arial, sans-serif">Skills + ClawHub + MCP</text>
+  <text x="558" y="774" fill="#4D7C0F" font-size="20" font-family="Segoe UI, Arial, sans-serif">hooks + observability</text>
 
   <rect x="914" y="634" width="350" height="166" rx="24" fill="#F3E8FF"/>
-  <text x="946" y="678" fill="#6B21A8" font-size="31" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Work Projection</text>
-  <text x="946" y="714" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">Work Runtime bridge</text>
-  <text x="946" y="744" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">durable Work state</text>
-  <text x="946" y="774" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">native GPUI · macOS now</text>
+  <text x="946" y="678" fill="#6B21A8" font-size="29" font-weight="700" font-family="Segoe UI, Arial, sans-serif">Agent Workers</text>
+  <text x="946" y="714" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">Main Agent + Subagents</text>
+  <text x="946" y="744" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">parent / child Run graph</text>
+  <text x="946" y="774" fill="#7E22CE" font-size="20" font-family="Segoe UI, Arial, sans-serif">Worker protocol v1</text>
 
   <path d="M380 602V632" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>
   <path d="M710 602V632" stroke="#0F172A" stroke-width="2.8" marker-end="url(#arrow)"/>

@@ -30,6 +30,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   custom system prompt, explicit Skill selection, and read-only tool policy to
   the real shared Agent Engine. Work consumes the full SDK facade instead of
   declaring a direct dependency on the root product package.
+- **Physical Agent Engine library boundary.** The concrete provider-neutral
+  Agent loop and its default runtime services now compile in
+  `microclaw-engine`. Server re-exports that shared implementation, while SDK
+  full and Work depend on the Engine crate without pulling in the root Server
+  product package, Web console, or concrete channel adapters.
 
 ## 0.5.5 - 2026-09-02
 
