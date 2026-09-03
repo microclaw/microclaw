@@ -1,0 +1,18 @@
+[package]
+name = "microclaw-sdk-consumer-smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = ["standard"]
+minimal = ["microclaw-sdk/minimal"]
+standard = ["microclaw-sdk/standard"]
+full = ["microclaw-sdk/full"]
+
+[dependencies]
+async-trait = "0.1"
+microclaw-sdk = { path = "../../crates/microclaw-sdk", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

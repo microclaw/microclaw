@@ -89,6 +89,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: scripts/ci/check_runtime_boundaries.sh
+      - run: scripts/ci/check_sdk_consumers.sh
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Trajectory eval gate
