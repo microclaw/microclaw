@@ -45,7 +45,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - **SDK-first project documentation.** The README and public documentation now
   present Server, Work, and the Rust SDK as three explicit entry points. The
   website gives each path a separate, color-coded quickstart card instead of a
-  mixed installer, and gives the SDK first-class navigation plus task-focused
+  mixed installer, with reduced-motion-safe entrance and interaction animation,
+  and gives the SDK first-class navigation plus task-focused
   guides for setup, lifecycle contracts, Skills, Workers, and feature/crate
   selection.
 
