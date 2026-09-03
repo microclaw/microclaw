@@ -354,14 +354,23 @@ jobs:
           path: work-release-assets/*
           if-no-files-found: error
 
-  publish-container:
-    name: Publish Container Image
-    runs-on: ubuntu-latest
+  build-container:
+    name: Build Container (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs: verify-ci
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
     steps:
       - name: Checkout tag commit
@@ -369,8 +378,62 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.title=MicroClaw
+            org.opencontainers.image.description=Multi-channel agent runtime for Telegram, Discord, Web, and more.
+          cache-from: type=gha,scope=release-container-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-container-${{ matrix.arch }}
+
+      - name: Export image digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/container-digests"
+          touch "${RUNNER_TEMP}/container-digests/${IMAGE_DIGEST#sha256:}"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/container-digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-container:
+    name: Publish Container Image
+    runs-on: ubuntu-24.04
+    needs: build-container
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Download image digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/container-digests
+          pattern: container-digest-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -388,15 +451,6 @@ jobs:
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Note Docker Hub publish status
-        shell: bash
-        run: |
-          if [[ -n "${DOCKERHUB_USERNAME}" && -n "${DOCKERHUB_TOKEN}" ]]; then
-            echo "Docker Hub publishing enabled for docker.io/microclaw/microclaw"
-          else
-            echo "Docker Hub publishing secrets are not configured; publishing GHCR only."
-          fi
-
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -407,9 +461,6 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
             type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
             type=raw,value=latest
-          labels: |
-            org.opencontainers.image.title=MicroClaw
-            org.opencontainers.image.description=Multi-channel agent runtime for Telegram, Discord, Web, and more.
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -425,16 +476,33 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=release-container
-          cache-to: type=gha,mode=max,scope=release-container
+      - name: Create GHCR multi-platform manifest
+        working-directory: ${{ runner.temp }}/container-digests
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+        shell: bash
+        run: |
+          mapfile -t tags < <(
+            jq -r '.tags[] | select(startswith("ghcr.io/")) | "--tag\n" + .' \
+              <<<"${DOCKER_METADATA_OUTPUT_JSON}"
+          )
+          mapfile -t digests < <(
+            printf 'ghcr.io/%s@sha256:%s\n' "${GITHUB_REPOSITORY}" *
+          )
+          docker buildx imagetools create "${tags[@]}" "${digests[@]}"
+
+      - name: Copy multi-platform manifest to Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+        shell: bash
+        run: |
+          mapfile -t tags < <(
+            jq -r '.tags[] | select(startswith("docker.io/")) | "--tag\n" + .' \
+              <<<"${DOCKER_METADATA_OUTPUT_JSON}"
+          )
+          source="ghcr.io/${GITHUB_REPOSITORY}:${RELEASE_TAG#v}"
+          docker buildx imagetools create "${tags[@]}" "${source}"
 
   reliability-scorecard:
     name: Reliability Scorecard
