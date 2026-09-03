@@ -47,6 +47,22 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/tags/${EXPECTED_TAG}")" ]]
           actual_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "microclaw-sdk") | .version')"
           [[ "${actual_version}" == "${EXPECTED_VERSION}" ]]
+      - name: Detect published API baseline
+        id: baseline
+        run: |
+          if curl --fail --silent "https://crates.io/api/v1/crates/microclaw-sdk" >/dev/null; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+            echo "No published SDK baseline exists; this is the initial release."
+          fi
+      - name: Enforce public API compatibility
+        if: steps.baseline.outputs.available == 'true'
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: microclaw-core,microclaw-observability,microclaw-storage,microclaw-tools,microclaw-channels,microclaw-clawhub,microclaw-app,microclaw-runtime,microclaw-engine,microclaw-worker,microclaw-sdk
+          feature-group: all-features
+          rust-toolchain: 1.95.0
       - name: Publish dependency-ordered crate set
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
