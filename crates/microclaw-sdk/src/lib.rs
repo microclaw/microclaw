@@ -6,7 +6,8 @@
 pub use microclaw_core::run_protocol::{
     AgentId, AgentProfile, CallerContext, RunId, RunRequest, RunResult, RunStatus,
     RuntimeCapabilities, RuntimeControl, RuntimeError, RuntimeErrorCode, SessionId, ToolPolicy,
-    WorkerDescriptor, WorkerHealth, WorkerHealthStatus, WorkerId,
+    WorkerCommand, WorkerDescriptor, WorkerFrame, WorkerHealth, WorkerHealthStatus, WorkerId,
+    WORKER_PROTOCOL_VERSION,
 };
 pub use microclaw_core::runtime_event::{
     RuntimeApprovalDecision, RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeEvent,

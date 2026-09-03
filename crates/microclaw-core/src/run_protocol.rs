@@ -11,6 +11,10 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::runtime_event::RuntimeEventEnvelope;
+
+pub const WORKER_PROTOCOL_VERSION: u16 = 1;
+
 macro_rules! string_id {
     ($name:ident) => {
         #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -239,6 +243,114 @@ pub struct WorkerHealth {
     pub observed_at: String,
 }
 
+/// Transport-neutral command vocabulary for a remote Worker endpoint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WorkerCommand {
+    Describe {
+        protocol_version: u16,
+    },
+    Health {
+        protocol_version: u16,
+    },
+    Submit {
+        protocol_version: u16,
+        profile: AgentProfile,
+        request: RunRequest,
+    },
+    Control {
+        protocol_version: u16,
+        control: RuntimeControl,
+    },
+    ResumeEvents {
+        protocol_version: u16,
+        run_id: RunId,
+        after_sequence: Option<u64>,
+    },
+}
+
+impl WorkerCommand {
+    pub fn protocol_version(&self) -> u16 {
+        match self {
+            Self::Describe { protocol_version }
+            | Self::Health { protocol_version }
+            | Self::Submit {
+                protocol_version, ..
+            }
+            | Self::Control {
+                protocol_version, ..
+            }
+            | Self::ResumeEvents {
+                protocol_version, ..
+            } => *protocol_version,
+        }
+    }
+}
+
+/// Frames returned by a Worker transport. Events and the terminal result may be streamed over
+/// WebSocket/SSE or represented by repeated polling without changing their JSON shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WorkerFrame {
+    Descriptor {
+        protocol_version: u16,
+        descriptor: WorkerDescriptor,
+    },
+    Health {
+        protocol_version: u16,
+        health: WorkerHealth,
+    },
+    Accepted {
+        protocol_version: u16,
+        run_id: RunId,
+    },
+    Event {
+        protocol_version: u16,
+        envelope: RuntimeEventEnvelope,
+    },
+    ControlAcknowledged {
+        protocol_version: u16,
+        run_id: RunId,
+    },
+    Result {
+        protocol_version: u16,
+        result: RunResult,
+    },
+    Error {
+        protocol_version: u16,
+        run_id: Option<RunId>,
+        error: RuntimeError,
+    },
+}
+
+impl WorkerFrame {
+    pub fn protocol_version(&self) -> u16 {
+        match self {
+            Self::Descriptor {
+                protocol_version, ..
+            }
+            | Self::Health {
+                protocol_version, ..
+            }
+            | Self::Accepted {
+                protocol_version, ..
+            }
+            | Self::Event {
+                protocol_version, ..
+            }
+            | Self::ControlAcknowledged {
+                protocol_version, ..
+            }
+            | Self::Result {
+                protocol_version, ..
+            }
+            | Self::Error {
+                protocol_version, ..
+            } => *protocol_version,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +380,44 @@ mod tests {
         assert_eq!(decoded, request);
         assert!(!json.contains("provider"));
         assert!(!json.contains("database"));
+    }
+
+    #[test]
+    fn worker_protocol_round_trips_submission_and_result_frames() {
+        let mut request = RunRequest::new("implement the parser");
+        request.run_id = Some(RunId::new("run-7"));
+        request.parent_run_id = Some(RunId::new("parent-2"));
+        let command = WorkerCommand::Submit {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            profile: AgentProfile {
+                id: Some(AgentId::new("coder")),
+                skills: vec!["rust-review".into()],
+                ..AgentProfile::default()
+            },
+            request,
+        };
+        let encoded = serde_json::to_string(&command).unwrap();
+        let decoded: WorkerCommand = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, command);
+        assert_eq!(decoded.protocol_version(), WORKER_PROTOCOL_VERSION);
+
+        let frame = WorkerFrame::Result {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            result: RunResult {
+                run_id: RunId::new("run-7"),
+                session_id: SessionId::new("session-3"),
+                status: RunStatus::Completed,
+                final_text: "done".into(),
+                error: None,
+                metadata: BTreeMap::new(),
+            },
+        };
+        let encoded = serde_json::to_string(&frame).unwrap();
+        assert_eq!(
+            serde_json::from_str::<WorkerFrame>(&encoded).unwrap(),
+            frame
+        );
+        assert_eq!(frame.protocol_version(), WORKER_PROTOCOL_VERSION);
     }
 
     #[test]

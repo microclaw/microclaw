@@ -13,6 +13,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   `microclaw-runtime` crate owns reusable run handles, event streaming,
   cancellation, steering, concurrency, and Local Worker execution, while
   `microclaw-sdk` provides a small third-party facade and compiling example.
+  The versioned remote Worker protocol covers discovery, health, submission,
+  resumable events, controls, acknowledgements, and terminal results.
 
 ### Changed
 
@@ -20,6 +22,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   execution now enter the existing Agent Engine through the same embeddable
   Runtime contract while preserving session persistence, cancellation,
   steering, and versioned events.
+- **One execution lifecycle for every product surface.** Server channels, Web,
+  ACP, Scheduler, headless, and Work now enter Agent execution through the same
+  `RunRequest`, `RunHandle`, and `RunResult` path. Runtime controls support
+  explicit acceptance or rejection instead of reporting only queue delivery.
 
 ## 0.5.5 - 2026-09-02
 

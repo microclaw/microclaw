@@ -17,11 +17,16 @@ use crate::tools::ToolAuthContext;
 use microclaw_core::llm_types::{
     ContentBlock, ImageSource, Message, MessageContent, ResponseContentBlock,
 };
+use microclaw_core::run_protocol::{
+    AgentProfile, CallerContext, RunId, RunRequest, RunStatus, RuntimeCapabilities, RuntimeControl,
+    RuntimeError, RuntimeErrorCode, SessionId,
+};
 pub use microclaw_core::runtime_event::RuntimeEvent as AgentEvent;
 use microclaw_core::text::floor_char_boundary;
 use microclaw_observability::traces::{
     kv, kv_int, new_span_id, new_trace_id, now_unix_nano, SpanData,
 };
+use microclaw_runtime::{ExecutionContext, ExecutionResult, RunExecutor, Runtime};
 use microclaw_storage::db::{call_blocking, SessionSettings, StoredMessage};
 use opentelemetry_proto::tonic::trace::v1::Status;
 use opentelemetry_semantic_conventions::attribute::{
@@ -168,6 +173,190 @@ impl AgentEngine for DefaultAgentEngine {
     }
 }
 
+struct AgentTurnExecutor {
+    state: AppState,
+    override_prompt: Option<String>,
+    image_data: Option<(String, String)>,
+    turn_guard: std::sync::Mutex<Option<crate::chat_turn_queue::TurnGuard>>,
+    resume_interrupted: bool,
+    experience_run_id: Option<String>,
+}
+
+#[async_trait]
+impl RunExecutor for AgentTurnExecutor {
+    async fn execute(
+        &self,
+        _profile: AgentProfile,
+        request: RunRequest,
+        mut runtime_context: ExecutionContext,
+    ) -> Result<ExecutionResult, RuntimeError> {
+        let channel = request.caller.channel.trim().to_string();
+        let chat_id = request.caller.chat_id.ok_or_else(|| RuntimeError {
+            code: RuntimeErrorCode::InvalidRequest,
+            message: "agent run caller.chat_id is required".into(),
+            retryable: false,
+        })?;
+        if channel.is_empty() {
+            return Err(RuntimeError {
+                code: RuntimeErrorCode::InvalidRequest,
+                message: "agent run caller.channel is required".into(),
+                retryable: false,
+            });
+        }
+        let chat_type = request
+            .metadata
+            .get("chat_type")
+            .and_then(Value::as_str)
+            .unwrap_or("private")
+            .to_string();
+        let turn_guard = self
+            .turn_guard
+            .lock()
+            .map_err(|_| runtime_execution_error("agent turn guard is poisoned"))?
+            .take();
+        let (legacy_tx, mut legacy_rx) = tokio::sync::mpsc::unbounded_channel();
+        let context = AgentRequestContext {
+            caller_channel: &channel,
+            chat_id,
+            chat_type: &chat_type,
+        };
+        let execution = process_with_agent_with_events_guarded_mode_inner(
+            &self.state,
+            context,
+            self.override_prompt.as_deref(),
+            self.image_data.clone(),
+            Some(&legacy_tx),
+            turn_guard,
+            self.resume_interrupted,
+            self.experience_run_id.clone(),
+        );
+        tokio::pin!(execution);
+
+        let response = loop {
+            tokio::select! {
+                result = &mut execution => break result.map_err(runtime_execution_error)?,
+                event = legacy_rx.recv() => {
+                    if let Some(event) = event {
+                        if !matches!(event, AgentEvent::FinalResponse { .. } | AgentEvent::Cancelled { .. }) {
+                            runtime_context.emit(event)?;
+                        }
+                    }
+                }
+                control = runtime_context.next_control_request() => {
+                    if let Some(control) = control {
+                        match control.control().clone() {
+                            RuntimeControl::Cancel { .. } => {
+                                if run_control::abort_runs(&channel, chat_id).await > 0 {
+                                    control.accept();
+                                } else {
+                                    control.reject(runtime_unavailable("the run finished before cancellation was accepted"));
+                                }
+                            }
+                            RuntimeControl::Steer { message, .. } => {
+                                match enqueue_runtime_steering(&self.state, &channel, chat_id, &message).await {
+                                    Ok(true) => control.accept(),
+                                    Ok(false) => control.reject(runtime_unavailable("the run finished before the update could be queued")),
+                                    Err(error) => control.reject(runtime_execution_error(error)),
+                                }
+                            }
+                            RuntimeControl::ResolveApproval { .. } => {
+                                control.reject(runtime_unavailable("this engine resolves approval as a follow-up run"));
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        while let Ok(event) = legacy_rx.try_recv() {
+            if !matches!(
+                event,
+                AgentEvent::FinalResponse { .. } | AgentEvent::Cancelled { .. }
+            ) {
+                runtime_context.emit(event)?;
+            }
+        }
+
+        if response == run_control::STOPPED_TEXT {
+            return Err(RuntimeError {
+                code: RuntimeErrorCode::Cancelled,
+                message: response,
+                retryable: false,
+            });
+        }
+        Ok(ExecutionResult::new(
+            request
+                .session_id
+                .unwrap_or_else(|| SessionId::new(format!("{channel}:{chat_id}"))),
+            response,
+        ))
+    }
+
+    fn capabilities(&self) -> RuntimeCapabilities {
+        RuntimeCapabilities {
+            streaming: true,
+            cancellation: true,
+            steering: true,
+            approvals: false,
+            skills: true,
+            subagents: true,
+            remote_workers: false,
+        }
+    }
+}
+
+fn runtime_execution_error(error: impl std::fmt::Display) -> RuntimeError {
+    RuntimeError {
+        code: RuntimeErrorCode::Internal,
+        message: error.to_string(),
+        retryable: false,
+    }
+}
+
+fn runtime_unavailable(message: impl Into<String>) -> RuntimeError {
+    RuntimeError {
+        code: RuntimeErrorCode::Unavailable,
+        message: message.into(),
+        retryable: false,
+    }
+}
+
+async fn enqueue_runtime_steering(
+    state: &AppState,
+    channel: &str,
+    chat_id: i64,
+    content: &str,
+) -> anyhow::Result<bool> {
+    let content = content.trim();
+    if content.is_empty() {
+        anyhow::bail!("steering update must not be empty");
+    }
+    let message_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let pending = PendingMessage {
+        sender_name: "runtime".into(),
+        content: content.to_string(),
+        message_id: message_id.clone(),
+        timestamp: timestamp.clone(),
+    };
+    if !state
+        .chat_turn_queue
+        .enqueue_if_busy(channel, chat_id, pending)
+        .await
+    {
+        return Ok(false);
+    }
+    let stored = StoredMessage {
+        id: message_id,
+        chat_id,
+        sender_name: "runtime".into(),
+        content: content.to_string(),
+        is_from_bot: false,
+        timestamp,
+    };
+    call_blocking(state.db.clone(), move |db| db.store_message(&stored)).await?;
+    Ok(true)
+}
+
 pub async fn process_with_agent(
     state: &AppState,
     context: AgentRequestContext<'_>,
@@ -265,6 +454,67 @@ pub async fn resume_interrupted_turn(
 // ownership, recovery mode, and durable experience identity explicit.
 #[allow(clippy::too_many_arguments)]
 async fn process_with_agent_with_events_guarded_mode(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+    override_prompt: Option<&str>,
+    image_data: Option<(String, String)>,
+    event_tx: Option<&UnboundedSender<AgentEvent>>,
+    turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
+    resume_interrupted: bool,
+    experience_run_id_override: Option<String>,
+) -> anyhow::Result<String> {
+    let executor = AgentTurnExecutor {
+        state: state.clone(),
+        override_prompt: override_prompt.map(str::to_string),
+        image_data,
+        turn_guard: std::sync::Mutex::new(turn_guard),
+        resume_interrupted,
+        experience_run_id: experience_run_id_override.clone(),
+    };
+    let runtime = Runtime::builder()
+        .executor(executor)
+        .max_concurrent_runs(1)
+        .build()?;
+    let mut request = RunRequest::new(override_prompt.unwrap_or_default());
+    request.run_id = experience_run_id_override.map(RunId::new);
+    request.session_id = Some(SessionId::new(format!(
+        "{}:{}",
+        context.caller_channel, context.chat_id
+    )));
+    request.caller = CallerContext {
+        channel: context.caller_channel.to_string(),
+        principal: None,
+        chat_id: Some(context.chat_id),
+    };
+    request.metadata.insert(
+        "chat_type".into(),
+        Value::String(context.chat_type.to_string()),
+    );
+    let mut run = runtime.agent(AgentProfile::default()).run(request);
+    while let Some(envelope) = run.next_event().await {
+        if let Some(tx) = event_tx {
+            let _ = tx.send(envelope.event);
+        }
+    }
+    let result = run.result().await?;
+    match result.status {
+        RunStatus::Completed => Ok(result.final_text),
+        RunStatus::Cancelled => Ok(result
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| run_control::STOPPED_TEXT.to_string())),
+        _ => Err(anyhow::anyhow!(
+            "{}",
+            result
+                .error
+                .map(|error| error.message)
+                .unwrap_or_else(|| format!("agent run ended with status {:?}", result.status))
+        )),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_with_agent_with_events_guarded_mode_inner(
     state: &AppState,
     context: AgentRequestContext<'_>,
     override_prompt: Option<&str>,
@@ -4160,10 +4410,10 @@ mod tests {
             config: cfg.clone(),
             channel_registry: channel_registry.clone(),
             db: db.clone(),
-            memory: MemoryManager::new(runtime_dir.to_str().unwrap()),
-            skills: SkillManager::from_skills_dir(&cfg.skills_data_dir()),
+            memory: Arc::new(MemoryManager::new(runtime_dir.to_str().unwrap())),
+            skills: Arc::new(SkillManager::from_skills_dir(&cfg.skills_data_dir())),
             hooks: Arc::new(crate::hooks::HookManager::from_config(&cfg)),
-            llm,
+            llm: Arc::from(llm),
             llm_provider_overrides: Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
@@ -4172,7 +4422,12 @@ mod tests {
             )),
             embedding: None,
             memory_backend: memory_backend.clone(),
-            tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
+            tools: Arc::new(ToolRegistry::new(
+                &cfg,
+                channel_registry,
+                db,
+                memory_backend,
+            )),
             chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
             skill_review_queue: crate::skill_review::build_skill_review_channel().0,
             metric_exporter: None,
@@ -4203,10 +4458,10 @@ mod tests {
             config: cfg.clone(),
             channel_registry: channel_registry.clone(),
             db: db.clone(),
-            memory: MemoryManager::new(runtime_dir.to_str().unwrap()),
-            skills: SkillManager::from_skills_dir(&cfg.skills_data_dir()),
+            memory: Arc::new(MemoryManager::new(runtime_dir.to_str().unwrap())),
+            skills: Arc::new(SkillManager::from_skills_dir(&cfg.skills_data_dir())),
             hooks: Arc::new(crate::hooks::HookManager::from_config(&cfg)),
-            llm,
+            llm: Arc::from(llm),
             llm_provider_overrides: Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
@@ -4215,7 +4470,12 @@ mod tests {
             )),
             embedding: None,
             memory_backend: memory_backend.clone(),
-            tools: ToolRegistry::new(&cfg, channel_registry, db, memory_backend),
+            tools: Arc::new(ToolRegistry::new(
+                &cfg,
+                channel_registry,
+                db,
+                memory_backend,
+            )),
             chat_turn_queue: Arc::new(crate::chat_turn_queue::ChatTurnQueue::new(20)),
             skill_review_queue: crate::skill_review::build_skill_review_channel().0,
             metric_exporter: None,
