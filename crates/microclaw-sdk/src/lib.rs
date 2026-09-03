@@ -114,6 +114,12 @@ impl MicroClaw {
         MicroClawBuilder::from_environment()
     }
 
+    /// Configure an embedded Agent Engine entirely in Rust, without a Server YAML file.
+    #[cfg(feature = "full")]
+    pub fn configure(config: FullRuntimeConfig) -> MicroClawBuilder {
+        MicroClawBuilder::from_runtime_config(config)
+    }
+
     pub fn runtime(&self) -> &Runtime {
         &self.runtime
     }
@@ -133,10 +139,42 @@ impl MicroClaw {
     }
 }
 
+/// Minimal provider configuration for a full embedded Agent Engine.
+#[cfg(feature = "full")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullRuntimeConfig {
+    pub provider: String,
+    pub model: String,
+    pub api_key: String,
+    pub base_url: Option<String>,
+}
+
+#[cfg(feature = "full")]
+impl FullRuntimeConfig {
+    pub fn new(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            model: model.into(),
+            api_key: api_key.into(),
+            base_url: None,
+        }
+    }
+
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = Some(url.into());
+        self
+    }
+}
+
 /// Builder for the configured Agent Engine exposed by the `full` SDK preset.
 #[cfg(feature = "full")]
 pub struct MicroClawBuilder {
     config_path: Option<PathBuf>,
+    runtime_config: Option<FullRuntimeConfig>,
     data_dir: Option<PathBuf>,
     skills_dir: Option<PathBuf>,
     workspace: Option<PathBuf>,
@@ -149,6 +187,7 @@ impl MicroClawBuilder {
     pub fn from_config_file(path: impl Into<PathBuf>) -> Self {
         Self {
             config_path: Some(path.into()),
+            runtime_config: None,
             data_dir: None,
             skills_dir: None,
             workspace: None,
@@ -160,6 +199,19 @@ impl MicroClawBuilder {
     pub fn from_environment() -> Self {
         Self {
             config_path: None,
+            runtime_config: None,
+            data_dir: None,
+            skills_dir: None,
+            workspace: None,
+            caller_channel: "embedded-app".into(),
+            max_concurrent_runs: 4,
+        }
+    }
+
+    pub fn from_runtime_config(config: FullRuntimeConfig) -> Self {
+        Self {
+            config_path: None,
+            runtime_config: Some(config),
             data_dir: None,
             skills_dir: None,
             workspace: None,
@@ -200,9 +252,15 @@ impl MicroClawBuilder {
         use microclaw_engine::config::Config;
         use microclaw_engine::headless::HeadlessRuntime;
 
-        let mut config = match self.config_path {
-            Some(path) => Config::load_from_path_for_headless(Path::new(&path)),
-            None => Config::load(),
+        let mut config = match (self.runtime_config, self.config_path) {
+            (Some(config), _) => Config::for_embedded(
+                config.provider,
+                config.model,
+                config.api_key,
+                config.base_url,
+            ),
+            (None, Some(path)) => Config::load_from_path_for_headless(Path::new(&path)),
+            (None, None) => Config::load(),
         }
         .map_err(|error| SdkError::Configuration(error.to_string()))?;
         if let Some(path) = self.data_dir {
@@ -323,20 +381,6 @@ impl Agent {
     pub fn run_request(&self, request: RunRequest) -> RunHandle {
         self.handle.run(request)
     }
-}
-
-/// Lower-level contracts for applications that need the complete foundational API.
-pub mod core {
-    pub use microclaw_core::*;
-}
-
-/// Transitional access to Agent Engine internals for first-party consumers.
-///
-/// Third-party applications should use [`MicroClaw`] and the stable types at this crate root.
-#[doc(hidden)]
-#[cfg(feature = "full")]
-pub mod engine {
-    pub use microclaw_engine::*;
 }
 
 #[cfg(test)]

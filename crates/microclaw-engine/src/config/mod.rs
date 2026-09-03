@@ -63,6 +63,16 @@ mod tests {
     }
 
     #[test]
+    fn embedded_config_does_not_require_a_delivery_channel() {
+        let config = Config::for_embedded("anthropic", "claude-test", "test-key", None).unwrap();
+        assert_eq!(config.llm_provider, "anthropic");
+        assert_eq!(config.model, "claude-test");
+        assert_eq!(config.api_key, "test-key");
+        assert!(!config.web_enabled);
+        assert!(config.channel_status().0.is_empty());
+    }
+
+    #[test]
     fn test_llm_provider_overrides_support_provider_preset_and_legacy_llm_provider_keys() {
         let mut config = test_config();
         config.channels = serde_yaml::from_str(

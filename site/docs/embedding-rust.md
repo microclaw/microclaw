@@ -53,11 +53,16 @@ println!("{}", run.result().await?.final_text);
 # }
 ```
 
+If the host application does not use a MicroClaw YAML file, configure the
+provider directly with `FullRuntimeConfig` and pass it to
+`MicroClaw::configure`. Secrets remain application-owned and do not need to be
+written to disk.
+
 An `AgentProfile` controls identity, prompt, selected Skills, and tool policy.
 Each `RunHandle` provides ordered events, cancellation, steering, approval
 controls, and one terminal result. Local Workers use the same contracts; the
-versioned serializable Worker protocol leaves room for a future remote
-transport without changing Agent or session identity.
+versioned serializable Worker protocol and authenticated WebSocket transport
+run the same Agent and session identity locally or on another Worker.
 
 See the complete compiling examples in
 [`crates/microclaw-sdk/examples`](https://github.com/microclaw/microclaw/tree/main/crates/microclaw-sdk/examples)

@@ -4,9 +4,8 @@
 application. It exposes provider-neutral requests, events, controls, terminal results, Agent
 handles, and Worker contracts without pulling in Server, channel, Web, or desktop UI code.
 
-Minimal and standard applications supply a `RunExecutor`. The `full` preset exposes
-`microclaw-engine`, including the configured `HeadlessRuntime`, so an application can start the
-same skilled Agent Engine used by Server and Work without depending on either product package.
+Minimal and standard applications supply a `RunExecutor`. The `full` preset starts the same
+skilled Agent Engine used by Server and Work without exposing either product package.
 
 The `full` preset provides a stable builder and validates selected Skills before a run starts:
 
@@ -25,6 +24,18 @@ let agent = microclaw
     .build()?;
 let result = agent.run("Review this repository").result().await?;
 println!("{}", result.final_text);
+# Ok(())
+# }
+```
+
+Applications that do not have a MicroClaw YAML file can configure the provider directly:
+
+```rust,no_run
+use microclaw_sdk::{FullRuntimeConfig, MicroClaw};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let config = FullRuntimeConfig::new("openai", "gpt-5", std::env::var("OPENAI_API_KEY")?);
+let microclaw = MicroClaw::configure(config).build().await?;
 # Ok(())
 # }
 ```

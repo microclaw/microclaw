@@ -8,6 +8,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Programmatic full-SDK configuration.** Rust hosts can now initialize the
+  complete Agent Engine with `FullRuntimeConfig` and `MicroClaw::configure`
+  without creating a Server-oriented YAML file.
+
 - **Embeddable Rust runtime foundation.** `microclaw-core` now defines stable
   Agent, Run, control, capability, and Worker contracts. The new
   `microclaw-runtime` crate owns reusable run handles, event streaming,

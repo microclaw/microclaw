@@ -1258,6 +1258,26 @@ impl Config {
         Self::load_from_path_inner(path, true)
     }
 
+    /// Build and validate a channel-free configuration for an embedded caller.
+    pub fn for_embedded(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+        base_url: Option<String>,
+    ) -> Result<Self, MicroClawError> {
+        let mut config: Config = serde_yaml::from_str("{}")
+            .map_err(|error| MicroClawError::Config(error.to_string()))?;
+        config.llm_provider = provider.into();
+        config.model = model.into();
+        config.api_key = api_key.into();
+        config.llm_base_url = base_url;
+        config.web_enabled = true;
+        config.post_deserialize()?;
+        config.web_enabled = false;
+        config.channels.remove("web");
+        Ok(config)
+    }
+
     fn load_from_path_inner(path: &Path, allow_no_channels: bool) -> Result<Self, MicroClawError> {
         let path_str = path.to_string_lossy().to_string();
         let content = std::fs::read_to_string(path)
@@ -1297,6 +1317,7 @@ impl Config {
         config.post_deserialize()?;
         if synthesized_channel {
             config.web_enabled = false;
+            config.channels.remove("web");
         }
         Ok(config)
     }
