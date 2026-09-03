@@ -58,6 +58,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   and docs jobs instead of rebuilding them, and Extended CI stops producing a
   disposable Work DMG on every push; signed bundles remain gated by the release
   workflow.
+- **Removed redundant nightly build.** The scheduled Nightly Stability workflow
+  duplicated the required stability-smoke job and a metrics test already run by
+  the main test suite, so it no longer consumes a daily runner or creates noisy
+  failure issues.
 
 - **Shared Work and headless execution API.** Headless CLI and native Work task
   execution now enter the existing Agent Engine through the same embeddable
