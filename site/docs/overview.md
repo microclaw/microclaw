@@ -6,8 +6,8 @@ sidebar_position: 1
 
 # MicroClaw
 
-MicroClaw is a self-hosted Rust agent platform with one shared agent core and
-two product surfaces:
+MicroClaw is a self-hosted Rust agent platform with one embeddable Agent Engine,
+two product surfaces, and a Rust SDK:
 
 - **MicroClaw Server** is the always-on runtime for chat channels, the local
   Web console, APIs, schedules, background work, and agent protocols. It ships
@@ -17,6 +17,8 @@ two product surfaces:
   is officially supported on Apple Silicon macOS 13+; launch-smoked Linux and
   Windows portable previews are published with each release while native
   platform acceptance continues.
+- **`microclaw-sdk`** lets another Rust application use the same Agent, Run,
+  event, control, Skill, and Worker model without importing Server or UI code.
 
 Both surfaces share the Agent Engine, provider abstraction, tool registry,
 policy and approval path, memory, skills, MCP integration, checkpoints, and
@@ -31,7 +33,7 @@ production deployments; `main` is the active development branch.
 - One shared agent loop across Server channels, Web, protocols, and native Work
 - A native Rust/GPUI desktop workspace without a bundled browser or duplicated runtime
 - Humanlike chat surface: short-first / multi-bubble replies, mood-adaptive tone, group etiquette
-- A concurrent **specialist sub-agent team** (mathematician, illustrator, researcher, coder, writer, analyst) with named tasks and colleague-style progress reports
+- Bounded, observable **Subagents** with named tasks, cancellation, native or ACP workers, and colleague-style progress reports
 - Long-lived memory backed by `AGENTS.md` files plus structured SQLite memory, with graph-augmented recall over a temporal knowledge graph
 - Built-in scheduler for cron and one-time tasks
 - Multi-chat permission model (`control_chat_ids`) for cross-chat tool authorization
@@ -68,7 +70,7 @@ MicroClaw enters an agentic loop for every message. LLM can call tools, inspect 
 
 - Agentic tool use (bash, file I/O, glob, grep)
 - Humanlike chat: short-first / BLUF replies, multi-bubble sends, zero-cost mood detection (`<conversation_mood>`), group etiquette
-- Concurrent specialist sub-agent team with named tasks (`label`), mid-run `report_progress`, opt-in standup + fan-in summaries, and specialist-to-specialist `consult_specialist`
+- Bounded Subagents with named tasks (`label`), mid-run `report_progress`, cancellation, native or ACP workers, opt-in standup + fan-in summaries, and specialist-to-specialist `consult_specialist`
 - 45 factory-ready built-in skills (compute, coding, research, planning, writing, diagrams, documents)
 - Web search, fetch, and browser automation (with default-on SSRF guard against private/loopback/cloud-metadata IPs)
 - Multimedia tools: image generation, vision, text-to-speech, speech-to-text

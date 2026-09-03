@@ -5,6 +5,7 @@ import Heading from '@theme/Heading';
 import {useEffect, useMemo, useState} from 'react';
 import styles from './index.module.css';
 import {getHomeMessages} from '../home-i18n';
+import architectureDiagram from '../../../docs/assets/readme/microclaw-architecture.svg';
 
 const SYSTEMS = [
   {id: 'macos', label: 'macOS', icon: 'macos'},
@@ -319,7 +320,7 @@ export default function Home() {
             <div className={styles.archLayout}>
               <div className={styles.archVisualCard}>
                 <img
-                  src="/img/blog/microclaw-runtime/01-system-architecture.svg"
+                  src={architectureDiagram}
                   alt={messages.architectureAlt}
                 />
               </div>
@@ -343,11 +344,11 @@ export default function Home() {
               <p>{messages.useCasesText}</p>
             </div>
             <div className={styles.useCaseGrid}>
-              {messages.useCases.map(([title, text]) => (
+              {messages.useCases.map(([title, text, href]) => (
                 <article key={title} className={styles.useCaseCard}>
                   <h3>{title}</h3>
                   <p>{text}</p>
-                  <Link to="/docs/overview">{messages.readDetails}</Link>
+                  <Link to={href || '/docs/overview'}>{messages.readDetails}</Link>
                 </article>
               ))}
             </div>

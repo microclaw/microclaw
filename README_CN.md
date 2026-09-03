@@ -18,18 +18,19 @@
 </p>
 
 <p align="center">
-  <strong>一套共享 Rust 智能体内核，两种产品形态。</strong><br />
-  MicroClaw Server 面向持续运行的渠道与自动化，MicroClaw Work 面向原生桌面工作空间。
+  <strong>一套可嵌入的 Rust 智能体内核，两种产品形态，一个 SDK。</strong><br />
+  运行 MicroClaw Server、使用原生 Work，或把同一套 Agent Engine 嵌入自己的 Rust 应用。
 </p>
 
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
+  <a href="#在-rust-中嵌入-microclaw">Rust SDK</a> ·
   <a href="#为什么选择-microclaw">为什么选择</a> ·
   <a href="#能力地图">能力地图</a> ·
   <a href="#文档">文档</a>
 </p>
 
-MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含两种产品形态。**MicroClaw Server** 持续运行，承载聊天渠道、Web、API、调度和自动化；**MicroClaw Work** 是面向本地项目工作的原生 GPUI 桌面应用。两者共享同一套渠道无关 Agent Engine、provider 抽象、工具、安全策略、记忆、技能和运行时事件。
+MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含两种产品形态和一套可嵌入 SDK。**MicroClaw Server** 持续运行，承载聊天渠道、Web、API、调度和自动化；**MicroClaw Work** 是面向本地项目工作的原生 GPUI 桌面应用；其他 Rust 应用可以通过 **`microclaw-sdk`** 使用同一套渠道无关 Agent Engine、工具、安全策略、记忆、技能和运行时事件。
 
 它面向的不只是一次问答，而是能够持续完成的工作：多步工具调用、可恢复会话、可靠投递、持久记忆、定时任务和受治理的扩展能力都运行在同一个系统中。
 
@@ -90,6 +91,7 @@ Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装
 ## 为什么选择 MicroClaw
 
 - **一套内核，两种产品形态。** Server 与 Work 共享同一套 Agent Engine、provider 层、工具、记忆、安全策略和恢复模型。
+- **可嵌入的 Rust SDK。** 应用无需依赖 Server、Web、具体渠道或桌面 UI，即可使用稳定的 Agent、Run、事件、控制和 Worker 契约。
 - **Local-first 原生工作空间。** Work 展示项目与 Git 分支上下文，支持原生拖放 Workspace 文件，并让附件访问继续受共享运行时的目录边界保护。
 - **执行可以持续。** 会话、安全工具边界、定时任务和消息投递都可以在进程重启后继续。
 - **不绑定模型提供商。** 原生支持 Anthropic，并通过统一内部消息模型兼容大量 OpenAI-compatible 和本地服务。
@@ -123,6 +125,22 @@ Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装
 
 Server 渠道适配器只负责输入转换和结果投递；Work 通过 `microclaw-work-runtime` 与 `microclaw-work-app` 把同一套运行时事件投影成原生 GPUI 状态。两种产品形态都不维护独立的 agent loop，也不重复实现 provider 逻辑。
 
+## 在 Rust 中嵌入 MicroClaw
+
+`microclaw-sdk` 把共享执行生命周期开放给其他 Rust 应用。它的 `full` preset 包含配置好的
+Agent Engine、Skills、工具、MCP、记忆、Hook、Subagent 和 Local Worker，但不会引入 Server、
+Web 控制台、具体渠道适配器或 Work UI。
+
+```toml
+[dependencies]
+microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
+```
+
+创建 `AgentProfile`、选择 Skills、提交 `RunRequest`，然后消费有序运行时事件和最终
+`RunResult`。可以直接参考能够编译的
+[`configured_skilled_agent`](crates/microclaw-sdk/examples/configured_skilled_agent.rs) 示例与
+[SDK 指南](crates/microclaw-sdk/README.md)。这些 SDK crate 目前通过代码仓库使用，尚未单独发布到 crates.io。
+
 ## 能力地图
 
 | 领域 | 主要能力 | 深入阅读 |
@@ -131,7 +149,7 @@ Server 渠道适配器只负责输入转换和结果投递；Work 通过 `microc
 | 连续性 | 会话恢复、上下文压缩、检查点、可靠投递、定时任务和取消 | [并发模型](docs/operations/concurrency-and-responsiveness.md)、[任务生命周期](docs/scheduled-task-lifecycle.md) |
 | 记忆与学习 | 文件和 SQLite 记忆、语义召回、时序知识图谱、经验凭证与受治理的技能演化 | [长期学习](docs/long-horizon-learning.md)、[Learning Foundry](docs/learning-foundry.md) |
 | 扩展 | 技能、Manifest 插件、Hook、MCP、ClawHub、A2A 与 ACP | [插件](docs/plugins/overview.md)、[MCP](docs/integrations/mcp.md)、[ClawHub](docs/clawhub/overview.md)、[A2A](docs/a2a.md) |
-| 交互入口 | 原生 MicroClaw Work、本地 Web UI、HTTP/SSE/WebSocket API、聊天渠道与智能体协议 | [Work 发布](docs/operations/microclaw-work-release.md)、[Web UI](docs/operations/web-ui.md)、[HTTP 触发](docs/operations/http-hook-trigger.md)、[ACP](docs/operations/acp-stdio.md) |
+| 交互入口 | Rust SDK、原生 MicroClaw Work、本地 Web UI、HTTP/SSE/WebSocket API、聊天渠道与智能体协议 | [SDK](crates/microclaw-sdk/README.md)、[Work 发布](docs/operations/microclaw-work-release.md)、[Web UI](docs/operations/web-ui.md)、[HTTP 触发](docs/operations/http-hook-trigger.md)、[ACP](docs/operations/acp-stdio.md) |
 | 安全与运维 | 工具确认、能力授权、Docker 沙箱、出口策略、凭证脱敏、指标、链路追踪与诊断 | [执行模型](docs/security/execution-model.md)、[安全运行时](docs/security/secure-runtime.md)、[运维手册](docs/operations/runbook.md) |
 
 ### 渠道与模型提供商
@@ -162,6 +180,7 @@ MicroClaw Work 当前正式支持 Apple Silicon macOS；Linux 和 Windows portab
 | 需求 | 事实来源 |
 |---|---|
 | 安装、配置和运行 | [快速上手](docs/getting-started.md) |
+| 在 Rust 中嵌入 Agent Engine | [SDK 指南](crates/microclaw-sdk/README.md)与[可编译示例](crates/microclaw-sdk/examples/configured_skilled_agent.rs) |
 | 查看常见示例 | [Cookbook](docs/cookbook.md) |
 | 查看所有内置工具 | [自动生成的工具目录](docs/generated/tools.md) |
 | 核对配置默认值 | [自动生成的配置默认值](docs/generated/config-defaults.md)和 [`microclaw.config.example.yaml`](microclaw.config.example.yaml) |

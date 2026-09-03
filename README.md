@@ -18,18 +18,19 @@
 </p>
 
 <p align="center">
-  <strong>One shared Rust agent core. Two product surfaces.</strong><br />
-  Run MicroClaw Server for always-on channels and automation, or use MicroClaw Work as a native desktop workspace.
+  <strong>One embeddable Rust agent core. Two products, one SDK.</strong><br />
+  Run MicroClaw Server, use the native Work app, or embed the same Agent Engine in your own Rust application.
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
+  <a href="#embed-microclaw-in-rust">Rust SDK</a> ·
   <a href="#why-microclaw">Why MicroClaw</a> ·
   <a href="#capabilities">Capabilities</a> ·
   <a href="#documentation">Documentation</a>
 </p>
 
-MicroClaw is a self-hosted Rust agent platform with two product surfaces. **MicroClaw Server** runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Work** is a native GPUI desktop application for local, workspace-centered agent work. Both use the same channel-independent Agent Engine, provider abstraction, tools, policy, memory, skills, and runtime events.
+MicroClaw is a self-hosted Rust agent platform with two product surfaces and an embeddable SDK. **MicroClaw Server** runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Work** is a native GPUI desktop application for local, workspace-centered agent work. Other Rust applications can use **`microclaw-sdk`** to run the same channel-independent Agent Engine, tools, policy, memory, skills, and runtime events.
 
 It is designed for work that lasts longer than one request: multi-step tool use, resumable sessions, durable delivery, persistent memory, scheduled tasks, and governed extensions all run in the same runtime.
 
@@ -92,6 +93,7 @@ For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service 
 ## Why MicroClaw
 
 - **One core, two product surfaces.** Server and Work share the same Agent Engine, provider layer, tools, memory, policy, and recovery model.
+- **An embeddable Rust SDK.** Applications can use stable Agent, Run, event, control, and Worker contracts without depending on Server, Web, channel, or desktop UI code.
 - **A local-first native Workspace.** Work shows project and Git branch context, supports native Workspace-file drag and drop, and keeps attachment access inside the shared runtime's folder guards.
 - **Execution that can continue.** Sessions, safe tool boundaries, scheduled work, and outbound delivery survive process restarts.
 - **Provider freedom.** Use native Anthropic or a broad set of OpenAI-compatible and local providers through one internal message model.
@@ -125,6 +127,23 @@ Every message follows the same flow:
 
 Server channel adapters translate ingress and delivery events only. Work projects the same runtime events into native GPUI state through `microclaw-work-runtime` and `microclaw-work-app`. Neither surface carries a separate agent loop or provider implementation.
 
+## Embed MicroClaw in Rust
+
+`microclaw-sdk` exposes the shared run lifecycle to other Rust applications. Its `full` preset
+includes the configured Agent Engine, Skills, tools, MCP, memory, hooks, Subagents, and Local
+Worker support without pulling in the Server, Web console, concrete channel adapters, or Work UI.
+
+```toml
+[dependencies]
+microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
+```
+
+Create an `AgentProfile`, select Skills, submit a `RunRequest`, and consume ordered runtime events
+plus the terminal `RunResult`. See the compiling
+[`configured_skilled_agent`](crates/microclaw-sdk/examples/configured_skilled_agent.rs) example and
+the [SDK guide](crates/microclaw-sdk/README.md). The SDK crates are currently consumed from the
+repository and are not yet published separately on crates.io.
+
 ## Capabilities
 
 | Area | What is included | Go deeper |
@@ -133,7 +152,7 @@ Server channel adapters translate ingress and delivery events only. Work project
 | Continuity | Resumable sessions, context compaction, checkpoints, durable outbound delivery, scheduling, and cancellation | [Concurrency](docs/operations/concurrency-and-responsiveness.md), [task lifecycle](docs/scheduled-task-lifecycle.md) |
 | Memory and learning | File and SQLite memory, semantic recall, temporal knowledge graph, experience evidence, and governed skill evolution | [Long-horizon learning](docs/long-horizon-learning.md), [Learning Foundry](docs/learning-foundry.md) |
 | Extension | Skills, manifest plugins, hooks, MCP, ClawHub, A2A, and ACP | [Plugins](docs/plugins/overview.md), [MCP](docs/integrations/mcp.md), [ClawHub](docs/clawhub/overview.md), [A2A](docs/a2a.md) |
-| Interfaces | Native MicroClaw Work, local Web UI, HTTP/SSE/WebSocket APIs, chat adapters, and agent protocols | [Work release](docs/operations/microclaw-work-release.md), [Web UI](docs/operations/web-ui.md), [HTTP triggers](docs/operations/http-hook-trigger.md), [ACP](docs/operations/acp-stdio.md) |
+| Interfaces | Rust SDK, native MicroClaw Work, local Web UI, HTTP/SSE/WebSocket APIs, chat adapters, and agent protocols | [SDK](crates/microclaw-sdk/README.md), [Work release](docs/operations/microclaw-work-release.md), [Web UI](docs/operations/web-ui.md), [HTTP triggers](docs/operations/http-hook-trigger.md), [ACP](docs/operations/acp-stdio.md) |
 | Safety and operations | Tool approvals, scoped capability grants, Docker sandboxing, egress policy, secret redaction, metrics, traces, and diagnostics | [Execution model](docs/security/execution-model.md), [secure runtime](docs/security/secure-runtime.md), [runbook](docs/operations/runbook.md) |
 
 ### Channels and providers
@@ -164,6 +183,7 @@ Start with the [documentation map](docs/README.md). It separates everyday use, e
 | Need | Canonical source |
 |---|---|
 | Install, configure, and run | [Getting started](docs/getting-started.md) |
+| Embed the Agent Engine in Rust | [SDK guide](crates/microclaw-sdk/README.md) and [compiling example](crates/microclaw-sdk/examples/configured_skilled_agent.rs) |
 | Browse examples | [Cookbook](docs/cookbook.md) |
 | See every built-in tool | [Generated tool catalog](docs/generated/tools.md) |
 | Review config defaults | [Generated config defaults](docs/generated/config-defaults.md) and [`microclaw.config.example.yaml`](microclaw.config.example.yaml) |

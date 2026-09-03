@@ -360,13 +360,13 @@ Manage a scheduled task by ID.
 
 ## Adding a New Tool
 
-1. Create `src/tools/my_tool.rs` implementing the `Tool` trait:
+1. Create `crates/microclaw-engine/src/tools/my_tool.rs` implementing the `Tool` trait:
    - `name()` — tool name string
    - `definition()` — `ToolDefinition` with JSON Schema
    - `execute(input)` — async execution returning `ToolResult`
-2. Add `pub mod my_tool;` to `src/tools/mod.rs`
+2. Add `pub mod my_tool;` to `crates/microclaw-engine/src/tools/mod.rs`
 3. Register in `ToolRegistry::new()` with `Box::new(my_tool::MyTool::new(...))`
 
-Trait/runtime note: `Tool` and `ToolResult` live in `microclaw_tools::runtime`; `src/tools/mod.rs` reuses those shared primitives.
+Trait/runtime note: `Tool` and `ToolResult` live in `microclaw_tools::runtime`; the Engine registry reuses those shared primitives.
 
 If your tool needs shared state (Bot, Database), add a constructor that accepts the dependency.

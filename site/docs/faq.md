@@ -31,7 +31,7 @@ The scheduler polls every 60 seconds for due tasks, runs the same agent loop as 
 
 ## Can I add custom tools?
 
-Yes. Implement the `Tool` trait (`microclaw_tools::runtime::Tool`) in `src/tools/`, register it in `ToolRegistry::new()`, and it becomes available to the LLM automatically.
+Yes. Implement the `Tool` trait (`microclaw_tools::runtime::Tool`) under `crates/microclaw-engine/src/tools/`, register it in `ToolRegistry::new()`, and it becomes available to the LLM automatically.
 
 ## What model is used by default?
 

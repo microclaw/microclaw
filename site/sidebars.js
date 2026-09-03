@@ -52,6 +52,7 @@ const sidebars = {
       label: 'Architecture',
       items: [
         'architecture',
+        'embedding-rust',
         'architecture-context',
         'architecture-skills',
         'architecture-mcp',
