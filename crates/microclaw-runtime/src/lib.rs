@@ -4,7 +4,7 @@
 //! concurrency, control routing, terminal results, and the provider-neutral event stream.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -14,7 +14,7 @@ use microclaw_core::run_protocol::{
     WorkerId,
 };
 use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{mpsc, oneshot, Notify, Semaphore};
 
 struct PendingControl {
     control: RuntimeControl,
@@ -216,6 +216,8 @@ impl RuntimeBuilder {
                 permits: Arc::new(Semaphore::new(self.max_concurrent_runs)),
                 max_concurrent_runs: self.max_concurrent_runs,
                 active_runs: Arc::new(AtomicUsize::new(0)),
+                queued_runs: AtomicUsize::new(0),
+                idle: Notify::new(),
             }),
         })
     }
@@ -226,6 +228,15 @@ struct RuntimeInner {
     permits: Arc<Semaphore>,
     max_concurrent_runs: usize,
     active_runs: Arc<AtomicUsize>,
+    queued_runs: AtomicUsize,
+    idle: Notify,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeStats {
+    pub active_runs: usize,
+    pub queued_runs: usize,
+    pub max_concurrent_runs: usize,
 }
 
 #[derive(Clone)]
@@ -256,6 +267,28 @@ impl Runtime {
     pub fn active_runs(&self) -> usize {
         self.inner.active_runs.load(Ordering::Acquire)
     }
+
+    pub fn queued_runs(&self) -> usize {
+        self.inner.queued_runs.load(Ordering::Acquire)
+    }
+
+    pub fn stats(&self) -> RuntimeStats {
+        RuntimeStats {
+            active_runs: self.active_runs(),
+            queued_runs: self.queued_runs(),
+            max_concurrent_runs: self.max_concurrent_runs(),
+        }
+    }
+
+    pub async fn wait_for_idle(&self) {
+        loop {
+            let notified = self.inner.idle.notified();
+            if self.active_runs() == 0 && self.queued_runs() == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -281,6 +314,7 @@ impl AgentHandle {
         let executor = self.runtime.inner.executor.clone();
         let permits = self.runtime.inner.permits.clone();
         let active_runs = self.runtime.inner.active_runs.clone();
+        let runtime_inner = self.runtime.inner.clone();
         let profile = self.profile.clone();
         let task_run_id = run_id.clone();
         let fallback_session_id = request
@@ -288,10 +322,13 @@ impl AgentHandle {
             .clone()
             .unwrap_or_else(|| SessionId::new(task_run_id.to_string()));
 
+        runtime_inner.queued_runs.fetch_add(1, Ordering::AcqRel);
         tokio::spawn(async move {
             let permit = match permits.acquire_owned().await {
                 Ok(permit) => permit,
                 Err(_) => {
+                    runtime_inner.queued_runs.fetch_sub(1, Ordering::AcqRel);
+                    runtime_inner.idle.notify_waiters();
                     let _ = result_tx.send(RunResult {
                         run_id: task_run_id,
                         session_id: fallback_session_id,
@@ -307,7 +344,8 @@ impl AgentHandle {
                     return;
                 }
             };
-            let _active_run = ActiveRunGuard::new(active_runs);
+            runtime_inner.queued_runs.fetch_sub(1, Ordering::AcqRel);
+            let _active_run = ActiveRunGuard::new(active_runs, runtime_inner.clone());
             let context = ExecutionContext {
                 run_id: task_run_id.clone(),
                 event_tx: event_tx.clone(),
@@ -376,18 +414,23 @@ impl AgentHandle {
 
 struct ActiveRunGuard {
     active_runs: Arc<AtomicUsize>,
+    runtime: Arc<RuntimeInner>,
 }
 
 impl ActiveRunGuard {
-    fn new(active_runs: Arc<AtomicUsize>) -> Self {
+    fn new(active_runs: Arc<AtomicUsize>, runtime: Arc<RuntimeInner>) -> Self {
         active_runs.fetch_add(1, Ordering::AcqRel);
-        Self { active_runs }
+        Self {
+            active_runs,
+            runtime,
+        }
     }
 }
 
 impl Drop for ActiveRunGuard {
     fn drop(&mut self) {
         self.active_runs.fetch_sub(1, Ordering::AcqRel);
+        self.runtime.idle.notify_waiters();
     }
 }
 
@@ -580,13 +623,22 @@ impl RunController {
 pub trait Worker: Send + Sync {
     fn descriptor(&self) -> WorkerDescriptor;
     fn health(&self) -> WorkerHealth;
-    async fn submit(&self, profile: AgentProfile, request: RunRequest) -> RunHandle;
+    async fn submit(
+        &self,
+        profile: AgentProfile,
+        request: RunRequest,
+    ) -> Result<RunHandle, RuntimeError>;
 }
+
+const WORKER_READY: u8 = 0;
+const WORKER_DRAINING: u8 = 1;
+const WORKER_UNAVAILABLE: u8 = 2;
 
 #[derive(Clone)]
 pub struct LocalWorker {
     descriptor: WorkerDescriptor,
     runtime: Runtime,
+    state: Arc<AtomicU8>,
 }
 
 impl LocalWorker {
@@ -601,7 +653,29 @@ impl LocalWorker {
                 labels: BTreeMap::new(),
             },
             runtime,
+            state: Arc::new(AtomicU8::new(WORKER_READY)),
         }
+    }
+
+    pub fn with_label(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.descriptor.labels.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn begin_drain(&self) {
+        self.state.store(WORKER_DRAINING, Ordering::Release);
+    }
+
+    pub fn mark_unavailable(&self) {
+        self.state.store(WORKER_UNAVAILABLE, Ordering::Release);
+    }
+
+    pub fn resume(&self) {
+        self.state.store(WORKER_READY, Ordering::Release);
+    }
+
+    pub async fn wait_for_idle(&self) {
+        self.runtime.wait_for_idle().await;
     }
 }
 
@@ -613,14 +687,17 @@ impl Worker for LocalWorker {
 
     fn health(&self) -> WorkerHealth {
         let active_runs = self.runtime.active_runs();
+        let state = self.state.load(Ordering::Acquire);
         WorkerHealth {
             worker_id: self.descriptor.id.clone(),
-            status: if active_runs >= self.descriptor.max_concurrent_runs {
-                WorkerHealthStatus::Busy
-            } else {
-                WorkerHealthStatus::Ready
+            status: match state {
+                WORKER_DRAINING => WorkerHealthStatus::Draining,
+                WORKER_UNAVAILABLE => WorkerHealthStatus::Unavailable,
+                _ if active_runs >= self.descriptor.max_concurrent_runs => WorkerHealthStatus::Busy,
+                _ => WorkerHealthStatus::Ready,
             },
             active_runs,
+            queued_runs: self.runtime.queued_runs(),
             observed_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -629,8 +706,19 @@ impl Worker for LocalWorker {
         }
     }
 
-    async fn submit(&self, profile: AgentProfile, request: RunRequest) -> RunHandle {
-        self.runtime.agent(profile).run(request)
+    async fn submit(
+        &self,
+        profile: AgentProfile,
+        request: RunRequest,
+    ) -> Result<RunHandle, RuntimeError> {
+        if self.state.load(Ordering::Acquire) != WORKER_READY {
+            return Err(RuntimeError {
+                code: RuntimeErrorCode::Unavailable,
+                message: "Worker is not accepting new runs".into(),
+                retryable: true,
+            });
+        }
+        Ok(self.runtime.agent(profile).run(request))
     }
 }
 
@@ -869,7 +957,8 @@ mod tests {
         assert!(descriptor.capabilities.streaming);
         let run = worker
             .submit(AgentProfile::default(), RunRequest::new("worker task"))
-            .await;
+            .await
+            .unwrap();
         assert_eq!(run.result().await.unwrap().final_text, "worker task");
     }
 
@@ -886,7 +975,8 @@ mod tests {
         let worker = LocalWorker::new(runtime, "local", "Local worker");
         let run = worker
             .submit(AgentProfile::default(), RunRequest::new("worker task"))
-            .await;
+            .await
+            .unwrap();
 
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
@@ -948,10 +1038,49 @@ mod tests {
         let result = worker
             .submit(profile, request)
             .await
+            .unwrap()
             .result()
             .await
             .unwrap();
         assert_eq!(result.metadata["agent_id"], "reviewer");
         assert_eq!(result.metadata["parent_run_id"], "parent-1");
+    }
+
+    #[tokio::test]
+    async fn local_worker_drains_without_accepting_new_runs() {
+        let runtime = Runtime::builder()
+            .executor(ConcurrentExecutor {
+                active: Arc::new(AtomicUsize::new(0)),
+                peak: Arc::new(AtomicUsize::new(0)),
+            })
+            .max_concurrent_runs(1)
+            .build()
+            .unwrap();
+        let worker =
+            LocalWorker::new(runtime, "local", "Local worker").with_label("pool", "foreground");
+        let run = worker
+            .submit(AgentProfile::default(), RunRequest::new("existing"))
+            .await
+            .unwrap();
+        worker.begin_drain();
+
+        assert_eq!(worker.descriptor().labels["pool"], "foreground");
+        assert_eq!(worker.health().status, WorkerHealthStatus::Draining);
+        let rejected = match worker
+            .submit(AgentProfile::default(), RunRequest::new("new"))
+            .await
+        {
+            Ok(_) => panic!("draining Worker should reject new runs"),
+            Err(error) => error,
+        };
+        assert_eq!(rejected.code, RuntimeErrorCode::Unavailable);
+
+        run.result().await.unwrap();
+        worker.wait_for_idle().await;
+        assert_eq!(worker.health().active_runs, 0);
+        worker.mark_unavailable();
+        assert_eq!(worker.health().status, WorkerHealthStatus::Unavailable);
+        worker.resume();
+        assert_eq!(worker.health().status, WorkerHealthStatus::Ready);
     }
 }

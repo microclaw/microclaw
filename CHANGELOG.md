@@ -19,6 +19,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   `MicroClawBuilder`, `MicroClaw`, `AgentBuilder`, and `SkillCatalog` entry
   points, validates selected Skills before execution, and reports setup
   failures through SDK-owned errors instead of leaking Engine internals.
+- **Operational Local Workers.** Local Workers now report active and queued
+  runs, support labels, draining, resume, unavailable state, and waiting for
+  idle. Submission returns an explicit error when a Worker has stopped
+  accepting work instead of creating an ambiguous failed run.
 
 ### Changed
 

@@ -254,6 +254,8 @@ pub struct WorkerHealth {
     pub worker_id: WorkerId,
     pub status: WorkerHealthStatus,
     pub active_runs: usize,
+    #[serde(default)]
+    pub queued_runs: usize,
     pub observed_at: String,
 }
 

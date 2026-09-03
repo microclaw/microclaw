@@ -20,7 +20,7 @@ pub use microclaw_core::runtime_event::{
 };
 pub use microclaw_runtime::{
     AgentHandle, ControlRequest, ExecutionContext, ExecutionResult, LocalWorker, RunController,
-    RunExecutor, RunHandle, Runtime, RuntimeBuildError, RuntimeBuilder, Worker,
+    RunExecutor, RunHandle, Runtime, RuntimeBuildError, RuntimeBuilder, RuntimeStats, Worker,
 };
 
 /// An SDK-level error that does not expose Server or Agent Engine implementation types.

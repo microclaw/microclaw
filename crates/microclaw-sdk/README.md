@@ -32,3 +32,11 @@ println!("{}", result.final_text);
 Use `microclaw.skills()` to list available and unavailable Skills with diagnostics. See
 `examples/minimal_agent.rs` for a custom executor and `examples/configured_skilled_agent.rs` for
 the full configured Agent Engine.
+
+## Workers
+
+`LocalWorker` uses the same Agent, Run, event, and control contracts. It exposes active and queued
+capacity, labels, health, draining, resume, and `wait_for_idle()` for graceful application
+shutdown. `Worker::submit` returns an explicit `Unavailable` error while draining or unavailable.
+The serialized `WorkerCommand` and `WorkerFrame` types use `WORKER_PROTOCOL_VERSION` for remote
+transports.
