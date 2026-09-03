@@ -138,8 +138,8 @@ Worker support without pulling in the Server, Web console, concrete channel adap
 microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
 ```
 
-Create an `AgentProfile`, select Skills, submit a `RunRequest`, and consume ordered runtime events
-plus the terminal `RunResult`. See the compiling
+Use `MicroClaw::builder`, inspect the Skill catalog, build an Agent with selected Skills, and
+consume ordered runtime events plus the terminal `RunResult`. See the compiling
 [`configured_skilled_agent`](crates/microclaw-sdk/examples/configured_skilled_agent.rs) example and
 the [SDK guide](crates/microclaw-sdk/README.md). The SDK crates are currently consumed from the
 repository and are not yet published separately on crates.io.

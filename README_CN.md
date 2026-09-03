@@ -136,8 +136,8 @@ Web 控制台、具体渠道适配器或 Work UI。
 microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
 ```
 
-创建 `AgentProfile`、选择 Skills、提交 `RunRequest`，然后消费有序运行时事件和最终
-`RunResult`。可以直接参考能够编译的
+通过 `MicroClaw::builder` 创建运行时、查看 Skill 目录、构建带有指定 Skills 的 Agent，
+然后消费有序运行时事件和最终 `RunResult`。可以直接参考能够编译的
 [`configured_skilled_agent`](crates/microclaw-sdk/examples/configured_skilled_agent.rs) 示例与
 [SDK 指南](crates/microclaw-sdk/README.md)。这些 SDK crate 目前通过代码仓库使用，尚未单独发布到 crates.io。
 

@@ -15,6 +15,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   `microclaw-sdk` provides a small third-party facade and compiling example.
   The versioned remote Worker protocol covers discovery, health, submission,
   resumable events, controls, acknowledgements, and terminal results.
+- **SDK-first Agent and Skill API.** `microclaw-sdk` now provides stable
+  `MicroClawBuilder`, `MicroClaw`, `AgentBuilder`, and `SkillCatalog` entry
+  points, validates selected Skills before execution, and reports setup
+  failures through SDK-owned errors instead of leaking Engine internals.
 
 ### Changed
 

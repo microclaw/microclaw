@@ -29,22 +29,22 @@ microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["f
 ## Run a skilled Agent
 
 ```rust
-use microclaw_sdk::engine::{config::Config, headless::HeadlessRuntime};
-use microclaw_sdk::{AgentProfile, RunRequest};
+use microclaw_sdk::MicroClaw;
 
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let config = Config::load_from_path_for_headless(
-    std::path::Path::new("microclaw.config.yaml"),
-)?;
-let runtime = HeadlessRuntime::load(config)
-    .await?
-    .into_embedded_runtime("my-app", 2)?;
-let agent = runtime.agent(AgentProfile {
-    name: "repository-reviewer".into(),
-    skills: vec!["code-review".into()],
-    ..AgentProfile::default()
-});
-let mut run = agent.run(RunRequest::new("Review this repository"));
+let microclaw = MicroClaw::builder("microclaw.config.yaml")
+    .caller_channel("my-app")
+    .max_concurrent_runs(2)
+    .build()
+    .await?;
+for skill in microclaw.skills().available() {
+    println!("{}: {}", skill.name, skill.description);
+}
+let agent = microclaw
+    .agent("repository-reviewer")
+    .skill("code-review")
+    .build()?;
+let mut run = agent.run("Review this repository");
 while let Some(event) = run.next_event().await {
     println!("{}: {:?}", event.sequence, event.event);
 }

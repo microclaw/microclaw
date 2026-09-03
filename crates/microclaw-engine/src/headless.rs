@@ -21,7 +21,7 @@ use crate::hooks::HookManager;
 use crate::memory::MemoryManager;
 use crate::memory_backend::{MemoryBackend, MemoryMcpClient};
 use crate::runtime::AppState;
-use crate::skills::SkillManager;
+use crate::skills::{SkillAvailability, SkillManager};
 use crate::tools::ToolRegistry;
 use crate::{embedding, llm};
 use microclaw_channels::channel_adapter::ChannelRegistry;
@@ -237,6 +237,14 @@ fn runtime_internal_error(error: impl std::fmt::Display) -> RuntimeError {
 }
 
 impl HeadlessRuntime {
+    /// Return the Skills visible to this runtime, including availability diagnostics when
+    /// requested. Embedding facades use this to present a catalog without exposing runtime state.
+    pub fn skill_catalog(&self, include_unavailable: bool) -> Vec<SkillAvailability> {
+        self.state
+            .skills
+            .discover_skills_with_status(include_unavailable)
+    }
+
     /// Build a standalone runtime from a loaded product config.
     ///
     /// This is the Work/headless bootstrap path. It intentionally initializes
