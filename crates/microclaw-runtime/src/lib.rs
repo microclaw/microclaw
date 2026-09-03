@@ -16,6 +16,10 @@ use microclaw_core::run_protocol::{
 use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
 use tokio::sync::{mpsc, oneshot, Notify, Semaphore};
 
+mod remote;
+
+pub use remote::{RemoteWorker, WorkerConnection, WorkerTransport};
+
 struct PendingControl {
     control: RuntimeControl,
     receipt: Option<oneshot::Sender<Result<(), RuntimeError>>>,

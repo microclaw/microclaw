@@ -39,4 +39,5 @@ the full configured Agent Engine.
 capacity, labels, health, draining, resume, and `wait_for_idle()` for graceful application
 shutdown. `Worker::submit` returns an explicit `Unavailable` error while draining or unavailable.
 The serialized `WorkerCommand` and `WorkerFrame` types use `WORKER_PROTOCOL_VERSION` for remote
-transports.
+transports. Implement `WorkerTransport` and `WorkerConnection`, then call
+`RemoteWorker::connect(...)`; remote runs return the same `RunHandle` used by local execution.

@@ -23,6 +23,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   runs, support labels, draining, resume, unavailable state, and waiting for
   idle. Submission returns an explicit error when a Worker has stopped
   accepting work instead of creating an ambiguous failed run.
+- **Transport-neutral Remote Worker client.** The SDK can discover a versioned
+  remote Worker, validate frame and run identity, stream its events into a
+  normal `RunHandle`, forward acknowledged controls, refresh health, and map
+  terminal frames into the same result contract used by Local Workers.
 
 ### Changed
 
