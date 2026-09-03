@@ -1,7 +1,10 @@
 # MicroClaw Website
 
-This folder contains the MicroClaw docs website (Docusaurus), published at https://microclaw.org.
-It includes docs + blog content and can be developed/deployed independently from the Rust bot.
+This folder is the canonical source for the MicroClaw documentation website,
+published at https://microclaw.org. It includes docs and blog content and can
+be developed independently from the Rust application. The generated site is
+deployed to the `gh-pages` branch of `microclaw/microclaw.github.io`; do not
+edit that generated branch by hand.
 
 ## Install
 
@@ -55,7 +58,7 @@ Commit website changes, then run:
 ```
 
 The script syncs the installer artifacts from the parent repository, pushes the
-site source branch, builds once, and deploys `build/` to `gh-pages`. The
+canonical monorepo source, builds once, and deploys `build/` to `gh-pages`. The
 Pages push uses SSH keepalive settings and retries up to three times by default.
 
 To use HTTPS credentials instead of SSH, run:

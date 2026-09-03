@@ -31,7 +31,7 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-echo "Pushing website source..."
+echo "Pushing canonical monorepo source..."
 git push
 
 if [ ! -d node_modules ]; then

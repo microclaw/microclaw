@@ -34,10 +34,11 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含�
 
 它面向的不只是一次问答，而是能够持续完成的工作：多步工具调用、可恢复会话、可靠投递、持久记忆、定时任务和受治理的扩展能力都运行在同一个系统中。
 
-| 产品 | 适用场景 | 当前支持 |
+| 使用入口 | 适用场景 | 当前支持 |
 |---|---|---|
 | MicroClaw Server | 常驻智能体、聊天渠道、Web/API、定时任务与远程自动化 | macOS、Linux 和 Windows |
 | MicroClaw Work | 原生本地对话、项目工作空间、工具审批、检查点与桌面设置 | Apple Silicon macOS 13+；Linux/Windows portable 预览包 |
+| `microclaw-sdk` | 在 Rust 应用中嵌入同一套 Agent Engine、Skills、事件、控制与 Worker | Rust 1.93+；提供 `minimal`、`standard`、`full` 与 `remote-worker` feature |
 
 有关本地任务闭环、平台支持等级、原生设置、安全边界和打包方式，请阅读
 [MicroClaw Work 产品指南](site/docs/work.md)。当前权威规划是
@@ -50,6 +51,14 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含�
 </p>
 
 ## 快速开始
+
+先按你的目标选择入口：
+
+| 我希望…… | 从这里开始 |
+|---|---|
+| 把 MicroClaw 当作原生项目搭档 | 安装下方的 MicroClaw Work |
+| 运行一个长期在线的智能体服务 | 安装下方的 MicroClaw Server |
+| 为现有 Rust 应用加入智能体能力 | 阅读 [SDK 快速接入](site/docs/sdk-quickstart.md) |
 
 在 Apple Silicon macOS 13+ 上安装原生 MicroClaw Work：
 
@@ -136,10 +145,24 @@ Web 控制台、具体渠道适配器或 Work UI。
 microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
 ```
 
+```rust
+use microclaw_sdk::{FullRuntimeConfig, MicroClaw};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = FullRuntimeConfig::new("openai", "gpt-5", std::env::var("OPENAI_API_KEY")?);
+    let microclaw = MicroClaw::configure(config).build().await?;
+    let result = microclaw.agent("assistant").build()?.run("Plan this task").result().await?;
+    println!("{}", result.final_text);
+    Ok(())
+}
+```
+
 通过 `MicroClaw::builder` 使用 YAML 配置，或通过 `MicroClaw::configure` 完全在代码中配置；随后可查看 Skill 目录、构建带有指定 Skills 的 Agent，
 然后消费有序运行时事件和最终 `RunResult`。可以直接参考能够编译的
 [`configured_skilled_agent`](crates/microclaw-sdk/examples/configured_skilled_agent.rs) 示例与
-[SDK 指南](crates/microclaw-sdk/README.md)。这些 SDK crate 目前通过代码仓库使用，尚未单独发布到 crates.io。
+[SDK 快速接入](site/docs/sdk-quickstart.md)、[核心概念](site/docs/sdk-concepts.md)、
+[Skills 指南](site/docs/sdk-skills.md)和 [Worker 指南](site/docs/sdk-workers.md)。这些 SDK crate 目前通过代码仓库使用，尚未单独发布到 crates.io。
 
 ## 能力地图
 

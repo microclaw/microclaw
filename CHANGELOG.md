@@ -42,6 +42,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **SDK-first project documentation.** The README and public documentation now
+  present Server, Work, and the Rust SDK as three explicit entry points. The
+  website gives the SDK first-class navigation plus task-focused guides for
+  setup, lifecycle contracts, Skills, Workers, and feature/crate selection.
+
 - **Publishable Rust SDK crate set.** Reusable crates now carry crates.io
   metadata, and a protected manual workflow publishes them in dependency order
   with exact version checks, duplicate-release handling, and index propagation

@@ -7,6 +7,18 @@ handles, and Worker contracts without pulling in Server, channel, Web, or deskto
 Minimal and standard applications supply a `RunExecutor`. The `full` preset starts the same
 skilled Agent Engine used by Server and Work without exposing either product package.
 
+## Choose a feature set
+
+| Feature | Use it when |
+|---|---|
+| `minimal` | Your application supplies a `RunExecutor` and only needs stable protocol contracts |
+| `standard` (default) | Your application wants the Runtime, Agent, Run, control, and Local Worker lifecycle |
+| `remote-worker` | The host or executor communicates over the authenticated WebSocket Worker protocol |
+| `full` | You want the configured MicroClaw Agent Engine, including providers, tools, memory, Skills, MCP, hooks, and Subagents |
+
+Most first-time integrations should use `full`. The workspace minimum supported
+Rust version is 1.93.
+
 The `full` preset provides a stable builder and validates selected Skills before a run starts:
 
 ```rust,no_run
@@ -44,6 +56,15 @@ Use `microclaw.skills()` to list available and unavailable Skills with diagnosti
 `examples/minimal_agent.rs` for a custom executor and `examples/configured_skilled_agent.rs` for
 the full configured Agent Engine.
 
+## Runtime contract
+
+- Build one `MicroClaw` runtime and reuse it across Agents.
+- Use an Agent profile for stable identity, prompt, Skills, and tool policy.
+- Treat each `RunHandle` as one execution with ordered events, controls, and one
+  authoritative terminal `RunResult`.
+- Branch on `RuntimeErrorCode` rather than parsing error messages.
+- Preserve event sequence numbers when projecting runs into a UI or protocol.
+
 ## Workers
 
 `LocalWorker` uses the same Agent, Run, event, and control contracts. It exposes active and queued
@@ -54,3 +75,12 @@ transports. Implement `WorkerTransport` and `WorkerConnection`, then call
 `RemoteWorker::connect(...)`; remote runs return the same `RunHandle` used by local execution. The
 `remote-worker` feature (included by `full`) provides `WebSocketWorkerTransport` and an
 authenticated `WorkerHost` for real network execution.
+
+## Guides
+
+- [SDK overview](https://microclaw.org/docs/sdk)
+- [Quickstart](https://microclaw.org/docs/sdk-quickstart)
+- [Agents, runs, events, and controls](https://microclaw.org/docs/sdk-concepts)
+- [Skills in embedded applications](https://microclaw.org/docs/sdk-skills)
+- [Local and remote Workers](https://microclaw.org/docs/sdk-workers)
+- [Features and crate boundaries](https://microclaw.org/docs/sdk-features)

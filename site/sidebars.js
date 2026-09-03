@@ -44,6 +44,18 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Rust SDK',
+      link: {type: 'doc', id: 'embedding-rust'},
+      items: [
+        'sdk-quickstart',
+        'sdk-concepts',
+        'sdk-skills',
+        'sdk-workers',
+        'sdk-features',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Usage',
       items: ['usage', 'commands', 'plugins', 'web-operator-api', 'http-hook-trigger', 'skills', 'learning-foundry', 'tools', 'memory', 'scheduler'],
     },
@@ -52,7 +64,6 @@ const sidebars = {
       label: 'Architecture',
       items: [
         'architecture',
-        'embedding-rust',
         'architecture-context',
         'architecture-skills',
         'architecture-mcp',

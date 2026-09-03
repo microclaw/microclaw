@@ -34,10 +34,11 @@ MicroClaw is a self-hosted Rust agent platform with two product surfaces and an 
 
 It is designed for work that lasts longer than one request: multi-step tool use, resumable sessions, durable delivery, persistent memory, scheduled tasks, and governed extensions all run in the same runtime.
 
-| Product | Best for | Availability |
+| Entry point | Best for | Availability |
 |---|---|---|
 | MicroClaw Server | Always-on agents, chat channels, Web/API access, scheduled work, and remote automation | macOS, Linux, and Windows |
 | MicroClaw Work | Native local conversations, project workspaces, approvals, checkpoints, and desktop settings | Apple Silicon macOS 13+; Linux/Windows portable previews |
+| `microclaw-sdk` | Embedding the same Agent Engine, Skills, events, controls, and Workers in a Rust application | Rust 1.93+; `minimal`, `standard`, `full`, and `remote-worker` feature sets |
 
 Read the [MicroClaw Work product guide](site/docs/work.md) for the local task
 loop, platform support levels, native settings, safety boundary, and packaging
@@ -51,6 +52,14 @@ model. The active delivery plan is
 </p>
 
 ## Quick start
+
+Choose the path that matches what you are building:
+
+| I want to… | Start here |
+|---|---|
+| Use MicroClaw as a native project coworker | Install MicroClaw Work below |
+| Run an always-on agent service | Install MicroClaw Server below |
+| Add agents to an existing Rust application | Follow the [SDK quickstart](site/docs/sdk-quickstart.md) |
 
 Install the native MicroClaw Work desktop app on Apple Silicon macOS 13+:
 
@@ -138,11 +147,25 @@ Worker support without pulling in the Server, Web console, concrete channel adap
 microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
 ```
 
+```rust
+use microclaw_sdk::{FullRuntimeConfig, MicroClaw};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = FullRuntimeConfig::new("openai", "gpt-5", std::env::var("OPENAI_API_KEY")?);
+    let microclaw = MicroClaw::configure(config).build().await?;
+    let result = microclaw.agent("assistant").build()?.run("Plan this task").result().await?;
+    println!("{}", result.final_text);
+    Ok(())
+}
+```
+
 Use `MicroClaw::builder` for YAML configuration or `MicroClaw::configure` for an entirely
 programmatic setup, inspect the Skill catalog, build an Agent with selected Skills, and
 consume ordered runtime events plus the terminal `RunResult`. See the compiling
 [`configured_skilled_agent`](crates/microclaw-sdk/examples/configured_skilled_agent.rs) example and
-the [SDK guide](crates/microclaw-sdk/README.md). The SDK crates are currently consumed from the
+the [SDK quickstart](site/docs/sdk-quickstart.md), [concept guide](site/docs/sdk-concepts.md),
+[Skills guide](site/docs/sdk-skills.md), and [Worker guide](site/docs/sdk-workers.md). The SDK crates are currently consumed from the
 repository and are not yet published separately on crates.io.
 
 ## Capabilities

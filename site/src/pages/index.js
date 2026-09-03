@@ -170,6 +170,9 @@ function HomepageHeader() {
               <Link className="button button--primary button--lg" to="/docs/quickstart">
                 {messages.start}
               </Link>
+              <Link className={styles.darkButton} to="/docs/sdk">
+                {messages.sdkCta}
+              </Link>
               <Link className={styles.darkButton} href="https://github.com/microclaw/microclaw">
                 {messages.github}
               </Link>
@@ -368,6 +371,9 @@ export default function Home() {
                 </Link>
                 <Link className="button button--secondary button--lg" to="/docs/architecture">
                   {messages.architectureDocs}
+                </Link>
+                <Link className="button button--secondary button--lg" to="/docs/sdk">
+                  {messages.sdkDocs}
                 </Link>
                 <Link className={styles.inlineLink} to="/docs/generated-tools">
                   {messages.toolsReference}

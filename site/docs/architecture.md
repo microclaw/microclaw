@@ -77,7 +77,7 @@ existing governed filesystem tools—not the view—read any content.
 ## Recommended reading order
 
 1. [Context Lifecycle](./architecture-context)
-2. [Embed MicroClaw in Rust](./embedding-rust)
+2. [Embed MicroClaw in Rust](./sdk)
 3. [Skills Architecture](./architecture-skills)
 4. [MCP Architecture](./architecture-mcp)
 5. [Channels and Gateway](./architecture-channels)

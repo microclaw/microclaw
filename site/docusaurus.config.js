@@ -81,9 +81,10 @@ const config = {
         // Search docs/blog pages without external services.
         indexDocs: true,
         indexBlog: true,
+        indexPages: true,
         docsRouteBasePath: '/docs',
         hashed: true,
-        language: ['en'],
+        language: ['en', 'zh'],
       },
     ],
     [
@@ -163,6 +164,7 @@ const config = {
             label: 'Docs',
           },
           {to: '/docs/quickstart', label: 'Quickstart', position: 'left'},
+          {to: '/docs/sdk', label: 'Rust SDK', position: 'left'},
           {to: '/blog', label: 'Blog', position: 'left'},
           {type: 'localeDropdown', position: 'right'},
           {type: 'search', position: 'right'},
@@ -186,6 +188,10 @@ const config = {
               {
                 label: 'Quickstart',
                 to: '/docs/quickstart',
+              },
+              {
+                label: 'Rust SDK',
+                to: '/docs/sdk',
               },
             ],
           },
