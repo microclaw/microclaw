@@ -134,16 +134,26 @@ impl RunExecutor for HeadlessRunExecutor {
                         forward_runtime_event(&context, envelope.event)?;
                     }
                 }
-                control = context.next_control() => {
-                    match control {
-                        Some(RuntimeControl::Cancel { .. }) => {
-                            self.runtime
+                control = context.next_control_request() => {
+                    if let Some(control) = control {
+                        match control.control().clone() {
+                        RuntimeControl::Cancel { .. } => {
+                            let cancelled = self.runtime
                                 .cancel_session_for_channel(&self.caller_channel, session.as_str())
                                 .await
                                 .map_err(runtime_internal_error)?;
+                            if cancelled > 0 {
+                                control.accept();
+                            } else {
+                                control.reject(RuntimeError {
+                                    code: RuntimeErrorCode::Unavailable,
+                                    message: "the run finished before cancellation was accepted".into(),
+                                    retryable: false,
+                                });
+                            }
                         }
-                        Some(RuntimeControl::Steer { message, .. }) => {
-                            self.runtime
+                        RuntimeControl::Steer { message, .. } => {
+                            let accepted = self.runtime
                                 .steer_session_for_channel(
                                     &self.caller_channel,
                                     session.as_str(),
@@ -151,16 +161,25 @@ impl RunExecutor for HeadlessRunExecutor {
                                 )
                                 .await
                                 .map_err(runtime_internal_error)?;
+                            if accepted {
+                                control.accept();
+                            } else {
+                                control.reject(RuntimeError {
+                                    code: RuntimeErrorCode::Unavailable,
+                                    message: "the run finished before the update could be queued".into(),
+                                    retryable: false,
+                                });
+                            }
                         }
-                        Some(RuntimeControl::ResolveApproval { .. }) => {
-                            return Err(RuntimeError {
+                        RuntimeControl::ResolveApproval { .. } => {
+                            control.reject(RuntimeError {
                                 code: RuntimeErrorCode::Unavailable,
                                 message: "the current Agent Engine approval bridge is unavailable"
                                     .into(),
                                 retryable: false,
                             });
                         }
-                        None => {}
+                        }
                     }
                 }
             }

@@ -16,6 +16,56 @@ use microclaw_core::run_protocol::{
 use microclaw_core::runtime_event::{RuntimeEvent, RuntimeEventEnvelope};
 use tokio::sync::{mpsc, oneshot, Semaphore};
 
+struct PendingControl {
+    control: RuntimeControl,
+    receipt: Option<oneshot::Sender<Result<(), RuntimeError>>>,
+}
+
+/// A control message received by an executor that can be explicitly accepted or rejected.
+///
+/// Executors should acknowledge only after the underlying engine has accepted the operation.
+/// Dropping a request without responding reports an unavailable control path to the caller.
+pub struct ControlRequest {
+    control: RuntimeControl,
+    receipt: Option<oneshot::Sender<Result<(), RuntimeError>>>,
+}
+
+impl ControlRequest {
+    pub fn control(&self) -> &RuntimeControl {
+        &self.control
+    }
+
+    pub fn into_control(self) -> RuntimeControl {
+        let control = self.control.clone();
+        self.accept();
+        control
+    }
+
+    pub fn accept(mut self) {
+        if let Some(receipt) = self.receipt.take() {
+            let _ = receipt.send(Ok(()));
+        }
+    }
+
+    pub fn reject(mut self, error: RuntimeError) {
+        if let Some(receipt) = self.receipt.take() {
+            let _ = receipt.send(Err(error));
+        }
+    }
+}
+
+impl Drop for ControlRequest {
+    fn drop(&mut self) {
+        if let Some(receipt) = self.receipt.take() {
+            let _ = receipt.send(Err(RuntimeError {
+                code: RuntimeErrorCode::Unavailable,
+                message: "executor did not acknowledge the control request".into(),
+                retryable: false,
+            }));
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionResult {
     pub session_id: SessionId,
@@ -37,7 +87,7 @@ impl ExecutionResult {
 pub struct ExecutionContext {
     run_id: RunId,
     event_tx: mpsc::UnboundedSender<RuntimeEventEnvelope>,
-    control_rx: mpsc::UnboundedReceiver<RuntimeControl>,
+    control_rx: mpsc::UnboundedReceiver<PendingControl>,
     next_sequence: Arc<AtomicU64>,
 }
 
@@ -62,11 +112,31 @@ impl ExecutionContext {
     }
 
     pub fn try_next_control(&mut self) -> Option<RuntimeControl> {
-        self.control_rx.try_recv().ok()
+        self.try_next_control_request()
+            .map(ControlRequest::into_control)
     }
 
     pub async fn next_control(&mut self) -> Option<RuntimeControl> {
-        self.control_rx.recv().await
+        self.next_control_request()
+            .await
+            .map(ControlRequest::into_control)
+    }
+
+    pub fn try_next_control_request(&mut self) -> Option<ControlRequest> {
+        self.control_rx
+            .try_recv()
+            .ok()
+            .map(|pending| ControlRequest {
+                control: pending.control,
+                receipt: pending.receipt,
+            })
+    }
+
+    pub async fn next_control_request(&mut self) -> Option<ControlRequest> {
+        self.control_rx.recv().await.map(|pending| ControlRequest {
+            control: pending.control,
+            receipt: pending.receipt,
+        })
     }
 }
 
@@ -307,7 +377,7 @@ fn emit_terminal_event(
 pub struct RunHandle {
     run_id: RunId,
     events: mpsc::UnboundedReceiver<RuntimeEventEnvelope>,
-    control_tx: mpsc::UnboundedSender<RuntimeControl>,
+    control_tx: mpsc::UnboundedSender<PendingControl>,
     result_rx: oneshot::Receiver<RunResult>,
 }
 
@@ -322,6 +392,71 @@ impl RunHandle {
 
     pub fn try_next_event(&mut self) -> Option<RuntimeEventEnvelope> {
         self.events.try_recv().ok()
+    }
+
+    pub fn cancel(&self) -> Result<(), RuntimeError> {
+        self.controller().cancel()
+    }
+
+    pub fn controller(&self) -> RunController {
+        RunController {
+            run_id: self.run_id.clone(),
+            control_tx: self.control_tx.clone(),
+        }
+    }
+
+    pub async fn cancel_confirmed(&self) -> Result<(), RuntimeError> {
+        self.controller().cancel_confirmed().await
+    }
+
+    pub fn steer(&self, message: impl Into<String>) -> Result<(), RuntimeError> {
+        self.controller().steer(message)
+    }
+
+    pub async fn steer_confirmed(&self, message: impl Into<String>) -> Result<(), RuntimeError> {
+        self.controller().steer_confirmed(message).await
+    }
+
+    pub fn resolve_approval(
+        &self,
+        approval_id: impl Into<String>,
+        decision: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        self.controller().resolve_approval(approval_id, decision)
+    }
+
+    pub async fn resolve_approval_confirmed(
+        &self,
+        approval_id: impl Into<String>,
+        decision: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        self.controller()
+            .resolve_approval_confirmed(approval_id, decision)
+            .await
+    }
+
+    pub async fn result(self) -> Result<RunResult, RuntimeError> {
+        self.result_rx.await.map_err(|_| RuntimeError {
+            code: RuntimeErrorCode::Internal,
+            message: "run ended without a terminal result".into(),
+            retryable: false,
+        })
+    }
+}
+
+/// Cloneable control plane for a running task.
+///
+/// Keeping this separate from [`RunHandle`] lets one task consume events while another task or
+/// UI callback controls the run without sharing the event receiver.
+#[derive(Clone)]
+pub struct RunController {
+    run_id: RunId,
+    control_tx: mpsc::UnboundedSender<PendingControl>,
+}
+
+impl RunController {
+    pub fn id(&self) -> &RunId {
+        &self.run_id
     }
 
     pub fn cancel(&self) -> Result<(), RuntimeError> {
@@ -350,19 +485,63 @@ impl RunHandle {
     }
 
     fn send_control(&self, control: RuntimeControl) -> Result<(), RuntimeError> {
-        self.control_tx.send(control).map_err(|_| RuntimeError {
-            code: RuntimeErrorCode::Unavailable,
-            message: "run is no longer accepting control messages".into(),
-            retryable: false,
-        })
+        self.control_tx
+            .send(PendingControl {
+                control,
+                receipt: None,
+            })
+            .map_err(|_| RuntimeError {
+                code: RuntimeErrorCode::Unavailable,
+                message: "run is no longer accepting control messages".into(),
+                retryable: false,
+            })
     }
 
-    pub async fn result(self) -> Result<RunResult, RuntimeError> {
-        self.result_rx.await.map_err(|_| RuntimeError {
-            code: RuntimeErrorCode::Internal,
-            message: "run ended without a terminal result".into(),
-            retryable: false,
+    pub async fn cancel_confirmed(&self) -> Result<(), RuntimeError> {
+        self.send_control_confirmed(RuntimeControl::Cancel {
+            run_id: self.run_id.clone(),
         })
+        .await
+    }
+
+    pub async fn steer_confirmed(&self, message: impl Into<String>) -> Result<(), RuntimeError> {
+        self.send_control_confirmed(RuntimeControl::Steer {
+            run_id: self.run_id.clone(),
+            message: message.into(),
+        })
+        .await
+    }
+
+    pub async fn resolve_approval_confirmed(
+        &self,
+        approval_id: impl Into<String>,
+        decision: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        self.send_control_confirmed(RuntimeControl::ResolveApproval {
+            run_id: self.run_id.clone(),
+            approval_id: approval_id.into(),
+            decision: decision.into(),
+        })
+        .await
+    }
+
+    async fn send_control_confirmed(&self, control: RuntimeControl) -> Result<(), RuntimeError> {
+        let (receipt_tx, receipt_rx) = oneshot::channel();
+        self.control_tx
+            .send(PendingControl {
+                control,
+                receipt: Some(receipt_tx),
+            })
+            .map_err(|_| RuntimeError {
+                code: RuntimeErrorCode::Unavailable,
+                message: "run is no longer accepting control messages".into(),
+                retryable: false,
+            })?;
+        receipt_rx.await.map_err(|_| RuntimeError {
+            code: RuntimeErrorCode::Unavailable,
+            message: "run ended before acknowledging the control request".into(),
+            retryable: false,
+        })?
     }
 }
 
@@ -550,6 +729,58 @@ mod tests {
         assert_eq!(result.final_text, "new direction");
     }
 
+    #[tokio::test]
+    async fn confirmed_control_waits_for_executor_acknowledgement() {
+        let runtime = Runtime::builder()
+            .executor(ControlledExecutor)
+            .build()
+            .unwrap();
+        let run = runtime
+            .agent(AgentProfile::default())
+            .run(RunRequest::new("wait"));
+        let controller = run.controller();
+
+        controller.steer_confirmed("accepted update").await.unwrap();
+        let result = run.result().await.unwrap();
+        assert_eq!(result.final_text, "accepted update");
+    }
+
+    struct RejectingExecutor;
+
+    #[async_trait]
+    impl RunExecutor for RejectingExecutor {
+        async fn execute(
+            &self,
+            _profile: AgentProfile,
+            _request: RunRequest,
+            mut context: ExecutionContext,
+        ) -> Result<ExecutionResult, RuntimeError> {
+            let request = context.next_control_request().await.unwrap();
+            request.reject(RuntimeError {
+                code: RuntimeErrorCode::ApprovalDenied,
+                message: "control rejected by policy".into(),
+                retryable: false,
+            });
+            Ok(ExecutionResult::new("rejected", "unchanged"))
+        }
+    }
+
+    #[tokio::test]
+    async fn confirmed_control_surfaces_executor_rejection() {
+        let runtime = Runtime::builder()
+            .executor(RejectingExecutor)
+            .build()
+            .unwrap();
+        let run = runtime
+            .agent(AgentProfile::default())
+            .run(RunRequest::new("wait"));
+        let controller = run.controller();
+
+        let error = controller.cancel_confirmed().await.unwrap_err();
+        assert_eq!(error.code, RuntimeErrorCode::ApprovalDenied);
+        assert_eq!(run.result().await.unwrap().final_text, "unchanged");
+    }
+
     struct ConcurrentExecutor {
         active: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
@@ -603,5 +834,52 @@ mod tests {
             .submit(AgentProfile::default(), RunRequest::new("worker task"))
             .await;
         assert_eq!(run.result().await.unwrap().final_text, "worker task");
+    }
+
+    struct RelationshipExecutor;
+
+    #[async_trait]
+    impl RunExecutor for RelationshipExecutor {
+        async fn execute(
+            &self,
+            profile: AgentProfile,
+            request: RunRequest,
+            _context: ExecutionContext,
+        ) -> Result<ExecutionResult, RuntimeError> {
+            let mut output = ExecutionResult::new("child-session", request.prompt);
+            output.metadata.insert(
+                "agent_id".into(),
+                serde_json::json!(profile.id.map(|id| id.into_inner())),
+            );
+            output.metadata.insert(
+                "parent_run_id".into(),
+                serde_json::json!(request.parent_run_id.map(|id| id.into_inner())),
+            );
+            Ok(output)
+        }
+    }
+
+    #[tokio::test]
+    async fn parent_child_identity_survives_local_worker_submission() {
+        let runtime = Runtime::builder()
+            .executor(RelationshipExecutor)
+            .build()
+            .unwrap();
+        let worker = LocalWorker::new(runtime, "local", "Local worker", 2);
+        let profile = AgentProfile {
+            id: Some(microclaw_core::run_protocol::AgentId::new("reviewer")),
+            ..AgentProfile::default()
+        };
+        let mut request = RunRequest::new("review child task");
+        request.parent_run_id = Some(RunId::new("parent-1"));
+
+        let result = worker
+            .submit(profile, request)
+            .await
+            .result()
+            .await
+            .unwrap();
+        assert_eq!(result.metadata["agent_id"], "reviewer");
+        assert_eq!(result.metadata["parent_run_id"], "parent-1");
     }
 }

@@ -5,8 +5,10 @@ edition = "2021"
 license = "MIT"
 
 [features]
-default = []
-full = []
+default = ["standard"]
+minimal = ["microclaw-runtime/minimal"]
+standard = ["microclaw-runtime/standard"]
+full = ["microclaw-runtime/full"]
 
 [dependencies]
 microclaw-core = { version = "0.1.0", path = "../microclaw-core" }

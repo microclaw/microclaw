@@ -5,7 +5,10 @@ edition = "2021"
 license = "MIT"
 
 [features]
-default = []
+default = ["standard"]
+minimal = []
+standard = []
+full = ["standard"]
 
 [dependencies]
 async-trait = "0.1"

@@ -1108,11 +1108,8 @@ fn run_worker(
             request.workspace,
         );
         let headless_runtime = HeadlessRuntime::load(config).await?;
-        let embedded_runtime = headless_runtime
-            .clone()
-            .into_embedded_runtime("work", 1)?;
+        let embedded_runtime = headless_runtime.clone().into_embedded_runtime("work", 1)?;
 
-        let session = request.session.clone();
         let mut runtime_request = RunRequest::new(request.task);
         runtime_request.run_id = Some(RunId::new(run_id.clone()));
         runtime_request.session_id = Some(SessionId::new(request.session));
@@ -1122,6 +1119,7 @@ fn run_worker(
                 ..AgentProfile::default()
             })
             .run(runtime_request);
+        let controller = run.controller();
         let result = 'run_loop: loop {
             tokio::select! {
                 event = run.next_event() => {
@@ -1136,33 +1134,18 @@ fn run_worker(
                 }
                 signal = cancel_rx.recv() => {
                     if signal.is_some() {
-                        loop {
-                            let aborted = headless_runtime.cancel_work_session(&session).await?;
-                            if aborted > 0 {
-                                while let Some(envelope) = run.next_event().await {
-                                    let _ = message_tx.send(WorkRuntimeMessage::Envelope(envelope));
-                                }
-                                break 'run_loop run.result().await.map_err(anyhow::Error::from);
+                        if controller.cancel_confirmed().await.is_ok() {
+                            while let Some(envelope) = run.next_event().await {
+                                let _ = message_tx.send(WorkRuntimeMessage::Envelope(envelope));
                             }
-                            tokio::select! {
-                                event = run.next_event() => {
-                                    match event {
-                                        Some(envelope) => {
-                                            let _ = message_tx.send(WorkRuntimeMessage::Envelope(envelope));
-                                        }
-                                        None => break 'run_loop run.result().await.map_err(anyhow::Error::from),
-                                    }
-                                }
-                                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                            }
+                            break 'run_loop run.result().await.map_err(anyhow::Error::from);
                         }
                     }
                 }
                 update = steer_rx.recv() => {
                     if let Some(update) = update {
-                        let (accepted, message) = match headless_runtime.steer_work_session(&session, &update).await {
-                            Ok(true) => (true, update),
-                            Ok(false) => (false, "The task finished before the update could be queued.".into()),
+                        let (accepted, message) = match controller.steer_confirmed(&update).await {
+                            Ok(()) => (true, update),
                             Err(error) => (false, error.to_string()),
                         };
                         let _ = message_tx.send(WorkRuntimeMessage::SteeringResult {

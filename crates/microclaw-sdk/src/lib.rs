@@ -13,8 +13,8 @@ pub use microclaw_core::runtime_event::{
     RuntimeEventEnvelope, RuntimePlanStep, RuntimePlanStepStatus, RuntimeProcessKind,
 };
 pub use microclaw_runtime::{
-    AgentHandle, ExecutionContext, ExecutionResult, LocalWorker, RunExecutor, RunHandle, Runtime,
-    RuntimeBuildError, RuntimeBuilder, Worker,
+    AgentHandle, ControlRequest, ExecutionContext, ExecutionResult, LocalWorker, RunController,
+    RunExecutor, RunHandle, Runtime, RuntimeBuildError, RuntimeBuilder, Worker,
 };
 
 /// Lower-level contracts for applications that need the complete foundational API.
