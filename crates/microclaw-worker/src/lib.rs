@@ -1,6 +1,6 @@
 //! Authenticated WebSocket transport and host for MicroClaw Workers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -101,7 +101,15 @@ impl WorkerConnection for WebSocketConnection {
 pub struct WorkerHost {
     worker: Arc<dyn Worker>,
     bearer_token: Option<String>,
-    runs: Arc<tokio::sync::Mutex<HashMap<String, Arc<HostedRun>>>>,
+    runs: Arc<tokio::sync::Mutex<HostedRunRegistry>>,
+    max_retained_runs: usize,
+    max_events_per_run: usize,
+}
+
+#[derive(Default)]
+struct HostedRunRegistry {
+    runs: HashMap<String, Arc<HostedRun>>,
+    completed: VecDeque<String>,
 }
 
 struct HostedRun {
@@ -113,7 +121,8 @@ struct HostedRun {
 
 #[derive(Default)]
 struct HostedRunState {
-    events: Vec<microclaw_core::runtime_event::RuntimeEventEnvelope>,
+    events: VecDeque<microclaw_core::runtime_event::RuntimeEventEnvelope>,
+    discarded_through: Option<u64>,
     result: Option<microclaw_core::run_protocol::RunResult>,
 }
 
@@ -122,7 +131,9 @@ impl WorkerHost {
         Self {
             worker: Arc::new(worker),
             bearer_token: None,
-            runs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            runs: Arc::new(tokio::sync::Mutex::new(HostedRunRegistry::default())),
+            max_retained_runs: 256,
+            max_events_per_run: 4096,
         }
     }
 
@@ -130,7 +141,9 @@ impl WorkerHost {
         Self {
             worker,
             bearer_token: None,
-            runs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            runs: Arc::new(tokio::sync::Mutex::new(HostedRunRegistry::default())),
+            max_retained_runs: 256,
+            max_events_per_run: 4096,
         }
     }
 
@@ -139,10 +152,18 @@ impl WorkerHost {
         self
     }
 
+    pub fn replay_limits(mut self, retained_runs: usize, events_per_run: usize) -> Self {
+        self.max_retained_runs = retained_runs.max(1);
+        self.max_events_per_run = events_per_run.max(1);
+        self
+    }
+
     /// Serve until the listener is closed or the task is cancelled.
     pub async fn serve(self, listener: TcpListener) -> Result<(), RuntimeError> {
         let worker = self.worker;
         let runs = self.runs;
+        let max_retained_runs = self.max_retained_runs;
+        let max_events_per_run = self.max_events_per_run;
         let bearer_token = self.bearer_token.map(|token| format!("Bearer {token}"));
         loop {
             let (stream, _) = listener.accept().await.map_err(connection_error)?;
@@ -150,7 +171,15 @@ impl WorkerHost {
             let runs = runs.clone();
             let bearer_token = bearer_token.clone();
             tokio::spawn(async move {
-                let _ = serve_connection(stream, worker, runs, bearer_token).await;
+                let _ = serve_connection(
+                    stream,
+                    worker,
+                    runs,
+                    bearer_token,
+                    max_retained_runs,
+                    max_events_per_run,
+                )
+                .await;
             });
         }
     }
@@ -160,8 +189,10 @@ impl WorkerHost {
 async fn serve_connection(
     stream: TcpStream,
     worker: Arc<dyn Worker>,
-    runs: Arc<tokio::sync::Mutex<HashMap<String, Arc<HostedRun>>>>,
+    runs: Arc<tokio::sync::Mutex<HostedRunRegistry>>,
     bearer_token: Option<String>,
+    max_retained_runs: usize,
+    max_events_per_run: usize,
 ) -> Result<(), RuntimeError> {
     let socket = accept_hdr_async(stream, move |request: &Request, mut response: Response| {
         let authorized = bearer_token.as_ref().is_none_or(|expected| {
@@ -216,7 +247,7 @@ async fn serve_connection(
                 let request_fingerprint =
                     serde_json::to_string(&(profile.clone(), &request)).map_err(protocol_error)?;
                 let mut registry = runs.lock().await;
-                let hosted = if let Some(existing) = registry.get(run_id.as_str()).cloned() {
+                let hosted = if let Some(existing) = registry.runs.get(run_id.as_str()).cloned() {
                     if existing.request_fingerprint != request_fingerprint {
                         send_frame(
                             &mut sink,
@@ -240,8 +271,14 @@ async fn serve_connection(
                         state: Mutex::new(HostedRunState::default()),
                         changed: tokio::sync::Notify::new(),
                     });
-                    registry.insert(run_id.to_string(), hosted.clone());
-                    tokio::spawn(pump_run(run, hosted.clone()));
+                    registry.runs.insert(run_id.to_string(), hosted.clone());
+                    tokio::spawn(pump_run(
+                        run,
+                        hosted.clone(),
+                        runs.clone(),
+                        max_retained_runs,
+                        max_events_per_run,
+                    ));
                     hosted
                 };
                 drop(registry);
@@ -264,7 +301,7 @@ async fn serve_connection(
                 after_sequence,
                 ..
             } => {
-                let hosted = runs.lock().await.get(run_id.as_str()).cloned();
+                let hosted = runs.lock().await.runs.get(run_id.as_str()).cloned();
                 let Some(hosted) = hosted else {
                     send_frame(
                         &mut sink,
@@ -289,14 +326,23 @@ async fn serve_connection(
     Ok(())
 }
 
-async fn pump_run(mut run: microclaw_runtime::RunHandle, hosted: Arc<HostedRun>) {
+async fn pump_run(
+    mut run: microclaw_runtime::RunHandle,
+    hosted: Arc<HostedRun>,
+    registry: Arc<tokio::sync::Mutex<HostedRunRegistry>>,
+    max_retained_runs: usize,
+    max_events_per_run: usize,
+) {
     while let Some(envelope) = run.next_event().await {
-        hosted
+        let mut state = hosted
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .events
-            .push(envelope);
+            .unwrap_or_else(|error| error.into_inner());
+        state.events.push_back(envelope);
+        while state.events.len() > max_events_per_run {
+            state.discarded_through = state.events.pop_front().map(|event| event.sequence);
+        }
+        drop(state);
         hosted.changed.notify_waiters();
     }
     let result =
@@ -316,6 +362,14 @@ async fn pump_run(mut run: microclaw_runtime::RunHandle, hosted: Arc<HostedRun>)
         .unwrap_or_else(|error| error.into_inner())
         .result = Some(result);
     hosted.changed.notify_waiters();
+    let run_id = hosted.controller.id().to_string();
+    let mut registry = registry.lock().await;
+    registry.completed.push_back(run_id);
+    while registry.completed.len() > max_retained_runs {
+        if let Some(expired) = registry.completed.pop_front() {
+            registry.runs.remove(&expired);
+        }
+    }
 }
 
 async fn stream_hosted_run<S, R>(
@@ -331,7 +385,7 @@ where
 {
     let mut cursor = after_sequence;
     loop {
-        let (events, result) = {
+        let (events, result, history_lost) = {
             let state = hosted
                 .state
                 .lock()
@@ -344,8 +398,27 @@ where
                     .cloned()
                     .collect::<Vec<_>>(),
                 state.result.clone(),
+                state
+                    .discarded_through
+                    .is_some_and(|discarded| cursor.is_none_or(|sequence| sequence < discarded)),
             )
         };
+        if history_lost {
+            send_frame(
+                sink,
+                WorkerFrame::Error {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    run_id: Some(run_id),
+                    error: RuntimeError {
+                        code: RuntimeErrorCode::Unavailable,
+                        message: "requested Worker event history has expired".into(),
+                        retryable: true,
+                    },
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         for envelope in events {
             cursor = Some(envelope.sequence);
             send_frame(

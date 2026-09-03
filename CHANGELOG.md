@@ -52,6 +52,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   disconnects, retain ordered events for protocol resume, and treat repeated
   submissions with the same run ID as one execution. Remote SDK clients
   reconnect automatically and suppress already-delivered events.
+- **Bounded Worker replay memory.** Worker hosts retain at most 256 completed
+  runs and 4,096 events per run by default, expose configurable replay limits,
+  and return an explicit retryable error when requested history has expired.
 
 - **Faster non-release CI.** CI and Extended CI now cancel superseded runs on
   the same branch. The final Rust release build reuses the already-required Web
