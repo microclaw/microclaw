@@ -1,0 +1,53 @@
+name: Publish Rust SDK Crates
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to publish from'
+        required: true
+        type: string
+      version:
+        description: 'Expected SDK crate version (for example 0.1.0)'
+        required: true
+        type: string
+      confirm:
+        description: 'Type publish to release immutable crates.io versions'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-sdk-crates
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+      - name: Validate immutable release inputs
+        env:
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          [[ "${CONFIRM}" == "publish" ]]
+          [[ "${EXPECTED_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]
+          git fetch --force origin "refs/tags/${EXPECTED_TAG}:refs/tags/${EXPECTED_TAG}"
+          [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/tags/${EXPECTED_TAG}")" ]]
+          actual_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "microclaw-sdk") | .version')"
+          [[ "${actual_version}" == "${EXPECTED_VERSION}" ]]
+      - name: Publish dependency-ordered crate set
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: scripts/publish_sdk_crates.sh --execute

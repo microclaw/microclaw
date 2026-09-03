@@ -2,7 +2,14 @@
 name = "microclaw-tools"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Tool execution, sandboxing, and policy primitives for MicroClaw"
+keywords = ["ai", "agent", "sandbox", "microclaw"]
+categories = ["development-tools"]
 
 [dependencies]
 anyhow = "1"

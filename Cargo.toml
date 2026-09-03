@@ -19,6 +19,13 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+authors = ["MicroClaw contributors"]
+homepage = "https://microclaw.ai"
+repository = "https://github.com/microclaw/microclaw"
+license = "MIT"
+rust-version = "1.95"
+
 [profile.release]
 strip = true
 lto = "thin"

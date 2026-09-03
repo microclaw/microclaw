@@ -2,7 +2,14 @@
 name = "microclaw-worker"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Authenticated remote Worker host and transport for MicroClaw"
+keywords = ["ai", "agent", "websocket", "microclaw"]
+categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 async-trait = "0.1"

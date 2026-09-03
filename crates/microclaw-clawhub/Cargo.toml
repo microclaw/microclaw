@@ -2,7 +2,14 @@
 name = "microclaw-clawhub"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "ClawHub registry client and package lifecycle for MicroClaw"
+keywords = ["ai", "agent", "registry", "microclaw"]
+categories = ["api-bindings"]
 
 [dependencies]
 microclaw-core = { version = "0.1.0", path = "../microclaw-core" }

@@ -2,7 +2,14 @@
 name = "microclaw-observability"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Metrics, tracing, and logging contracts for MicroClaw"
+keywords = ["ai", "agent", "observability", "microclaw"]
+categories = ["development-tools::debugging"]
 
 [dependencies]
 base64 = "0.22"

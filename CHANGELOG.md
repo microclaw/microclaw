@@ -35,6 +35,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Publishable Rust SDK crate set.** Reusable crates now carry crates.io
+  metadata, and a protected manual workflow publishes them in dependency order
+  with exact version checks, duplicate-release handling, and index propagation
+  waits before publishing `microclaw-sdk`.
+
 - **Resumable remote Worker runs.** WebSocket-hosted runs now survive client
   disconnects, retain ordered events for protocol resume, and treat repeated
   submissions with the same run ID as one execution. Remote SDK clients

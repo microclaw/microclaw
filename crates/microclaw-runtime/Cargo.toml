@@ -2,7 +2,14 @@
 name = "microclaw-runtime"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Embeddable run lifecycle and Worker contracts for MicroClaw"
+keywords = ["ai", "agent", "runtime", "microclaw"]
+categories = ["asynchronous"]
 
 [features]
 default = ["standard"]
