@@ -1,6 +1,7 @@
 //! Authenticated WebSocket transport and host for MicroClaw Workers.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -8,7 +9,7 @@ use http::header::AUTHORIZATION;
 use microclaw_core::run_protocol::{
     RuntimeError, RuntimeErrorCode, WorkerCommand, WorkerFrame, WORKER_PROTOCOL_VERSION,
 };
-use microclaw_runtime::{Worker, WorkerConnection, WorkerTransport};
+use microclaw_runtime::{RunController, Worker, WorkerConnection, WorkerTransport};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
@@ -100,6 +101,20 @@ impl WorkerConnection for WebSocketConnection {
 pub struct WorkerHost {
     worker: Arc<dyn Worker>,
     bearer_token: Option<String>,
+    runs: Arc<tokio::sync::Mutex<HashMap<String, Arc<HostedRun>>>>,
+}
+
+struct HostedRun {
+    request_fingerprint: String,
+    controller: RunController,
+    state: Mutex<HostedRunState>,
+    changed: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+struct HostedRunState {
+    events: Vec<microclaw_core::runtime_event::RuntimeEventEnvelope>,
+    result: Option<microclaw_core::run_protocol::RunResult>,
 }
 
 impl WorkerHost {
@@ -107,6 +122,7 @@ impl WorkerHost {
         Self {
             worker: Arc::new(worker),
             bearer_token: None,
+            runs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -114,6 +130,7 @@ impl WorkerHost {
         Self {
             worker,
             bearer_token: None,
+            runs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -125,13 +142,15 @@ impl WorkerHost {
     /// Serve until the listener is closed or the task is cancelled.
     pub async fn serve(self, listener: TcpListener) -> Result<(), RuntimeError> {
         let worker = self.worker;
+        let runs = self.runs;
         let bearer_token = self.bearer_token.map(|token| format!("Bearer {token}"));
         loop {
             let (stream, _) = listener.accept().await.map_err(connection_error)?;
             let worker = worker.clone();
+            let runs = runs.clone();
             let bearer_token = bearer_token.clone();
             tokio::spawn(async move {
-                let _ = serve_connection(stream, worker, bearer_token).await;
+                let _ = serve_connection(stream, worker, runs, bearer_token).await;
             });
         }
     }
@@ -141,6 +160,7 @@ impl WorkerHost {
 async fn serve_connection(
     stream: TcpStream,
     worker: Arc<dyn Worker>,
+    runs: Arc<tokio::sync::Mutex<HashMap<String, Arc<HostedRun>>>>,
     bearer_token: Option<String>,
 ) -> Result<(), RuntimeError> {
     let socket = accept_hdr_async(stream, move |request: &Request, mut response: Response| {
@@ -193,8 +213,38 @@ async fn serve_connection(
                     .run_id
                     .clone()
                     .ok_or_else(|| protocol_error("remote submission requires run_id"))?;
-                let mut run = worker.submit(profile, *request).await?;
-                let controller = run.controller();
+                let request_fingerprint =
+                    serde_json::to_string(&(profile.clone(), &request)).map_err(protocol_error)?;
+                let mut registry = runs.lock().await;
+                let hosted = if let Some(existing) = registry.get(run_id.as_str()).cloned() {
+                    if existing.request_fingerprint != request_fingerprint {
+                        send_frame(
+                            &mut sink,
+                            WorkerFrame::Error {
+                                protocol_version: WORKER_PROTOCOL_VERSION,
+                                run_id: Some(run_id),
+                                error: protocol_error(
+                                    "run_id was already submitted with a different request",
+                                ),
+                            },
+                        )
+                        .await?;
+                        continue;
+                    }
+                    existing
+                } else {
+                    let run = worker.submit(profile, *request).await?;
+                    let hosted = Arc::new(HostedRun {
+                        request_fingerprint,
+                        controller: run.controller(),
+                        state: Mutex::new(HostedRunState::default()),
+                        changed: tokio::sync::Notify::new(),
+                    });
+                    registry.insert(run_id.to_string(), hosted.clone());
+                    tokio::spawn(pump_run(run, hosted.clone()));
+                    hosted
+                };
+                drop(registry);
                 send_frame(
                     &mut sink,
                     WorkerFrame::Accepted {
@@ -203,75 +253,144 @@ async fn serve_connection(
                     },
                 )
                 .await?;
-                loop {
-                    tokio::select! {
-                        event = run.next_event() => match event {
-                            Some(envelope) => send_frame(&mut sink, WorkerFrame::Event {
-                                protocol_version: WORKER_PROTOCOL_VERSION,
-                                envelope,
-                            }).await?,
-                            None => {
-                                let result = run.result().await?;
-                                send_frame(&mut sink, WorkerFrame::Result {
-                                    protocol_version: WORKER_PROTOCOL_VERSION,
-                                    result,
-                                }).await?;
-                                break;
-                            }
-                        },
-                        message = stream.next() => {
-                            let Some(message) = message else {
-                                return Err(connection_error("Worker client disconnected"));
-                            };
-                            let control = decode_command(message.map_err(connection_error)?)?;
-                            control.validate_protocol()?;
-                            let WorkerCommand::Control { control, .. } = control else {
-                                send_frame(&mut sink, WorkerFrame::Error {
-                                    protocol_version: WORKER_PROTOCOL_VERSION,
-                                    run_id: Some(run_id.clone()),
-                                    error: protocol_error("only control commands are accepted during a run"),
-                                }).await?;
-                                continue;
-                            };
-                            let outcome = match control {
-                                microclaw_core::run_protocol::RuntimeControl::Cancel { .. } => {
-                                    controller.cancel_confirmed().await
-                                }
-                                microclaw_core::run_protocol::RuntimeControl::Steer { message, .. } => {
-                                    controller.steer_confirmed(message).await
-                                }
-                                microclaw_core::run_protocol::RuntimeControl::ResolveApproval {
-                                    approval_id, decision, ..
-                                } => controller.resolve_approval_confirmed(approval_id, decision).await,
-                            };
-                            match outcome {
-                                Ok(()) => send_frame(&mut sink, WorkerFrame::ControlAcknowledged {
-                                    protocol_version: WORKER_PROTOCOL_VERSION,
-                                    run_id: run_id.clone(),
-                                }).await?,
-                                Err(error) => send_frame(&mut sink, WorkerFrame::Error {
-                                    protocol_version: WORKER_PROTOCOL_VERSION,
-                                    run_id: Some(run_id.clone()),
-                                    error,
-                                }).await?,
-                            }
-                        }
-                    }
-                }
+                stream_hosted_run(&mut sink, &mut stream, hosted, run_id, None).await?;
+                return Ok(());
             }
             WorkerCommand::Control { .. } => {
                 return Err(protocol_error("control command has no active run"));
             }
-            WorkerCommand::ResumeEvents { .. } => {
-                return Err(RuntimeError {
-                    code: RuntimeErrorCode::Unavailable,
-                    message: "event resume is not enabled by this Worker host".into(),
-                    retryable: false,
-                });
+            WorkerCommand::ResumeEvents {
+                run_id,
+                after_sequence,
+                ..
+            } => {
+                let hosted = runs.lock().await.get(run_id.as_str()).cloned();
+                let Some(hosted) = hosted else {
+                    send_frame(
+                        &mut sink,
+                        WorkerFrame::Error {
+                            protocol_version: WORKER_PROTOCOL_VERSION,
+                            run_id: Some(run_id),
+                            error: RuntimeError {
+                                code: RuntimeErrorCode::Unavailable,
+                                message: "run is not known by this Worker host".into(),
+                                retryable: true,
+                            },
+                        },
+                    )
+                    .await?;
+                    continue;
+                };
+                stream_hosted_run(&mut sink, &mut stream, hosted, run_id, after_sequence).await?;
+                return Ok(());
             }
         }
     }
     Ok(())
+}
+
+async fn pump_run(mut run: microclaw_runtime::RunHandle, hosted: Arc<HostedRun>) {
+    while let Some(envelope) = run.next_event().await {
+        hosted
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .events
+            .push(envelope);
+        hosted.changed.notify_waiters();
+    }
+    let result =
+        run.result()
+            .await
+            .unwrap_or_else(|error| microclaw_core::run_protocol::RunResult {
+                run_id: hosted.controller.id().clone(),
+                session_id: microclaw_core::run_protocol::SessionId::new(""),
+                status: microclaw_core::run_protocol::RunStatus::Failed,
+                final_text: String::new(),
+                error: Some(error),
+                metadata: Default::default(),
+            });
+    hosted
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .result = Some(result);
+    hosted.changed.notify_waiters();
+}
+
+async fn stream_hosted_run<S, R>(
+    sink: &mut S,
+    stream: &mut R,
+    hosted: Arc<HostedRun>,
+    run_id: microclaw_core::run_protocol::RunId,
+    after_sequence: Option<u64>,
+) -> Result<(), RuntimeError>
+where
+    S: futures_util::Sink<Message, Error = WebSocketError> + Unpin,
+    R: futures_util::Stream<Item = Result<Message, WebSocketError>> + Unpin,
+{
+    let mut cursor = after_sequence;
+    loop {
+        let (events, result) = {
+            let state = hosted
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            (
+                state
+                    .events
+                    .iter()
+                    .filter(|event| cursor.is_none_or(|value| event.sequence > value))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                state.result.clone(),
+            )
+        };
+        for envelope in events {
+            cursor = Some(envelope.sequence);
+            send_frame(
+                sink,
+                WorkerFrame::Event {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    envelope,
+                },
+            )
+            .await?;
+        }
+        if let Some(result) = result {
+            send_frame(
+                sink,
+                WorkerFrame::Result {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    result,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        tokio::select! {
+            _ = hosted.changed.notified() => {}
+            message = stream.next() => {
+                let Some(message) = message else { return Err(connection_error("Worker client disconnected")); };
+                let command = decode_command(message.map_err(connection_error)?)?;
+                command.validate_protocol()?;
+                let WorkerCommand::Control { control, .. } = command else {
+                    send_frame(sink, WorkerFrame::Error { protocol_version: WORKER_PROTOCOL_VERSION, run_id: Some(run_id.clone()), error: protocol_error("only control commands are accepted during a run") }).await?;
+                    continue;
+                };
+                let outcome = match control {
+                    microclaw_core::run_protocol::RuntimeControl::Cancel { run_id: target } if target == run_id => hosted.controller.cancel_confirmed().await,
+                    microclaw_core::run_protocol::RuntimeControl::Steer { run_id: target, message } if target == run_id => hosted.controller.steer_confirmed(message).await,
+                    microclaw_core::run_protocol::RuntimeControl::ResolveApproval { run_id: target, approval_id, decision } if target == run_id => hosted.controller.resolve_approval_confirmed(approval_id, decision).await,
+                    _ => Err(protocol_error("control command targets a different run")),
+                };
+                match outcome {
+                    Ok(()) => send_frame(sink, WorkerFrame::ControlAcknowledged { protocol_version: WORKER_PROTOCOL_VERSION, run_id: run_id.clone() }).await?,
+                    Err(error) => send_frame(sink, WorkerFrame::Error { protocol_version: WORKER_PROTOCOL_VERSION, run_id: Some(run_id.clone()), error }).await?,
+                }
+            }
+        }
+    }
 }
 
 fn decode_command(message: Message) -> Result<WorkerCommand, RuntimeError> {
@@ -335,6 +454,7 @@ mod tests {
     use microclaw_runtime::{
         ExecutionContext, ExecutionResult, LocalWorker, RemoteWorker, RunExecutor, Runtime,
     };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
@@ -366,6 +486,28 @@ mod tests {
                 remote_workers: true,
                 ..RuntimeCapabilities::default()
             }
+        }
+    }
+
+    struct CountingEcho(Arc<AtomicUsize>);
+
+    #[async_trait]
+    impl RunExecutor for CountingEcho {
+        async fn execute(
+            &self,
+            _profile: AgentProfile,
+            request: RunRequest,
+            context: ExecutionContext,
+        ) -> Result<ExecutionResult, RuntimeError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            context.emit(RuntimeEvent::TextDelta {
+                delta: "persisted".into(),
+            })?;
+            Ok(ExecutionResult::new(
+                SessionId::new("resumed-session"),
+                request.prompt,
+            ))
         }
     }
 
@@ -416,5 +558,59 @@ mod tests {
         };
         assert_eq!(error.code, RuntimeErrorCode::Unavailable);
         host.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_worker_keeps_run_alive_and_resumes_after_disconnect() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runtime = Runtime::builder()
+            .executor(CountingEcho(executions.clone()))
+            .build()
+            .unwrap();
+        let host = WorkerHost::new(LocalWorker::new(runtime, "worker-1", "Test worker"));
+        let host_task = tokio::spawn(async move {
+            let _ = host.serve(listener).await;
+        });
+        let transport = WebSocketWorkerTransport::new(format!("ws://{address}"));
+        let run_id = microclaw_core::run_protocol::RunId::new("durable-run");
+        let mut first = transport.connect().await.unwrap();
+        let mut request = RunRequest::new("survive disconnect");
+        request.run_id = Some(run_id.clone());
+        first
+            .send(WorkerCommand::Submit {
+                protocol_version: WORKER_PROTOCOL_VERSION,
+                profile: AgentProfile::default(),
+                request: Box::new(request),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            first.receive().await.unwrap(),
+            Some(WorkerFrame::Accepted { .. })
+        ));
+        drop(first);
+
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        let mut resumed = transport.connect().await.unwrap();
+        resumed
+            .send(WorkerCommand::ResumeEvents {
+                protocol_version: WORKER_PROTOCOL_VERSION,
+                run_id: run_id.clone(),
+                after_sequence: None,
+            })
+            .await
+            .unwrap();
+        let result = loop {
+            match resumed.receive().await.unwrap() {
+                Some(WorkerFrame::Event { .. }) => {}
+                Some(WorkerFrame::Result { result, .. }) => break result,
+                frame => panic!("unexpected resumed frame: {frame:?}"),
+            }
+        };
+        assert_eq!(result.run_id, run_id);
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        host_task.abort();
     }
 }

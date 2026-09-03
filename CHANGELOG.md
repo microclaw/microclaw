@@ -35,6 +35,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Resumable remote Worker runs.** WebSocket-hosted runs now survive client
+  disconnects, retain ordered events for protocol resume, and treat repeated
+  submissions with the same run ID as one execution. Remote SDK clients
+  reconnect automatically and suppress already-delivered events.
+
 - **Faster non-release CI.** CI and Extended CI now cancel superseded runs on
   the same branch. The final Rust release build reuses the already-required Web
   and docs jobs instead of rebuilding them, and Extended CI stops producing a

@@ -50,11 +50,34 @@ impl RunExecutor for RemoteExecutor {
 
         let mut controls_open = true;
         let mut pending_control: Option<ControlRequest> = None;
+        let mut last_remote_sequence = None;
+        let mut reconnect_attempts = 0_u8;
         loop {
             tokio::select! {
                 frame = connection.receive() => {
-                    let Some(frame) = frame? else {
-                        return Err(unavailable("remote Worker disconnected before returning a result"));
+                    let frame = match frame {
+                        Ok(Some(frame)) => {
+                            reconnect_attempts = 0;
+                            frame
+                        }
+                        Ok(None) | Err(_) if reconnect_attempts < 3 => {
+                            reconnect_attempts += 1;
+                            connection = self.transport.connect().await?;
+                            connection.send(WorkerCommand::ResumeEvents {
+                                protocol_version: WORKER_PROTOCOL_VERSION,
+                                run_id: run_id.clone(),
+                                after_sequence: last_remote_sequence,
+                            }).await?;
+                            if let Some(control) = pending_control.as_ref() {
+                                connection.send(WorkerCommand::Control {
+                                    protocol_version: WORKER_PROTOCOL_VERSION,
+                                    control: control.control().clone(),
+                                }).await?;
+                            }
+                            continue;
+                        }
+                        Ok(None) => return Err(unavailable("remote Worker disconnected before returning a result")),
+                        Err(error) => return Err(error),
                     };
                     frame.validate_protocol()?;
                     match frame {
@@ -65,6 +88,10 @@ impl RunExecutor for RemoteExecutor {
                             if envelope.run_id != run_id.as_str() {
                                 return Err(protocol_error("remote Worker returned an event for a different run"));
                             }
+                            if last_remote_sequence.is_some_and(|sequence| envelope.sequence <= sequence) {
+                                continue;
+                            }
+                            last_remote_sequence = Some(envelope.sequence);
                             if !matches!(
                                 envelope.event,
                                 microclaw_core::runtime_event::RuntimeEvent::FinalResponse { .. }
@@ -298,10 +325,12 @@ mod tests {
     #[derive(Clone)]
     struct ScriptedTransport {
         connections: Arc<Mutex<VecDeque<VecDeque<WorkerFrame>>>>,
+        sent: Arc<Mutex<Vec<WorkerCommand>>>,
     }
 
     struct ScriptedConnection {
         frames: VecDeque<WorkerFrame>,
+        sent: Arc<Mutex<Vec<WorkerCommand>>>,
     }
 
     #[async_trait]
@@ -313,13 +342,17 @@ mod tests {
                 .unwrap()
                 .pop_front()
                 .ok_or_else(|| unavailable("missing scripted connection"))?;
-            Ok(Box::new(ScriptedConnection { frames }))
+            Ok(Box::new(ScriptedConnection {
+                frames,
+                sent: self.sent.clone(),
+            }))
         }
     }
 
     #[async_trait]
     impl WorkerConnection for ScriptedConnection {
-        async fn send(&mut self, _command: WorkerCommand) -> Result<(), RuntimeError> {
+        async fn send(&mut self, command: WorkerCommand) -> Result<(), RuntimeError> {
+            self.sent.lock().unwrap().push(command);
             Ok(())
         }
 
@@ -379,6 +412,7 @@ mod tests {
                     },
                 ]),
             ]))),
+            sent: Arc::new(Mutex::new(Vec::new())),
         };
         let worker = RemoteWorker::connect(transport).await.unwrap();
         assert_eq!(worker.descriptor().id, WorkerId::new("remote-1"));
@@ -395,5 +429,73 @@ mod tests {
             RuntimeEvent::FinalResponse { .. }
         ));
         assert_eq!(run.result().await.unwrap().final_text, "done");
+    }
+
+    #[tokio::test]
+    async fn remote_worker_resumes_without_replaying_delivered_events() {
+        let run_id = RunId::new("resumable-run");
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let result = WorkerFrame::Result {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            result: RunResult {
+                run_id: run_id.clone(),
+                session_id: SessionId::new("resumed-session"),
+                status: RunStatus::Completed,
+                final_text: "resumed".into(),
+                error: None,
+                metadata: BTreeMap::new(),
+            },
+        };
+        let event = |sequence, delta: &str| WorkerFrame::Event {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            envelope: RuntimeEventEnvelope::new(
+                run_id.to_string(),
+                sequence,
+                RuntimeEvent::TextDelta {
+                    delta: delta.into(),
+                },
+            ),
+        };
+        let transport = ScriptedTransport {
+            connections: Arc::new(Mutex::new(VecDeque::from([
+                VecDeque::from([WorkerFrame::Descriptor {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    descriptor: descriptor(),
+                }]),
+                VecDeque::from([
+                    WorkerFrame::Accepted {
+                        protocol_version: WORKER_PROTOCOL_VERSION,
+                        run_id: run_id.clone(),
+                    },
+                    event(0, "first"),
+                ]),
+                VecDeque::from([event(0, "duplicate"), event(1, "second"), result]),
+            ]))),
+            sent: sent.clone(),
+        };
+        let worker = RemoteWorker::connect(transport).await.unwrap();
+        let mut request = RunRequest::new("resume remotely");
+        request.run_id = Some(run_id.clone());
+        let mut run = worker
+            .submit(AgentProfile::default(), request)
+            .await
+            .unwrap();
+
+        let mut deltas = Vec::new();
+        while let Some(envelope) = run.next_event().await {
+            if let RuntimeEvent::TextDelta { delta } = envelope.event {
+                deltas.push(delta);
+            }
+        }
+        assert_eq!(deltas, ["first", "second"]);
+        assert_eq!(run.result().await.unwrap().final_text, "resumed");
+        assert!(sent.lock().unwrap().iter().any(|command| matches!(
+            command,
+            WorkerCommand::ResumeEvents {
+                run_id: resumed,
+                after_sequence: Some(0),
+                ..
+            } if resumed == &run_id
+        )));
     }
 }
