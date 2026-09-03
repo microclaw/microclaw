@@ -35,6 +35,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Faster non-release CI.** CI and Extended CI now cancel superseded runs on
+  the same branch. The final Rust release build reuses the already-required Web
+  and docs jobs instead of rebuilding them, and Extended CI stops producing a
+  disposable Work DMG on every push; signed bundles remain gated by the release
+  workflow.
+
 - **Shared Work and headless execution API.** Headless CLI and native Work task
   execution now enter the existing Agent Engine through the same embeddable
   Runtime contract while preserving session persistence, cancellation,

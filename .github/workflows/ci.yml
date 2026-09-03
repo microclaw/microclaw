@@ -11,6 +11,10 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   web:
     name: Web And Docs Build (node ${{ matrix.node }})
@@ -141,15 +145,6 @@ jobs:
     needs: [web, docker-build, security-audit, rust-ubuntu, rust-macos, stability-smoke]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm --prefix web ci
-      - run: npm --prefix web run build
-      - run: npm --prefix site ci
-      - run: npm --prefix site run build
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.95.0
