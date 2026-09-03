@@ -456,6 +456,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.image_names.outputs.images }}
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
             type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
@@ -486,9 +488,23 @@ jobs:
             jq -r '.tags[] | select(startswith("ghcr.io/")) | "--tag\n" + .' \
               <<<"${DOCKER_METADATA_OUTPUT_JSON}"
           )
-          mapfile -t digests < <(
-            printf 'ghcr.io/%s@sha256:%s\n' "${GITHUB_REPOSITORY}" *
-          )
+
+          shopt -s nullglob
+          digest_files=(*)
+          if [[ "${#digest_files[@]}" -ne 2 ]]; then
+            echo "Expected exactly 2 platform digests, found ${#digest_files[@]}." >&2
+            exit 1
+          fi
+
+          digests=()
+          for digest in "${digest_files[@]}"; do
+            if [[ ! "${digest}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Invalid SHA-256 digest filename: ${digest}" >&2
+              exit 1
+            fi
+            digests+=("ghcr.io/${GITHUB_REPOSITORY}@sha256:${digest}")
+          done
+
           docker buildx imagetools create "${tags[@]}" "${digests[@]}"
 
       - name: Copy multi-platform manifest to Docker Hub
