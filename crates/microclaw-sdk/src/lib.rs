@@ -22,3 +22,12 @@ pub use microclaw_runtime::{
 pub mod core {
     pub use microclaw_core::*;
 }
+
+/// Supported default MicroClaw services for applications using the `full` preset.
+///
+/// The compatibility facade keeps product internals out of ordinary SDK imports while the
+/// concrete Agent Engine continues its physical crate extraction.
+#[cfg(feature = "full")]
+pub mod engine {
+    pub use microclaw::*;
+}

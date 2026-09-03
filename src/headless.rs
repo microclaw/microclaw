@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, RwLock};
 
-use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentRequestContext};
+use crate::agent_engine::{
+    process_with_agent_profile_guarded_mode, AgentEvent, AgentRequestContext,
+};
 use crate::chat_turn_queue::PendingMessage;
 use crate::config::Config;
 use crate::hooks::HookManager;
@@ -105,7 +107,7 @@ impl HeadlessRunExecutor {
 impl RunExecutor for HeadlessRunExecutor {
     async fn execute(
         &self,
-        _profile: AgentProfile,
+        profile: AgentProfile,
         request: RunRequest,
         mut context: ExecutionContext,
     ) -> Result<ExecutionResult, RuntimeError> {
@@ -114,7 +116,7 @@ impl RunExecutor for HeadlessRunExecutor {
             .clone()
             .unwrap_or_else(|| SessionId::new("default"));
         let (legacy_event_tx, mut legacy_event_rx) = mpsc::unbounded_channel();
-        let run = self.runtime.run(
+        let run = self.runtime.run_with_profile(
             HeadlessRunRequest {
                 prompt: request.prompt,
                 session: Some(session.to_string()),
@@ -122,6 +124,7 @@ impl RunExecutor for HeadlessRunExecutor {
                 run_id: Some(context.run_id().to_string()),
                 caller_channel: self.caller_channel.clone(),
             },
+            profile,
             Some(legacy_event_tx),
         );
         tokio::pin!(run);
@@ -328,6 +331,16 @@ impl HeadlessRuntime {
         request: HeadlessRunRequest,
         event_tx: Option<mpsc::UnboundedSender<RuntimeEventEnvelope>>,
     ) -> anyhow::Result<HeadlessRunResult> {
+        self.run_with_profile(request, AgentProfile::default(), event_tx)
+            .await
+    }
+
+    pub async fn run_with_profile(
+        &self,
+        request: HeadlessRunRequest,
+        profile: AgentProfile,
+        event_tx: Option<mpsc::UnboundedSender<RuntimeEventEnvelope>>,
+    ) -> anyhow::Result<HeadlessRunResult> {
         let session_name = request
             .session
             .clone()
@@ -356,7 +369,7 @@ impl HeadlessRuntime {
             }
             None => (None, None),
         };
-        let response = process_with_agent_with_events(
+        let response = process_with_agent_profile_guarded_mode(
             &self.state,
             AgentRequestContext {
                 caller_channel: &caller_channel,
@@ -366,6 +379,10 @@ impl HeadlessRuntime {
             None,
             None,
             raw_event_tx.as_ref(),
+            None,
+            false,
+            None,
+            profile,
         )
         .await;
         drop(raw_event_tx);
@@ -580,6 +597,14 @@ mod tests {
 
     struct SlowLlm;
 
+    struct CapturingLlm {
+        system_prompt: Arc<std::sync::Mutex<String>>,
+    }
+
+    struct ToolCapturingLlm {
+        tools: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
     struct SteeringLlm {
         calls: Arc<std::sync::atomic::AtomicUsize>,
         first_call_started: Arc<tokio::sync::Notify>,
@@ -614,6 +639,48 @@ mod tests {
         ) -> Result<MessagesResponse, MicroClawError> {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             unreachable!("the cancellation test must stop the pending model call")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for CapturingLlm {
+        async fn send_message(
+            &self,
+            system: &str,
+            _messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            *self.system_prompt.lock().unwrap() = system.to_string();
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text {
+                    text: "profile applied".into(),
+                }],
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ToolCapturingLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            _messages: Vec<Message>,
+            tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            *self.tools.lock().unwrap() = tools
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect();
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text {
+                    text: "policy applied".into(),
+                }],
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            })
         }
     }
 
@@ -757,6 +824,77 @@ mod tests {
             envelope.event,
             RuntimeEvent::FinalResponse { ref text } if text == "real agent loop response"
         )));
+    }
+
+    #[tokio::test]
+    async fn embedded_agent_profile_applies_prompt_and_selected_skills() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let captured = Arc::new(std::sync::Mutex::new(String::new()));
+        let headless = runtime_with_llm(
+            directory.path(),
+            Box::new(CapturingLlm {
+                system_prompt: captured.clone(),
+            }),
+        );
+        let skill_dir = headless.state.skills.skills_dir().join("rust-review");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: rust-review\ndescription: Review Rust\n---\nCHECK_AGENT_SKILL_BODY\n",
+        )
+        .unwrap();
+        let runtime = headless.into_embedded_runtime(WORK_CHANNEL, 1).unwrap();
+        let profile = AgentProfile {
+            name: "reviewer".into(),
+            system_prompt: Some("CHECK_AGENT_PROFILE_PROMPT".into()),
+            skills: vec!["rust-review".into()],
+            ..AgentProfile::default()
+        };
+
+        let result = runtime
+            .agent(profile)
+            .run(RunRequest::new("review this crate"))
+            .result()
+            .await
+            .unwrap();
+
+        assert_eq!(result.final_text, "profile applied");
+        let system = captured.lock().unwrap();
+        assert!(system.contains("CHECK_AGENT_PROFILE_PROMPT"), "{system}");
+        assert!(system.contains("CHECK_AGENT_SKILL_BODY"), "{system}");
+    }
+
+    #[tokio::test]
+    async fn embedded_read_only_profile_hides_mutating_tools() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runtime = runtime_with_llm(
+            directory.path(),
+            Box::new(ToolCapturingLlm {
+                tools: captured.clone(),
+            }),
+        )
+        .into_embedded_runtime(WORK_CHANNEL, 1)
+        .unwrap();
+        let profile = AgentProfile {
+            name: "reviewer".into(),
+            tool_policy: microclaw_core::run_protocol::ToolPolicy::ReadOnly,
+            ..AgentProfile::default()
+        };
+
+        runtime
+            .agent(profile)
+            .run(RunRequest::new("inspect this project"))
+            .result()
+            .await
+            .unwrap();
+
+        let tools = captured.lock().unwrap();
+        assert!(tools.iter().any(|name| name == "read_file"), "{tools:?}");
+        assert!(!tools.iter().any(|name| name == "write_file"), "{tools:?}");
+        assert!(!tools.iter().any(|name| name == "bash"), "{tools:?}");
     }
 
     #[tokio::test]

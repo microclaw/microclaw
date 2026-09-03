@@ -9,11 +9,11 @@ publish = false
 anyhow = "1"
 chrono = "0.4"
 dirs = "6"
-microclaw = { path = "../..", default-features = false }
 microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
 microclaw-clawhub = { version = "0.1.0", path = "../microclaw-clawhub" }
 microclaw-storage = { version = "0.1.0", path = "../microclaw-storage" }
 microclaw-runtime = { version = "0.1.0", path = "../microclaw-runtime" }
+microclaw-sdk = { version = "0.1.0", path = "../microclaw-sdk", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

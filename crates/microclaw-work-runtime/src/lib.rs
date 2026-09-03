@@ -13,6 +13,7 @@ use microclaw_clawhub::install::InstallOptions;
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
 use microclaw_core::run_protocol::{AgentProfile, RunId, RunRequest, SessionId};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
+use microclaw_sdk::engine as microclaw;
 use microclaw_storage::db::Database;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

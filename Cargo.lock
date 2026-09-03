@@ -6173,6 +6173,7 @@ name = "microclaw-sdk"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "microclaw",
  "microclaw-core",
  "microclaw-runtime",
  "tokio",
@@ -6262,10 +6263,10 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs",
- "microclaw",
  "microclaw-clawhub",
  "microclaw-core",
  "microclaw-runtime",
+ "microclaw-sdk",
  "microclaw-storage",
  "serde",
  "serde_json",

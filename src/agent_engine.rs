@@ -19,7 +19,7 @@ use microclaw_core::llm_types::{
 };
 use microclaw_core::run_protocol::{
     AgentProfile, CallerContext, RunId, RunRequest, RunStatus, RuntimeCapabilities, RuntimeControl,
-    RuntimeError, RuntimeErrorCode, SessionId,
+    RuntimeError, RuntimeErrorCode, SessionId, ToolPolicy,
 };
 pub use microclaw_core::runtime_event::RuntimeEvent as AgentEvent;
 use microclaw_core::text::floor_char_boundary;
@@ -36,6 +36,7 @@ use opentelemetry_semantic_conventions::attribute::{
 
 tokio::task_local! {
     static EXPERIENCE_RUN_ID: String;
+    static RUNTIME_AGENT_PROFILE: AgentProfile;
 }
 
 const RUNTIME_RESUME_PROMPT: &str = "[runtime_resume]: The previous process stopped at a safe \
@@ -186,7 +187,7 @@ struct AgentTurnExecutor {
 impl RunExecutor for AgentTurnExecutor {
     async fn execute(
         &self,
-        _profile: AgentProfile,
+        profile: AgentProfile,
         request: RunRequest,
         mut runtime_context: ExecutionContext,
     ) -> Result<ExecutionResult, RuntimeError> {
@@ -220,15 +221,18 @@ impl RunExecutor for AgentTurnExecutor {
             chat_id,
             chat_type: &chat_type,
         };
-        let execution = process_with_agent_with_events_guarded_mode_inner(
-            &self.state,
-            context,
-            self.override_prompt.as_deref(),
-            self.image_data.clone(),
-            Some(&legacy_tx),
-            turn_guard,
-            self.resume_interrupted,
-            self.experience_run_id.clone(),
+        let execution = RUNTIME_AGENT_PROFILE.scope(
+            profile,
+            process_with_agent_with_events_guarded_mode_inner(
+                &self.state,
+                context,
+                self.override_prompt.as_deref(),
+                self.image_data.clone(),
+                Some(&legacy_tx),
+                turn_guard,
+                self.resume_interrupted,
+                self.experience_run_id.clone(),
+            ),
         );
         tokio::pin!(execution);
 
@@ -463,6 +467,32 @@ async fn process_with_agent_with_events_guarded_mode(
     resume_interrupted: bool,
     experience_run_id_override: Option<String>,
 ) -> anyhow::Result<String> {
+    process_with_agent_profile_guarded_mode(
+        state,
+        context,
+        override_prompt,
+        image_data,
+        event_tx,
+        turn_guard,
+        resume_interrupted,
+        experience_run_id_override,
+        AgentProfile::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn process_with_agent_profile_guarded_mode(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+    override_prompt: Option<&str>,
+    image_data: Option<(String, String)>,
+    event_tx: Option<&UnboundedSender<AgentEvent>>,
+    turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
+    resume_interrupted: bool,
+    experience_run_id_override: Option<String>,
+    profile: AgentProfile,
+) -> anyhow::Result<String> {
     let executor = AgentTurnExecutor {
         state: state.clone(),
         override_prompt: override_prompt.map(str::to_string),
@@ -490,7 +520,7 @@ async fn process_with_agent_with_events_guarded_mode(
         "chat_type".into(),
         Value::String(context.chat_type.to_string()),
     );
-    let mut run = runtime.agent(AgentProfile::default()).run(request);
+    let mut run = runtime.agent(profile).run(request);
     while let Some(envelope) = run.next_event().await {
         if let Some(tx) = event_tx {
             let _ = tx.send(envelope.event);
@@ -1722,9 +1752,19 @@ async fn process_with_agent_logic(
     )
     .await;
     let memory_context = format!("{}{}", file_memory, db_memory);
-    let skills_catalog = state
-        .skills
-        .build_skills_catalog_for_query(&query, state.config.skills_catalog_top_k);
+    let runtime_profile = RUNTIME_AGENT_PROFILE.try_with(Clone::clone).ok();
+    let skills_catalog = match runtime_profile.as_ref() {
+        Some(profile) if !profile.skills.is_empty() => {
+            state.skills.build_skills_catalog_for_names_and_query(
+                &profile.skills,
+                &query,
+                state.config.skills_catalog_top_k,
+            )
+        }
+        _ => state
+            .skills
+            .build_skills_catalog_for_query(&query, state.config.skills_catalog_top_k),
+    };
     let soul_content = load_soul_content(&state.config, context.caller_channel, chat_id);
     let user_model = load_user_model(state, context.caller_channel, chat_id);
     let project_context = load_project_context(&state.config, context.caller_channel, chat_id);
@@ -1742,6 +1782,15 @@ async fn process_with_agent_logic(
         project_context.as_deref(),
         user_model.as_deref(),
     );
+    if let Some(agent_prompt) = runtime_profile
+        .as_ref()
+        .and_then(|profile| profile.system_prompt.as_deref())
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+    {
+        system_prompt.push_str("\n\n# Agent Profile\n\n");
+        system_prompt.push_str(agent_prompt);
+    }
     let experience_environment = experience_environment_fingerprint(state, context);
     let experience_query = query.clone();
     let search_environment = experience_environment.clone();
@@ -1950,7 +1999,23 @@ async fn process_with_agent_logic(
     }
 
     let learning_foundry_mode = context.caller_channel == "learning_foundry";
-    let tool_defs = if plan_mode_active {
+    let profile_read_only = runtime_profile
+        .as_ref()
+        .is_some_and(|profile| profile.tool_policy == ToolPolicy::ReadOnly);
+    let tool_defs = if profile_read_only {
+        state
+            .tools
+            .definitions()
+            .iter()
+            .filter(|definition| {
+                matches!(
+                    microclaw_tools::runtime::tool_concurrency_class(&definition.name),
+                    microclaw_tools::runtime::ToolConcurrencyClass::ReadOnly
+                )
+            })
+            .cloned()
+            .collect()
+    } else if plan_mode_active {
         // Read-only research tools only — nothing that mutates state.
         state
             .tools
@@ -1990,6 +2055,12 @@ async fn process_with_agent_logic(
     } else {
         state.tools.definitions().to_vec()
     };
+    let profile_allowed_tools = profile_read_only.then(|| {
+        tool_defs
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect::<std::collections::HashSet<_>>()
+    });
     let mut skill_env_files: Vec<String> = {
         let db = state.db.clone();
         call_blocking(db, move |db| db.load_session_skill_envs(chat_id))
@@ -2779,6 +2850,23 @@ async fn process_with_agent_logic(
             let repeat_window = state.config.tool_repeat_window;
             let repeat_limit = state.config.tool_repeat_limit.max(1);
             for call in raw_pending_calls {
+                if profile_allowed_tools
+                    .as_ref()
+                    .is_some_and(|allowed| !allowed.contains(&call.name))
+                {
+                    short_circuit_results.push((
+                        call.id.clone(),
+                        ContentBlock::ToolResult {
+                            tool_use_id: call.id,
+                            content: format!(
+                                "Tool `{}` is unavailable because this Agent Profile is read-only.",
+                                call.name
+                            ),
+                            is_error: Some(true),
+                        },
+                    ));
+                    continue;
+                }
                 if repeat_window == 0 || call.name == "fetch_artifact" {
                     pending_calls.push(call);
                     continue;

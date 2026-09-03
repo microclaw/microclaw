@@ -582,6 +582,45 @@ impl SkillManager {
         out
     }
 
+    /// Build a catalog restricted to an Agent Profile's explicit skill selection.
+    ///
+    /// Unlike the global query-aware catalog, explicitly assigned skills are all included with
+    /// their instructions (subject to the same per-skill body cap). Missing, disabled, or
+    /// incompatible skills are represented as unavailable instead of silently enabling a
+    /// different skill.
+    pub fn build_skills_catalog_for_names_and_query(
+        &self,
+        names: &[String],
+        _query: &str,
+        _top_k: usize,
+    ) -> String {
+        let mut seen = std::collections::HashSet::new();
+        let mut catalog = String::from("<available_skills>\n");
+        for name in names {
+            let name = name.trim();
+            if name.is_empty() || !seen.insert(name.to_ascii_lowercase()) {
+                continue;
+            }
+            match self.load_skill_checked(name) {
+                Ok((metadata, body)) => {
+                    catalog.push_str(&format!(
+                        "<skill name=\"{}\" description=\"{}\">\n{}\n</skill>\n",
+                        escape_xml_attribute(&metadata.name),
+                        escape_xml_attribute(&metadata.description),
+                        truncate_chars(&body, MAX_INLINED_SKILL_BODY_CHARS),
+                    ));
+                }
+                Err(reason) => catalog.push_str(&format!(
+                    "<skill-unavailable name=\"{}\">{}</skill-unavailable>\n",
+                    escape_xml_attribute(name),
+                    escape_xml_text(&reason),
+                )),
+            }
+        }
+        catalog.push_str("</available_skills>");
+        catalog
+    }
+
     /// Build a user-facing formatted list of available skills.
     pub fn list_skills_formatted(&self) -> String {
         let skills = self.discover_skills();
@@ -767,6 +806,22 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     }
     let truncated: String = s.chars().take(max_chars).collect();
     format!("{truncated}...")
+}
+
+fn escape_xml_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn escape_xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Attempt to convert single-line frontmatter (`--- name: x description: y --- body`)
@@ -1180,6 +1235,36 @@ Instructions.
         let sm = SkillManager::new(dir.to_str().unwrap());
         let catalog = sm.build_skills_catalog();
         assert!(catalog.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn selected_skill_catalog_includes_only_profile_assignments() {
+        let dir = std::env::temp_dir().join(format!(
+            "microclaw_selected_skills_{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_skill(
+            &dir,
+            "rust-review",
+            "Review Rust",
+            "Check ownership and errors.",
+        );
+        write_skill(&dir, "deploy", "Deploy services", "Push the image.");
+        let manager = SkillManager::from_skills_dir(dir.to_str().unwrap());
+
+        let catalog = manager.build_skills_catalog_for_names_and_query(
+            &["rust-review".into()],
+            "deploy rust",
+            3,
+        );
+
+        assert!(catalog.contains("rust-review"), "catalog: {catalog}");
+        assert!(
+            catalog.contains("Check ownership and errors."),
+            "catalog: {catalog}"
+        );
+        assert!(!catalog.contains("Push the image."), "catalog: {catalog}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

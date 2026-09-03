@@ -26,6 +26,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   ACP, Scheduler, headless, and Work now enter Agent execution through the same
   `RunRequest`, `RunHandle`, and `RunResult` path. Runtime controls support
   explicit acceptance or rejection instead of reporting only queue delivery.
+- **Effective embedded Agent profiles.** SDK Agent profiles now apply their
+  custom system prompt, explicit Skill selection, and read-only tool policy to
+  the real shared Agent Engine. Work consumes the full SDK facade instead of
+  declaring a direct dependency on the root product package.
 
 ## 0.5.5 - 2026-09-02
 
