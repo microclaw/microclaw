@@ -15,6 +15,7 @@ members = [
     "crates/microclaw-runtime",
     "crates/microclaw-engine",
     "crates/microclaw-sdk",
+    "crates/microclaw-worker",
 ]
 resolver = "2"
 

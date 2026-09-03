@@ -27,6 +27,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   remote Worker, validate frame and run identity, stream its events into a
   normal `RunHandle`, forward acknowledged controls, refresh health, and map
   terminal frames into the same result contract used by Local Workers.
+- **Authenticated WebSocket Worker transport.** The new `microclaw-worker`
+  crate hosts Local or custom Workers over WebSocket, uses constant-time Bearer
+  token checks, and provides an SDK transport for discovery, health, events,
+  controls, and terminal results without pulling Server or UI dependencies into
+  the Worker boundary.
 
 ### Changed
 

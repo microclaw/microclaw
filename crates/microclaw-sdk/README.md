@@ -40,4 +40,6 @@ capacity, labels, health, draining, resume, and `wait_for_idle()` for graceful a
 shutdown. `Worker::submit` returns an explicit `Unavailable` error while draining or unavailable.
 The serialized `WorkerCommand` and `WorkerFrame` types use `WORKER_PROTOCOL_VERSION` for remote
 transports. Implement `WorkerTransport` and `WorkerConnection`, then call
-`RemoteWorker::connect(...)`; remote runs return the same `RunHandle` used by local execution.
+`RemoteWorker::connect(...)`; remote runs return the same `RunHandle` used by local execution. The
+`remote-worker` feature (included by `full`) provides `WebSocketWorkerTransport` and an
+authenticated `WorkerHost` for real network execution.

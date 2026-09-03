@@ -8,12 +8,14 @@ license = "MIT"
 default = ["standard"]
 minimal = ["microclaw-runtime/minimal"]
 standard = ["microclaw-runtime/standard"]
-full = ["microclaw-runtime/full", "dep:microclaw-engine"]
+remote-worker = ["dep:microclaw-worker"]
+full = ["microclaw-runtime/full", "dep:microclaw-engine", "remote-worker"]
 
 [dependencies]
 microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
 microclaw-runtime = { version = "0.1.0", path = "../microclaw-runtime" }
 microclaw-engine = { version = "0.1.0", path = "../microclaw-engine", optional = true }
+microclaw-worker = { version = "0.1.0", path = "../microclaw-worker", optional = true }
 serde_json = "1"
 thiserror = "2"
 

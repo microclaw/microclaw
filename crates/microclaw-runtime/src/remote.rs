@@ -65,7 +65,13 @@ impl RunExecutor for RemoteExecutor {
                             if envelope.run_id != run_id.as_str() {
                                 return Err(protocol_error("remote Worker returned an event for a different run"));
                             }
-                            context.emit(envelope.event)?;
+                            if !matches!(
+                                envelope.event,
+                                microclaw_core::runtime_event::RuntimeEvent::FinalResponse { .. }
+                                    | microclaw_core::runtime_event::RuntimeEvent::Cancelled { .. }
+                            ) {
+                                context.emit(envelope.event)?;
+                            }
                         }
                         WorkerFrame::ControlAcknowledged { run_id: acknowledged, .. } => {
                             ensure_run_id(&run_id, &acknowledged)?;

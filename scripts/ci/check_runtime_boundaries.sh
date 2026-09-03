@@ -40,3 +40,11 @@ for forbidden in microclaw axum gpui teloxide serenity; do
     exit 1
   fi
 done
+
+worker_tree="$(cargo tree -p microclaw-worker -e normal --prefix none)"
+for forbidden in microclaw microclaw-engine axum gpui teloxide serenity; do
+  if printf '%s\n' "$worker_tree" | cut -d' ' -f1 | grep -Fxq "$forbidden"; then
+    printf 'microclaw-worker must not depend on product, Engine, channel, or UI package %s\n' "$forbidden" >&2
+    exit 1
+  fi
+done

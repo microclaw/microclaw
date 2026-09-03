@@ -24,6 +24,9 @@ pub use microclaw_runtime::{
     RuntimeStats, Worker, WorkerConnection, WorkerTransport,
 };
 
+#[cfg(feature = "remote-worker")]
+pub use microclaw_worker::{WebSocketWorkerTransport, WorkerHost};
+
 /// An SDK-level error that does not expose Server or Agent Engine implementation types.
 #[derive(Debug, thiserror::Error)]
 pub enum SdkError {
