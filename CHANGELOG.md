@@ -4,6 +4,23 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Added
+
+- **Embeddable Rust runtime foundation.** `microclaw-core` now defines stable
+  Agent, Run, control, capability, and Worker contracts. The new
+  `microclaw-runtime` crate owns reusable run handles, event streaming,
+  cancellation, steering, concurrency, and Local Worker execution, while
+  `microclaw-sdk` provides a small third-party facade and compiling example.
+
+### Changed
+
+- **Shared Work and headless execution API.** Headless CLI and native Work task
+  execution now enter the existing Agent Engine through the same embeddable
+  Runtime contract while preserving session persistence, cancellation,
+  steering, and versioned events.
+
 ## 0.5.5 - 2026-09-02
 
 ### Added

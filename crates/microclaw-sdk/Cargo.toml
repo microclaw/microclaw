@@ -1,0 +1,17 @@
+[package]
+name = "microclaw-sdk"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[features]
+default = []
+full = []
+
+[dependencies]
+microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
+microclaw-runtime = { version = "0.1.0", path = "../microclaw-runtime" }
+
+[dev-dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

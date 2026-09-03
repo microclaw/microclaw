@@ -23,7 +23,12 @@ use crate::skills::SkillManager;
 use crate::tools::ToolRegistry;
 use crate::{embedding, llm};
 use microclaw_channels::channel_adapter::ChannelRegistry;
+use microclaw_core::run_protocol::{
+    AgentProfile, RunRequest, RuntimeCapabilities, RuntimeControl, RuntimeError, RuntimeErrorCode,
+    SessionId,
+};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
+use microclaw_runtime::{ExecutionContext, ExecutionResult, RunExecutor};
 use microclaw_storage::db::{call_blocking, Database, StoredMessage};
 
 pub const HEADLESS_CHANNEL: &str = "headless";
@@ -72,8 +77,141 @@ pub struct HeadlessRunResult {
 /// It owns the existing provider-neutral Agent Engine state but starts no
 /// channel, Web server, or scheduler. Both the CLI and Work adapters call this
 /// service instead of assembling or copying an Agent Loop.
+#[derive(Clone)]
 pub struct HeadlessRuntime {
     state: Arc<AppState>,
+}
+
+/// Adapter from the existing shared Agent Engine to the embeddable Runtime contract.
+///
+/// This is intentionally channel-free: the caller selects the logical channel used for policy,
+/// persistence, cancellation, and steering. Product UIs consume `microclaw-runtime` rather than
+/// calling the Agent Engine directly.
+pub struct HeadlessRunExecutor {
+    runtime: HeadlessRuntime,
+    caller_channel: String,
+}
+
+impl HeadlessRunExecutor {
+    pub fn new(runtime: HeadlessRuntime, caller_channel: impl Into<String>) -> Self {
+        Self {
+            runtime,
+            caller_channel: caller_channel.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl RunExecutor for HeadlessRunExecutor {
+    async fn execute(
+        &self,
+        _profile: AgentProfile,
+        request: RunRequest,
+        mut context: ExecutionContext,
+    ) -> Result<ExecutionResult, RuntimeError> {
+        let session = request
+            .session_id
+            .clone()
+            .unwrap_or_else(|| SessionId::new("default"));
+        let (legacy_event_tx, mut legacy_event_rx) = mpsc::unbounded_channel();
+        let run = self.runtime.run(
+            HeadlessRunRequest {
+                prompt: request.prompt,
+                session: Some(session.to_string()),
+                sender_name: self.caller_channel.clone(),
+                run_id: Some(context.run_id().to_string()),
+                caller_channel: self.caller_channel.clone(),
+            },
+            Some(legacy_event_tx),
+        );
+        tokio::pin!(run);
+
+        let result = loop {
+            tokio::select! {
+                result = &mut run => break result,
+                event = legacy_event_rx.recv() => {
+                    if let Some(envelope) = event {
+                        forward_runtime_event(&context, envelope.event)?;
+                    }
+                }
+                control = context.next_control() => {
+                    match control {
+                        Some(RuntimeControl::Cancel { .. }) => {
+                            self.runtime
+                                .cancel_session_for_channel(&self.caller_channel, session.as_str())
+                                .await
+                                .map_err(runtime_internal_error)?;
+                        }
+                        Some(RuntimeControl::Steer { message, .. }) => {
+                            self.runtime
+                                .steer_session_for_channel(
+                                    &self.caller_channel,
+                                    session.as_str(),
+                                    &message,
+                                )
+                                .await
+                                .map_err(runtime_internal_error)?;
+                        }
+                        Some(RuntimeControl::ResolveApproval { .. }) => {
+                            return Err(RuntimeError {
+                                code: RuntimeErrorCode::Unavailable,
+                                message: "the current Agent Engine approval bridge is unavailable"
+                                    .into(),
+                                retryable: false,
+                            });
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+        .map_err(runtime_internal_error)?;
+
+        while let Ok(envelope) = legacy_event_rx.try_recv() {
+            forward_runtime_event(&context, envelope.event)?;
+        }
+
+        let mut output = ExecutionResult::new(session, result.response);
+        output.metadata.insert(
+            "chat_id".into(),
+            serde_json::Value::Number(result.chat_id.into()),
+        );
+        Ok(output)
+    }
+
+    fn capabilities(&self) -> RuntimeCapabilities {
+        RuntimeCapabilities {
+            streaming: true,
+            cancellation: true,
+            steering: true,
+            approvals: false,
+            skills: true,
+            subagents: true,
+            remote_workers: false,
+        }
+    }
+}
+
+fn forward_runtime_event(
+    context: &ExecutionContext,
+    event: microclaw_core::runtime_event::RuntimeEvent,
+) -> Result<(), RuntimeError> {
+    if matches!(
+        event,
+        microclaw_core::runtime_event::RuntimeEvent::FinalResponse { .. }
+            | microclaw_core::runtime_event::RuntimeEvent::Cancelled { .. }
+    ) {
+        return Ok(());
+    }
+    context.emit(event)
+}
+
+fn runtime_internal_error(error: impl std::fmt::Display) -> RuntimeError {
+    RuntimeError {
+        code: RuntimeErrorCode::Internal,
+        message: error.to_string(),
+        retryable: false,
+    }
 }
 
 impl HeadlessRuntime {
@@ -152,6 +290,18 @@ impl HeadlessRuntime {
             log_exporter: None,
         });
         Self { state }
+    }
+
+    /// Build the public embeddable Runtime over this configured Agent Engine.
+    pub fn into_embedded_runtime(
+        self,
+        caller_channel: impl Into<String>,
+        max_concurrent_runs: usize,
+    ) -> Result<microclaw_runtime::Runtime, microclaw_runtime::RuntimeBuildError> {
+        microclaw_runtime::Runtime::builder()
+            .executor(HeadlessRunExecutor::new(self, caller_channel))
+            .max_concurrent_runs(max_concurrent_runs)
+            .build()
     }
 
     pub async fn run(
@@ -345,25 +495,37 @@ pub async fn run_once(
     session: Option<String>,
     json: bool,
 ) -> anyhow::Result<i32> {
-    let runtime = HeadlessRuntime::new(config, db, memory, skills, mcp_manager);
+    let runtime = HeadlessRuntime::new(config, db, memory, skills, mcp_manager)
+        .into_embedded_runtime(HEADLESS_CHANNEL, 1)?;
+    let mut request = RunRequest::new(prompt);
+    request.session_id = session.map(SessionId::new);
     let result = runtime
-        .run(HeadlessRunRequest::cli(prompt, session), None)
+        .agent(AgentProfile {
+            name: "MicroClaw CLI".into(),
+            ..AgentProfile::default()
+        })
+        .run(request)
+        .result()
         .await;
 
     match result {
         Ok(result) => {
+            let chat_id = result
+                .metadata
+                .get("chat_id")
+                .and_then(serde_json::Value::as_i64);
             if json {
                 println!(
                     "{}",
                     serde_json::json!({
                         "ok": true,
-                        "response": result.response,
-                        "chat_id": result.chat_id,
-                        "run_id": result.run_id,
+                        "response": result.final_text,
+                        "chat_id": chat_id,
+                        "run_id": result.run_id.to_string(),
                     })
                 );
             } else {
-                println!("{}", result.response);
+                println!("{}", result.final_text);
             }
             Ok(0)
         }

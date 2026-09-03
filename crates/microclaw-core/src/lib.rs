@@ -5,5 +5,6 @@ pub mod error;
 pub mod injection_scan;
 pub mod llm_types;
 pub mod redact;
+pub mod run_protocol;
 pub mod runtime_event;
 pub mod text;

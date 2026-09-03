@@ -19,6 +19,7 @@ This directory tracks RFCs for the MicroClaw feature-completion program.
 - `0005-subagents-runtime-v1.md`
 - `0006-typescript-plugin-host.md`
 - `0007-plugin-host-runtime-decision.md`
+- `0008-embeddable-runtime-sdk-worker.md`
 
 ## Status Lifecycle
 

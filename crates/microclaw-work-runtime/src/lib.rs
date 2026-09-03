@@ -11,6 +11,7 @@ use microclaw::llm::create_provider;
 use microclaw::tools::{Tool, sync_skills::SyncSkillsTool};
 use microclaw_clawhub::install::InstallOptions;
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
+use microclaw_core::run_protocol::{AgentProfile, RunId, RunRequest, SessionId};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
 use microclaw_storage::db::Database;
 use std::path::{Path, PathBuf};
@@ -1106,50 +1107,60 @@ fn run_worker(
             Config::load_from_path_for_headless(&config_path)?,
             request.workspace,
         );
-        let runtime = HeadlessRuntime::load(config).await?;
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let event_message_tx = message_tx.clone();
-        let event_forwarder = tokio::spawn(async move {
-            while let Some(envelope) = event_rx.recv().await {
-                if event_message_tx
-                    .send(WorkRuntimeMessage::Envelope(envelope))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
+        let headless_runtime = HeadlessRuntime::load(config).await?;
+        let embedded_runtime = headless_runtime
+            .clone()
+            .into_embedded_runtime("work", 1)?;
 
         let session = request.session.clone();
-        let run = runtime.run(
-            HeadlessRunRequest::work(request.task, Some(request.session), run_id.clone()),
-            Some(event_tx),
-        );
-        tokio::pin!(run);
-        let result = loop {
+        let mut runtime_request = RunRequest::new(request.task);
+        runtime_request.run_id = Some(RunId::new(run_id.clone()));
+        runtime_request.session_id = Some(SessionId::new(request.session));
+        let mut run = embedded_runtime
+            .agent(AgentProfile {
+                name: "MicroClaw Work".into(),
+                ..AgentProfile::default()
+            })
+            .run(runtime_request);
+        let result = 'run_loop: loop {
             tokio::select! {
-                result = &mut run => break result,
+                event = run.next_event() => {
+                    match event {
+                        Some(envelope) => {
+                            if message_tx.send(WorkRuntimeMessage::Envelope(envelope)).is_err() {
+                                break run.result().await.map_err(anyhow::Error::from);
+                            }
+                        }
+                        None => break run.result().await.map_err(anyhow::Error::from),
+                    }
+                }
                 signal = cancel_rx.recv() => {
                     if signal.is_some() {
-                        let completed_while_waiting = loop {
-                            let aborted = runtime.cancel_work_session(&session).await?;
+                        loop {
+                            let aborted = headless_runtime.cancel_work_session(&session).await?;
                             if aborted > 0 {
-                                break None;
+                                while let Some(envelope) = run.next_event().await {
+                                    let _ = message_tx.send(WorkRuntimeMessage::Envelope(envelope));
+                                }
+                                break 'run_loop run.result().await.map_err(anyhow::Error::from);
                             }
                             tokio::select! {
-                                result = &mut run => break Some(result),
+                                event = run.next_event() => {
+                                    match event {
+                                        Some(envelope) => {
+                                            let _ = message_tx.send(WorkRuntimeMessage::Envelope(envelope));
+                                        }
+                                        None => break 'run_loop run.result().await.map_err(anyhow::Error::from),
+                                    }
+                                }
                                 _ = tokio::time::sleep(Duration::from_millis(10)) => {}
                             }
-                        };
-                        break match completed_while_waiting {
-                            Some(result) => result,
-                            None => run.await,
-                        };
+                        }
                     }
                 }
                 update = steer_rx.recv() => {
                     if let Some(update) = update {
-                        let (accepted, message) = match runtime.steer_work_session(&session, &update).await {
+                        let (accepted, message) = match headless_runtime.steer_work_session(&session, &update).await {
                             Ok(true) => (true, update),
                             Ok(false) => (false, "The task finished before the update could be queued.".into()),
                             Err(error) => (false, error.to_string()),
@@ -1163,14 +1174,13 @@ fn run_worker(
                 }
             }
         };
-        event_forwarder.await?;
         result
     });
 
     match result {
         Ok(result) => {
             let _ = message_tx.send(WorkRuntimeMessage::Completed {
-                run_id: result.run_id,
+                run_id: result.run_id.to_string(),
             });
         }
         Err(error) => send_failure(&message_tx, &run_id, error.to_string()),
