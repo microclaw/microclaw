@@ -181,6 +181,7 @@ MicroClaw Work 当前正式支持 Apple Silicon macOS；Linux 和 Windows portab
 |---|---|
 | 安装、配置和运行 | [快速上手](docs/getting-started.md) |
 | 在 Rust 中嵌入 Agent Engine | [SDK 指南](crates/microclaw-sdk/README.md)与[可编译示例](crates/microclaw-sdk/examples/configured_skilled_agent.rs) |
+| 发布 Rust SDK crates | [Rust SDK 发布手册](docs/operations/rust-sdk-release.md) |
 | 查看常见示例 | [Cookbook](docs/cookbook.md) |
 | 查看所有内置工具 | [自动生成的工具目录](docs/generated/tools.md) |
 | 核对配置默认值 | [自动生成的配置默认值](docs/generated/config-defaults.md)和 [`microclaw.config.example.yaml`](microclaw.config.example.yaml) |

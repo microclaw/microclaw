@@ -185,6 +185,7 @@ Start with the [documentation map](docs/README.md). It separates everyday use, e
 |---|---|
 | Install, configure, and run | [Getting started](docs/getting-started.md) |
 | Embed the Agent Engine in Rust | [SDK guide](crates/microclaw-sdk/README.md) and [compiling example](crates/microclaw-sdk/examples/configured_skilled_agent.rs) |
+| Publish the Rust SDK crates | [Rust SDK release runbook](docs/operations/rust-sdk-release.md) |
 | Browse examples | [Cookbook](docs/cookbook.md) |
 | See every built-in tool | [Generated tool catalog](docs/generated/tools.md) |
 | Review config defaults | [Generated config defaults](docs/generated/config-defaults.md) and [`microclaw.config.example.yaml`](microclaw.config.example.yaml) |
