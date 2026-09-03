@@ -24,7 +24,7 @@ authors = ["MicroClaw contributors"]
 homepage = "https://microclaw.ai"
 repository = "https://github.com/microclaw/microclaw"
 license = "MIT"
-rust-version = "1.95"
+rust-version = "1.93"
 
 [profile.release]
 strip = true
