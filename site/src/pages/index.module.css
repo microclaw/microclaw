@@ -2,7 +2,7 @@
   position: relative;
   overflow: hidden;
   color: #dce2f5;
-  padding: 6.5rem 0 5.5rem;
+  padding: 5.6rem 0 4.8rem;
   background:
     radial-gradient(circle at 16% 10%, rgba(187, 154, 247, 0.26), transparent 40%),
     radial-gradient(circle at 84% 18%, rgba(125, 207, 255, 0.26), transparent 42%),
@@ -29,18 +29,16 @@
   opacity: 0.24;
 }
 
-.heroLayout {
+.heroContent {
   position: relative;
   z-index: 1;
-  display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
-  gap: 2rem;
-  align-items: center;
+  min-width: 0;
 }
 
-.heroContent {
-  max-width: 680px;
-  min-width: 0;
+.heroLead {
+  max-width: 880px;
+  margin: 0 auto;
+  text-align: center;
 }
 
 .eyebrow {
@@ -92,7 +90,9 @@
   margin: 0;
   font-size: 1.2rem;
   font-weight: 600;
-  max-width: 58ch;
+  max-width: 64ch;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .heroSubtext {
@@ -101,36 +101,9 @@
   color: rgba(220, 226, 245, 0.82);
   font-size: 1.05rem;
   line-height: 1.6;
-  max-width: 64ch;
-}
-
-.heroActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.8rem;
-  margin-top: 2rem;
-}
-
-.darkButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 3rem;
-  border-radius: 8px;
-  padding: 0.72rem 1.5rem;
-  border: 1px solid rgba(125, 207, 255, 0.32);
-  background: rgba(36, 40, 59, 0.8);
-  color: #f8fcff;
-  font-weight: 700;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: 0 10px 26px rgba(4, 8, 18, 0.32);
-}
-
-.darkButton:hover {
-  text-decoration: none;
-  color: #ffffff;
-  transform: translateY(-1px);
-  box-shadow: 0 14px 32px rgba(9, 25, 32, 0.34);
+  max-width: 72ch;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .heroMetaRow {
@@ -138,6 +111,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
+  justify-content: center;
 }
 
 .heroMetaRow span {
@@ -150,6 +124,169 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.pathGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 3rem;
+}
+
+.pathCard {
+  --path-accent: #bb9af7;
+  --path-accent-rgb: 187, 154, 247;
+  display: flex;
+  min-width: 0;
+  min-height: 31rem;
+  flex-direction: column;
+  padding: 1.55rem;
+  border: 1px solid rgba(var(--path-accent-rgb), 0.44);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(var(--path-accent-rgb), 0.19), transparent 40%),
+    linear-gradient(155deg, rgba(26, 28, 46, 0.98), rgba(11, 14, 28, 0.98));
+  box-shadow:
+    0 26px 58px rgba(2, 8, 24, 0.4),
+    inset 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.pathCardWork {
+  --path-accent: #7dcfff;
+  --path-accent-rgb: 125, 207, 255;
+}
+
+.pathCardServer {
+  --path-accent: #e0af68;
+  --path-accent-rgb: 224, 175, 104;
+}
+
+.pathTopline,
+.pathCommandLabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.pathNumber {
+  color: var(--path-accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.pathBadge {
+  padding: 0.28rem 0.65rem;
+  border: 1px solid rgba(var(--path-accent-rgb), 0.38);
+  border-radius: 999px;
+  background: rgba(var(--path-accent-rgb), 0.1);
+  color: var(--path-accent);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pathCard h2 {
+  margin: 1.3rem 0 0;
+  color: #f7f8ff;
+  font-size: clamp(1.65rem, 2.4vw, 2.2rem);
+}
+
+.pathAudience {
+  margin: 0.45rem 0 0;
+  color: var(--path-accent);
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
+.pathDescription {
+  min-height: 4.8rem;
+  margin: 0.9rem 0 0;
+  color: rgba(226, 232, 251, 0.78);
+  line-height: 1.55;
+}
+
+.pathBenefits {
+  display: grid;
+  gap: 0.55rem;
+  margin: 1.1rem 0 1.3rem;
+  padding: 0;
+  list-style: none;
+}
+
+.pathBenefits li {
+  position: relative;
+  padding-left: 1rem;
+  color: rgba(233, 238, 252, 0.88);
+  font-size: 0.88rem;
+}
+
+.pathBenefits li::before {
+  position: absolute;
+  left: 0;
+  color: var(--path-accent);
+  content: '•';
+}
+
+.pathCommandLabel {
+  margin-top: auto;
+  color: rgba(218, 226, 247, 0.6);
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pathCommandRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
+.pathCommandRow code {
+  min-width: 0;
+  min-height: 4.1rem;
+  padding: 0.72rem;
+  overflow: auto;
+  border: 1px solid rgba(var(--path-accent-rgb), 0.22);
+  border-radius: 7px;
+  background: rgba(2, 7, 18, 0.72);
+  color: #f3f6ff;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.pathCommandRow button {
+  align-self: stretch;
+  padding: 0.65rem;
+  border: 1px solid rgba(var(--path-accent-rgb), 0.42);
+  border-radius: 7px;
+  background: rgba(var(--path-accent-rgb), 0.12);
+  color: var(--path-accent);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.pathAction {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(var(--path-accent-rgb), 0.2);
+  color: var(--path-accent);
+  font-weight: 800;
+}
+
+.pathAction:hover {
+  color: #ffffff;
+  text-decoration: none;
 }
 
 .installPanel {
@@ -664,7 +801,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .heroLayout,
   .archLayout,
   .ctaCard {
     grid-template-columns: 1fr;
@@ -672,13 +808,22 @@
     align-items: flex-start;
   }
 
-  .installPanel {
-    min-width: 0;
-    max-width: 100%;
-  }
-
   .ctaActions {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 960px) {
+  .pathGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .pathCard {
+    min-height: 0;
+  }
+
+  .pathDescription {
+    min-height: 0;
   }
 }
 
@@ -701,25 +846,12 @@
     grid-template-columns: 1fr;
   }
 
-  .installTabs {
+  .pathCommandRow {
     grid-template-columns: 1fr;
   }
 
-  .installRow {
-    grid-template-columns: 1fr;
-  }
-
-  .copyButton {
-    width: 100%;
-  }
-
-  .heroActions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .darkButton {
-    width: 100%;
+  .pathCommandRow button {
+    min-height: 2.8rem;
   }
 
   .section,
