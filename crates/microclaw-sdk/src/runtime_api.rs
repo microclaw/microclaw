@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "full")]
 use std::path::{Path, PathBuf};
@@ -6,8 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::{AgentId, AgentProfile, RunRequest, ToolPolicy};
 pub use microclaw_engine::{
     AgentHandle, ControlRequest, ExecutionContext, ExecutionResult, LocalWorker, RemoteWorker,
-    RunController, RunExecutor, RunHandle, Runtime, RuntimeBuildError, RuntimeBuilder,
-    RuntimeStats, Worker, WorkerConnection, WorkerTransport,
+    RemoteWorkerOptions, RunController, RunExecutor, RunHandle, Runtime, RuntimeBuildError,
+    RuntimeBuilder, RuntimeStats, Worker, WorkerConnection, WorkerTransport,
 };
 
 #[cfg(feature = "remote-worker")]
@@ -26,6 +27,8 @@ pub enum SdkError {
     EmptyAgentName,
     #[error("Skill '{0}' is not available in this runtime")]
     SkillUnavailable(String),
+    #[error("could not manage Skill state: {0}")]
+    SkillManagement(String),
 }
 
 impl From<RuntimeBuildError> for SdkError {
@@ -43,6 +46,7 @@ pub enum SdkErrorCode {
     Runtime,
     InvalidAgent,
     SkillUnavailable,
+    SkillManagement,
 }
 
 impl SdkError {
@@ -53,6 +57,7 @@ impl SdkError {
             Self::Runtime(_) => SdkErrorCode::Runtime,
             Self::EmptyAgentName => SdkErrorCode::InvalidAgent,
             Self::SkillUnavailable(_) => SdkErrorCode::SkillUnavailable,
+            Self::SkillManagement(_) => SdkErrorCode::SkillManagement,
         }
     }
 
@@ -68,6 +73,7 @@ pub struct SkillSummary {
     pub description: String,
     pub source: String,
     pub version: Option<String>,
+    pub enabled: bool,
     pub available: bool,
     pub unavailable_reason: Option<String>,
 }
@@ -76,6 +82,41 @@ pub struct SkillSummary {
 #[derive(Debug, Clone, Default)]
 pub struct SkillCatalog {
     skills: Vec<SkillSummary>,
+}
+
+/// Stable SDK projection of a durable task delegated by the Main Agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DelegatedTask {
+    pub run_id: String,
+    pub parent_run_id: Option<String>,
+    pub depth: u32,
+    pub label: Option<String>,
+    pub task: String,
+    pub status: String,
+    pub progress: Option<String>,
+    pub result: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub cancel_requested: bool,
+}
+
+/// Result of installing or updating a Skill package.
+#[cfg(feature = "full")]
+#[derive(Debug, Clone)]
+pub struct SkillInstallResult {
+    pub message: String,
+    pub warnings: Vec<String>,
+    pub skills: SkillCatalog,
+}
+
+/// Result of recoverably removing a Skill package.
+#[cfg(feature = "full")]
+#[derive(Debug, Clone)]
+pub struct SkillRemovalResult {
+    pub archived_at: PathBuf,
+    pub skills: SkillCatalog,
 }
 
 impl SkillCatalog {
@@ -98,11 +139,29 @@ impl SkillCatalog {
     }
 }
 
+#[cfg(feature = "full")]
+fn skill_catalog(skills: Vec<microclaw_engine::skills::SkillAvailability>) -> SkillCatalog {
+    SkillCatalog::new(skills.into_iter().map(|skill| {
+        let enabled = skill.reason.as_deref() != Some("Skill is disabled for this runtime.");
+        SkillSummary {
+            name: skill.meta.name,
+            description: skill.meta.description,
+            source: skill.meta.source,
+            version: skill.meta.version,
+            enabled,
+            available: skill.available,
+            unavailable_reason: skill.reason,
+        }
+    }))
+}
+
 /// A configured, embeddable MicroClaw runtime.
 #[derive(Clone)]
 pub struct MicroClaw {
     runtime: Runtime,
-    skills: SkillCatalog,
+    skills: Arc<RwLock<SkillCatalog>>,
+    #[cfg(feature = "full")]
+    engine: Option<microclaw_engine::headless::HeadlessRuntime>,
 }
 
 impl MicroClaw {
@@ -111,13 +170,15 @@ impl MicroClaw {
     pub fn from_runtime(runtime: Runtime) -> Self {
         Self {
             runtime,
-            skills: SkillCatalog::default(),
+            skills: Arc::new(RwLock::new(SkillCatalog::default())),
+            #[cfg(feature = "full")]
+            engine: None,
         }
     }
 
     /// Attach a host-provided Skill catalog to a custom Runtime.
     pub fn with_skill_catalog(mut self, skills: SkillCatalog) -> Self {
-        self.skills = skills;
+        self.skills = Arc::new(RwLock::new(skills));
         self
     }
 
@@ -143,8 +204,135 @@ impl MicroClaw {
         &self.runtime
     }
 
-    pub fn skills(&self) -> &SkillCatalog {
-        &self.skills
+    pub fn skills(&self) -> SkillCatalog {
+        self.skills
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    /// Reload Skills from disk and return the current catalog.
+    #[cfg(feature = "full")]
+    pub fn reload_skills(&self) -> Result<SkillCatalog, SdkError> {
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            SdkError::SkillManagement("this Runtime has no configured Agent Engine".into())
+        })?;
+        let catalog = skill_catalog(engine.reload_skill_catalog(true));
+        *self
+            .skills
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = catalog.clone();
+        Ok(catalog)
+    }
+
+    /// Enable or disable one installed Skill for this Runtime.
+    #[cfg(feature = "full")]
+    pub fn set_skill_enabled(
+        &self,
+        name: impl AsRef<str>,
+        enabled: bool,
+    ) -> Result<SkillCatalog, SdkError> {
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            SdkError::SkillManagement("this Runtime has no configured Agent Engine".into())
+        })?;
+        engine
+            .set_skill_enabled(name.as_ref(), enabled)
+            .map_err(SdkError::SkillManagement)?;
+        self.reload_skills()
+    }
+
+    /// Install or update a local, GitHub, or ClawHub Skill and refresh the catalog.
+    #[cfg(feature = "full")]
+    pub async fn install_skill(
+        &self,
+        reference: impl AsRef<str>,
+    ) -> Result<SkillInstallResult, SdkError> {
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            SdkError::SkillManagement("this Runtime has no configured Agent Engine".into())
+        })?;
+        let outcome = engine
+            .install_skill(reference.as_ref())
+            .await
+            .map_err(SdkError::SkillManagement)?;
+        Ok(SkillInstallResult {
+            message: outcome.message,
+            warnings: outcome.warnings,
+            skills: self.reload_skills()?,
+        })
+    }
+
+    /// Import a Skill from a local directory containing `SKILL.md`.
+    #[cfg(feature = "full")]
+    pub async fn install_local_skill(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<SkillInstallResult, SdkError> {
+        let reference = path.as_ref().to_string_lossy().into_owned();
+        self.install_skill(reference).await
+    }
+
+    /// Recoverably remove one Skill by moving it into the managed archive directory.
+    #[cfg(feature = "full")]
+    pub fn remove_skill(&self, name: impl AsRef<str>) -> Result<SkillRemovalResult, SdkError> {
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            SdkError::SkillManagement("this Runtime has no configured Agent Engine".into())
+        })?;
+        let archived_at = engine
+            .archive_skill(name.as_ref())
+            .map_err(SdkError::SkillManagement)?;
+        Ok(SkillRemovalResult {
+            archived_at,
+            skills: self.reload_skills()?,
+        })
+    }
+
+    /// List Subagent tasks delegated by the Main Agent in one session.
+    #[cfg(feature = "full")]
+    pub fn delegated_tasks(
+        &self,
+        session: impl AsRef<str>,
+        limit: usize,
+    ) -> Result<Vec<DelegatedTask>, SdkError> {
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            SdkError::Runtime("this Runtime has no configured Agent Engine".into())
+        })?;
+        engine
+            .subagent_runs(session.as_ref(), limit)
+            .map(|runs| {
+                runs.into_iter()
+                    .map(|run| DelegatedTask {
+                        run_id: run.run_id,
+                        parent_run_id: run.parent_run_id,
+                        depth: run.depth,
+                        label: run.label,
+                        task: run.task,
+                        status: run.status,
+                        progress: run.progress,
+                        result: run.result,
+                        error: run.error,
+                        created_at: run.created_at,
+                        started_at: run.started_at,
+                        finished_at: run.finished_at,
+                        cancel_requested: run.cancel_requested,
+                    })
+                    .collect()
+            })
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Cancel one active Subagent task owned by the named session.
+    #[cfg(feature = "full")]
+    pub fn cancel_delegated_task(
+        &self,
+        session: impl AsRef<str>,
+        run_id: impl AsRef<str>,
+    ) -> Result<bool, SdkError> {
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            SdkError::Runtime("this Runtime has no configured Agent Engine".into())
+        })?;
+        engine
+            .cancel_subagent(session.as_ref(), run_id.as_ref())
+            .map_err(|error| SdkError::Runtime(error.to_string()))
     }
 
     pub fn agent(&self, name: impl Into<String>) -> AgentBuilder<'_> {
@@ -296,23 +484,15 @@ impl MicroClawBuilder {
         let engine = HeadlessRuntime::load(config)
             .await
             .map_err(|error| SdkError::Initialization(error.to_string()))?;
-        let skills =
-            SkillCatalog::new(
-                engine
-                    .skill_catalog(true)
-                    .into_iter()
-                    .map(|skill| SkillSummary {
-                        name: skill.meta.name,
-                        description: skill.meta.description,
-                        source: skill.meta.source,
-                        version: skill.meta.version,
-                        available: skill.available,
-                        unavailable_reason: skill.reason,
-                    }),
-            );
-        let runtime =
-            engine.into_embedded_runtime(self.caller_channel, self.max_concurrent_runs)?;
-        Ok(MicroClaw { runtime, skills })
+        let skills = skill_catalog(engine.skill_catalog(true));
+        let runtime = engine
+            .clone()
+            .into_embedded_runtime(self.caller_channel, self.max_concurrent_runs)?;
+        Ok(MicroClaw {
+            runtime,
+            skills: Arc::new(RwLock::new(skills)),
+            engine: Some(engine),
+        })
     }
 }
 
@@ -369,7 +549,7 @@ impl AgentBuilder<'_> {
         for name in &self.profile.skills {
             let available = self
                 .microclaw
-                .skills
+                .skills()
                 .find(name)
                 .is_some_and(|skill| skill.available);
             if !available {
@@ -435,6 +615,7 @@ mod tests {
             description: "Review code".into(),
             source: "test".into(),
             version: Some("1".into()),
+            enabled: true,
             available: true,
             unavailable_reason: None,
         }]);
@@ -469,5 +650,46 @@ mod tests {
         let error = SdkError::EmptyAgentName;
         assert_eq!(error.code(), SdkErrorCode::InvalidAgent);
         assert!(!error.retryable());
+    }
+
+    #[cfg(feature = "full")]
+    #[tokio::test]
+    async fn full_runtime_reloads_and_toggles_skills_without_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let skills_dir = directory.path().join("skills");
+        let first = skills_dir.join("sdk-first");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::write(
+            first.join("SKILL.md"),
+            "---\nname: sdk-first\ndescription: first SDK skill\n---\nUse the first skill.\n",
+        )
+        .unwrap();
+
+        let sdk = MicroClaw::configure(FullRuntimeConfig::new("ollama", "local", ""))
+            .data_dir(directory.path().join("data"))
+            .skills_dir(&skills_dir)
+            .build()
+            .await
+            .unwrap();
+        assert!(sdk.skills().find("sdk-first").unwrap().enabled);
+
+        let disabled = sdk.set_skill_enabled("sdk-first", false).unwrap();
+        let first = disabled.find("sdk-first").unwrap();
+        assert!(!first.enabled);
+        assert!(!first.available);
+
+        let second = directory.path().join("sdk-second");
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(
+            second.join("SKILL.md"),
+            "---\nname: sdk-second\ndescription: second SDK skill\n---\nUse the second skill.\n",
+        )
+        .unwrap();
+        assert!(sdk.skills().find("sdk-second").is_none());
+        let installed = sdk.install_local_skill(&second).await.unwrap();
+        assert!(installed.skills.find("sdk-second").is_some());
+        let removed = sdk.remove_skill("sdk-second").unwrap();
+        assert!(removed.archived_at.join("SKILL.md").is_file());
+        assert!(removed.skills.find("sdk-second").is_none());
     }
 }

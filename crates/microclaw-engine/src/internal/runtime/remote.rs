@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use microclaw_core::run_protocol::{
@@ -27,6 +28,35 @@ pub trait WorkerTransport: Send + Sync + 'static {
 struct RemoteExecutor {
     transport: Arc<dyn WorkerTransport>,
     capabilities: RuntimeCapabilities,
+    reconnect: RemoteWorkerOptions,
+}
+
+/// Reconnection policy for remote Worker runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteWorkerOptions {
+    pub max_reconnect_attempts: u8,
+    pub reconnect_backoff: Duration,
+}
+
+impl Default for RemoteWorkerOptions {
+    fn default() -> Self {
+        Self {
+            max_reconnect_attempts: 3,
+            reconnect_backoff: Duration::from_millis(250),
+        }
+    }
+}
+
+impl RemoteWorkerOptions {
+    pub fn max_reconnect_attempts(mut self, attempts: u8) -> Self {
+        self.max_reconnect_attempts = attempts;
+        self
+    }
+
+    pub fn reconnect_backoff(mut self, backoff: Duration) -> Self {
+        self.reconnect_backoff = backoff;
+        self
+    }
 }
 
 #[async_trait]
@@ -60,19 +90,42 @@ impl RunExecutor for RemoteExecutor {
                             reconnect_attempts = 0;
                             frame
                         }
-                        Ok(None) | Err(_) if reconnect_attempts < 3 => {
-                            reconnect_attempts += 1;
-                            connection = self.transport.connect().await?;
-                            connection.send(WorkerCommand::ResumeEvents {
-                                protocol_version: WORKER_PROTOCOL_VERSION,
-                                run_id: run_id.clone(),
-                                after_sequence: last_remote_sequence,
-                            }).await?;
-                            if let Some(control) = pending_control.as_ref() {
-                                connection.send(WorkerCommand::Control {
-                                    protocol_version: WORKER_PROTOCOL_VERSION,
-                                    control: control.control().clone(),
-                                }).await?;
+                        Ok(None) | Err(_) if reconnect_attempts < self.reconnect.max_reconnect_attempts => {
+                            loop {
+                                reconnect_attempts += 1;
+                                if !self.reconnect.reconnect_backoff.is_zero() {
+                                    tokio::time::sleep(
+                                        self.reconnect.reconnect_backoff
+                                            * u32::from(reconnect_attempts),
+                                    )
+                                    .await;
+                                }
+                                let resumed = async {
+                                    let mut next = self.transport.connect().await?;
+                                    next.send(WorkerCommand::ResumeEvents {
+                                        protocol_version: WORKER_PROTOCOL_VERSION,
+                                        run_id: run_id.clone(),
+                                        after_sequence: last_remote_sequence,
+                                    })
+                                    .await?;
+                                    if let Some(control) = pending_control.as_ref() {
+                                        next.send(WorkerCommand::Control {
+                                            protocol_version: WORKER_PROTOCOL_VERSION,
+                                            control: control.control().clone(),
+                                        })
+                                        .await?;
+                                    }
+                                    Ok::<_, RuntimeError>(next)
+                                }
+                                .await;
+                                match resumed {
+                                    Ok(next) => {
+                                        connection = next;
+                                        break;
+                                    }
+                                    Err(_) if reconnect_attempts < self.reconnect.max_reconnect_attempts => continue,
+                                    Err(error) => return Err(error),
+                                }
                             }
                             continue;
                         }
@@ -172,6 +225,13 @@ pub struct RemoteWorker {
 
 impl RemoteWorker {
     pub async fn connect(transport: impl WorkerTransport) -> Result<Self, RuntimeError> {
+        Self::connect_with_options(transport, RemoteWorkerOptions::default()).await
+    }
+
+    pub async fn connect_with_options(
+        transport: impl WorkerTransport,
+        reconnect: RemoteWorkerOptions,
+    ) -> Result<Self, RuntimeError> {
         let transport: Arc<dyn WorkerTransport> = Arc::new(transport);
         let mut connection = transport.connect().await?;
         connection
@@ -200,6 +260,7 @@ impl RemoteWorker {
             .shared_executor(Arc::new(RemoteExecutor {
                 transport: transport.clone(),
                 capabilities: descriptor.capabilities.clone(),
+                reconnect,
             }))
             .max_concurrent_runs(descriptor.max_concurrent_runs.max(1))
             .build()
@@ -497,5 +558,42 @@ mod tests {
                 ..
             } if resumed == &run_id
         )));
+    }
+
+    #[tokio::test]
+    async fn remote_worker_reconnect_policy_can_fail_fast() {
+        let run_id = RunId::new("fail-fast-run");
+        let transport = ScriptedTransport {
+            connections: Arc::new(Mutex::new(VecDeque::from([
+                VecDeque::from([WorkerFrame::Descriptor {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    descriptor: descriptor(),
+                }]),
+                VecDeque::from([WorkerFrame::Accepted {
+                    protocol_version: WORKER_PROTOCOL_VERSION,
+                    run_id: run_id.clone(),
+                }]),
+            ]))),
+            sent: Arc::new(Mutex::new(Vec::new())),
+        };
+        let worker = RemoteWorker::connect_with_options(
+            transport,
+            RemoteWorkerOptions::default()
+                .max_reconnect_attempts(0)
+                .reconnect_backoff(Duration::ZERO),
+        )
+        .await
+        .unwrap();
+        let mut request = RunRequest::new("do not reconnect");
+        request.run_id = Some(run_id);
+        let run = worker
+            .submit(AgentProfile::default(), request)
+            .await
+            .unwrap();
+        let result = run.result().await.unwrap();
+        assert_eq!(result.status, RunStatus::Failed);
+        let error = result.error.unwrap();
+        assert_eq!(error.code, RuntimeErrorCode::Unavailable);
+        assert!(error.retryable);
     }
 }

@@ -24,6 +24,7 @@ use crate::internal::storage::db::{call_blocking, Database, StoredMessage};
 use crate::memory::MemoryManager;
 use crate::memory_backend::{MemoryBackend, MemoryMcpClient};
 use crate::runtime::AppState;
+use crate::skill_management::{archive_skill, install_skill, SkillInstallOutcome};
 use crate::skills::{SkillAvailability, SkillManager};
 use crate::tools::ToolRegistry;
 use crate::{embedding, llm};
@@ -72,6 +73,24 @@ pub struct HeadlessRunResult {
     pub run_id: String,
     pub chat_id: i64,
     pub response: String,
+}
+
+/// UI-neutral projection of one durable Subagent run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadlessSubagentRun {
+    pub run_id: String,
+    pub parent_run_id: Option<String>,
+    pub depth: u32,
+    pub label: Option<String>,
+    pub task: String,
+    pub status: String,
+    pub progress: Option<String>,
+    pub result: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub cancel_requested: bool,
 }
 
 /// Reusable application service for one-shot tasks.
@@ -243,6 +262,84 @@ impl HeadlessRuntime {
         self.state
             .skills
             .discover_skills_with_status(include_unavailable)
+    }
+
+    /// Invalidate cached integrity verdicts and rebuild the runtime's Skill catalog.
+    pub fn reload_skill_catalog(&self, include_unavailable: bool) -> Vec<SkillAvailability> {
+        self.state.skills.reload();
+        self.skill_catalog(include_unavailable)
+    }
+
+    /// Change runtime-scoped Skill enablement without rewriting the Skill package.
+    pub fn set_skill_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
+        self.state.skills.set_enabled(name, enabled)?;
+        self.state.skills.reload();
+        Ok(())
+    }
+
+    /// Install or update a Skill through the shared governed package path.
+    pub async fn install_skill(&self, reference: &str) -> Result<SkillInstallOutcome, String> {
+        install_skill(&self.state.config, &self.state.skills, reference).await
+    }
+
+    /// Recoverably remove a Skill and return its archive location.
+    pub fn archive_skill(&self, name: &str) -> Result<std::path::PathBuf, String> {
+        archive_skill(&self.state.skills, name)
+    }
+
+    /// List durable Subagent runs belonging to a named embedded session.
+    pub fn subagent_runs(
+        &self,
+        session: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<HeadlessSubagentRun>> {
+        let external_chat_id = format!("headless:{}", session.trim());
+        let Some(chat_id) = self
+            .state
+            .db
+            .find_chat_id(HEADLESS_CHANNEL, &external_chat_id)?
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .state
+            .db
+            .list_subagent_runs(chat_id, limit.clamp(1, 1_000))?
+            .into_iter()
+            .map(|run| HeadlessSubagentRun {
+                run_id: run.run_id,
+                parent_run_id: run.parent_run_id,
+                depth: run.depth.max(0) as u32,
+                label: run.label,
+                task: run.task,
+                status: run.status,
+                progress: run.progress_text,
+                result: run.result_text,
+                error: run.error_text,
+                created_at: run.created_at,
+                started_at: run.started_at,
+                finished_at: run.finished_at,
+                cancel_requested: run.cancel_requested,
+            })
+            .collect())
+    }
+
+    /// Persist and promptly signal cancellation for one Subagent owned by the session.
+    pub fn cancel_subagent(&self, session: &str, run_id: &str) -> anyhow::Result<bool> {
+        let external_chat_id = format!("headless:{}", session.trim());
+        let Some(chat_id) = self
+            .state
+            .db
+            .find_chat_id(HEADLESS_CHANNEL, &external_chat_id)?
+        else {
+            return Ok(false);
+        };
+        Ok(crate::tools::subagents::request_subagent_cancel(
+            &self.state.config,
+            &self.state.db,
+            chat_id,
+            run_id,
+        )?)
     }
 
     /// Build a standalone runtime from a loaded product config.
@@ -833,6 +930,46 @@ mod tests {
             envelope.event,
             RuntimeEvent::FinalResponse { ref text } if text == "real agent loop response"
         )));
+    }
+
+    #[tokio::test]
+    async fn durable_subagents_are_observable_and_cancellable_through_headless_runtime() {
+        use crate::storage::db::subagents::CreateSubagentRunParams;
+
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime_with_fake_llm(directory.path());
+        let chat_id = runtime
+            .resolve_session_chat_id("sdk-session")
+            .await
+            .unwrap();
+        runtime
+            .state
+            .db
+            .create_subagent_run(CreateSubagentRunParams {
+                run_id: "delegated-1",
+                parent_run_id: Some("main-1"),
+                depth: 1,
+                token_budget: 10_000,
+                chat_id,
+                caller_channel: HEADLESS_CHANNEL,
+                task: "inspect the parser",
+                context: "",
+                provider: "test",
+                model: "test",
+                label: Some("parser review"),
+            })
+            .unwrap();
+
+        let tasks = runtime.subagent_runs("sdk-session", 20).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].parent_run_id.as_deref(), Some("main-1"));
+        assert_eq!(tasks[0].depth, 1);
+        assert_eq!(tasks[0].label.as_deref(), Some("parser review"));
+        assert!(runtime
+            .cancel_subagent("sdk-session", "delegated-1")
+            .unwrap());
+        assert!(runtime.subagent_runs("sdk-session", 20).unwrap()[0].cancel_requested);
     }
 
     #[tokio::test]

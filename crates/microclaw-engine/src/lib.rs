@@ -65,6 +65,7 @@ pub mod schedule_lifecycle;
 pub mod setup;
 pub mod setup_def;
 pub mod skill_audit;
+pub mod skill_management;
 pub mod skill_review;
 pub mod skills;
 pub mod subdirectory_hints;
@@ -85,8 +86,8 @@ pub use internal::app::logging;
 pub use internal::app::transcribe;
 pub use internal::runtime::{
     AgentHandle, ControlRequest, ExecutionContext, ExecutionResult, LocalWorker, RemoteWorker,
-    RunController, RunExecutor, RunHandle, Runtime, RuntimeBuildError, RuntimeBuilder,
-    RuntimeStats, Worker, WorkerConnection, WorkerTransport,
+    RemoteWorkerOptions, RunController, RunExecutor, RunHandle, Runtime, RuntimeBuildError,
+    RuntimeBuilder, RuntimeStats, Worker, WorkerConnection, WorkerTransport,
 };
 pub use internal::storage::memory;
 pub use internal::worker::{WebSocketWorkerTransport, WorkerHost};

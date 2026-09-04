@@ -333,6 +333,11 @@ impl Tool for SyncSkillsTool {
                     .to_string()
             });
 
+        if let Err(error) = crate::skills::validate_agentskills_name(&target_name) {
+            return ToolResult::error(format!("Invalid target Skill name: {error}"))
+                .with_error_type("sync_invalid_target");
+        }
+
         let raw = match Self::fetch_skill_content(&source_repo, &skill_name, &git_ref).await {
             Ok(v) => v,
             Err(e) => return ToolResult::error(e).with_error_type("sync_fetch_failed"),
@@ -340,6 +345,12 @@ impl Tool for SyncSkillsTool {
 
         let normalized =
             Self::normalize_skill_markdown(&raw, &source_repo, &git_ref, &skill_name, &target_name);
+        if let Err(reason) = microclaw_core::injection_scan::scan_for_injection(&normalized) {
+            return ToolResult::error(format!(
+                "Refusing to install Skill '{target_name}': security scan flagged its content ({reason})"
+            ))
+            .with_error_type("sync_security_rejected");
+        }
 
         let out_dir = self.skills_dir.join(&target_name);
         if let Err(e) = std::fs::create_dir_all(&out_dir) {
@@ -427,5 +438,15 @@ mod tests {
         assert!(out.contains("source: remote:vercel-labs/skills"));
         assert!(out.contains("version: main"));
         assert!(out.contains("updated_at:"));
+    }
+
+    #[tokio::test]
+    async fn test_sync_skills_rejects_path_traversal_target_before_fetch() {
+        let tool = SyncSkillsTool::new("/tmp/skills");
+        let result = tool
+            .execute(json!({"skill_name": "demo", "target_name": "../../escape"}))
+            .await;
+        assert!(result.is_error);
+        assert_eq!(result.error_type.as_deref(), Some("sync_invalid_target"));
     }
 }

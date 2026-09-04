@@ -4,15 +4,12 @@
 //! Agent Engine to versioned runtime events. UI packages consume this port;
 //! they do not create Tokio runtimes or call the Agent Engine directly.
 
-use microclaw::clawhub::install::InstallOptions;
-use microclaw::clawhub::service::{ClawHubGateway, RegistryClawHubGateway};
 use microclaw::config::Config;
 #[cfg(test)]
 use microclaw::config::WorkingDirIsolation;
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
 use microclaw::llm::create_provider;
 use microclaw::storage::db::Database;
-use microclaw::tools::{Tool, sync_skills::SyncSkillsTool};
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
 use microclaw_core::run_protocol::{RunId, RunRequest, SessionId};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
@@ -702,43 +699,19 @@ impl WorkRuntimeService {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|error| SkillSettingsError::Skill(error.to_string()))?;
 
-        let (message, warnings) = if Path::new(reference).is_dir() {
-            (
-                import_local_skill(Path::new(reference), &skills_dir)?,
-                Vec::new(),
-            )
-        } else if reference.contains("github.com/") || reference.split('/').count() >= 3 {
-            let result = runtime.block_on(
-                SyncSkillsTool::new(&config.skills_data_dir())
-                    .execute(serde_json::json!({"skill_name": reference})),
-            );
-            if result.is_error {
-                return Err(SkillSettingsError::Skill(result.content));
-            }
-            (result.content, Vec::new())
-        } else {
-            let gateway = RegistryClawHubGateway::from_config(&config);
-            let result = runtime
-                .block_on(gateway.install(
-                    reference,
-                    None,
-                    &skills_dir,
-                    &config.clawhub_lockfile_path(),
-                    &InstallOptions {
-                        force: true,
-                        skip_gates: false,
-                        skip_security: false,
-                    },
-                ))
-                .map_err(|error| SkillSettingsError::Skill(error.to_string()))?;
-            if !result.success {
-                return Err(SkillSettingsError::Skill(result.message));
-            }
-            (result.message, result.warnings)
-        };
+        let manager = microclaw::skills::SkillManager::from_skills_and_runtime(
+            &config.skills_data_dir(),
+            &config.runtime_data_dir(),
+        )
+        .with_config_verification(&config);
+        let outcome = runtime
+            .block_on(microclaw::skill_management::install_skill(
+                &config, &manager, reference,
+            ))
+            .map_err(SkillSettingsError::Skill)?;
         Ok(SkillInstallResult {
-            message,
-            warnings,
+            message: outcome.message,
+            warnings: outcome.warnings,
             skills: self.skills()?,
         })
     }
@@ -1178,50 +1151,6 @@ fn configure_work_runtime(mut config: Config, workspace: String) -> Config {
     config
 }
 
-fn import_local_skill(source: &Path, skills_dir: &Path) -> Result<String, SkillSettingsError> {
-    let name = source
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| {
-            !value.is_empty()
-                && value
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
-        })
-        .ok_or_else(|| SkillSettingsError::Skill("invalid local skill directory name".into()))?;
-    if !source.join("SKILL.md").is_file() {
-        return Err(SkillSettingsError::Skill(
-            "local skill directory must contain SKILL.md".into(),
-        ));
-    }
-    let staging = skills_dir.join(format!(".{name}.work-import"));
-    if staging.exists() {
-        fs::remove_dir_all(&staging)?;
-    }
-    copy_skill_tree(source, &staging)?;
-    let target = skills_dir.join(name);
-    let backup = skills_dir.join(format!(".{name}.work-backup"));
-    if backup.exists() {
-        fs::remove_dir_all(&backup)?;
-    }
-    if target.exists() {
-        fs::rename(&target, &backup)?;
-    }
-    if let Err(error) = fs::rename(&staging, &target) {
-        if backup.exists() {
-            let _ = fs::rename(&backup, &target);
-        }
-        return Err(error.into());
-    }
-    if backup.exists() {
-        fs::remove_dir_all(&backup)?;
-    }
-    Ok(format!(
-        "Imported local skill {name} from {}",
-        source.display()
-    ))
-}
-
 #[cfg(test)]
 fn work_session_chat_id(db: &Database, session: &str) -> Result<i64, SkillSettingsError> {
     let session = session.trim();
@@ -1257,27 +1186,6 @@ fn subagent_elapsed_seconds(created_at: &str, finished_at: Option<&str>) -> u64 
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .unwrap_or_else(|| chrono::Utc::now().fixed_offset());
     finished.signed_duration_since(created).num_seconds().max(0) as u64
-}
-
-fn copy_skill_tree(source: &Path, target: &Path) -> Result<(), SkillSettingsError> {
-    fs::create_dir_all(target)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            return Err(SkillSettingsError::Skill(format!(
-                "local skill contains unsupported symlink: {}",
-                entry.path().display()
-            )));
-        }
-        let destination = target.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_skill_tree(&entry.path(), &destination)?;
-        } else if file_type.is_file() {
-            fs::copy(entry.path(), destination)?;
-        }
-    }
-    Ok(())
 }
 
 fn codex_account_available_at(home: Option<&Path>, access_token_present: bool) -> bool {

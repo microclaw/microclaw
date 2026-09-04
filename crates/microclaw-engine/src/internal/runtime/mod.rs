@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot, Notify, Semaphore};
 
 mod remote;
 
-pub use remote::{RemoteWorker, WorkerConnection, WorkerTransport};
+pub use remote::{RemoteWorker, RemoteWorkerOptions, WorkerConnection, WorkerTransport};
 
 struct PendingControl {
     control: RuntimeControl,

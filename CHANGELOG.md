@@ -6,6 +6,19 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Added
+
+- Added live SDK Skill lifecycle APIs for refresh, enable/disable, governed
+  local/GitHub/ClawHub installation, and recoverable removal.
+- Added stable SDK projections for observing and cancelling durable tasks
+  delegated by the Main Agent.
+- Added configurable remote Worker reconnect attempts and backoff.
+
+### Changed
+
+- Work and SDK Skill imports now share one Engine service with staged local
+  copies, symlink rejection, injection scanning, and path-safe Skill names.
+
 ## 0.4.0 - 2026-09-04
 
 ### Added
