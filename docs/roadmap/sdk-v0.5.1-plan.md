@@ -1,7 +1,8 @@
 # Rust SDK v0.5.1 execution plan
 
-Status: **Active**  
+Status: **Delivered**  
 Opened: 2026-09-04  
+Delivered: 2026-09-04  
 Release type: patch, compatible with the 0.5 public API
 
 ## Outcome
@@ -39,3 +40,10 @@ the same Core, Engine, SDK, run lifecycle, Skill service, and Worker protocol.
 4. Publish Core, wait for the index, publish Engine, wait, then publish SDK.
 5. Verify immutable registry consumers and publish the GitHub release notes.
 6. Mark this plan Delivered and remove local build artifacts.
+
+## Release evidence
+
+- Source commit: `7167775`
+- Tag and GitHub release: [`sdk-v0.5.1`](https://github.com/microclaw/microclaw/releases/tag/sdk-v0.5.1)
+- Publication workflow: [run 33910165698](https://github.com/microclaw/microclaw/actions/runs/33910165698)
+- crates.io: [`microclaw-core`](https://crates.io/crates/microclaw-core/0.5.1), [`microclaw-engine`](https://crates.io/crates/microclaw-engine/0.5.1), and [`microclaw-sdk`](https://crates.io/crates/microclaw-sdk/0.5.1)

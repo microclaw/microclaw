@@ -8,8 +8,8 @@ first.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`sdk-v0.5.1-plan.md`](./sdk-v0.5.1-plan.md) | **Active** | Patch-release execution plan: SDK adoption, Work Skill provenance, Worker recovery evidence, and leaner release gates. |
-| [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md) | Strategic reference | Canonical Server + local-first Work direction; the active patch release takes only its bounded 0.5.1 slice. |
+| [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md) | **Active** | Canonical Server + local-first Work plan, covering macOS product completion, one shared kernel, Workspace depth, lightweight packaging, and Linux/Windows portable previews. |
+| [`sdk-v0.5.1-plan.md`](./sdk-v0.5.1-plan.md) | Delivered | SDK adoption, Work Skill provenance, Worker recovery evidence, and leaner release gates shipped in Rust SDK 0.5.1. |
 | [`product-direction-2026-08.md`](./product-direction-2026-08.md) | Superseded | Original direction that established the two-product boundary; replaced by the focused local-first delivery plan. |
 | [`microclaw-work-macos-execution-plan.md`](./microclaw-work-macos-execution-plan.md) | Superseded | macOS execution baseline; remaining gates are carried into the active local-first plan. |
 | [`microclaw-work-proposal-cn.md`](./microclaw-work-proposal-cn.md) | Proposal | Chinese proposal for the next major Work/Server product boundary; discussion only, not implementation authorization. |
