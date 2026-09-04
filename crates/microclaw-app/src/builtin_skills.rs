@@ -2,7 +2,7 @@ use include_dir::{include_dir, Dir, DirEntry, File};
 use serde::Deserialize;
 use std::path::Path;
 
-static BUILTIN_SKILLS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../skills/built-in");
+static BUILTIN_SKILLS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/skills/built-in");
 
 pub fn ensure_builtin_skills(skills_root: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(skills_root)?;
