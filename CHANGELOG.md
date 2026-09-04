@@ -6,6 +6,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Fixed
+
+- Restricted GitHub Release aggregation to distributable Server, Work, and
+  reliability artifacts so Docker Buildx's internal `.dockerbuild` records
+  cannot break the final upload step.
+
 ## 0.6.0 - 2026-09-04
 
 ### Added

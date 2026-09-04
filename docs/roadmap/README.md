@@ -1,14 +1,14 @@
 # Roadmap documents — index
 
 These files accumulate; without a status column a reader cannot tell a delivered
-plan from an aspirational one. **The active plan is the single entry marked
-`Active` below.** Everything marked `Delivered` or `Superseded` is kept for
-history — do not pick work from it without checking against the active plan
-first.
+plan from an aspirational one. When an entry is marked `Active`, it is the only
+current execution plan. Everything marked `Delivered` or `Superseded` is kept
+for history — do not pick work from it without checking whether a newer active
+plan exists first.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`v0.6.0-plan.md`](./v0.6.0-plan.md) | **Active** | Release plan aligning Server, Work, SDK, shared crates, Skills, and controlled delegation at 0.6.0. |
+| [`v0.6.0-plan.md`](./v0.6.0-plan.md) | Delivered | Server, Work, SDK, shared crates, Skills, and controlled delegation aligned and released at 0.6.0. |
 | [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md) | Superseded | Product direction folded into the focused v0.6.0 execution plan. |
 | [`sdk-v0.5.1-plan.md`](./sdk-v0.5.1-plan.md) | Delivered | SDK adoption, Work Skill provenance, Worker recovery evidence, and leaner release gates shipped in Rust SDK 0.5.1. |
 | [`product-direction-2026-08.md`](./product-direction-2026-08.md) | Superseded | Original direction that established the two-product boundary; replaced by the focused local-first delivery plan. |

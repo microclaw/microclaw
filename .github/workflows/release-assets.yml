@@ -580,9 +580,27 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Download artifacts
+      # Download only distributable artifacts. Docker Buildx also uploads internal
+      # `.dockerbuild` records; merging those into `dist` is unnecessary and can
+      # make the release fail when GitHub's artifact service cannot extract one.
+      - name: Download Server artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: "{linux-*,macos-*,windows-*}"
+          path: dist
+          merge-multiple: true
+
+      - name: Download Work artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: microclaw-work-portable-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download reliability scorecard
+        uses: actions/download-artifact@v4
+        with:
+          name: reliability-scorecard
           path: dist
           merge-multiple: true
 
