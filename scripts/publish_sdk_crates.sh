@@ -9,15 +9,7 @@ fi
 
 crates=(
   microclaw-core
-  microclaw-observability
-  microclaw-storage
-  microclaw-tools
-  microclaw-channels
-  microclaw-clawhub
-  microclaw-app
-  microclaw-runtime
   microclaw-engine
-  microclaw-worker
   microclaw-sdk
 )
 
@@ -42,18 +34,16 @@ for crate_name in "${crates[@]}"; do
   fi
 done
 
-package_args=(--locked)
 if [[ "${mode}" == "--check" ]]; then
-  package_args+=(--allow-dirty)
-fi
-cargo package -p microclaw-core "${package_args[@]}"
-cargo package -p microclaw-observability "${package_args[@]}"
-
-if [[ "${mode}" == "--check" ]]; then
+  cargo package -p microclaw-core --locked --allow-dirty --no-verify
+  cargo check -p microclaw-engine --all-features
+  cargo check -p microclaw-sdk --all-features
   echo "SDK crate metadata and leaf packages are valid at ${workspace_version}."
   echo "Run with --execute only from the protected publication workflow."
   exit 0
 fi
+
+cargo package -p microclaw-core --locked
 
 if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
   echo "CARGO_REGISTRY_TOKEN is required" >&2

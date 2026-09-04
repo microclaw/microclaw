@@ -16,9 +16,9 @@ use tokio::sync::Mutex;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::config::{Config, ResolvedSubagentAcpTargetConfig};
+use crate::internal::storage::db::{call_blocking, Database};
 use crate::tools::{resolve_tool_working_dir, ToolAuthContext};
 use microclaw_core::text::floor_char_boundary;
-use microclaw_storage::db::{call_blocking, Database};
 
 const ACP_RUNTIME_PROVIDER: &str = "acp";
 const ACP_AGENT_STDERR_LIMIT_BYTES: usize = 16 * 1024;
@@ -678,7 +678,7 @@ fn resolve_client_path(root: &Path, requested: &Path) -> Result<PathBuf, acp::Er
         return Err(acp::Error::invalid_params());
     }
     let path_str = resolved.to_string_lossy().to_string();
-    if let Err(msg) = microclaw_tools::path_guard::check_path(&path_str) {
+    if let Err(msg) = crate::internal::tool_runtime::path_guard::check_path(&path_str) {
         let mut err = acp::Error::invalid_request();
         err.message = msg;
         return Err(err);

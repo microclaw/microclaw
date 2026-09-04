@@ -1,9 +1,9 @@
 use crate::clawhub::service::{ClawHubGateway, RegistryClawHubGateway};
 use crate::config::Config;
 use crate::error::MicroClawError;
+use crate::internal::clawhub::install::InstallOptions;
 use crate::skills::SkillManager;
 use clap::{Parser, Subcommand};
-use microclaw_clawhub::install::InstallOptions;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -140,8 +140,8 @@ pub async fn handle_skill_cli(args: &[String], config: &Config) -> Result<(), Mi
             let skills_dir = PathBuf::from(config.skills_data_dir());
             let mut bad = 0usize;
             for (slug, entry) in &lock.skills {
-                use microclaw_clawhub::install::TreeVerification;
-                match microclaw_clawhub::install::verify_tree(entry, &skills_dir) {
+                use crate::internal::clawhub::install::TreeVerification;
+                match crate::internal::clawhub::install::verify_tree(entry, &skills_dir) {
                     TreeVerification::Ok => println!("  ✓ {slug} — tree matches lockfile"),
                     TreeVerification::Unpinned => println!(
                         "  - {slug} — no tree hash recorded (installed before pinning; reinstall to pin)"

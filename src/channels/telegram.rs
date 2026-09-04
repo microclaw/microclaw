@@ -23,12 +23,12 @@ use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_comman
 use crate::chat_turn_queue::PendingMessage;
 use crate::runtime::AppState;
 use crate::tools::ToolAuthContext;
-use microclaw_channels::channel::ConversationKind;
-use microclaw_channels::channel_adapter::ChannelAdapter;
 #[cfg(test)]
 use microclaw_core::llm_types::{ContentBlock, ImageSource, MessageContent};
 use microclaw_core::text::floor_char_boundary;
-use microclaw_storage::db::{call_blocking, StoredMessage};
+use microclaw_engine::internal::channels::channel::ConversationKind;
+use microclaw_engine::internal::channels::channel_adapter::ChannelAdapter;
+use microclaw_engine::internal::storage::db::{call_blocking, StoredMessage};
 
 /// Configuration for Telegram streaming and reasoning display
 #[derive(Debug, Clone, Deserialize)]
@@ -2160,7 +2160,7 @@ mod tests {
         strip_thinking,
     };
     use microclaw_core::llm_types::Message;
-    use microclaw_storage::db::StoredMessage;
+    use microclaw_engine::internal::storage::db::StoredMessage;
 
     fn make_msg(id: &str, sender: &str, content: &str, is_bot: bool, ts: &str) -> StoredMessage {
         StoredMessage {

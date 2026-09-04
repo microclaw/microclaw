@@ -8,9 +8,9 @@
 
 use std::sync::Arc;
 
+use crate::internal::storage::db::{call_blocking, Database};
 use microclaw_core::error::MicroClawError;
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
-use microclaw_storage::db::{call_blocking, Database};
 
 use crate::config::Config;
 use crate::llm::create_provider;
@@ -80,7 +80,7 @@ pub async fn generate_and_save_title(
     Ok(Some(title))
 }
 
-fn build_transcript(messages: &[microclaw_storage::db::StoredMessage]) -> String {
+fn build_transcript(messages: &[crate::internal::storage::db::StoredMessage]) -> String {
     let mut out = String::new();
     for m in messages.iter().rev().take(MAX_MESSAGES_SAMPLED) {
         let role = if m.is_from_bot { "Assistant" } else { "User" };

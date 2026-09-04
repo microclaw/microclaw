@@ -17,8 +17,8 @@ use serde_json::json;
 use tracing::{info, warn};
 
 use crate::config::AlertsConfig;
+use crate::internal::storage::db::call_blocking;
 use crate::runtime::AppState;
-use microclaw_storage::db::call_blocking;
 
 /// Turns refused because a chat exhausted its token budget, since process
 /// start. Recorded by the agent engine at the single enforcement point.
@@ -241,7 +241,7 @@ pub fn spawn_alerts(state: Arc<AppState>) {
                     "{}/alerts",
                     crate::http_client::default_llm_user_agent()
                 ))
-                .redirect(microclaw_tools::url_safety::ssrf_redirect_policy(3))
+                .redirect(crate::internal::tool_runtime::url_safety::ssrf_redirect_policy(3))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new());
             let mut loop_state = AlertLoopState::default();

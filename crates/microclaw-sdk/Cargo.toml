@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-sdk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license.workspace = true
 authors.workspace = true
@@ -14,16 +14,14 @@ categories = ["api-bindings", "asynchronous"]
 
 [features]
 default = ["standard"]
-minimal = ["microclaw-runtime/minimal"]
-standard = ["microclaw-runtime/standard"]
-remote-worker = ["dep:microclaw-worker"]
-full = ["microclaw-runtime/full", "dep:microclaw-engine", "remote-worker"]
+minimal = []
+standard = []
+remote-worker = []
+full = ["remote-worker"]
 
 [dependencies]
-microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
-microclaw-runtime = { version = "0.1.0", path = "../microclaw-runtime" }
-microclaw-engine = { version = "0.1.0", path = "../microclaw-engine", optional = true }
-microclaw-worker = { version = "0.1.0", path = "../microclaw-worker", optional = true }
+microclaw-core = { version = "0.2.0", path = "../microclaw-core" }
+microclaw-engine = { version = "0.2.0", path = "../microclaw-engine" }
 serde_json = "1"
 thiserror = "2"
 

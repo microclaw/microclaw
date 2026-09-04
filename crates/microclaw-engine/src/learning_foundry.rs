@@ -8,9 +8,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::internal::storage::db::{call_blocking, LearningTrack};
 use chrono::Utc;
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
-use microclaw_storage::db::{call_blocking, LearningTrack};
 use serde::Deserialize;
 use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{error, info, warn};
@@ -201,13 +201,13 @@ async fn distill_candidate(
         return Err("candidate is missing provenance, tests, or a valid risk".into());
     }
     crate::skills::validate_agentskills_name(&draft.skill_name)?;
-    microclaw_storage::memory_quality::scan_for_injection(&draft.instructions)
+    crate::internal::storage::memory_quality::scan_for_injection(&draft.instructions)
         .map_err(|reason| format!("candidate injection scan failed: {reason}"))?;
     Ok(Some(draft))
 }
 
 fn parse_candidate_tests(
-    candidate: &microclaw_storage::db::LearningTrackCandidate,
+    candidate: &crate::internal::storage::db::LearningTrackCandidate,
 ) -> Result<Vec<CandidateTest>, String> {
     let tests: Vec<CandidateTest> = serde_json::from_value(candidate.tests.clone())
         .map_err(|error| format!("invalid candidate tests: {error}"))?;
@@ -304,7 +304,7 @@ pub async fn evaluate_learning_candidate(
     state: &AppState,
     chat_id: i64,
     candidate_id: &str,
-) -> Result<microclaw_storage::db::LearningCandidateEvaluation, String> {
+) -> Result<crate::internal::storage::db::LearningCandidateEvaluation, String> {
     let candidate_key = candidate_id.to_string();
     let candidate = call_blocking(state.db.clone(), move |db| {
         db.get_learning_track_candidate(&candidate_key, chat_id)
@@ -669,7 +669,7 @@ pub async fn promote_learning_candidate(
         );
     }
     crate::skills::validate_agentskills_name(&candidate.skill_name)?;
-    microclaw_storage::memory_quality::scan_for_injection(&candidate.instructions)
+    crate::internal::storage::memory_quality::scan_for_injection(&candidate.instructions)
         .map_err(|reason| format!("candidate injection scan failed: {reason}"))?;
     let skills_root = std::path::PathBuf::from(state.config.skills_data_dir());
     let skill_dir = skills_root.join(&candidate.skill_name);
@@ -683,7 +683,7 @@ pub async fn promote_learning_candidate(
         serde_json::to_string_pretty(&candidate.sources).unwrap_or_else(|_| "[]".into()),
         serde_json::to_string_pretty(&candidate.tests).unwrap_or_else(|_| "[]".into()),
     );
-    microclaw_storage::memory_quality::scan_for_injection(&content)
+    crate::internal::storage::memory_quality::scan_for_injection(&content)
         .map_err(|reason| format!("materialized skill injection scan failed: {reason}"))?;
     std::fs::write(skill_dir.join("SKILL.md"), &content).map_err(|error| error.to_string())?;
     state
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn candidate_tests_require_three_complete_scenarios() {
-        let candidate = microclaw_storage::db::LearningTrackCandidate {
+        let candidate = crate::internal::storage::db::LearningTrackCandidate {
             candidate_id: "candidate".into(),
             epoch_id: "epoch".into(),
             skill_name: "safe-skill".into(),

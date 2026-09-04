@@ -6,10 +6,10 @@ use chrono::{NaiveDateTime, TimeZone, Utc};
 use serde_json::json;
 
 use super::{authorize_chat_access, schema_object, Tool, ToolResult};
-use microclaw_channels::channel::enforce_channel_policy;
-use microclaw_channels::channel_adapter::ChannelRegistry;
+use crate::internal::channels::channel::enforce_channel_policy;
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::storage::db::{call_blocking, Database};
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::{call_blocking, Database};
 
 fn compute_next_run(cron_expr: &str, tz_name: &str) -> Result<String, String> {
     let tz: chrono_tz::Tz = tz_name
@@ -1002,10 +1002,10 @@ impl Tool for GetTaskHistoryTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use microclaw_channels::channel::ConversationKind;
-    use microclaw_channels::channel_adapter::ChannelAdapter;
-    use microclaw_channels::channel_adapter::ChannelRegistry;
-    use microclaw_storage::db::Database;
+    use crate::internal::channels::channel::ConversationKind;
+    use crate::internal::channels::channel_adapter::ChannelAdapter;
+    use crate::internal::channels::channel_adapter::ChannelRegistry;
+    use crate::internal::storage::db::Database;
     use serde_json::json;
 
     fn test_registry() -> Arc<ChannelRegistry> {

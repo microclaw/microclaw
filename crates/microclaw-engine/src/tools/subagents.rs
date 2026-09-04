@@ -11,13 +11,13 @@ use super::{
     ToolRegistry, ToolResult,
 };
 use crate::config::{Config, ResolvedSubagentAcpTargetConfig};
-use microclaw_channels::channel::deliver_and_store_bot_message;
-use microclaw_channels::channel_adapter::ChannelRegistry;
+use crate::internal::channels::channel::deliver_and_store_bot_message;
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::storage::db::{
+    call_blocking, CreateSubagentRunParams, Database, FinishSubagentRunParams,
+};
 use microclaw_core::llm_types::{
     ContentBlock, Message, MessageContent, ResponseContentBlock, ToolDefinition,
-};
-use microclaw_storage::db::{
-    call_blocking, CreateSubagentRunParams, Database, FinishSubagentRunParams,
 };
 
 const MAX_SUB_AGENT_ITERATIONS: usize = 16;
@@ -438,11 +438,13 @@ async fn apply_completion_contract(
     let working_dir = match config.working_dir_isolation {
         crate::config::WorkingDirIsolation::Direct => base.to_path_buf(),
         crate::config::WorkingDirIsolation::Shared => base.join("shared"),
-        crate::config::WorkingDirIsolation::Chat => microclaw_tools::runtime::chat_working_dir(
-            base,
-            &auth.caller_channel,
-            auth.caller_chat_id,
-        ),
+        crate::config::WorkingDirIsolation::Chat => {
+            crate::internal::tool_runtime::runtime::chat_working_dir(
+                base,
+                &auth.caller_channel,
+                auth.caller_chat_id,
+            )
+        }
     };
     let runner = SubagentBashRunner { tools, auth };
     let outcomes = crate::completion_contract::verify_criteria(
@@ -2340,7 +2342,9 @@ impl SubagentsOrchestrateTool {
         }
     }
 
-    fn merge_run_artifacts(runs: &[microclaw_storage::db::SubagentRunRecord]) -> serde_json::Value {
+    fn merge_run_artifacts(
+        runs: &[crate::internal::storage::db::SubagentRunRecord],
+    ) -> serde_json::Value {
         let mut summaries = Vec::new();
         let mut findings = BTreeSet::new();
         let mut next_actions = BTreeSet::new();

@@ -1776,17 +1776,18 @@ Use operator password + API keys for Web auth."
             return Ok(());
         }
         for url in self.configured_egress_endpoints() {
-            let decision = microclaw_tools::egress::evaluate_url(&self.egress_policy, &url);
+            let decision =
+                crate::internal::tool_runtime::egress::evaluate_url(&self.egress_policy, &url);
             match decision {
-                microclaw_tools::egress::EgressDecision::Warn(reason) => {
+                crate::internal::tool_runtime::egress::EgressDecision::Warn(reason) => {
                     warn!(url = %url, reason = %reason, "configured endpoint violates egress policy");
                 }
-                microclaw_tools::egress::EgressDecision::Block(reason) => {
+                crate::internal::tool_runtime::egress::EgressDecision::Block(reason) => {
                     return Err(MicroClawError::Config(format!(
                         "configured endpoint `{url}` blocked by egress policy: {reason}"
                     )));
                 }
-                microclaw_tools::egress::EgressDecision::Allow => {}
+                crate::internal::tool_runtime::egress::EgressDecision::Allow => {}
             }
         }
         Ok(())
@@ -1828,7 +1829,7 @@ Use operator password + API keys for Web auth."
             }
 
             if self.web_search.effective_backend()
-                == microclaw_tools::web_search::SearchBackend::Searxng
+                == crate::internal::tool_runtime::web_search::SearchBackend::Searxng
             {
                 add(Some(&self.web_search.searxng_base_url));
             }

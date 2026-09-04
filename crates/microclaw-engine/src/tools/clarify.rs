@@ -2,11 +2,11 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 
-use microclaw_channels::channel::deliver_and_store_bot_message;
-use microclaw_channels::channel_adapter::ChannelRegistry;
+use crate::internal::channels::channel::deliver_and_store_bot_message;
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::storage::db::Database;
+use crate::internal::tool_runtime::runtime::auth_context_from_input;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
-use microclaw_tools::runtime::auth_context_from_input;
 
 use super::{schema_object, Tool, ToolResult};
 

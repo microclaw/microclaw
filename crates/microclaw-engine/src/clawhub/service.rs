@@ -1,10 +1,10 @@
 use std::path::Path;
 
+use crate::internal::clawhub::client::ClawHubClient;
+use crate::internal::clawhub::install::{install_skill, InstallOptions, InstallResult};
+use crate::internal::clawhub::lockfile::read_lockfile;
+use crate::internal::clawhub::types::{LockFile, SearchResult, SkillMeta};
 use async_trait::async_trait;
-use microclaw_clawhub::client::ClawHubClient;
-use microclaw_clawhub::install::{install_skill, InstallOptions, InstallResult};
-use microclaw_clawhub::lockfile::read_lockfile;
-use microclaw_clawhub::types::{LockFile, SearchResult, SkillMeta};
 
 use crate::config::Config;
 use crate::error::MicroClawError;

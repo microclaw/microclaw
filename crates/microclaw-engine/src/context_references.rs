@@ -16,7 +16,7 @@
 //! The existing `path_guard` module catches these too, but enforcing here
 //! avoids spending time fetching only to reject.
 //!
-//! URL fetching delegates to `microclaw_tools::web_fetch::fetch_url_with_timeout`,
+//! URL fetching delegates to `crate::internal::tool_runtime::web_fetch::fetch_url_with_timeout`,
 //! which already enforces the SSRF guard from PR #335.
 
 use std::path::{Path, PathBuf};
@@ -373,9 +373,12 @@ async fn expand_folder(target: &str, cwd: &Path) -> Result<String, String> {
 }
 
 async fn expand_url(target: &str) -> Result<String, String> {
-    let body = microclaw_tools::web_fetch::fetch_url_with_timeout(target, URL_FETCH_TIMEOUT_SECS)
-        .await
-        .map_err(|e| format!("@url:{target} fetch failed: {e}"))?;
+    let body = crate::internal::tool_runtime::web_fetch::fetch_url_with_timeout(
+        target,
+        URL_FETCH_TIMEOUT_SECS,
+    )
+    .await
+    .map_err(|e| format!("@url:{target} fetch failed: {e}"))?;
     let snippet = if body.len() > MAX_URL_BYTES {
         format!(
             "{}\n... [truncated to {} bytes]",

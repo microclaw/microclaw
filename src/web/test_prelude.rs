@@ -18,9 +18,9 @@ pub(crate) use axum::http::{Request, StatusCode};
 
 pub(crate) use futures_util::{SinkExt, StreamExt};
 
-pub(crate) use microclaw_channels::channel_adapter::ChannelRegistry;
+pub(crate) use microclaw_engine::internal::channels::channel_adapter::ChannelRegistry;
 
-pub(crate) use microclaw_storage::db::call_blocking;
+pub(crate) use microclaw_engine::internal::storage::db::call_blocking;
 
 pub(crate) use serde_json::json;
 

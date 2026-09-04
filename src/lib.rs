@@ -26,18 +26,18 @@ pub const EMBEDDED_WEB_UI_ENABLED: bool = cfg!(feature = "embedded-web-ui");
 
 pub use channels::discord;
 pub use channels::telegram;
-pub use microclaw_app::builtin_skills;
-pub use microclaw_app::logging;
-pub use microclaw_app::transcribe;
-pub use microclaw_channels::channel;
-pub use microclaw_channels::channel_adapter;
 pub use microclaw_core::error;
 pub use microclaw_core::llm_types;
 pub use microclaw_core::text;
-pub use microclaw_storage::db;
-pub use microclaw_storage::memory;
-pub use microclaw_storage::memory_quality;
-pub use microclaw_tools::sandbox;
+pub use microclaw_engine::internal::app::builtin_skills;
+pub use microclaw_engine::internal::app::logging;
+pub use microclaw_engine::internal::app::transcribe;
+pub use microclaw_engine::internal::channels::channel;
+pub use microclaw_engine::internal::channels::channel_adapter;
+pub use microclaw_engine::internal::storage::db;
+pub use microclaw_engine::internal::storage::memory;
+pub use microclaw_engine::internal::storage::memory_quality;
+pub use microclaw_engine::internal::tool_runtime::sandbox;
 
 #[cfg(test)]
 pub mod test_support {

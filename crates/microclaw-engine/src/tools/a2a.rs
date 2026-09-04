@@ -8,8 +8,8 @@ use crate::a2a::{
 };
 use crate::config::Config;
 use crate::http_client::default_llm_user_agent;
+use crate::internal::tool_runtime::runtime::HIGH_RISK_APPROVED_KEY as A2A_HIGH_RISK_APPROVED_KEY;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_tools::runtime::HIGH_RISK_APPROVED_KEY as A2A_HIGH_RISK_APPROVED_KEY;
 
 pub struct A2AListPeersTool {
     config: Config,

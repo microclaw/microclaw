@@ -17,11 +17,11 @@ use crate::chat_commands::maybe_handle_plugin_command;
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
-use microclaw_channels::channel::ConversationKind;
-use microclaw_channels::channel_adapter::ChannelAdapter;
 use microclaw_core::text::floor_char_boundary;
-use microclaw_storage::db::call_blocking;
-use microclaw_storage::db::StoredMessage;
+use microclaw_engine::internal::channels::channel::ConversationKind;
+use microclaw_engine::internal::channels::channel_adapter::ChannelAdapter;
+use microclaw_engine::internal::storage::db::call_blocking;
+use microclaw_engine::internal::storage::db::StoredMessage;
 
 pub const SETUP_DEF: DynamicChannelDef = DynamicChannelDef {
     name: "irc",

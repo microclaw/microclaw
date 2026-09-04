@@ -3,8 +3,8 @@ use reqwest::multipart;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+use crate::internal::tool_runtime::media_client::{load_bytes_from_location, MediaClient};
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_tools::media_client::{load_bytes_from_location, MediaClient};
 
 use super::{schema_object, Tool, ToolResult};
 use crate::config::{Config, MediaConfig, SttConfig};

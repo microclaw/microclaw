@@ -5,9 +5,9 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::config::{RtkConfig, WorkingDirIsolation};
+use crate::internal::tool_runtime::sandbox::{SandboxExecOptions, SandboxMode, SandboxRouter};
 use microclaw_core::llm_types::ToolDefinition;
 use microclaw_core::text::floor_char_boundary;
-use microclaw_tools::sandbox::{SandboxExecOptions, SandboxMode, SandboxRouter};
 
 use super::{schema_object, Tool, ToolResult};
 
@@ -79,7 +79,7 @@ impl BashTool {
     }
 }
 
-use microclaw_tools::runtime::HIGH_RISK_APPROVED_KEY as BASH_HIGH_RISK_APPROVED_KEY;
+use crate::internal::tool_runtime::runtime::HIGH_RISK_APPROVED_KEY as BASH_HIGH_RISK_APPROVED_KEY;
 
 fn extract_env_files(input: &serde_json::Value) -> Vec<PathBuf> {
     super::auth_context_from_input(input)
@@ -93,7 +93,7 @@ fn redact_env_secrets(output: &str, env_files: &[PathBuf]) -> String {
     let mut secrets: Vec<(String, String)> = Vec::new();
     for env_file in env_files {
         if let Ok(content) = std::fs::read_to_string(env_file) {
-            for (key, value) in microclaw_tools::env_file::parse_dotenv(&content) {
+            for (key, value) in crate::internal::tool_runtime::env_file::parse_dotenv(&content) {
                 if value.len() >= REDACT_MIN_VALUE_LEN {
                     secrets.push((key, value));
                 }
@@ -348,7 +348,8 @@ impl Tool for BashTool {
         let mut result = if let Some(router) = &self.sandbox_router {
             router.exec(&session_key, &exec_command, &exec_opts).await
         } else {
-            microclaw_tools::sandbox::exec_host_command(&exec_command, &exec_opts).await
+            crate::internal::tool_runtime::sandbox::exec_host_command(&exec_command, &exec_opts)
+                .await
         };
 
         // The rewrite decision is made on the host, but execution may land in
@@ -360,7 +361,7 @@ impl Tool for BashTool {
             result = if let Some(router) = &self.sandbox_router {
                 router.exec(&session_key, command, &exec_opts).await
             } else {
-                microclaw_tools::sandbox::exec_host_command(command, &exec_opts).await
+                crate::internal::tool_runtime::sandbox::exec_host_command(command, &exec_opts).await
             };
         }
 

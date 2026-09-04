@@ -232,7 +232,7 @@ impl SkillManager {
             return map.clone();
         }
         let mut reasons = HashMap::new();
-        let lock = match microclaw_clawhub::lockfile::read_lockfile(lock_path) {
+        let lock = match crate::internal::clawhub::lockfile::read_lockfile(lock_path) {
             Ok(lock) => lock,
             Err(e) => {
                 // An unreadable lockfile means integrity can no longer be
@@ -246,9 +246,9 @@ impl SkillManager {
                 return reasons;
             }
         };
-        use microclaw_clawhub::install::TreeVerification;
+        use crate::internal::clawhub::install::TreeVerification;
         for (slug, entry) in &lock.skills {
-            match microclaw_clawhub::install::verify_tree(entry, &self.skills_dir) {
+            match crate::internal::clawhub::install::verify_tree(entry, &self.skills_dir) {
                 TreeVerification::Ok => {}
                 TreeVerification::Unpinned => {
                     tracing::warn!(
@@ -1317,7 +1317,7 @@ ok
         let mut skills = std::collections::HashMap::new();
         skills.insert(
             slug.to_string(),
-            microclaw_clawhub::types::LockEntry {
+            crate::internal::clawhub::types::LockEntry {
                 slug: slug.to_string(),
                 installed_version: "1.0.0".into(),
                 installed_at: "2026-08-07T00:00:00Z".into(),
@@ -1326,8 +1326,8 @@ ok
                 local_path: slug.to_string(),
             },
         );
-        let lock = microclaw_clawhub::types::LockFile { version: 1, skills };
-        microclaw_clawhub::lockfile::write_lockfile(lock_path, &lock).unwrap();
+        let lock = crate::internal::clawhub::types::LockFile { version: 1, skills };
+        crate::internal::clawhub::lockfile::write_lockfile(lock_path, &lock).unwrap();
     }
 
     #[test]
@@ -1339,7 +1339,8 @@ ok
         std::fs::create_dir_all(&dir).unwrap();
         write_skill(&dir, "managed", "managed skill", "ok");
         write_skill(&dir, "local", "local skill", "ok");
-        let tree = microclaw_clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
+        let tree =
+            crate::internal::clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
         let lock_path = dir.join("clawhub.lock.json");
         write_lock_entry(&lock_path, "managed", Some(tree));
 
@@ -1379,7 +1380,8 @@ ok
         ));
         std::fs::create_dir_all(&dir).unwrap();
         write_skill(&dir, "managed", "managed skill", "ok");
-        let tree = microclaw_clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
+        let tree =
+            crate::internal::clawhub::install::compute_tree_hash(&dir.join("managed")).unwrap();
         let lock_path = dir.join("clawhub.lock.json");
         write_lock_entry(&lock_path, "managed", Some(tree));
 

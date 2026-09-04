@@ -6,12 +6,12 @@ use crate::config::{
     normalize_model_name, resolve_model_name_with_fallback, Config, ResolvedLlmProviderProfile,
 };
 use crate::http_client::llm_user_agent;
+use crate::internal::storage::db::{call_blocking, Database};
+use crate::internal::storage::usage::build_usage_report;
+use crate::internal::tool_runtime::todo_store::clear_todos;
 use crate::run_control;
 use crate::runtime::AppState;
 use microclaw_core::llm_types::Message;
-use microclaw_storage::db::{call_blocking, Database};
-use microclaw_storage::usage::build_usage_report;
-use microclaw_tools::todo_store::clear_todos;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -163,7 +163,9 @@ async fn handle_learning_command(state: &AppState, chat_id: i64, args: &str) -> 
     format_learning_run_detail(&detail)
 }
 
-fn format_learning_run_detail(detail: &microclaw_storage::db::ExperienceRunDetail) -> String {
+fn format_learning_run_detail(
+    detail: &crate::internal::storage::db::ExperienceRunDetail,
+) -> String {
     let mut lines = vec![
         format!("Learning run {}", detail.run.run_id),
         format!(
@@ -339,7 +341,7 @@ async fn handle_rewind_command(
             .into();
     }
 
-    let working_dir = microclaw_tools::runtime::working_dir_for_context(
+    let working_dir = crate::internal::tool_runtime::runtime::working_dir_for_context(
         std::path::Path::new(&state.config.working_dir),
         state.config.working_dir_isolation,
         caller_channel,
@@ -2375,7 +2377,7 @@ mod slash_command_tests {
     fn learning_detail_cli_shows_used_experience_and_evidence() {
         let dir = std::env::temp_dir().join(format!("mc_learning_cli_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let db = microclaw_storage::db::Database::new(dir.to_str().unwrap()).unwrap();
+        let db = crate::internal::storage::db::Database::new(dir.to_str().unwrap()).unwrap();
         for (run_id, objective) in [
             ("cli-source", "deploy the service"),
             ("cli-query", "deploy it again"),

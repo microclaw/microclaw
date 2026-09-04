@@ -10,6 +10,11 @@ use crate::config::{
     normalize_model_name, resolve_model_name_with_fallback, ResolvedLlmProviderProfile,
 };
 use crate::hooks::HookOutcome;
+use crate::internal::observability::traces::{
+    kv, kv_int, new_span_id, new_trace_id, now_unix_nano, SpanData,
+};
+use crate::internal::runtime::{ExecutionContext, ExecutionResult, RunExecutor, Runtime};
+use crate::internal::storage::db::{call_blocking, SessionSettings, StoredMessage};
 use crate::memory_service::{build_db_memory_context, maybe_handle_explicit_memory_command};
 use crate::run_control;
 use crate::runtime::AppState;
@@ -23,11 +28,6 @@ use microclaw_core::run_protocol::{
 };
 pub use microclaw_core::runtime_event::RuntimeEvent as AgentEvent;
 use microclaw_core::text::floor_char_boundary;
-use microclaw_observability::traces::{
-    kv, kv_int, new_span_id, new_trace_id, now_unix_nano, SpanData,
-};
-use microclaw_runtime::{ExecutionContext, ExecutionResult, RunExecutor, Runtime};
-use microclaw_storage::db::{call_blocking, SessionSettings, StoredMessage};
 use opentelemetry_proto::tonic::trace::v1::Status;
 use opentelemetry_semantic_conventions::attribute::{
     GEN_AI_OPERATION_NAME, GEN_AI_REQUEST_MODEL, GEN_AI_SYSTEM, GEN_AI_USAGE_INPUT_TOKENS,
@@ -875,7 +875,7 @@ fn tool_use_fingerprint(blocks: &[ResponseContentBlock]) -> Option<String> {
 /// equivalent JSON inputs (e.g. reordered object keys) produce the same
 /// key, while auth-context noise is stripped.
 fn duplicate_call_key(name: &str, input: &serde_json::Value) -> String {
-    microclaw_tools::tool_cache::cache_key(name, input)
+    crate::internal::tool_runtime::tool_cache::cache_key(name, input)
 }
 
 pub fn should_suppress_user_error(err: &anyhow::Error) -> bool {
@@ -1371,7 +1371,7 @@ pub(crate) async fn process_with_agent_impl(
         if tool_calls > 0 {
             let envelope_id = format!("tool-results:{experience_run_id}");
             if let Err(error) = call_blocking(state.db.clone(), move |db| {
-                db.ingest_outcome_envelope(&microclaw_storage::db::OutcomeEnvelopeV1 {
+                db.ingest_outcome_envelope(&crate::internal::storage::db::OutcomeEnvelopeV1 {
                     envelope_id,
                     run_id: experience_run_id,
                     source_kind: "runtime".into(),
@@ -1404,7 +1404,7 @@ pub(crate) async fn process_with_agent_impl(
             let tool_run_id = EXPERIENCE_RUN_ID.try_with(Clone::clone).unwrap_or_default();
             if let Err(error) = call_blocking(state.db.clone(), move |db| {
                 for outcome in tool_outcomes {
-                    db.ingest_outcome_envelope(&microclaw_storage::db::OutcomeEnvelopeV1 {
+                    db.ingest_outcome_envelope(&crate::internal::storage::db::OutcomeEnvelopeV1 {
                         envelope_id: uuid::Uuid::new_v4().to_string(),
                         run_id: tool_run_id.clone(),
                         source_kind: "runtime".into(),
@@ -1592,7 +1592,7 @@ async fn process_with_agent_logic(
     if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
         if let MessageContent::Text(text) = messages[idx].content.clone() {
             if text.contains('@') {
-                let chat_cwd = microclaw_tools::runtime::working_dir_for_context(
+                let chat_cwd = crate::internal::tool_runtime::runtime::working_dir_for_context(
                     std::path::Path::new(&state.config.working_dir),
                     state.config.working_dir_isolation,
                     context.caller_channel,
@@ -2009,8 +2009,10 @@ async fn process_with_agent_logic(
             .iter()
             .filter(|definition| {
                 matches!(
-                    microclaw_tools::runtime::tool_concurrency_class(&definition.name),
-                    microclaw_tools::runtime::ToolConcurrencyClass::ReadOnly
+                    crate::internal::tool_runtime::runtime::tool_concurrency_class(
+                        &definition.name
+                    ),
+                    crate::internal::tool_runtime::runtime::ToolConcurrencyClass::ReadOnly
                 )
             })
             .cloned()
@@ -2023,8 +2025,10 @@ async fn process_with_agent_logic(
             .iter()
             .filter(|definition| {
                 matches!(
-                    microclaw_tools::runtime::tool_concurrency_class(&definition.name),
-                    microclaw_tools::runtime::ToolConcurrencyClass::ReadOnly
+                    crate::internal::tool_runtime::runtime::tool_concurrency_class(
+                        &definition.name
+                    ),
+                    crate::internal::tool_runtime::runtime::ToolConcurrencyClass::ReadOnly
                 ) || matches!(definition.name.as_str(), "todo_write" | "clarify")
             })
             .cloned()
@@ -2118,7 +2122,7 @@ async fn process_with_agent_logic(
     // directory itself is excluded (its hint file is already in the system
     // prompt via `load_project_context`).
     let mut subdir_hints = crate::subdirectory_hints::SubdirectoryHintTracker::new(
-        microclaw_tools::runtime::working_dir_for_context(
+        crate::internal::tool_runtime::runtime::working_dir_for_context(
             std::path::Path::new(&state.config.working_dir),
             state.config.working_dir_isolation,
             context.caller_channel,
@@ -2131,7 +2135,7 @@ async fn process_with_agent_logic(
     // /rewind. Failure here is logged and ignored; checkpoints must never
     // block the agent loop.
     if state.config.checkpoints_enabled {
-        let working_dir = microclaw_tools::runtime::working_dir_for_context(
+        let working_dir = crate::internal::tool_runtime::runtime::working_dir_for_context(
             std::path::Path::new(&state.config.working_dir),
             state.config.working_dir_isolation,
             context.caller_channel,
@@ -4265,19 +4269,19 @@ mod tests {
     }
     use crate::chat_turn_queue::PendingMessage;
     use crate::config::{Config, WorkingDirIsolation};
+    use crate::internal::channels::channel::ConversationKind;
+    use crate::internal::channels::channel_adapter::ChannelAdapter;
+    use crate::internal::channels::channel_adapter::ChannelRegistry;
+    use crate::internal::storage::db::{Database, StoredMessage};
     use crate::llm::LlmProvider;
     use crate::memory::MemoryManager;
     use crate::runtime::AppState;
     use crate::skills::SkillManager;
     use crate::tools::ToolRegistry;
-    use microclaw_channels::channel::ConversationKind;
-    use microclaw_channels::channel_adapter::ChannelAdapter;
-    use microclaw_channels::channel_adapter::ChannelRegistry;
     use microclaw_core::error::MicroClawError;
     use microclaw_core::llm_types::{
         Message, MessagesResponse, ResponseContentBlock, ToolDefinition, Usage,
     };
-    use microclaw_storage::db::{Database, StoredMessage};
     use serde_json::json;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

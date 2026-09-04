@@ -18,20 +18,20 @@ use crate::agent_engine::{
 use crate::chat_turn_queue::PendingMessage;
 use crate::config::Config;
 use crate::hooks::HookManager;
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::runtime::{ExecutionContext, ExecutionResult, RunExecutor};
+use crate::internal::storage::db::{call_blocking, Database, StoredMessage};
 use crate::memory::MemoryManager;
 use crate::memory_backend::{MemoryBackend, MemoryMcpClient};
 use crate::runtime::AppState;
 use crate::skills::{SkillAvailability, SkillManager};
 use crate::tools::ToolRegistry;
 use crate::{embedding, llm};
-use microclaw_channels::channel_adapter::ChannelRegistry;
 use microclaw_core::run_protocol::{
     AgentProfile, RunRequest, RuntimeCapabilities, RuntimeControl, RuntimeError, RuntimeErrorCode,
     SessionId,
 };
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
-use microclaw_runtime::{ExecutionContext, ExecutionResult, RunExecutor};
-use microclaw_storage::db::{call_blocking, Database, StoredMessage};
 
 pub const HEADLESS_CHANNEL: &str = "headless";
 pub const WORK_CHANNEL: &str = "work";
@@ -327,8 +327,9 @@ impl HeadlessRuntime {
         self,
         caller_channel: impl Into<String>,
         max_concurrent_runs: usize,
-    ) -> Result<microclaw_runtime::Runtime, microclaw_runtime::RuntimeBuildError> {
-        microclaw_runtime::Runtime::builder()
+    ) -> Result<crate::internal::runtime::Runtime, crate::internal::runtime::RuntimeBuildError>
+    {
+        crate::internal::runtime::Runtime::builder()
             .executor(HeadlessRunExecutor::new(self, caller_channel))
             .max_concurrent_runs(max_concurrent_runs)
             .build()

@@ -3,12 +3,12 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use microclaw_channels::channel::deliver_and_store_bot_message;
-use microclaw_channels::channel_adapter::ChannelRegistry;
+use crate::internal::channels::channel::deliver_and_store_bot_message;
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::storage::db::Database;
+use crate::internal::tool_runtime::media_client::{persist_output, MediaClient};
+use crate::internal::tool_runtime::runtime::auth_context_from_input;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
-use microclaw_tools::media_client::{persist_output, MediaClient};
-use microclaw_tools::runtime::auth_context_from_input;
 
 use super::{schema_object, Tool, ToolResult};
 use crate::config::{Config, MediaConfig, PodcastConfig, TtsConfig};
@@ -455,9 +455,12 @@ async fn deliver_attachment(
     file: &Path,
     caption: &str,
 ) -> Result<String, String> {
-    let routing =
-        microclaw_channels::channel::get_required_chat_routing(channels, db.clone(), chat_id)
-            .await?;
+    let routing = crate::internal::channels::channel::get_required_chat_routing(
+        channels,
+        db.clone(),
+        chat_id,
+    )
+    .await?;
     let Some(adapter) = channels.get(&routing.channel_name) else {
         return Err(format!("no adapter for channel '{}'", routing.channel_name));
     };
@@ -468,11 +471,12 @@ async fn deliver_attachment(
             file.display()
         ));
     }
-    let external_chat_id =
-        microclaw_storage::db::call_blocking(db.clone(), move |d| d.get_chat_external_id(chat_id))
-            .await
-            .map_err(|e| e.to_string())?
-            .unwrap_or_else(|| chat_id.to_string());
+    let external_chat_id = crate::internal::storage::db::call_blocking(db.clone(), move |d| {
+        d.get_chat_external_id(chat_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .unwrap_or_else(|| chat_id.to_string());
     let caption_short = caption.chars().take(120).collect::<String>();
     match adapter
         .send_attachment(&external_chat_id, file, Some(&caption_short))

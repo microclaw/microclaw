@@ -3,8 +3,8 @@ use serde_json::json;
 use std::sync::Arc;
 use tracing::info;
 
+use crate::internal::storage::db::{call_blocking, Database};
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::{call_blocking, Database};
 
 use super::{schema_object, Tool, ToolResult};
 
@@ -328,7 +328,7 @@ mod tests {
         let (db, dir) = test_db();
 
         // Insert first triple directly with a fixed timestamp to avoid timing races
-        let id1 = microclaw_storage::db::call_blocking(db.clone(), |db| {
+        let id1 = crate::internal::storage::db::call_blocking(db.clone(), |db| {
             db.kg_insert_triple(
                 "db-port",
                 "is",
@@ -345,13 +345,13 @@ mod tests {
 
         // Invalidate the first and add the second
         let now = "2026-01-02T00:00:00Z";
-        let _ = microclaw_storage::db::call_blocking(db.clone(), {
+        let _ = crate::internal::storage::db::call_blocking(db.clone(), {
             let now = now.to_string();
             move |db| db.kg_invalidate_triple(id1, &now)
         })
         .await;
 
-        let _ = microclaw_storage::db::call_blocking(db.clone(), {
+        let _ = crate::internal::storage::db::call_blocking(db.clone(), {
             let now = now.to_string();
             move |db| db.kg_insert_triple("db-port", "is", "5433", None, &now, 0.80, "test", None)
         })

@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::internal::tool_runtime::runtime::{tool_risk, ToolRisk};
 use crate::tools::IDEMPOTENT_TOOLS;
-use microclaw_tools::runtime::{tool_risk, ToolRisk};
 
 /// Pre-tool-call policy mode. `Off` preserves historical behavior (no policy
 /// evaluation at all); `Warn` logs violations to the audit trail but lets the
@@ -127,7 +127,7 @@ pub fn evaluate_tool_policy(cfg: &ToolPolicyConfig, tool_name: &str) -> PolicyDe
 pub fn evaluate_tool_policy_with_risk(
     cfg: &ToolPolicyConfig,
     tool_name: &str,
-    risk: microclaw_tools::runtime::ToolRisk,
+    risk: crate::internal::tool_runtime::runtime::ToolRisk,
 ) -> PolicyDecision {
     if cfg.mode == ToolPolicyMode::Off {
         return PolicyDecision::Allow;
@@ -164,7 +164,7 @@ pub fn evaluate_tool_policy_with_risk(
 pub fn evaluate_tool_policy_for_auth(
     cfg: &ToolPolicyConfig,
     tool_name: &str,
-    auth: &microclaw_tools::runtime::ToolAuthContext,
+    auth: &crate::internal::tool_runtime::runtime::ToolAuthContext,
 ) -> PolicyDecision {
     evaluate_tool_policy_for_auth_with_risk(cfg, tool_name, auth, tool_risk(tool_name))
 }
@@ -175,8 +175,8 @@ pub fn evaluate_tool_policy_for_auth(
 pub fn evaluate_tool_policy_for_auth_with_risk(
     cfg: &ToolPolicyConfig,
     tool_name: &str,
-    auth: &microclaw_tools::runtime::ToolAuthContext,
-    risk: microclaw_tools::runtime::ToolRisk,
+    auth: &crate::internal::tool_runtime::runtime::ToolAuthContext,
+    risk: crate::internal::tool_runtime::runtime::ToolRisk,
 ) -> PolicyDecision {
     let global = evaluate_tool_policy_with_risk(cfg, tool_name, risk);
     if matches!(global, PolicyDecision::Block(_))
@@ -231,7 +231,10 @@ pub fn evaluate_tool_policy_for_auth_with_risk(
     }
 }
 
-fn grant_matches(rule: &ToolGrantRule, auth: &microclaw_tools::runtime::ToolAuthContext) -> bool {
+fn grant_matches(
+    rule: &ToolGrantRule,
+    auth: &crate::internal::tool_runtime::runtime::ToolAuthContext,
+) -> bool {
     rule.chat_id
         .is_none_or(|chat_id| chat_id == auth.caller_chat_id)
         && rule
@@ -460,8 +463,11 @@ mod tests {
         assert_eq!(ok.max_risk, Some(ToolRisk::Medium));
     }
 
-    fn auth(chat_id: i64, principal: &str) -> microclaw_tools::runtime::ToolAuthContext {
-        microclaw_tools::runtime::ToolAuthContext {
+    fn auth(
+        chat_id: i64,
+        principal: &str,
+    ) -> crate::internal::tool_runtime::runtime::ToolAuthContext {
+        crate::internal::tool_runtime::runtime::ToolAuthContext {
             caller_channel: "telegram".into(),
             caller_chat_id: chat_id,
             principal: principal.into(),

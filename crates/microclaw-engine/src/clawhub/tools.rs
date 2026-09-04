@@ -1,9 +1,9 @@
 use crate::clawhub::service::{ClawHubGateway, RegistryClawHubGateway};
 use crate::config::Config;
+use crate::internal::clawhub::install::InstallOptions;
 use crate::llm_types::ToolDefinition;
 use crate::tools::{schema_object, Tool, ToolResult};
 use async_trait::async_trait;
-use microclaw_clawhub::install::InstallOptions;
 use std::path::PathBuf;
 use std::sync::Arc;
 

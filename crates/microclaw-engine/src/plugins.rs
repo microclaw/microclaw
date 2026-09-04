@@ -2,9 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::internal::tool_runtime::sandbox::{
+    SandboxExecOptions, SandboxExecResult, SandboxMode, SandboxRouter,
+};
 use async_trait::async_trait;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_tools::sandbox::{SandboxExecOptions, SandboxExecResult, SandboxMode, SandboxRouter};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::warn;
@@ -939,14 +941,14 @@ async fn execute_command_with_policy(
     let session_key = format!("{}-{}", caller_channel, caller_chat_id);
     match execution_policy {
         PluginExecutionPolicy::HostOnly => {
-            microclaw_tools::sandbox::exec_host_command(command, &opts).await
+            crate::internal::tool_runtime::sandbox::exec_host_command(command, &opts).await
         }
         PluginExecutionPolicy::SandboxOnly => router.exec(&session_key, command, &opts).await,
         PluginExecutionPolicy::Dual => {
             if router.mode() == SandboxMode::All {
                 router.exec(&session_key, command, &opts).await
             } else {
-                microclaw_tools::sandbox::exec_host_command(command, &opts).await
+                crate::internal::tool_runtime::sandbox::exec_host_command(command, &opts).await
             }
         }
     }

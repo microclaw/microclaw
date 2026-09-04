@@ -3,7 +3,7 @@
 //! smoke-tests; these tests exercise the bits that don't need real API
 //! credentials.
 
-use microclaw_tools::media_client::MediaClient;
+use microclaw_engine::internal::tool_runtime::media_client::MediaClient;
 
 #[test]
 fn media_client_rejects_loopback_base_url() {

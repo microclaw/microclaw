@@ -7,6 +7,8 @@
 // reachable from this crate's own entry points.
 #![allow(dead_code)]
 
+pub mod internal;
+
 pub mod a2a;
 pub mod acp_subagent;
 pub mod agent_engine;
@@ -54,12 +56,18 @@ pub mod voice;
 pub mod channels;
 pub mod runtime;
 
-pub use microclaw_app::builtin_skills;
-pub use microclaw_app::logging;
-pub use microclaw_app::transcribe;
+pub use internal::app::builtin_skills;
+pub use internal::app::logging;
+pub use internal::app::transcribe;
+pub use internal::runtime::{
+    AgentHandle, ControlRequest, ExecutionContext, ExecutionResult, LocalWorker, RemoteWorker,
+    RunController, RunExecutor, RunHandle, Runtime, RuntimeBuildError, RuntimeBuilder,
+    RuntimeStats, Worker, WorkerConnection, WorkerTransport,
+};
+pub use internal::storage::memory;
+pub use internal::worker::{WebSocketWorkerTransport, WorkerHost};
 pub use microclaw_core::error;
 pub use microclaw_core::llm_types;
-pub use microclaw_storage::memory;
 
 #[cfg(test)]
 pub mod test_support {

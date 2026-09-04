@@ -20,14 +20,16 @@ use crate::agent_engine::{process_with_agent_with_events, AgentEvent, AgentReque
 use crate::chat_commands::handle_chat_command;
 use crate::config::{Config, WorkingDirIsolation};
 use crate::runtime::AppState;
-use microclaw_channels::channel::ConversationKind;
-use microclaw_channels::channel::{
+use microclaw_engine::internal::channels::channel::ConversationKind;
+use microclaw_engine::internal::channels::channel::{
     deliver_and_store_bot_message, get_chat_routing, session_source_for_chat,
 };
-use microclaw_channels::channel_adapter::{ChannelAdapter, ChannelRegistry};
-use microclaw_observability::metrics::{OtlpMetricExporter, OtlpMetricSnapshot};
-use microclaw_storage::db::{call_blocking, ChatSummary, MetricsHistoryPoint, StoredMessage};
-use microclaw_storage::usage::build_usage_report;
+use microclaw_engine::internal::channels::channel_adapter::{ChannelAdapter, ChannelRegistry};
+use microclaw_engine::internal::observability::metrics::{OtlpMetricExporter, OtlpMetricSnapshot};
+use microclaw_engine::internal::storage::db::{
+    call_blocking, ChatSummary, MetricsHistoryPoint, StoredMessage,
+};
+use microclaw_engine::internal::storage::usage::build_usage_report;
 
 use middleware::*;
 

@@ -18,9 +18,9 @@ use agent_client_protocol::{
     SessionId, SessionMode, SessionModeState, SessionUpdate, SetSessionModeRequest,
     SetSessionModeResponse, StopReason,
 };
-use microclaw_channels::channel::ConversationKind;
-use microclaw_channels::channel_adapter::{ChannelAdapter, ChannelRegistry};
-use microclaw_storage::db::{call_blocking, Database, StoredMessage};
+use microclaw_engine::internal::channels::channel::ConversationKind;
+use microclaw_engine::internal::channels::channel_adapter::{ChannelAdapter, ChannelRegistry};
+use microclaw_engine::internal::storage::db::{call_blocking, Database, StoredMessage};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

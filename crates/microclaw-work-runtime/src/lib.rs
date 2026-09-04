@@ -9,15 +9,15 @@ use microclaw::config::Config;
 #[cfg(test)]
 use microclaw::config::WorkingDirIsolation;
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
+use microclaw::internal::clawhub::install::InstallOptions;
+use microclaw::internal::storage::db::Database;
 use microclaw::llm::create_provider;
 use microclaw::tools::{Tool, sync_skills::SyncSkillsTool};
-use microclaw_clawhub::install::InstallOptions;
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
 use microclaw_core::run_protocol::{RunId, RunRequest, SessionId};
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
 use microclaw_engine as microclaw;
 use microclaw_sdk::MicroClaw;
-use microclaw_storage::db::Database;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -2081,7 +2081,7 @@ mod tests {
 
     #[test]
     fn work_lists_and_cancels_durable_subagents() {
-        use microclaw_storage::db::subagents::CreateSubagentRunParams;
+        use microclaw::internal::storage::db::subagents::CreateSubagentRunParams;
 
         let directory = tempfile::tempdir().unwrap();
         let data_dir = directory.path().join("data");

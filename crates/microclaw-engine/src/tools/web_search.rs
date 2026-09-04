@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use super::{schema_object, Tool, ToolResult};
+use crate::internal::tool_runtime::web_search::SearchProviderConfig;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_tools::web_search::SearchProviderConfig;
 
 pub struct WebSearchTool {
     default_timeout_secs: u64,
@@ -63,7 +63,7 @@ impl Tool for WebSearchTool {
         };
         let timeout_secs = resolve_timeout_secs(&input, self.default_timeout_secs);
 
-        match microclaw_tools::web_search::search_with_provider(
+        match crate::internal::tool_runtime::web_search::search_with_provider(
             &query,
             &self.provider,
             timeout_secs,
@@ -74,7 +74,9 @@ impl Tool for WebSearchTool {
                 if hits.is_empty() {
                     ToolResult::success("No results found.".into())
                 } else {
-                    ToolResult::success(microclaw_tools::web_search::format_search_hits(&hits))
+                    ToolResult::success(
+                        crate::internal::tool_runtime::web_search::format_search_hits(&hits),
+                    )
                 }
             }
             Err(e) => ToolResult::error(format!("Search failed: {e}")),

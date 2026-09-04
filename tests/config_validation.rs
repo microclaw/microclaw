@@ -78,10 +78,10 @@ fn minimal_config() -> Config {
         web_run_history_limit: 512,
         web_session_idle_ttl_seconds: 300,
         web_fetch_validation:
-            microclaw_tools::web_content_validation::WebContentValidationConfig::default(),
-        web_fetch_url_validation: microclaw_tools::web_fetch::WebFetchUrlValidationConfig::default(
+            microclaw_engine::internal::tool_runtime::web_content_validation::WebContentValidationConfig::default(),
+        web_fetch_url_validation: microclaw_engine::internal::tool_runtime::web_fetch::WebFetchUrlValidationConfig::default(
         ),
-        web_search: microclaw_tools::web_search::SearchProviderConfig::default(),
+        web_search: microclaw_engine::internal::tool_runtime::web_search::SearchProviderConfig::default(),
         output_guardrail: microclaw_core::redact::OutputGuardrailConfig::default(),
         tool_policy: microclaw::tool_guardrails::ToolPolicyConfig::default(),
         egress_policy: microclaw::config::EgressPolicyConfig::default(),

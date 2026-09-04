@@ -41,6 +41,7 @@ codegen-units = 16
 [package]
 name = "microclaw"
 version = "0.5.5"
+publish = false
 edition = "2021"
 license = "MIT"
 default-run = "microclaw"
@@ -54,7 +55,7 @@ channel-matrix = ["dep:matrix-sdk"]
 full = ["channel-matrix"]
 
 [dependencies]
-microclaw-core = { version = "0.1.0", path = "crates/microclaw-core" }
+microclaw-core = { version = "0.2.0", path = "crates/microclaw-core" }
 microclaw-clawhub = { version = "0.1.0", path = "crates/microclaw-clawhub" }
 microclaw-storage = { version = "0.1.0", path = "crates/microclaw-storage" }
 microclaw-tools = { version = "0.1.0", path = "crates/microclaw-tools" }
@@ -62,7 +63,7 @@ microclaw-channels = { version = "0.1.0", path = "crates/microclaw-channels" }
 microclaw-app = { version = "0.1.0", path = "crates/microclaw-app" }
 microclaw-observability = { version = "0.1.0", path = "crates/microclaw-observability" }
 microclaw-runtime = { version = "0.1.0", path = "crates/microclaw-runtime" }
-microclaw-engine = { version = "0.1.0", path = "crates/microclaw-engine", features = ["test-support"] }
+microclaw-engine = { version = "0.2.0", path = "crates/microclaw-engine", features = ["test-support"] }
 teloxide = { version = "0.17", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"
@@ -130,3 +131,7 @@ tower = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8.1"
+
+[patch.crates-io]
+microclaw-core = { path = "crates/microclaw-core" }
+microclaw-engine = { path = "crates/microclaw-engine" }

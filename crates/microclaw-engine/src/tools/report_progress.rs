@@ -5,11 +5,11 @@ use serde_json::json;
 
 use super::{schema_object, Tool, ToolResult};
 use crate::config::Config;
-use microclaw_channels::channel::deliver_and_store_bot_message;
-use microclaw_channels::channel_adapter::ChannelRegistry;
+use crate::internal::channels::channel::deliver_and_store_bot_message;
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::storage::db::{call_blocking, Database};
+use crate::internal::tool_runtime::runtime::auth_context_from_input;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::{call_blocking, Database};
-use microclaw_tools::runtime::auth_context_from_input;
 
 /// Lets a running sub-agent push a short progress update to its chat while it
 /// works, like a colleague giving a quick status. Records the update on the run

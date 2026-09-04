@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
+use crate::internal::storage::db::{call_blocking, Database, Memory};
 use crate::mcp::{McpManager, McpServer, McpToolInfo};
 use microclaw_core::error::MicroClawError;
 use microclaw_core::text::floor_char_boundary;
-use microclaw_storage::db::{call_blocking, Database, Memory};
 
 #[derive(Clone)]
 pub struct MemoryMcpClient {

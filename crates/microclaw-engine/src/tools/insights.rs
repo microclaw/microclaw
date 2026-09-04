@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+use crate::internal::storage::db::{call_blocking, Database};
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::{call_blocking, Database};
 
 use super::{auth_context_from_input, authorize_chat_access, schema_object, Tool, ToolResult};
 

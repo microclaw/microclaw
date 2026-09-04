@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use super::{authorize_chat_access, schema_object, Tool, ToolResult};
+use crate::internal::storage::db::{call_blocking, Database};
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::{call_blocking, Database};
 
 pub struct ExportChatTool {
     db: Arc<Database>,
@@ -113,7 +113,7 @@ impl Tool for ExportChatTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use microclaw_storage::db::{Database, StoredMessage};
+    use crate::internal::storage::db::{Database, StoredMessage};
 
     fn test_db() -> (Arc<Database>, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("microclaw_export_{}", uuid::Uuid::new_v4()));

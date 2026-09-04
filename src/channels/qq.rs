@@ -16,9 +16,9 @@ use crate::channels::startup_guard::{
 use crate::chat_commands::{handle_chat_command, is_slash_command, unknown_command_response};
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
-use microclaw_channels::channel::ConversationKind;
-use microclaw_channels::channel_adapter::ChannelAdapter;
-use microclaw_storage::db::{call_blocking, StoredMessage};
+use microclaw_engine::internal::channels::channel::ConversationKind;
+use microclaw_engine::internal::channels::channel_adapter::ChannelAdapter;
+use microclaw_engine::internal::storage::db::{call_blocking, StoredMessage};
 
 pub const SETUP_DEF: DynamicChannelDef = DynamicChannelDef {
     name: "qq",

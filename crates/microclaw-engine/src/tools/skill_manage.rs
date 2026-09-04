@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
+use crate::internal::storage::db::Database;
+use crate::internal::storage::memory_quality;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
-use microclaw_storage::memory_quality;
 
 use super::{schema_object, Tool, ToolResult};
 

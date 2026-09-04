@@ -3,10 +3,10 @@ use serde_json::json;
 use std::sync::Arc;
 use tracing::info;
 
+use crate::internal::storage::db::Database;
+use crate::internal::storage::db::Memory;
 use crate::memory_backend::MemoryBackend;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
-use microclaw_storage::db::Memory;
 
 use super::{auth_context_from_input, authorize_chat_access, schema_object, Tool, ToolResult};
 

@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-engine"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license.workspace = true
 authors.workspace = true
@@ -14,26 +14,22 @@ categories = ["development-tools"]
 [features]
 default = []
 test-support = []
-sqlite-vec = ["microclaw-storage/sqlite-vec"]
+sqlite-vec = ["dep:sqlite-vec"]
+journald = ["dep:tracing-journald"]
 
 [dependencies]
-microclaw-core = { version = "0.1.0", path = "../microclaw-core" }
-microclaw-clawhub = { version = "0.1.0", path = "../microclaw-clawhub" }
-microclaw-storage = { version = "0.1.0", path = "../microclaw-storage" }
-microclaw-tools = { version = "0.1.0", path = "../microclaw-tools" }
-microclaw-channels = { version = "0.1.0", path = "../microclaw-channels" }
-microclaw-app = { version = "0.1.0", path = "../microclaw-app" }
-microclaw-observability = { version = "0.1.0", path = "../microclaw-observability" }
-microclaw-runtime = { version = "0.1.0", path = "../microclaw-runtime" }
+microclaw-core = { version = "0.2.0", path = "../microclaw-core" }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
-reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream", "multipart"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-journald = { version = "0.3", optional = true }
 regex = "1"
 glob = "0.3"
 thiserror = "2"
@@ -56,6 +52,10 @@ tokio-util = { version = "0.7", features = ["compat"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 opentelemetry-proto = { version = "0.28", features = ["gen-tonic-messages"] }
+opentelemetry = "0.30"
+opentelemetry_sdk = { version = "0.30", features = ["rt-tokio", "experimental_async_runtime", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
+opentelemetry-otlp = { version = "0.30", features = ["http-proto", "trace", "metrics", "logs", "reqwest-client"] }
+opentelemetry-appender-tracing = "0.30"
 opentelemetry-semantic-conventions = { version = "0.30", features = ["semconv_experimental"] }
 prost = "0.13"
 rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
@@ -70,6 +70,7 @@ typst-pdf = "0.15"
 typst-layout = "0.15"
 toml = "0.8"
 url = "2"
+sqlite-vec = { version = "0.1.8", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

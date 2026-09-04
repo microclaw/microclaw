@@ -5,10 +5,10 @@ use tracing::info;
 
 use crate::agent_engine::is_slash_command_text;
 use crate::embedding::EmbeddingProvider;
+use crate::internal::storage::db::{call_blocking, Database, KgTriple, Memory};
+use crate::internal::storage::memory_quality;
 use crate::memory_backend::MemoryBackend;
 use crate::runtime::AppState;
-use microclaw_storage::db::{call_blocking, Database, KgTriple, Memory};
-use microclaw_storage::memory_quality;
 
 pub struct ReflectorApplyOutcome {
     pub inserted: usize,
@@ -959,7 +959,7 @@ pub(crate) fn memory_supports_local_semantic_ranking(memory_backend: &MemoryBack
 #[cfg(test)]
 mod recency_tests {
     use super::effective_memory_score;
-    use microclaw_storage::db::Memory;
+    use crate::internal::storage::db::Memory;
 
     fn mk(category: &str, last_seen: &str, confidence: f64) -> Memory {
         Memory {
@@ -1086,7 +1086,7 @@ mod consolidation_tests {
 #[cfg(test)]
 mod graph_recall_tests {
     use super::{extract_kg_seeds, render_graph_section};
-    use microclaw_storage::db::KgTriple;
+    use crate::internal::storage::db::KgTriple;
 
     fn triple(subject: &str, predicate: &str, object: &str) -> KgTriple {
         KgTriple {

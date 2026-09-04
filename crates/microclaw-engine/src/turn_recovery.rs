@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
+use crate::internal::channels::channel::deliver_and_store_bot_message;
+use crate::internal::storage::db::call_blocking;
 use crate::runtime::AppState;
-use microclaw_channels::channel::deliver_and_store_bot_message;
-use microclaw_storage::db::call_blocking;
 
 /// After a long outage, an automatic continuation is more surprising than
 /// useful. Operators can still inspect the audit/session state.
@@ -219,7 +219,7 @@ async fn clear_recovered_turn(state: &AppState, chat_id: i64) {
 
 async fn log_recovery_audit(
     state: &AppState,
-    turn: &microclaw_storage::db::InterruptedTurn,
+    turn: &crate::internal::storage::db::InterruptedTurn,
     action: &'static str,
     status: &'static str,
 ) {

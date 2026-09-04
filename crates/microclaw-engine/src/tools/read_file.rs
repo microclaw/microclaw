@@ -69,7 +69,8 @@ impl Tool for ReadFileTool {
         let resolved_path = super::resolve_tool_path(&working_dir, path);
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
 
-        if let Err(msg) = microclaw_tools::path_guard::check_path(&resolved_path_str) {
+        if let Err(msg) = crate::internal::tool_runtime::path_guard::check_path(&resolved_path_str)
+        {
             return ToolResult::error(msg);
         }
 

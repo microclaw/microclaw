@@ -69,7 +69,7 @@ pub async fn transcribe_audio(config: &Config, audio_bytes: &[u8]) -> Result<Str
         let Some(ref openai_key) = config.openai_api_key else {
             return Err("Voice transcription requires openai_api_key".into());
         };
-        microclaw_app::transcribe::transcribe_audio(openai_key, audio_bytes).await
+        crate::internal::app::transcribe::transcribe_audio(openai_key, audio_bytes).await
     }
 }
 

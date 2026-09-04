@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
+use crate::internal::storage::db::Database;
+use crate::internal::tool_runtime::todo_store::{format_todos, read_todos, write_todos, TodoItem};
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
-use microclaw_tools::todo_store::{format_todos, read_todos, write_todos, TodoItem};
 
 use super::{auth_context_from_input, authorize_chat_access, schema_object, Tool, ToolResult};
 

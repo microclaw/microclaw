@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
+use crate::internal::storage::db::Database;
+use crate::internal::storage::memory_quality;
 use crate::memory_backend::MemoryBackend;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
-use microclaw_storage::memory_quality;
 
 use super::{auth_context_from_input, authorize_chat_access, schema_object, Tool, ToolResult};
 
@@ -366,7 +366,7 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
-    use microclaw_storage::db::{Database, StoredMessage};
+    use crate::internal::storage::db::{Database, StoredMessage};
 
     fn test_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("microclaw_memtool_{}", uuid::Uuid::new_v4()))

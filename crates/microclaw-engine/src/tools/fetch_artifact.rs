@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 
+use crate::internal::storage::db::Database;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
 
 use super::{auth_context_from_input, schema_object, Tool, ToolResult};
 
@@ -95,7 +95,7 @@ impl Tool for FetchArtifactTool {
         let db = self.db.clone();
         let artifact_id_for_db = artifact_id.clone();
         let now = chrono::Utc::now().to_rfc3339();
-        let lookup = microclaw_storage::db::call_blocking(db, move |db| {
+        let lookup = crate::internal::storage::db::call_blocking(db, move |db| {
             db.get_tool_artifact_slice(&artifact_id_for_db, offset, length, &now)
         })
         .await;

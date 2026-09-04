@@ -18,9 +18,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::internal::storage::db::call_blocking;
+use crate::internal::storage::db::Database;
 use microclaw_core::llm_types::{ContentBlock, Message, MessageContent, ResponseContentBlock};
-use microclaw_storage::db::call_blocking;
-use microclaw_storage::db::Database;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -443,7 +443,7 @@ pub async fn spawn_skill_review_worker(state: Arc<AppState>, mut worker: SkillRe
 async fn run_learn_job(state: &Arc<AppState>, chat_id: i64) {
     let outcome = run_skill_review_core(state, chat_id, true).await;
     let reply = crate::chat_commands::format_learn_reply(&outcome);
-    let routing = match microclaw_channels::channel::get_chat_routing(
+    let routing = match crate::internal::channels::channel::get_chat_routing(
         &state.channel_registry,
         state.db.clone(),
         chat_id,
@@ -459,7 +459,7 @@ async fn run_learn_job(state: &Arc<AppState>, chat_id: i64) {
         }
     };
     let bot_username = state.config.bot_username_for_channel(&routing.channel_name);
-    if let Err(e) = microclaw_channels::channel::deliver_and_store_bot_message(
+    if let Err(e) = crate::internal::channels::channel::deliver_and_store_bot_message(
         &state.channel_registry,
         state.db.clone(),
         &bot_username,
@@ -900,7 +900,7 @@ fn validate_skill_name(name: &str) -> Result<(), String> {
 }
 
 fn scan_or_reject(content: &str) -> Result<(), String> {
-    microclaw_storage::memory_quality::scan_for_injection(content)
+    crate::internal::storage::memory_quality::scan_for_injection(content)
         .map_err(|reason| format!("injection scan failed: {reason}"))
 }
 

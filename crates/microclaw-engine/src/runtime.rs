@@ -6,16 +6,16 @@ use tokio::sync::RwLock;
 use crate::config::Config;
 use crate::embedding::EmbeddingProvider;
 use crate::hooks::HookManager;
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::observability::logs::OtlpLogExporter;
+use crate::internal::observability::metrics::OtlpMetricExporter;
+use crate::internal::observability::traces::OtlpTraceExporter;
+use crate::internal::storage::db::Database;
 use crate::llm::LlmProvider;
 use crate::memory::MemoryManager;
 use crate::memory_backend::MemoryBackend;
 use crate::skills::SkillManager;
 use crate::tools::ToolRegistry;
-use microclaw_channels::channel_adapter::ChannelRegistry;
-use microclaw_observability::logs::OtlpLogExporter;
-use microclaw_observability::metrics::OtlpMetricExporter;
-use microclaw_observability::traces::OtlpTraceExporter;
-use microclaw_storage::db::Database;
 
 #[derive(Clone)]
 pub struct AppState {

@@ -19,13 +19,13 @@ use crate::agent_engine::AgentRequestContext;
 use crate::agent_engine::{process_with_agent, process_with_agent_with_experience_id};
 use crate::memory_service::apply_reflector_extractions;
 use crate::runtime::AppState;
-use microclaw_channels::channel::{
+use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
+use microclaw_core::text::floor_char_boundary;
+use microclaw_engine::internal::channels::channel::{
     deliver_and_store_bot_message, deliver_and_store_bot_message_with_status, get_chat_routing,
     ChatRouting, ConversationKind, DeliveryOutcome,
 };
-use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
-use microclaw_core::text::floor_char_boundary;
-use microclaw_storage::db::call_blocking;
+use microclaw_engine::internal::storage::db::call_blocking;
 
 pub fn spawn_scheduler(state: Arc<AppState>) {
     crate::supervision::spawn_supervised("scheduler", move || {
@@ -160,7 +160,8 @@ async fn run_due_tasks(state: &Arc<AppState>) {
     // sequentially — two tasks for the same chat would otherwise race on that
     // chat's session/history. A single slow or hung task no longer blocks
     // unrelated chats' tasks for the rest of the tick.
-    let mut by_chat: HashMap<i64, Vec<microclaw_storage::db::ScheduledTask>> = HashMap::new();
+    let mut by_chat: HashMap<i64, Vec<microclaw_engine::internal::storage::db::ScheduledTask>> =
+        HashMap::new();
     for task in tasks {
         by_chat.entry(task.chat_id).or_default().push(task);
     }
@@ -185,7 +186,7 @@ async fn run_due_tasks(state: &Arc<AppState>) {
 /// tool_policy all apply).
 struct SchedulerBashRunner<'a> {
     state: &'a Arc<AppState>,
-    auth: microclaw_tools::runtime::ToolAuthContext,
+    auth: microclaw_engine::internal::tool_runtime::runtime::ToolAuthContext,
 }
 
 #[async_trait::async_trait]
@@ -210,7 +211,7 @@ impl crate::completion_contract::CommandRunner for SchedulerBashRunner<'_> {
 /// contract that can't be checked must not report success.
 async fn verify_task_contract(
     state: &Arc<AppState>,
-    task: &microclaw_storage::db::ScheduledTask,
+    task: &microclaw_engine::internal::storage::db::ScheduledTask,
     routing: &ChatRouting,
     experience_run_id: &str,
     response: String,
@@ -245,12 +246,16 @@ async fn verify_task_contract(
         crate::config::WorkingDirIsolation::Direct => base.to_path_buf(),
         crate::config::WorkingDirIsolation::Shared => base.join("shared"),
         crate::config::WorkingDirIsolation::Chat => {
-            microclaw_tools::runtime::chat_working_dir(base, &routing.channel_name, task.chat_id)
+            microclaw_engine::internal::tool_runtime::runtime::chat_working_dir(
+                base,
+                &routing.channel_name,
+                task.chat_id,
+            )
         }
     };
     let runner = SchedulerBashRunner {
         state,
-        auth: microclaw_tools::runtime::ToolAuthContext {
+        auth: microclaw_engine::internal::tool_runtime::runtime::ToolAuthContext {
             caller_channel: routing.channel_name.clone(),
             caller_chat_id: task.chat_id,
             principal: "scheduler".to_string(),
@@ -297,7 +302,10 @@ async fn verify_task_contract(
 /// a wall-clock timeout so a hung run can't pin a slot forever), deliver the
 /// reply, log the run, enqueue a DLQ entry on failure, and reschedule (or mark
 /// terminal). Failures and timeouts are surfaced — never silently swallowed.
-async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::ScheduledTask) {
+async fn run_one_due_task(
+    state: Arc<AppState>,
+    task: microclaw_engine::internal::storage::db::ScheduledTask,
+) {
     info!(
         "Scheduler: executing task #{} for chat {} (schedule {}='{}', was due at {})",
         task.id, task.chat_id, task.schedule_type, task.schedule_value, task.next_run,
@@ -532,29 +540,31 @@ async fn run_one_due_task(state: Arc<AppState>, task: microclaw_storage::db::Sch
             success,
             log_summary.as_deref(),
         )?;
-        db.ingest_outcome_envelope(&microclaw_storage::db::OutcomeEnvelopeV1 {
-            envelope_id: format!("scheduler-run-log:{scheduler_experience_run_id}"),
-            run_id: scheduler_experience_run_id,
-            source_kind: "runtime".into(),
-            source_name: "scheduler_run_log".into(),
-            verdict: if success {
-                "passed".into()
-            } else {
-                "failed".into()
+        db.ingest_outcome_envelope(
+            &microclaw_engine::internal::storage::db::OutcomeEnvelopeV1 {
+                envelope_id: format!("scheduler-run-log:{scheduler_experience_run_id}"),
+                run_id: scheduler_experience_run_id,
+                source_kind: "runtime".into(),
+                source_name: "scheduler_run_log".into(),
+                verdict: if success {
+                    "passed".into()
+                } else {
+                    "failed".into()
+                },
+                confidence: 1.0,
+                evidence: log_summary,
+                scope: Some("scheduled_task".into()),
+                valid_until: None,
+                payload: serde_json::json!({
+                    "task_id": task.id,
+                    "duration_ms": duration_ms,
+                    "started_at": started_for_log,
+                    "finished_at": finished_for_log,
+                    "success": success
+                }),
+                feedback: None,
             },
-            confidence: 1.0,
-            evidence: log_summary,
-            scope: Some("scheduled_task".into()),
-            valid_until: None,
-            payload: serde_json::json!({
-                "task_id": task.id,
-                "duration_ms": duration_ms,
-                "started_at": started_for_log,
-                "finished_at": finished_for_log,
-                "success": success
-            }),
-            feedback: None,
-        })?;
+        )?;
         Ok(())
     })
     .await
@@ -928,7 +938,8 @@ async fn run_task_standup(
     }
 
     // Group active runs by chat.
-    let mut by_chat: HashMap<i64, Vec<microclaw_storage::db::SubagentRunRecord>> = HashMap::new();
+    let mut by_chat: HashMap<i64, Vec<microclaw_engine::internal::storage::db::SubagentRunRecord>> =
+        HashMap::new();
     for run in runs {
         by_chat.entry(run.chat_id).or_default().push(run);
     }
@@ -1537,7 +1548,7 @@ async fn run_interjection(state: &Arc<AppState>, last_interjection: &mut HashMap
 /// that has run well past the interval without recent progress is flagged as
 /// possibly stalled.
 fn format_standup(
-    runs: &[microclaw_storage::db::SubagentRunRecord],
+    runs: &[microclaw_engine::internal::storage::db::SubagentRunRecord],
     now: chrono::DateTime<Utc>,
     interval_secs: u64,
     avg_duration_secs: Option<i64>,
@@ -2381,7 +2392,7 @@ mod tests {
 
     #[test]
     fn test_format_standup_uses_label_and_progress() {
-        use microclaw_storage::db::SubagentRunRecord;
+        use microclaw_engine::internal::storage::db::SubagentRunRecord;
         let now = Utc::now();
         let created = (now - chrono::Duration::seconds(630)).to_rfc3339();
         let run = SubagentRunRecord {
@@ -2421,7 +2432,7 @@ mod tests {
 
     #[test]
     fn test_format_standup_flags_stalled_task() {
-        use microclaw_storage::db::SubagentRunRecord;
+        use microclaw_engine::internal::storage::db::SubagentRunRecord;
         let now = Utc::now();
         // Running 90 min, no progress ever, interval 30 min → stalled.
         let run = SubagentRunRecord {
@@ -2459,7 +2470,7 @@ mod tests {
 
     #[test]
     fn test_format_standup_shows_eta_when_under_average() {
-        use microclaw_storage::db::SubagentRunRecord;
+        use microclaw_engine::internal::storage::db::SubagentRunRecord;
         let now = Utc::now();
         // Running 2 min, average completed run is 10 min → ~8m left, no stall flag.
         let run = SubagentRunRecord {

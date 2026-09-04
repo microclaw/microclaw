@@ -14,10 +14,10 @@ use serde_json::json;
 use std::collections::BTreeSet;
 
 use super::{schema_object, Tool, ToolResult};
+use crate::internal::tool_runtime::web_content_validation::WebContentValidationConfig;
+use crate::internal::tool_runtime::web_fetch::WebFetchUrlValidationConfig;
+use crate::internal::tool_runtime::web_search::SearchProviderConfig;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_tools::web_content_validation::WebContentValidationConfig;
-use microclaw_tools::web_fetch::WebFetchUrlValidationConfig;
-use microclaw_tools::web_search::SearchProviderConfig;
 
 const MAX_SUB_QUERIES: usize = 6;
 const MAX_SOURCES: usize = 10;
@@ -113,7 +113,11 @@ impl Tool for DeepResearchTool {
 
         // Fan out: search every sub-query concurrently.
         let searches = queries.iter().map(|q| {
-            microclaw_tools::web_search::search_with_provider(q, &self.provider, timeout_secs)
+            crate::internal::tool_runtime::web_search::search_with_provider(
+                q,
+                &self.provider,
+                timeout_secs,
+            )
         });
         let results = join_all(searches).await;
 
@@ -169,7 +173,7 @@ impl Tool for DeepResearchTool {
                 let validation = self.validation;
                 let url_validation = self.url_validation.clone();
                 async move {
-                    microclaw_tools::web_fetch::fetch_url_with_timeout_and_validation(
+                    crate::internal::tool_runtime::web_fetch::fetch_url_with_timeout_and_validation(
                         &url,
                         timeout_secs,
                         validation,

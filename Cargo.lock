@@ -6129,7 +6129,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "once_cell",
  "regex",
@@ -6143,7 +6143,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -6159,17 +6159,14 @@ dependencies = [
  "iana-time-zone",
  "include_dir",
  "md5",
- "microclaw-app",
- "microclaw-channels",
- "microclaw-clawhub",
  "microclaw-core",
- "microclaw-observability",
- "microclaw-runtime",
- "microclaw-storage",
- "microclaw-tools",
  "native-tls",
+ "opentelemetry 0.30.0",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
  "opentelemetry-proto 0.28.0",
  "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk 0.30.0",
  "prost",
  "pulldown-cmark",
  "qrcode",
@@ -6183,6 +6180,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "shellexpand",
+ "sqlite-vec",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -6191,6 +6189,8 @@ dependencies = [
  "tokio-util",
  "toml 0.8.23",
  "tracing",
+ "tracing-journald",
+ "tracing-subscriber",
  "typst",
  "typst-layout",
  "typst-pdf",
@@ -6231,13 +6231,11 @@ dependencies = [
 
 [[package]]
 name = "microclaw-sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "microclaw-core",
  "microclaw-engine",
- "microclaw-runtime",
- "microclaw-worker",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",

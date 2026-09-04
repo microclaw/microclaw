@@ -3,9 +3,9 @@ use serde_json::json;
 use std::sync::Arc;
 use tracing::{info, warn};
 
+use crate::internal::storage::db::Database;
 use crate::skills::SkillManager;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
 
 use super::{auth_context_from_input, schema_object, Tool, ToolResult};
 

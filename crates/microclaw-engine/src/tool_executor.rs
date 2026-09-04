@@ -11,18 +11,18 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::hooks::HookOutcome;
+use crate::internal::observability::traces::{kv, new_span_id, now_unix_nano, SpanData};
+use crate::internal::tool_runtime::runtime::{
+    parse_concurrency_class, tool_concurrency_class, ToolConcurrencyClass, ToolResult,
+};
 use crate::runtime::AppState;
 use crate::tools::ToolAuthContext;
 use microclaw_core::llm_types::ContentBlock;
-use microclaw_observability::traces::{kv, new_span_id, now_unix_nano, SpanData};
-use microclaw_tools::runtime::{
-    parse_concurrency_class, tool_concurrency_class, ToolConcurrencyClass, ToolResult,
-};
 use opentelemetry_proto::tonic::trace::v1::Status;
 
 use crate::agent_engine::AgentEvent;
+use crate::internal::observability::traces::OtlpTraceExporter;
 use microclaw_core::runtime_event::{RuntimePlanStep, RuntimePlanStepStatus, RuntimeProcessKind};
-use microclaw_observability::traces::OtlpTraceExporter;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// A single pending tool call extracted from the LLM response.
@@ -451,7 +451,7 @@ async fn execute_single_tool(
                 }
                 if let Ok(files_json) = serde_json::to_string(&ctx.skill_env_files) {
                     let db = state.db.clone();
-                    let _ = microclaw_storage::db::call_blocking(db, move |db| {
+                    let _ = crate::internal::storage::db::call_blocking(db, move |db| {
                         db.save_session_skill_envs(chat_id, &files_json)
                     })
                     .await;
@@ -617,7 +617,7 @@ async fn maybe_spill_to_artifact(
     let artifact_id_for_save = artifact_id.clone();
     let tool_name_for_save = tool_name.to_string();
     let content_for_save = content.clone();
-    let saved = microclaw_storage::db::call_blocking(db, move |db| {
+    let saved = crate::internal::storage::db::call_blocking(db, move |db| {
         db.save_tool_artifact(
             &artifact_id_for_save,
             chat_id,
@@ -932,7 +932,7 @@ fn bounded_text(text: &str, limit: usize) -> (String, bool) {
 /// changed. Successful edits only — error results never carry the payload.
 fn emit_file_diff_event(
     tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
-    result: &microclaw_tools::runtime::ToolResult,
+    result: &crate::internal::tool_runtime::runtime::ToolResult,
 ) {
     let Some(fd) = result
         .metadata

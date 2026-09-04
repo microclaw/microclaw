@@ -65,17 +65,19 @@ pub const IDEMPOTENT_TOOLS: &[&str] = &[
 ];
 
 use crate::config::Config;
-use crate::memory_backend::MemoryBackend;
-use microclaw_channels::channel_adapter::ChannelRegistry;
-use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::Database;
-pub use microclaw_tools::runtime::{
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::storage::db::Database;
+pub use crate::internal::tool_runtime::runtime::{
     auth_context_from_input, authorize_chat_access, resolve_tool_path, resolve_tool_working_dir,
     schema_object, tool_execution_policy, tool_risk, validate_execution_policy, Tool,
     ToolAuthContext, ToolResult, ToolRisk,
 };
-use microclaw_tools::runtime::{inject_auth_context, require_high_risk_approval_with_risk};
-use microclaw_tools::sandbox::{ExtraMount, SandboxMode, SandboxRouter};
+use crate::internal::tool_runtime::runtime::{
+    inject_auth_context, require_high_risk_approval_with_risk,
+};
+use crate::internal::tool_runtime::sandbox::{ExtraMount, SandboxMode, SandboxRouter};
+use crate::memory_backend::MemoryBackend;
+use microclaw_core::llm_types::ToolDefinition;
 
 pub struct ToolRegistry {
     config: Config,
@@ -742,7 +744,7 @@ impl ToolRegistry {
                     let actor = format!("chat:{}:{}", auth.caller_chat_id, auth.principal);
                     let detail = reason.clone();
                     tokio::spawn(async move {
-                        let _ = microclaw_storage::db::call_blocking(db, move |db| {
+                        let _ = crate::internal::storage::db::call_blocking(db, move |db| {
                             db.log_audit_event(
                                 "tool_policy",
                                 &actor,
@@ -764,15 +766,16 @@ impl ToolRegistry {
                 }
             }
         }
-        for (url, decision) in
-            microclaw_tools::egress::evaluate_tool_input(&self.config.egress_policy, &input)
-        {
+        for (url, decision) in crate::internal::tool_runtime::egress::evaluate_tool_input(
+            &self.config.egress_policy,
+            &input,
+        ) {
             let (action, status, reason, blocked) = match decision {
-                microclaw_tools::egress::EgressDecision::Allow => continue,
-                microclaw_tools::egress::EgressDecision::Warn(reason) => {
+                crate::internal::tool_runtime::egress::EgressDecision::Allow => continue,
+                crate::internal::tool_runtime::egress::EgressDecision::Warn(reason) => {
                     ("warn", "allowed", reason, false)
                 }
-                microclaw_tools::egress::EgressDecision::Block(reason) => {
+                crate::internal::tool_runtime::egress::EgressDecision::Block(reason) => {
                     ("block", "blocked", reason, true)
                 }
             };
@@ -790,7 +793,7 @@ impl ToolRegistry {
                 let actor = format!("chat:{}:{}", auth.caller_chat_id, auth.principal);
                 let detail = format!("{reason}; url={url}");
                 tokio::spawn(async move {
-                    let _ = microclaw_storage::db::call_blocking(db, move |db| {
+                    let _ = crate::internal::storage::db::call_blocking(db, move |db| {
                         db.log_audit_event(
                             "egress_policy",
                             &actor,
@@ -832,11 +835,13 @@ impl ToolRegistry {
                 // peers) honor it too instead of re-prompting every call.
                 let standing = if let Some(db) = self.audit_db.clone() {
                     let key = format!("approved_tool:{}:{}", auth.caller_chat_id, name);
-                    microclaw_storage::db::call_blocking(db, move |db| db.get_runtime_meta(&key))
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some()
+                    crate::internal::storage::db::call_blocking(db, move |db| {
+                        db.get_runtime_meta(&key)
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
                 } else {
                     false
                 };

@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use tracing::{info, warn};
 
+use crate::internal::channels::channel::deliver_and_store_bot_message;
+use crate::internal::storage::db::call_blocking;
 use crate::runtime::AppState;
-use microclaw_channels::channel::deliver_and_store_bot_message;
-use microclaw_storage::db::call_blocking;
 
 const LAST_SENT_META_KEY: &str = "trust_report_last_sent_at";
 

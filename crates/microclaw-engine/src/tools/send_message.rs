@@ -6,13 +6,13 @@ use serde_json::json;
 use tracing::{info, warn};
 
 use super::{authorize_chat_access, schema_object, Tool, ToolResult};
-use microclaw_channels::channel::{
+use crate::internal::channels::channel::{
     deliver_and_store_bot_message, enforce_channel_policy, get_required_chat_routing,
 };
-use microclaw_channels::channel_adapter::ChannelRegistry;
+use crate::internal::channels::channel_adapter::ChannelRegistry;
+use crate::internal::storage::db::{call_blocking, Database, StoredMessage};
+use crate::internal::tool_runtime::runtime::auth_context_from_input;
 use microclaw_core::llm_types::ToolDefinition;
-use microclaw_storage::db::{call_blocking, Database, StoredMessage};
-use microclaw_tools::runtime::auth_context_from_input;
 
 pub struct SendMessageTool {
     registry: Arc<ChannelRegistry>,
@@ -356,9 +356,9 @@ impl Tool for SendMessageTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use microclaw_channels::channel::ConversationKind;
-    use microclaw_channels::channel_adapter::ChannelAdapter;
-    use microclaw_channels::channel_adapter::ChannelRegistry;
+    use crate::internal::channels::channel::ConversationKind;
+    use crate::internal::channels::channel_adapter::ChannelAdapter;
+    use crate::internal::channels::channel_adapter::ChannelRegistry;
     use serde_json::json;
     use std::path::Path;
 
