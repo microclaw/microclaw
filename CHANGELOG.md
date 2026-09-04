@@ -6,6 +6,28 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-04
+
+### Added
+
+- Added a CI release invariant that keeps Server, Work, Work Headless, the
+  internal Work crates, Core, Engine, SDK, and web package metadata on one
+  product version.
+- Added native Work management for governed local, GitHub, and ClawHub Skills,
+  including source/version visibility, enablement, compatibility diagnostics,
+  background import, and recoverable removal.
+- Added durable, observable, and cancellable Main Agent delegation in Work and
+  stable SDK projections for delegated tasks.
+
+### Changed
+
+- Aligned the complete MicroClaw product and Rust workspace at 0.6.0.
+- Formalized the single-writer Workspace model: Subagents can perform bounded
+  parallel work while the Main Agent retains approvals, mutation ordering,
+  cancellation, and the final response.
+- Kept Server and Work on one SDK and Agent Engine execution path while
+  preserving the SDK's `minimal`, `standard`, and `full` dependency tiers.
+
 ## Rust SDK 0.5.1 - 2026-09-04
 
 ### Added

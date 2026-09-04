@@ -891,7 +891,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -4380,7 +4380,7 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry 0.5.3",
+ "windows-registry 0.4.0",
 ]
 
 [[package]]
@@ -4401,7 +4401,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -6009,7 +6009,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw"
-version = "0.5.5"
+version = "0.6.0"
 dependencies = [
  "aes",
  "agent-client-protocol",
@@ -6074,7 +6074,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "once_cell",
  "regex",
@@ -6088,7 +6088,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-engine"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -6148,7 +6148,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-sdk"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "microclaw-core",
@@ -6161,7 +6161,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-work"
-version = "0.5.5"
+version = "0.6.0"
 dependencies = [
  "dirs",
  "embed-resource",
@@ -6180,7 +6180,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-work-app"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "microclaw-core",
  "serde",
@@ -6191,7 +6191,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-work-headless"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "microclaw-sdk",
  "microclaw-work-app",
@@ -6202,7 +6202,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-work-runtime"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7811,7 +7811,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.11.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

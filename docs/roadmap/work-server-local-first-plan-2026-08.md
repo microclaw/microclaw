@@ -1,7 +1,7 @@
 # MicroClaw Server + Work local-first plan
 
-Status: **Active**
-Updated: **2026-09-02**
+Status: **Superseded by the v0.6.0 execution plan**
+Updated: **2026-09-04**
 
 > MicroClaw Server is a cross-platform, deployable Agent Runtime. MicroClaw
 > Work is a native, local-first desktop coworker built on the same core.

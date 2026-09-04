@@ -8,7 +8,8 @@ first.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md) | **Active** | Canonical Server + local-first Work plan, covering macOS product completion, one shared kernel, Workspace depth, lightweight packaging, and Linux/Windows portable previews. |
+| [`v0.6.0-plan.md`](./v0.6.0-plan.md) | **Active** | Release plan aligning Server, Work, SDK, shared crates, Skills, and controlled delegation at 0.6.0. |
+| [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md) | Superseded | Product direction folded into the focused v0.6.0 execution plan. |
 | [`sdk-v0.5.1-plan.md`](./sdk-v0.5.1-plan.md) | Delivered | SDK adoption, Work Skill provenance, Worker recovery evidence, and leaner release gates shipped in Rust SDK 0.5.1. |
 | [`product-direction-2026-08.md`](./product-direction-2026-08.md) | Superseded | Original direction that established the two-product boundary; replaced by the focused local-first delivery plan. |
 | [`microclaw-work-macos-execution-plan.md`](./microclaw-work-macos-execution-plan.md) | Superseded | macOS execution baseline; remaining gates are carried into the active local-first plan. |

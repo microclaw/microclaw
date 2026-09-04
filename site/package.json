@@ -1,6 +1,6 @@
 {
   "name": "microclaw-site",
-  "version": "0.0.1",
+  "version": "0.6.0",
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
