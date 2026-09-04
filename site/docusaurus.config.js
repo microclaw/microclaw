@@ -101,7 +101,7 @@ const config = {
       tagName: 'meta',
       attributes: {
         name: 'theme-color',
-        content: '#1a1b26',
+        content: '#171a18',
       },
     },
     {

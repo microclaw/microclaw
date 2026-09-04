@@ -856,6 +856,7 @@ hardened packaging/release automation.
 
 ### Changed
 
+- Refined the documentation site's mobile navigation, typography, and neutral-first visual palette for clearer small-screen browsing.
 - Heavy integrations are now optional build features; MCP returned to the default build, with `full` reserved for Matrix only (#313)
 - Reduced release artifact size via release-profile tuning (#310)
 - Raised the default web inflight limit to 10

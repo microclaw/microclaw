@@ -953,3 +953,198 @@
     padding: 4.2rem 0;
   }
 }
+
+/* Editorial palette: quiet neutrals carry the page; color only identifies an
+   action or one of the three product paths. */
+.hero,
+:global([data-theme='dark']) .hero {
+  color: #dfe3df;
+  background:
+    radial-gradient(circle at 78% 8%, rgba(111, 152, 173, 0.12), transparent 34rem),
+    linear-gradient(155deg, #111412 0%, #181d19 58%, #1d2728 100%);
+}
+
+.heroBackdrop {
+  background: radial-gradient(circle at 12% 74%, rgba(180, 122, 77, 0.08), transparent 34rem);
+}
+
+.heroPattern,
+:global([data-theme='dark']) .heroPattern {
+  background-image:
+    linear-gradient(rgba(224, 228, 222, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(224, 228, 222, 0.045) 1px, transparent 1px);
+  background-size: 64px 64px;
+  opacity: 0.32;
+  animation-duration: 36s;
+}
+
+.eyebrow,
+:global([data-theme='dark']) .eyebrow {
+  border-color: rgba(143, 181, 197, 0.34);
+  background: rgba(143, 181, 197, 0.08);
+  color: #a9c4cf;
+}
+
+.releasePill {
+  border-color: rgba(210, 174, 139, 0.34);
+  color: #d9b995;
+  background: rgba(180, 122, 77, 0.08);
+}
+
+.releasePill:hover {
+  border-color: #d9b995;
+}
+
+.heroTitle {
+  color: #f2f1eb;
+  text-shadow: none;
+}
+
+.heroSubtext,
+:global([data-theme='dark']) .heroSubtext {
+  color: #b7bdb8;
+}
+
+.heroMetaRow span,
+:global([data-theme='dark']) .heroMetaRow span {
+  background: rgba(240, 241, 235, 0.04);
+  border-color: rgba(240, 241, 235, 0.14);
+  color: #bec4bf;
+}
+
+.pathCard {
+  --path-accent: #8fa9b6;
+  --path-accent-rgb: 143, 169, 182;
+  border-color: rgba(var(--path-accent-rgb), 0.34);
+  border-radius: 10px;
+  background: rgba(28, 33, 30, 0.94);
+  box-shadow: 0 20px 46px rgba(4, 7, 5, 0.28), inset 0 1px rgba(255, 255, 255, 0.035);
+}
+
+.pathCardWork {
+  --path-accent: #91b2a8;
+  --path-accent-rgb: 145, 178, 168;
+}
+
+.pathCardServer {
+  --path-accent: #c59a72;
+  --path-accent-rgb: 197, 154, 114;
+}
+
+.pathBadge {
+  border-radius: 5px;
+}
+
+.pathDescription {
+  color: #b8bfba;
+}
+
+.pathBenefits li {
+  color: #d3d7d3;
+}
+
+.pathCommandRow code {
+  background: #111512;
+  color: #e7e8e2;
+}
+
+@media (hover: hover) {
+  .pathCard:hover,
+  .pathCard:focus-within {
+    transform: translateY(-4px);
+    border-color: rgba(var(--path-accent-rgb), 0.58);
+    box-shadow: 0 26px 58px rgba(4, 7, 5, 0.34), inset 0 1px rgba(255, 255, 255, 0.05);
+  }
+}
+
+.proofStrip,
+:global([data-theme='dark']) .proofStrip {
+  background: #0e110f;
+  border-color: rgba(223, 227, 221, 0.1);
+}
+
+.proofLabel {
+  color: #9cb9c5;
+}
+
+.productCard,
+.capabilityCard,
+.useCaseCard,
+.archVisualCard,
+.stepCard {
+  background: var(--mc-card);
+  border-color: var(--mc-hairline);
+  box-shadow: var(--mc-card-shadow);
+}
+
+.productCard p,
+.productAvailability,
+.sectionHeader p,
+.capabilityCard p,
+.stepCard p,
+.useCaseCard p {
+  color: var(--mc-muted);
+}
+
+.productCardHeader span {
+  background: rgba(49, 95, 120, 0.09);
+  color: #315f78;
+}
+
+.stepCard span {
+  color: #315f78;
+}
+
+.ctaCard {
+  border-radius: 10px;
+  background: linear-gradient(150deg, #171b18, #23302f);
+  border-color: rgba(143, 181, 197, 0.25);
+  box-shadow: 0 22px 44px rgba(20, 25, 21, 0.22);
+}
+
+.inlineLink {
+  color: #a9c4cf;
+}
+
+@media (max-width: 760px) {
+  .hero {
+    padding: 3.7rem 0 3.5rem;
+  }
+
+  .heroLead {
+    text-align: left;
+  }
+
+  .eyebrow,
+  .releasePill {
+    margin: 0 0.45rem 0.55rem 0;
+  }
+
+  .heroTitle {
+    margin-top: 0.85rem;
+    font-size: clamp(2.25rem, 11vw, 3rem);
+    line-height: 1.02;
+  }
+
+  .heroSubtitle {
+    font-size: 1.08rem;
+    line-height: 1.45;
+  }
+
+  .heroSubtext {
+    font-size: 0.98rem;
+    line-height: 1.58;
+  }
+
+  .heroMetaRow {
+    justify-content: flex-start;
+  }
+
+  .pathGrid {
+    margin-top: 2.2rem;
+  }
+
+  .pathCard {
+    padding: 1.25rem;
+  }
+}

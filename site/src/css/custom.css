@@ -1,85 +1,85 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
 :root {
-  --ifm-color-primary: #345fe8;
-  --ifm-color-primary-dark: #2853d7;
-  --ifm-color-primary-darker: #224bc7;
-  --ifm-color-primary-darkest: #18399f;
-  --ifm-color-primary-light: #4c76f0;
-  --ifm-color-primary-lighter: #668bf5;
-  --ifm-color-primary-lightest: #9ab4ff;
-  --ifm-font-family-base: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
-  --ifm-heading-font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --ifm-color-primary: #315f78;
+  --ifm-color-primary-dark: #2b556b;
+  --ifm-color-primary-darker: #274f64;
+  --ifm-color-primary-darkest: #1f414f;
+  --ifm-color-primary-light: #3a6d88;
+  --ifm-color-primary-lighter: #427690;
+  --ifm-color-primary-lightest: #638fa4;
+  --ifm-font-family-base: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --ifm-heading-font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --ifm-font-family-monospace: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
   --ifm-code-font-size: 92%;
-  --ifm-font-color-base: #2b3045;
-  --ifm-heading-color: #171927;
-  --ifm-link-color: #345fe8;
-  --ifm-link-hover-color: #6948b8;
-  --ifm-toc-border-color: rgba(52, 95, 232, 0.16);
+  --ifm-font-color-base: #353936;
+  --ifm-heading-color: #171a18;
+  --ifm-link-color: #315f78;
+  --ifm-link-hover-color: #234b60;
+  --ifm-toc-border-color: #d9d8d1;
   --ifm-navbar-shadow: none;
-  --ifm-background-color: #f8faff;
-  --ifm-footer-background-color: #12131d;
-  --docusaurus-highlighted-code-line-bg: rgba(52, 95, 232, 0.12);
+  --ifm-background-color: #f7f6f1;
+  --ifm-footer-background-color: #171a18;
+  --docusaurus-highlighted-code-line-bg: rgba(49, 95, 120, 0.1);
 
   /* Keep a faint tint on the page so white cards still separate from it. */
-  --mc-surface: #f8faff;
-  --mc-surface-alt: #eaeffb;
-  --mc-card: #ffffff;
-  --mc-ink: #171927;
-  --mc-muted: rgba(23, 25, 39, 0.74);
-  --mc-hairline: rgba(52, 95, 232, 0.14);
-  --mc-card-shadow: 0 10px 26px rgba(22, 38, 77, 0.09);
-  --mc-blue: #7aa2f7;
-  --mc-cyan: #7dcfff;
-  --mc-violet: #bb9af7;
-  --mc-orange: #ff9e64;
-  --mc-night: #1a1b26;
+  --mc-surface: #f7f6f1;
+  --mc-surface-alt: #efeee8;
+  --mc-card: #fffefa;
+  --mc-ink: #171a18;
+  --mc-muted: #656a66;
+  --mc-hairline: #d9d8d1;
+  --mc-card-shadow: 0 12px 30px rgba(33, 38, 34, 0.07);
+  --mc-blue: #6f98ad;
+  --mc-cyan: #76a59b;
+  --mc-violet: #8c8297;
+  --mc-orange: #b47a4d;
+  --mc-night: #171a18;
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #7aa2f7;
-  --ifm-color-primary-dark: #638ff0;
-  --ifm-color-primary-darker: #527fe8;
-  --ifm-color-primary-darkest: #345fc5;
-  --ifm-color-primary-light: #91b3fa;
-  --ifm-color-primary-lighter: #a6c2fb;
-  --ifm-color-primary-lightest: #d1defd;
+  --ifm-color-primary: #8fb5c5;
+  --ifm-color-primary-dark: #78a4b6;
+  --ifm-color-primary-darker: #6d9caf;
+  --ifm-color-primary-darkest: #4f8297;
+  --ifm-color-primary-light: #a6c5d1;
+  --ifm-color-primary-lighter: #b5d0da;
+  --ifm-color-primary-lightest: #d8e5e9;
   /* Deliberate lightness ladder: page -> alt band -> card. Earlier revisions
      kept all three within ~5% lightness, which read as one flat grey field. */
-  --ifm-background-color: #0f1017;
-  --ifm-footer-background-color: #0a0b11;
-  --ifm-font-color-base: #dce2f5;
-  --ifm-heading-color: #f8faff;
-  --ifm-link-color: #7dcfff;
-  --ifm-link-hover-color: #bb9af7;
-  --ifm-toc-border-color: rgba(122, 162, 247, 0.22);
-  --docusaurus-highlighted-code-line-bg: rgba(125, 207, 255, 0.1);
+  --ifm-background-color: #141715;
+  --ifm-footer-background-color: #0f1110;
+  --ifm-font-color-base: #d9ddd8;
+  --ifm-heading-color: #f1f0e9;
+  --ifm-link-color: #8fb5c5;
+  --ifm-link-hover-color: #b2ced8;
+  --ifm-toc-border-color: #343a36;
+  --docusaurus-highlighted-code-line-bg: rgba(143, 181, 197, 0.1);
 
-  --mc-surface: #0f1017;
-  --mc-surface-alt: #161823;
-  --mc-card: #212640;
-  --mc-ink: #dce2f5;
-  --mc-muted: rgba(220, 226, 245, 0.84);
-  --mc-hairline: rgba(150, 185, 255, 0.24);
+  --mc-surface: #141715;
+  --mc-surface-alt: #1a1e1b;
+  --mc-card: #202521;
+  --mc-ink: #e4e5df;
+  --mc-muted: #b5bbb6;
+  --mc-hairline: #363c38;
   /* Inset top highlight is what actually reads as a card edge on a dark page;
      a drop shadow alone is nearly invisible against near-black. */
   --mc-card-shadow: 0 14px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 body {
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   overflow-x: hidden;
 }
 
 ::selection {
   color: #ffffff;
-  background: rgba(52, 95, 232, 0.72);
+  background: #315f78;
 }
 
 [data-theme='dark'] ::selection {
-  color: #151620;
-  background: #7dcfff;
+  color: #141715;
+  background: #8fb5c5;
 }
 
 html,
@@ -88,9 +88,9 @@ html,
 }
 
 .navbar {
-  backdrop-filter: blur(14px);
-  background: color-mix(in srgb, var(--ifm-background-color) 84%, transparent);
-  border-bottom: 1px solid rgba(52, 95, 232, 0.14);
+  backdrop-filter: blur(18px);
+  background: color-mix(in srgb, var(--ifm-background-color) 92%, transparent);
+  border-bottom: 1px solid var(--mc-hairline);
 }
 
 [data-theme='dark'] .navbar {
@@ -98,16 +98,16 @@ html,
 }
 
 .navbar__title {
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-weight: 650;
+  letter-spacing: 0.015em;
 }
 
 .navbar__logo img {
-  filter: drop-shadow(0 0 8px rgba(125, 207, 255, 0.3));
+  filter: none;
 }
 
 .navbar__link {
-  font-weight: 600;
+  font-weight: 550;
 }
 
 .navbar__link:hover,
@@ -135,12 +135,12 @@ a {
 }
 
 :focus-visible {
-  outline: 2px solid #7dcfff;
+  outline: 2px solid #4f819a;
   outline-offset: 3px;
 }
 
 .theme-doc-sidebar-container {
-  background: color-mix(in srgb, var(--ifm-background-color) 94%, #7aa2f7 6%);
+  background: var(--mc-surface-alt);
 }
 
 .menu__link {
@@ -148,16 +148,16 @@ a {
 }
 
 .menu__link--active:not(.menu__link--sublist) {
-  background: rgba(122, 162, 247, 0.11);
+  background: rgba(49, 95, 120, 0.1);
 }
 
 [data-theme='dark'] .menu__link--active:not(.menu__link--sublist) {
-  background: rgba(122, 162, 247, 0.09);
-  box-shadow: inset 2px 0 0 #7aa2f7;
+  background: rgba(143, 181, 197, 0.1);
+  box-shadow: inset 2px 0 0 #8fb5c5;
 }
 
 .table-of-contents__link--active {
-  color: #7dcfff;
+  color: var(--ifm-link-color);
 }
 
 .pagination-nav__link {
@@ -171,17 +171,17 @@ a {
 }
 
 blockquote {
-  border-left-color: #7aa2f7;
-  background: rgba(122, 162, 247, 0.06);
+  border-left-color: var(--ifm-color-primary);
+  background: rgba(49, 95, 120, 0.06);
   padding: 0.8rem 1rem;
 }
 
 hr {
-  background-color: rgba(122, 162, 247, 0.16);
+  background-color: var(--mc-hairline);
 }
 
 * {
-  scrollbar-color: rgba(122, 162, 247, 0.42) transparent;
+  scrollbar-color: #87918b transparent;
   scrollbar-width: thin;
 }
 
@@ -189,6 +189,99 @@ hr {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 0.75rem;
+}
+
+@media (max-width: 996px) {
+  .navbar {
+    height: 4rem;
+    padding: 0 0.85rem;
+  }
+
+  .navbar__toggle,
+  .navbar-sidebar__close,
+  .navbar__search {
+    display: inline-flex;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.7rem;
+  }
+
+  .navbar__toggle {
+    margin-right: 0.55rem;
+  }
+
+  .navbar__brand {
+    min-width: 0;
+  }
+
+  .navbar__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .navbar-sidebar {
+    width: min(88vw, 22rem);
+    height: 100dvh;
+    min-height: 100vh;
+    background: var(--mc-card);
+    border-right: 1px solid var(--mc-hairline);
+    box-shadow: 18px 0 48px rgba(20, 23, 21, 0.18);
+    overflow: hidden;
+  }
+
+  .navbar-sidebar__brand {
+    height: 4rem;
+    padding: 0 1rem;
+    background: var(--mc-card);
+    border-bottom: 1px solid var(--mc-hairline);
+  }
+
+  .navbar-sidebar__items {
+    height: calc(100dvh - 4rem);
+    padding: 0.75rem;
+    background: var(--mc-card);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .navbar-sidebar .menu__list {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .navbar-sidebar .menu__link {
+    min-height: 3rem;
+    padding: 0.75rem 0.9rem;
+    border-radius: 0.65rem;
+    color: var(--mc-ink);
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .navbar-sidebar .menu__link:hover,
+  .navbar-sidebar .menu__link--active {
+    background: var(--mc-surface-alt);
+    color: var(--ifm-color-primary);
+  }
+
+  .navbar-sidebar__back {
+    min-height: 3rem;
+    color: var(--mc-ink);
+    background: var(--mc-surface-alt);
+  }
+
+  .navbar-sidebar__backdrop {
+    background: rgba(16, 19, 17, 0.48);
+    backdrop-filter: blur(2px);
+  }
+
+  .navbar__search-input {
+    background-color: var(--mc-surface-alt);
+    border: 1px solid var(--mc-hairline);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
