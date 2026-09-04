@@ -166,6 +166,13 @@ pub struct SkillInstallResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRemovalResult {
+    pub name: String,
+    pub archived_to: String,
+    pub skills: Vec<WorkSkill>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkSubagent {
     pub run_id: String,
     pub label: String,
@@ -729,6 +736,24 @@ impl WorkRuntimeService {
             })
             .expect("failed to start skill import worker");
         rx
+    }
+
+    /// Recoverably remove a Skill by moving its directory below `.archived`.
+    pub fn remove_skill(&self, name: &str) -> Result<SkillRemovalResult, SkillSettingsError> {
+        let config = Config::load_from_path_for_headless(&self.config_path)
+            .map_err(|error| SkillSettingsError::Config(error.to_string()))?;
+        let manager = microclaw::skills::SkillManager::from_skills_and_runtime(
+            &config.skills_data_dir(),
+            &config.runtime_data_dir(),
+        )
+        .with_config_verification(&config);
+        let archived_to = microclaw::skill_management::archive_skill(&manager, name)
+            .map_err(SkillSettingsError::Skill)?;
+        Ok(SkillRemovalResult {
+            name: name.to_string(),
+            archived_to: archived_to.display().to_string(),
+            skills: self.skills()?,
+        })
     }
 
     pub fn subagents(&self, session: &str) -> Result<Vec<WorkSubagent>, SkillSettingsError> {
@@ -1985,6 +2010,17 @@ mod tests {
         );
         assert!(!skills_dir.join(".local-skill.work-backup").exists());
         assert!(!skills_dir.join(".local-skill.work-import").exists());
+
+        let removed = service.remove_skill("local-skill").unwrap();
+        assert_eq!(removed.name, "local-skill");
+        assert!(
+            removed
+                .skills
+                .iter()
+                .all(|skill| skill.name != "local-skill")
+        );
+        assert!(!skills_dir.join("local-skill").exists());
+        assert!(Path::new(&removed.archived_to).join("SKILL.md").exists());
     }
 
     #[test]

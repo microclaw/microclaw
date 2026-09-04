@@ -4,6 +4,14 @@
 
 Use this guide for rolling upgrades that may include schema/auth/hooks/session/metrics changes.
 
+### SDK v0.5.0
+
+The three public Rust crates move together to `0.5.0`. `microclaw-sdk` adds live
+Skill lifecycle management, typed durable delegation projections, cancellation,
+and configurable remote Worker reconnect policy. `DelegatedTask.status` is now
+`DelegatedTaskStatus`; use `as_str()` when displaying it and retain the
+`Unknown` case when matching exhaustively.
+
 ## Pre-Upgrade Checklist
 
 1. Backup SQLite database (`microclaw.db`).

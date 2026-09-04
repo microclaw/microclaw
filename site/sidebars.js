@@ -50,6 +50,7 @@ const sidebars = {
         'sdk-quickstart',
         'sdk-concepts',
         'sdk-skills',
+        'sdk-delegation',
         'sdk-workers',
         'sdk-features',
       ],

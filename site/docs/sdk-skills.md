@@ -40,10 +40,24 @@ for skill in microclaw.skills().all() {
 }
 ```
 
-The catalog is a snapshot created during runtime initialization. Show
+The catalog is refreshed on demand. Show
 `description`, `source`, and `version` where available. Disable unavailable
 Skills in the UI and surface `unavailable_reason` instead of letting a run fail
 later.
+
+## Manage Skills without restarting
+
+```rust
+let installed = microclaw.install_skill("owner/repository/skill").await?;
+let catalog = microclaw.set_skill_enabled("code-review", false)?;
+let catalog = microclaw.reload_skills()?;
+let removed = microclaw.remove_skill("old-skill")?;
+println!("Archived at {}", removed.archived_at.display());
+```
+
+Use `install_local_skill(path)` for a local directory. Local imports are staged,
+reject symbolic links, and pass injection scanning before replacing an existing
+package. Removal is recoverable: the package moves under `.archived/`.
 
 ## Select Skills for an Agent
 
@@ -62,8 +76,8 @@ Skill returns `SdkError::SkillUnavailable` before execution begins.
 
 - Let users select Skills per Agent, not per individual event.
 - Preserve Skill IDs in application state; treat display descriptions as copy.
-- Rebuild the runtime after installing or removing Skills so the catalog is
-  refreshed predictably.
+- Refresh the catalog after external filesystem changes; SDK lifecycle methods
+  refresh it automatically.
 - Keep import, review, activation, and selection as distinct actions.
 - Apply MicroClaw's existing audit and policy gates rather than inventing a
   second trust model in the host UI.

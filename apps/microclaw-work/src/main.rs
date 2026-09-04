@@ -1149,6 +1149,20 @@ impl WorkApp {
         cx.notify();
     }
 
+    fn remove_skill(&mut self, name: String, cx: &mut Context<Self>) {
+        match self.runtime_service.remove_skill(&name) {
+            Ok(result) => {
+                self.skills = result.skills;
+                self.skills_message =
+                    format!("Skill {} archived to {}.", result.name, result.archived_to);
+            }
+            Err(error) => {
+                self.skills_message = format!("Could not archive skill {name}: {error}");
+            }
+        }
+        cx.notify();
+    }
+
     fn import_skill(&mut self, cx: &mut Context<Self>) {
         if self.skill_import_active {
             return;
@@ -2769,6 +2783,7 @@ impl WorkApp {
             .cloned()
             .map(|skill| {
                 let name = skill.name.clone();
+                let remove_name = name.clone();
                 let next_enabled = !skill.enabled;
                 h_flex()
                     .w_full()
@@ -2828,13 +2843,26 @@ impl WorkApp {
                             })),
                     )
                     .child(
-                        Button::new(format!("toggle-skill-{name}"))
-                            .outline()
-                            .small()
-                            .label(if skill.enabled { "Disable" } else { "Enable" })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.set_skill_enabled(name.clone(), next_enabled, cx);
-                            })),
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new(format!("toggle-skill-{name}"))
+                                    .outline()
+                                    .small()
+                                    .label(if skill.enabled { "Disable" } else { "Enable" })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.set_skill_enabled(name.clone(), next_enabled, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(format!("archive-skill-{remove_name}"))
+                                    .ghost()
+                                    .small()
+                                    .label("Archive")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.remove_skill(remove_name.clone(), cx);
+                                    })),
+                            ),
                     )
                     .into_any_element()
             })

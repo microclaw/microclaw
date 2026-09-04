@@ -6,6 +6,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-04
+
 ### Added
 
 - Added live SDK Skill lifecycle APIs for refresh, enable/disable, governed

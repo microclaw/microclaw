@@ -42,6 +42,23 @@ microclaw-sdk = {
 messages. Validate `WORKER_PROTOCOL_VERSION` during connection setup and reject
 incompatible peers explicitly.
 
+Configure bounded reconnect behavior when the default three attempts and
+incremental 250 ms backoff do not fit the host:
+
+```rust
+use std::time::Duration;
+use microclaw_sdk::{RemoteWorker, RemoteWorkerOptions};
+
+let options = RemoteWorkerOptions::default()
+    .max_reconnect_attempts(5)
+    .reconnect_backoff(Duration::from_millis(500));
+let worker = RemoteWorker::connect_with_options(transport, options).await?;
+```
+
+Reconnect resumes after the last delivered sequence and resends an unacknowledged
+control request. Attempts are bounded; exhaustion produces a retryable
+`RuntimeErrorCode::Unavailable` result.
+
 ## Reconnection and replay
 
 Remote runs keep the same run and session identity across reconnects. A client

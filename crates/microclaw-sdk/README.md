@@ -53,9 +53,18 @@ let microclaw = MicroClaw::configure(config).build().await?;
 # }
 ```
 
-Use `microclaw.skills()` to list available and unavailable Skills with diagnostics. See
-`examples/minimal_protocol.rs` for protocol-only integration, `examples/custom_executor.rs` for a
-host executor, and `examples/configured_skilled_agent.rs` for the full configured Agent Engine.
+Use `microclaw.skills()` to list available and unavailable Skills with diagnostics. A `full` host
+can install local, GitHub, or ClawHub Skills, enable or disable them, reload the catalog without a
+restart, and recoverably remove them with `install_skill`, `set_skill_enabled`, `reload_skills`,
+and `remove_skill`. See `examples/managed_skills.rs` for the complete lifecycle.
+
+Durable work delegated by the Main Agent is available through `delegated_tasks`; active tasks can
+be cancelled with `cancel_delegated_task`. The typed `DelegatedTaskStatus` is forward-compatible
+with future Engine states. See `examples/delegated_tasks.rs`.
+
+For smaller integrations, see `examples/minimal_protocol.rs` for protocol-only integration,
+`examples/custom_executor.rs` for a host executor, and `examples/configured_skilled_agent.rs` for
+the full configured Agent Engine.
 
 ## Runtime contract
 
@@ -74,7 +83,9 @@ capacity, labels, health, draining, resume, and `wait_for_idle()` for graceful a
 shutdown. `Worker::submit` returns an explicit `Unavailable` error while draining or unavailable.
 The serialized `WorkerCommand` and `WorkerFrame` types use `WORKER_PROTOCOL_VERSION` for remote
 transports. Implement `WorkerTransport` and `WorkerConnection`, then call
-`RemoteWorker::connect(...)`; remote runs return the same `RunHandle` used by local execution. The
+`RemoteWorker::connect(...)`; remote runs return the same `RunHandle` used by local execution.
+Use `RemoteWorker::connect_with_options(...)` to bound reconnect attempts and tune backoff while
+retaining event replay, acknowledgement, duplicate suppression, and pending-control recovery. The
 `remote-worker` feature (included by `full`) provides `WebSocketWorkerTransport` and an
 authenticated `WorkerHost` for real network execution.
 
@@ -84,5 +95,6 @@ authenticated `WorkerHost` for real network execution.
 - [Quickstart](https://microclaw.org/docs/sdk-quickstart)
 - [Agents, runs, events, and controls](https://microclaw.org/docs/sdk-concepts)
 - [Skills in embedded applications](https://microclaw.org/docs/sdk-skills)
+- [Main Agent delegation](https://microclaw.org/docs/sdk-delegation)
 - [Local and remote Workers](https://microclaw.org/docs/sdk-workers)
 - [Features and crate boundaries](https://microclaw.org/docs/sdk-features)

@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-sdk"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license.workspace = true
 authors.workspace = true
@@ -20,8 +20,8 @@ remote-worker = ["standard"]
 full = ["remote-worker", "microclaw-engine/document-tools"]
 
 [dependencies]
-microclaw-core = { version = "0.4.0", path = "../microclaw-core", default-features = false }
-microclaw-engine = { version = "0.4.0", path = "../microclaw-engine", optional = true, default-features = false }
+microclaw-core = { version = "0.5.0", path = "../microclaw-core", default-features = false }
+microclaw-engine = { version = "0.5.0", path = "../microclaw-engine", optional = true, default-features = false }
 serde_json = { version = "1", optional = true }
 thiserror = { version = "2", optional = true }
 
@@ -36,6 +36,14 @@ required-features = ["standard"]
 [[example]]
 name = "minimal_protocol"
 required-features = ["minimal"]
+
+[[example]]
+name = "managed_skills"
+required-features = ["full"]
+
+[[example]]
+name = "delegated_tasks"
+required-features = ["full"]
 
 [dev-dependencies]
 async-trait = "0.1"

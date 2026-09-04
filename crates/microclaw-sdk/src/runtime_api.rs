@@ -92,7 +92,7 @@ pub struct DelegatedTask {
     pub depth: u32,
     pub label: Option<String>,
     pub task: String,
-    pub status: String,
+    pub status: DelegatedTaskStatus,
     pub progress: Option<String>,
     pub result: Option<String>,
     pub error: Option<String>,
@@ -100,6 +100,57 @@ pub struct DelegatedTask {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub cancel_requested: bool,
+}
+
+/// Lifecycle state for a task delegated by the Main Agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DelegatedTaskStatus {
+    Accepted,
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    BudgetExceeded,
+    Unknown(String),
+}
+
+impl DelegatedTaskStatus {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::BudgetExceeded => "budget_exceeded",
+            Self::Unknown(status) => status,
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::BudgetExceeded
+        )
+    }
+}
+
+impl From<String> for DelegatedTaskStatus {
+    fn from(status: String) -> Self {
+        match status.as_str() {
+            "accepted" => Self::Accepted,
+            "queued" => Self::Queued,
+            "running" => Self::Running,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "cancelled" | "canceled" => Self::Cancelled,
+            "budget_exceeded" => Self::BudgetExceeded,
+            _ => Self::Unknown(status),
+        }
+    }
 }
 
 /// Result of installing or updating a Skill package.
@@ -306,7 +357,7 @@ impl MicroClaw {
                         depth: run.depth,
                         label: run.label,
                         task: run.task,
-                        status: run.status,
+                        status: run.status.into(),
                         progress: run.progress,
                         result: run.result,
                         error: run.error,
@@ -650,6 +701,16 @@ mod tests {
         let error = SdkError::EmptyAgentName;
         assert_eq!(error.code(), SdkErrorCode::InvalidAgent);
         assert!(!error.retryable());
+    }
+
+    #[test]
+    fn delegated_task_status_is_typed_and_forward_compatible() {
+        assert!(DelegatedTaskStatus::from("completed".to_string()).is_terminal());
+        assert!(!DelegatedTaskStatus::from("running".to_string()).is_terminal());
+        assert_eq!(
+            DelegatedTaskStatus::from("future_state".to_string()).as_str(),
+            "future_state"
+        );
     }
 
     #[cfg(feature = "full")]
