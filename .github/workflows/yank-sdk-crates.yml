@@ -1,0 +1,41 @@
+name: Yank Rust SDK Crates
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to yank
+        required: true
+      confirm:
+        description: Type yank to confirm
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  yank:
+    if: inputs.confirm == 'yank'
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Yank previously published crate set
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          for crate_name in \
+            microclaw-core \
+            microclaw-observability \
+            microclaw-storage \
+            microclaw-tools \
+            microclaw-channels \
+            microclaw-clawhub \
+            microclaw-app \
+            microclaw-runtime
+          do
+            cargo yank --registry crates-io "${crate_name}@${VERSION}"
+          done
