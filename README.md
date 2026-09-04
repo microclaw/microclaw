@@ -69,7 +69,7 @@ brew install --cask microclaw-work
 ```
 
 Linux x86_64/arm64 and Windows x86_64 portable previews are available from the
-[v0.6.0 release](https://github.com/microclaw/microclaw/releases/tag/v0.6.0).
+[v0.6.1 release](https://github.com/microclaw/microclaw/releases/tag/v0.6.1).
 macOS remains the officially supported Work desktop platform while the preview
 builds complete platform acceptance.
 
@@ -95,7 +95,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.6.0**. It aligns Server, Work, and the Rust SDK on one versioned runtime contract, with governed Skills, durable observable Subagents, cancellation, and a single-writer Workspace safety model. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.6.0).
+The latest release is **v0.6.1**. It keeps the Server, Work, and Rust SDK contract from 0.6 while making releases faster and deterministic through reusable Rust caches, an explicit artifact manifest, and current GitHub Actions runtimes. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.6.1).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 

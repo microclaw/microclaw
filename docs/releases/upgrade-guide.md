@@ -4,6 +4,13 @@
 
 Use this guide for rolling upgrades that may include schema/auth/hooks/session/metrics changes.
 
+### SDK and products v0.6.1
+
+Version `0.6.1` is a patch release with no intended SDK API or configuration
+breaks. Server, Work, Work Headless, and the three public Rust crates move
+together to `0.6.1`. Release automation now validates the complete artifact
+set and excludes internal Docker Buildx records from GitHub Release uploads.
+
 ### SDK and products v0.6.0
 
 Server, Work, all shared Rust crates, and the web package metadata now use one

@@ -28,13 +28,13 @@ stored in repository secrets.
 
 ## Release assets
 
-For a tag such as `v0.6.0`, the workflow publishes:
+For a tag such as `v0.6.1`, the workflow publishes:
 
 ```text
-microclaw-work-0.6.0-arm64-macos.dmg
-microclaw-work-0.6.0-x86_64-linux-gnu.tar.gz
-microclaw-work-0.6.0-aarch64-linux-gnu.tar.gz
-microclaw-work-0.6.0-x86_64-windows-msvc.zip
+microclaw-work-0.6.1-arm64-macos.dmg
+microclaw-work-0.6.1-x86_64-linux-gnu.tar.gz
+microclaw-work-0.6.1-aarch64-linux-gnu.tar.gz
+microclaw-work-0.6.1-x86_64-windows-msvc.zip
 ```
 
 `MICROCLAW_WORK_VERSION_OVERRIDE` binds the application bundle and DMG version
@@ -69,7 +69,7 @@ xcrun notarytool store-credentials "microclaw-work-notary" \
 
 MICROCLAW_WORK_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
 MICROCLAW_WORK_NOTARY_PROFILE="microclaw-work-notary" \
-MICROCLAW_WORK_VERSION_OVERRIDE="0.6.0" \
+MICROCLAW_WORK_VERSION_OVERRIDE="0.6.1" \
 scripts/build_work_macos_dmg.sh work-release
 MICROCLAW_WORK_REQUIRE_NOTARIZATION=1 \
 scripts/verify_work_macos_release.sh work-release

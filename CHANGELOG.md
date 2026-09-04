@@ -6,11 +6,24 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.6.1 - 2026-09-04
+
+### Changed
+
+- Added reusable per-platform release caches and a bounded timeout for Server
+  release builds, reducing repeated patch-release compilation time.
+- Updated official artifact and Docker actions to their current Node 24-based
+  major versions.
+
 ### Fixed
 
 - Restricted GitHub Release aggregation to distributable Server, Work, and
   reliability artifacts so Docker Buildx's internal `.dockerbuild` records
   cannot break the final upload step.
+- Added a strict release manifest check that rejects missing or unexpected
+  Server, Work, and reliability assets before checksums or publication.
+- Corrected the documentation home page release badge and link, which still
+  referenced v0.5.5 after the v0.6.0 release.
 
 ## 0.6.0 - 2026-09-04
 

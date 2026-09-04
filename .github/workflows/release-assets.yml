@@ -126,6 +126,7 @@ jobs:
   build-assets:
     name: Build ${{ matrix.target.label }}-${{ matrix.flavor }}
     runs-on: ${{ matrix.target.os }}
+    timeout-minutes: 120
     needs: verify-ci
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
@@ -185,6 +186,11 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust release cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-server-${{ matrix.target.label }}-${{ matrix.flavor }}
 
       - name: Build release binary
         shell: bash
@@ -382,10 +388,10 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -393,7 +399,7 @@ jobs:
 
       - name: Build and push image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -432,14 +438,14 @@ jobs:
 
     steps:
       - name: Download image digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/container-digests
           pattern: container-digest-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Prepare image names
         id: image_names
@@ -456,7 +462,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ steps.image_names.outputs.images }}
           flavor: |
@@ -468,7 +474,7 @@ jobs:
             type=raw,value=latest
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -476,7 +482,7 @@ jobs:
 
       - name: Log in to Docker Hub
         if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
@@ -568,7 +574,8 @@ jobs:
   publish-assets:
     name: Upload to GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-assets, build-work-portable-assets, reliability-scorecard]
+    needs:
+      [build-assets, build-work-portable-assets, publish-container, reliability-scorecard]
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
@@ -583,22 +590,36 @@ jobs:
       # Download only distributable artifacts. Docker Buildx also uploads internal
       # `.dockerbuild` records; merging those into `dist` is unnecessary and can
       # make the release fail when GitHub's artifact service cannot extract one.
-      - name: Download Server artifacts
-        uses: actions/download-artifact@v4
+      - name: Download Linux Server artifacts
+        uses: actions/download-artifact@v8
         with:
-          pattern: "{linux-*,macos-*,windows-*}"
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download macOS Server artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: macos-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download Windows Server artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: windows-*
           path: dist
           merge-multiple: true
 
       - name: Download Work artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: microclaw-work-portable-*
           path: dist
           merge-multiple: true
 
       - name: Download reliability scorecard
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: reliability-scorecard
           path: dist
@@ -621,6 +642,10 @@ jobs:
           else
             echo "No locally notarized Work DMG is present for ${RELEASE_TAG}."
           fi
+
+      - name: Verify release artifact set
+        shell: bash
+        run: scripts/ci/check_release_assets.sh dist "${RELEASE_TAG}"
 
       - name: Generate checksums
         shell: bash
