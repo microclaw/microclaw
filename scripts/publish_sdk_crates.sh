@@ -60,12 +60,36 @@ if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
   exit 1
 fi
 
+publish_crate() {
+  local crate_name="$1"
+  local publish_log
+  local publish_status
+  publish_log="$(mktemp)"
+
+  for attempt in 1 2 3; do
+    set +e
+    cargo publish -p "${crate_name}" --locked 2>&1 | tee "${publish_log}"
+    publish_status="${PIPESTATUS[0]}"
+    set -e
+
+    if [[ "${publish_status}" == "0" ]]; then
+      return 0
+    fi
+    if grep -q "429 Too Many Requests" "${publish_log}" && [[ "${attempt}" != "3" ]]; then
+      echo "crates.io rate limit reached; waiting 10 minutes before retrying ${crate_name}"
+      sleep 600
+      continue
+    fi
+    return "${publish_status}"
+  done
+}
+
 for crate_name in "${crates[@]}"; do
   if "${crates_io_curl[@]}" "https://crates.io/api/v1/crates/${crate_name}/${workspace_version}" >/dev/null; then
     echo "${crate_name} ${workspace_version} is already published; skipping"
     continue
   fi
-  cargo publish -p "${crate_name}" --locked
+  publish_crate "${crate_name}"
   for attempt in $(seq 1 30); do
     if "${crates_io_curl[@]}" "https://crates.io/api/v1/crates/${crate_name}/${workspace_version}" >/dev/null; then
       break
