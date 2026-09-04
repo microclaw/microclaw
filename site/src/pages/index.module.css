@@ -702,17 +702,150 @@
 }
 
 .archVisualCard {
+  min-width: 0;
   border-radius: 10px;
-  padding: 1rem;
-  background: #ffffff;
-  border: 1px solid rgba(52, 95, 232, 0.1);
-  box-shadow: 0 16px 36px rgba(22, 38, 77, 0.12);
+  padding: 1.15rem;
+  background: var(--mc-card);
+  border: 1px solid var(--mc-hairline);
+  box-shadow: var(--mc-card-shadow);
 }
 
-.archVisualCard img {
-  display: block;
-  width: 100%;
-  height: auto;
+.archMap {
+  display: grid;
+  gap: 1rem;
+  min-height: 34rem;
+  padding: 1.15rem;
+  border-radius: 8px;
+  background: #151a17;
+  color: #e9ebe6;
+}
+
+.archEntryRow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.archEntry {
+  --arch-accent: #8fa9b6;
+  display: flex;
+  min-width: 0;
+  min-height: 7.4rem;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--arch-accent) 45%, transparent);
+  border-top: 3px solid var(--arch-accent);
+  border-radius: 7px;
+  background: #1d231f;
+}
+
+.archEntrySdk {
+  --arch-accent: #8fa9b6;
+}
+
+.archEntryWork {
+  --arch-accent: #91b2a8;
+}
+
+.archEntryServer {
+  --arch-accent: #c59a72;
+}
+
+.archEntry span,
+.archEngine > span {
+  color: var(--arch-accent);
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.archEntry strong {
+  color: #f1f2ed;
+  font-size: 0.94rem;
+  line-height: 1.2;
+}
+
+.archConnector {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  color: #8f9992;
+}
+
+.archConnector span {
+  height: 1px;
+  background: #3b4540;
+}
+
+.archConnector em {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.66rem;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.archEngine {
+  position: relative;
+  display: flex;
+  min-height: 10.5rem;
+  flex-direction: column;
+  justify-content: center;
+  padding: 1.4rem;
+  overflow: hidden;
+  border: 1px solid #53645b;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #24322c, #1b2521);
+}
+
+.archEngine::after {
+  position: absolute;
+  width: 10rem;
+  height: 10rem;
+  right: -5rem;
+  bottom: -5rem;
+  border: 1px solid rgba(143, 181, 197, 0.16);
+  border-radius: 50%;
+  content: '';
+}
+
+.archEngine > span {
+  --arch-accent: #9cb9c5;
+}
+
+.archEngine strong {
+  margin-top: 0.5rem;
+  color: #f4f3ed;
+  font-size: clamp(1.35rem, 2.7vw, 2rem);
+  line-height: 1.08;
+}
+
+.archEngine p {
+  margin: 0.65rem 0 0;
+  color: #b9c0bb;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.74rem;
+}
+
+.archCapabilityGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.archCapabilityGrid span {
+  padding: 0.58rem 0.5rem;
+  border: 1px solid #343d38;
+  border-radius: 5px;
+  background: #1b211e;
+  color: #bfc5c0;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.68rem;
+  text-align: center;
 }
 
 .archSteps {
@@ -1146,5 +1279,26 @@
 
   .pathCard {
     padding: 1.25rem;
+  }
+
+  .archVisualCard {
+    padding: 0.75rem;
+  }
+
+  .archMap {
+    min-height: 0;
+    padding: 0.85rem;
+  }
+
+  .archEntryRow {
+    grid-template-columns: 1fr;
+  }
+
+  .archEntry {
+    min-height: 5.3rem;
+  }
+
+  .archCapabilityGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

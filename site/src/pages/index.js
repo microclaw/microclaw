@@ -5,7 +5,6 @@ import Heading from '@theme/Heading';
 import {useEffect, useState} from 'react';
 import styles from './index.module.css';
 import {getHomeMessages} from '../home-i18n';
-import architectureDiagram from '../../../docs/assets/readme/microclaw-architecture.svg';
 
 const PATH_COMMANDS = {
   sdk: 'microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }',
@@ -158,6 +157,47 @@ function HomepageHeader() {
   );
 }
 
+function ArchitectureMap({label}) {
+  const capabilities = ['Skills', 'Tools + MCP', 'Memory', 'Policy', 'Workers', 'Observability'];
+
+  return (
+    <div className={styles.archMap} role="img" aria-label={label}>
+      <div className={styles.archEntryRow}>
+        <div className={`${styles.archEntry} ${styles.archEntrySdk}`}>
+          <span>01 · Embed</span>
+          <strong>Rust SDK</strong>
+        </div>
+        <div className={`${styles.archEntry} ${styles.archEntryWork}`}>
+          <span>02 · Desktop</span>
+          <strong>MicroClaw Work</strong>
+        </div>
+        <div className={`${styles.archEntry} ${styles.archEntryServer}`}>
+          <span>03 · Service</span>
+          <strong>MicroClaw Server</strong>
+        </div>
+      </div>
+
+      <div className={styles.archConnector} aria-hidden="true">
+        <span />
+        <em>one shared core</em>
+        <span />
+      </div>
+
+      <div className={styles.archEngine}>
+        <span>PROVIDER-NEUTRAL RUNTIME</span>
+        <strong>MicroClaw Agent Engine</strong>
+        <p>Agent Loop · Run lifecycle · Events · Recovery</p>
+      </div>
+
+      <div className={styles.archCapabilityGrid}>
+        {capabilities.map((capability) => (
+          <span key={capability}>{capability}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const {siteConfig, i18n} = useDocusaurusContext();
   const messages = getHomeMessages(i18n.currentLocale);
@@ -207,10 +247,7 @@ export default function Home() {
             </div>
             <div className={styles.archLayout}>
               <div className={styles.archVisualCard}>
-                <img
-                  src={architectureDiagram}
-                  alt={messages.architectureAlt}
-                />
+                <ArchitectureMap label={messages.architectureAlt} />
               </div>
               <div className={styles.archSteps}>
                 {messages.architectureSteps.map(([title, text], index) => (
