@@ -73,7 +73,7 @@ run_case() {
 
 run_case "process-restart" "recovery" \
   "A safe active-turn checkpoint survives a second recovery restart." \
-  cargo test --quiet -p microclaw-storage test_active_turn_checkpoint_survives_recovery_restart_boundary
+  cargo test --quiet -p microclaw-engine test_active_turn_checkpoint_survives_recovery_restart_boundary
 run_case "scheduler-reopen" "recovery" \
   "Scheduled work remains available after the database is reopened." \
   cargo test --quiet --test db_integration test_scheduled_task_persists_across_db_reopen
@@ -82,7 +82,7 @@ run_case "scheduler-dlq-replay" "recovery" \
   cargo test --quiet test_replay_task_dlq_requeues_task_and_marks_replayed
 run_case "delivery-idempotency" "delivery" \
   "Interrupted chunk delivery resumes without duplicating the logical message." \
-  cargo test --quiet -p microclaw-storage test_chunked_delivery_resumes_and_stores_logical_message_once
+  cargo test --quiet -p microclaw-engine test_chunked_delivery_resumes_and_stores_logical_message_once
 run_case "payload-integrity" "delivery" \
   "Long messages preserve every byte across newline chunk boundaries." \
   cargo test --quiet -p microclaw-core split_text_preserves_every_byte_at_newline_boundaries
@@ -109,7 +109,7 @@ run_case "permission-matrix" "security" \
   cargo test --quiet --test tool_permissions
 run_case "sandbox-required" "security" \
   "A required sandbox fails closed when its runtime is unavailable." \
-  cargo test --quiet -p microclaw-tools test_router_fails_closed_when_runtime_required_and_missing
+  cargo test --quiet -p microclaw-engine test_router_fails_closed_when_runtime_required_and_missing
 
 total="$(wc -l < "$rows_path" | tr -d ' ')"
 passed="$(awk -F '\t' '$3 == "pass" { count++ } END { print count+0 }' "$rows_path")"

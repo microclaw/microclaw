@@ -4,18 +4,10 @@ members = [
     "apps/microclaw-work",
     "apps/microclaw-work-headless",
     "crates/microclaw-core",
-    "crates/microclaw-clawhub",
-    "crates/microclaw-storage",
-    "crates/microclaw-tools",
     "crates/microclaw-work-app",
     "crates/microclaw-work-runtime",
-    "crates/microclaw-channels",
-    "crates/microclaw-app",
-    "crates/microclaw-observability",
-    "crates/microclaw-runtime",
     "crates/microclaw-engine",
     "crates/microclaw-sdk",
-    "crates/microclaw-worker",
 ]
 resolver = "2"
 
@@ -49,21 +41,14 @@ default-run = "microclaw"
 [features]
 default = ["embedded-web-ui"]
 embedded-web-ui = []
-sqlite-vec = ["microclaw-storage/sqlite-vec", "microclaw-engine/sqlite-vec"]
-journald = ["microclaw-app/journald"]
+sqlite-vec = ["microclaw-engine/sqlite-vec"]
+journald = ["microclaw-engine/journald"]
 channel-matrix = ["dep:matrix-sdk"]
 full = ["channel-matrix"]
 
 [dependencies]
-microclaw-core = { version = "0.2.0", path = "crates/microclaw-core" }
-microclaw-clawhub = { version = "0.1.0", path = "crates/microclaw-clawhub" }
-microclaw-storage = { version = "0.1.0", path = "crates/microclaw-storage" }
-microclaw-tools = { version = "0.1.0", path = "crates/microclaw-tools" }
-microclaw-channels = { version = "0.1.0", path = "crates/microclaw-channels" }
-microclaw-app = { version = "0.1.0", path = "crates/microclaw-app" }
-microclaw-observability = { version = "0.1.0", path = "crates/microclaw-observability" }
-microclaw-runtime = { version = "0.1.0", path = "crates/microclaw-runtime" }
-microclaw-engine = { version = "0.2.0", path = "crates/microclaw-engine", features = ["test-support"] }
+microclaw-core = { version = "0.3.0", path = "crates/microclaw-core" }
+microclaw-engine = { version = "0.3.0", path = "crates/microclaw-engine", features = ["test-support"] }
 teloxide = { version = "0.17", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"

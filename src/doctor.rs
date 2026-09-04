@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::config::{Config, SandboxBackend, SandboxMode};
 use crate::mcp::McpConfig;
-use microclaw_engine::internal::tool_runtime::sandbox::{
+use microclaw_engine::tool_runtime::sandbox::{
     runtime_available_for_backend, selected_runtime_cli,
 };
 
@@ -206,7 +206,7 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
 
 fn build_delivery_report() -> anyhow::Result<DoctorReport> {
     let config = Config::load()?;
-    let db = microclaw_engine::internal::storage::db::Database::new(&config.runtime_data_dir())?;
+    let db = microclaw_engine::storage::db::Database::new(&config.runtime_data_dir())?;
     let health = db.outbound_delivery_health()?;
     let mut report = DoctorReport::new();
 
@@ -2153,13 +2153,11 @@ mod tests {
         cfg.web_fetch_url_validation.feed_sync.enabled = true;
         cfg.web_fetch_url_validation.feed_sync.fail_open = false;
         cfg.web_fetch_url_validation.feed_sync.sources = vec![
-            microclaw_engine::internal::tool_runtime::web_fetch::WebFetchFeedSource {
+            microclaw_engine::tool_runtime::web_fetch::WebFetchFeedSource {
                 enabled: true,
-                mode:
-                    microclaw_engine::internal::tool_runtime::web_fetch::WebFetchFeedMode::Denylist,
+                mode: microclaw_engine::tool_runtime::web_fetch::WebFetchFeedMode::Denylist,
                 url: "notaurl".to_string(),
-                format:
-                    microclaw_engine::internal::tool_runtime::web_fetch::WebFetchFeedFormat::Lines,
+                format: microclaw_engine::tool_runtime::web_fetch::WebFetchFeedFormat::Lines,
                 refresh_interval_secs: 60,
                 timeout_secs: 5,
             },

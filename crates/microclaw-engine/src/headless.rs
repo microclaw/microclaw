@@ -87,7 +87,7 @@ pub struct HeadlessRuntime {
 /// Adapter from the existing shared Agent Engine to the embeddable Runtime contract.
 ///
 /// This is intentionally channel-free: the caller selects the logical channel used for policy,
-/// persistence, cancellation, and steering. Product UIs consume `microclaw-runtime` rather than
+/// persistence, cancellation, and steering. Product UIs consume `microclaw-engine` rather than
 /// calling the Agent Engine directly.
 pub struct HeadlessRunExecutor {
     runtime: HeadlessRuntime,

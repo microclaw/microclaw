@@ -238,26 +238,22 @@ pub(crate) async fn api_learning_feedback(
     let envelope_id = format!("feedback:{run_id}:{feedback_actor}:{feedback_id}");
     let response_feedback_id = feedback_id.clone();
     call_blocking(state.app_state.db.clone(), move |db| {
-        db.ingest_outcome_envelope(
-            &microclaw_engine::internal::storage::db::OutcomeEnvelopeV1 {
-                envelope_id,
-                run_id,
-                source_kind: "human".into(),
-                source_name: verifier_name,
-                verdict,
-                confidence,
-                evidence,
-                scope,
-                valid_until,
-                payload: json!({"origin": "web_feedback"}),
-                feedback: Some(
-                    microclaw_engine::internal::storage::db::ExperienceFeedbackInput {
-                        feedback_id: feedback_id.clone(),
-                        actor: feedback_actor,
-                    },
-                ),
-            },
-        )
+        db.ingest_outcome_envelope(&microclaw_engine::storage::db::OutcomeEnvelopeV1 {
+            envelope_id,
+            run_id,
+            source_kind: "human".into(),
+            source_name: verifier_name,
+            verdict,
+            confidence,
+            evidence,
+            scope,
+            valid_until,
+            payload: json!({"origin": "web_feedback"}),
+            feedback: Some(microclaw_engine::storage::db::ExperienceFeedbackInput {
+                feedback_id: feedback_id.clone(),
+                actor: feedback_actor,
+            }),
+        })
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -576,7 +572,7 @@ pub(crate) async fn api_learning_policy(
 pub(crate) async fn api_update_learning_policy(
     headers: HeaderMap,
     State(state): State<WebState>,
-    Json(policy): Json<microclaw_engine::internal::storage::db::SkillGovernancePolicy>,
+    Json(policy): Json<microclaw_engine::storage::db::SkillGovernancePolicy>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     metrics_http_inc(&state).await;
     let actor = require_scope(&state, &headers, AuthScope::Admin)

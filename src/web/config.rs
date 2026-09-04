@@ -1,6 +1,6 @@
 use super::*;
-use microclaw_engine::internal::tool_runtime::runtime::{tool_execution_policy, tool_risk};
-use microclaw_engine::internal::tool_runtime::sandbox::{
+use microclaw_engine::tool_runtime::runtime::{tool_execution_policy, tool_risk};
+use microclaw_engine::tool_runtime::sandbox::{
     runtime_available_for_backend, selected_runtime_cli,
 };
 

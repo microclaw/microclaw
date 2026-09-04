@@ -1,7 +1,7 @@
 use super::*;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use futures_util::{SinkExt, StreamExt};
-use microclaw_engine::internal::storage::db::SessionSettings;
+use microclaw_engine::storage::db::SessionSettings;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, info, warn};

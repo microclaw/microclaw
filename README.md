@@ -144,7 +144,7 @@ Worker support without pulling in the Server, Web console, concrete channel adap
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.2", features = ["full"] }
+microclaw-sdk = { version = "0.3", features = ["full"] }
 ```
 
 ```rust

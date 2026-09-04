@@ -4,16 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-runtime_tree="$(cargo tree -p microclaw-runtime -e normal --prefix none)"
-for forbidden in axum gpui teloxide serenity microclaw-channels microclaw-work-runtime; do
-  if printf '%s\n' "$runtime_tree" | cut -d' ' -f1 | grep -Fxq "$forbidden"; then
-    printf 'microclaw-runtime must not depend on %s\n' "$forbidden" >&2
-    exit 1
-  fi
-done
-
 for preset in minimal standard full; do
-  cargo test -p microclaw-runtime --no-default-features --features "$preset" --lib
   cargo test -p microclaw-sdk --no-default-features --features "$preset" --lib --examples
 done
 
@@ -37,14 +28,6 @@ engine_direct_tree="$(cargo tree -p microclaw-engine -e normal --depth 1 --prefi
 for forbidden in microclaw axum gpui teloxide serenity; do
   if printf '%s\n' "$engine_direct_tree" | cut -d' ' -f1 | grep -Fxq "$forbidden"; then
     printf 'microclaw-engine must not directly depend on product/UI package %s\n' "$forbidden" >&2
-    exit 1
-  fi
-done
-
-worker_tree="$(cargo tree -p microclaw-worker -e normal --prefix none)"
-for forbidden in microclaw microclaw-engine axum gpui teloxide serenity; do
-  if printf '%s\n' "$worker_tree" | cut -d' ' -f1 | grep -Fxq "$forbidden"; then
-    printf 'microclaw-worker must not depend on product, Engine, channel, or UI package %s\n' "$forbidden" >&2
     exit 1
   fi
 done

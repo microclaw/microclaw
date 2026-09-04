@@ -142,7 +142,7 @@ Web 控制台、具体渠道适配器或 Work UI。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.2", features = ["full"] }
+microclaw-sdk = { version = "0.3", features = ["full"] }
 ```
 
 ```rust

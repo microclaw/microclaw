@@ -27,11 +27,9 @@ use crate::config::Config;
 use crate::runtime::AppState;
 use crate::setup_def::{ChannelFieldDef, DynamicChannelDef};
 use microclaw_core::text::split_text;
-use microclaw_engine::internal::channels::channel::{
-    deliver_and_store_bot_message, ConversationKind,
-};
-use microclaw_engine::internal::channels::channel_adapter::ChannelAdapter;
-use microclaw_engine::internal::storage::db::{call_blocking, StoredMessage};
+use microclaw_engine::channel::{deliver_and_store_bot_message, ConversationKind};
+use microclaw_engine::channel_adapter::ChannelAdapter;
+use microclaw_engine::storage::db::{call_blocking, StoredMessage};
 
 const CHANNEL_KEY: &str = "weixin";
 /// Max bytes per outbound Weixin text item. The ilink `sendmessage` API
@@ -2998,7 +2996,7 @@ mod tests {
     use crate::config::Config;
     use axum::http::{HeaderMap, HeaderValue};
     use axum::{routing::get, Router};
-    use microclaw_engine::internal::channels::channel_adapter::ChannelAdapter;
+    use microclaw_engine::channel_adapter::ChannelAdapter;
 
     fn unique_temp_dir() -> PathBuf {
         let root = std::env::temp_dir().join(format!("mc_weixin_test_{}", uuid::Uuid::new_v4()));

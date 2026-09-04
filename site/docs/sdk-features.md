@@ -15,31 +15,31 @@ the same public run protocol.
 ### Complete embedded Agent Engine
 
 ```toml
-microclaw-sdk = { version = "0.2", features = ["full"] }
+microclaw-sdk = { version = "0.3", features = ["full"] }
 ```
 
 Use this for providers, tools, memory, Skills, MCP, hooks, Subagents, and Worker
 transport in one host.
 
-### Host-provided executor
+### Protocol-only integration
 
 ```toml
 microclaw-sdk = {
-  version = "0.2",
+  version = "0.3",
   default-features = false,
   features = ["minimal"]
 }
 ```
 
-Implement `RunExecutor`, create a `Runtime`, and wrap it with
-`MicroClaw::from_runtime`. This is appropriate when another system already owns
-model and tool execution.
+Use the stable request, result, event, control, and Worker wire contracts without
+pulling `microclaw-engine` into the dependency graph. Add `standard` when the host
+also needs `Runtime`, `Agent`, and `RunExecutor`.
 
 ### Runtime plus remote Worker transport
 
 ```toml
 microclaw-sdk = {
-  version = "0.2",
+  version = "0.3",
   default-features = false,
   features = ["standard", "remote-worker"]
 }
@@ -57,8 +57,8 @@ The crates.io release exposes three supported layers:
 | `microclaw-engine` | Agent Engine, persistence, tools, channels, runtime, and Worker implementation |
 | `microclaw-sdk` | Supported application-facing facade |
 
-The remaining workspace crates are private implementation or application packages.
-Prefer SDK re-exports unless you need the Engine's lower-level integration APIs.
+The remaining workspace crates are application packages. Prefer SDK re-exports
+unless you need the Engine's lower-level integration APIs.
 
 ## Compatibility expectations
 

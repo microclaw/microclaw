@@ -51,14 +51,10 @@ The repository pins Rust in `rust-toolchain.toml`. Use that toolchain rather tha
 ### Workspace crates (`crates/`)
 
 - `microclaw-core`: shared errors, LLM types, text utilities, redaction, and injection scanning
-- `microclaw-storage`: SQLite schema/migrations, memory, quality, and usage queries
-- `microclaw-tools`: tool runtime primitives, sandboxing, path/URL guards, caching, and web helpers
-- `microclaw-channels`: channel traits, adapters, and delivery boundary
-- `microclaw-app`: logging, bundled skills, and transcription support
+- `microclaw-engine`: Agent loop plus reusable storage, tools, channels, Worker, Skills, and observability services
+- `microclaw-sdk`: stable public facade with protocol-only, runtime, and full Engine feature tiers
 - `microclaw-work-app`: UI-independent Work commands, projections, and session persistence
 - `microclaw-work-runtime`: foreground Work runtime lifecycle and Agent Engine event bridge
-- `microclaw-clawhub`: registry client, installation, gates, types, and lockfile support
-- `microclaw-observability`: metrics, traces, logs, SDK, and external adapters
 
 ### Other important directories
 
@@ -73,8 +69,8 @@ The repository pins Rust in `rust-toolchain.toml`. Use that toolchain rather tha
 ## Where changes belong
 
 - Put channel-neutral behavior in the shared agent/runtime layers, not in `src/channels/*`.
-- Put reusable storage logic in `microclaw-storage`; keep SQL schema changes and migrations together.
-- Put reusable tool execution and safety primitives in `microclaw-tools`; built-in Agent Engine tools remain in `crates/microclaw-engine/src/tools/`.
+- Put reusable storage logic under `microclaw-engine::storage`; keep SQL schema changes and migrations together.
+- Put reusable tool execution and safety primitives under `microclaw-engine::tool_runtime`; built-in tools remain in `crates/microclaw-engine/src/tools/`.
 - Keep protocol transport details in `a2a`, `acp`, `mcp`, or channel modules and convert them to shared internal types at the boundary.
 - When adding config, update the config type, defaults/setup path, example YAML, self-check behavior when relevant, and generated config documentation.
 - When adding a tool, register it through `crates/microclaw-engine/src/tools/mod.rs`, include its risk/auth behavior, add tests, and regenerate tool docs.

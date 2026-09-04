@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       version:
-        description: 'Expected SDK crate version (for example 0.2.0)'
+        description: 'Expected SDK crate version (for example 0.3.0)'
         required: true
         type: string
       confirm:

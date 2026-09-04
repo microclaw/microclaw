@@ -6,6 +6,20 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.3.0 - 2026-09-04
+
+### Changed
+
+- Consolidated reusable runtime, storage, tool, channel, observability, ClawHub,
+  and Worker implementations into `microclaw-engine`, removing eight duplicate
+  implementation crates from the workspace.
+- Replaced the public `microclaw_engine::internal` namespace with explicit
+  Engine integration modules used by Server and Work.
+- Made SDK presets real dependency tiers: `minimal` is protocol-only,
+  `standard` adds the embeddable runtime, and `full` adds configured Engine and
+  Skill discovery.
+- Updated SDK documentation and release validation for the 0.3 crates.io set.
+
 ### Added
 
 - **Programmatic full-SDK configuration.** Rust hosts can now initialize the

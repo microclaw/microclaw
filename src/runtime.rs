@@ -41,11 +41,11 @@ use crate::memory_backend::MemoryBackend;
 use crate::skills::SkillManager;
 use crate::tools::ToolRegistry;
 use crate::web::WebAdapter;
-use microclaw_engine::internal::channels::channel_adapter::ChannelRegistry;
-use microclaw_engine::internal::observability::logs::OtlpLogExporter;
-use microclaw_engine::internal::observability::metrics::OtlpMetricExporter;
-use microclaw_engine::internal::observability::traces::OtlpTraceExporter;
-use microclaw_engine::internal::storage::db::Database;
+use microclaw_engine::channel_adapter::ChannelRegistry;
+use microclaw_engine::observability::logs::OtlpLogExporter;
+use microclaw_engine::observability::metrics::OtlpMetricExporter;
+use microclaw_engine::observability::traces::OtlpTraceExporter;
+use microclaw_engine::storage::db::Database;
 
 #[cfg(not(feature = "channel-matrix"))]
 fn warn_missing_feature(config: &Config, channel_key: &str, feature_name: &str) {

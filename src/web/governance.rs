@@ -11,7 +11,7 @@ use axum::{extract::State, http::HeaderMap, http::StatusCode, Json};
 use serde_json::json;
 
 use crate::web::{middleware::AuthScope, require_scope, WebState};
-use microclaw_engine::internal::storage::db::call_blocking;
+use microclaw_engine::storage::db::call_blocking;
 
 pub async fn api_governance(
     headers: HeaderMap,

@@ -4,14 +4,14 @@
 application. It exposes provider-neutral requests, events, controls, terminal results, Agent
 handles, and Worker contracts without pulling in Server, channel, Web, or desktop UI code.
 
-Minimal and standard applications supply a `RunExecutor`. The `full` preset starts the same
-skilled Agent Engine used by Server and Work without exposing either product package.
+The `minimal` preset is protocol-only, `standard` adds a host-provided `RunExecutor`, and `full`
+starts the same skilled Agent Engine used by Server and Work without exposing either product package.
 
 ## Choose a feature set
 
 | Feature | Use it when |
 |---|---|
-| `minimal` | Your application supplies a `RunExecutor` and only needs stable protocol contracts |
+| `minimal` | Your application only needs stable protocol, event, control, and Worker wire contracts |
 | `standard` (default) | Your application wants the Runtime, Agent, Run, control, and Local Worker lifecycle |
 | `remote-worker` | The host or executor communicates over the authenticated WebSocket Worker protocol |
 | `full` | You want the configured MicroClaw Agent Engine, including providers, tools, memory, Skills, MCP, hooks, and Subagents |

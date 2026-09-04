@@ -4,14 +4,14 @@
 //! Agent Engine to versioned runtime events. UI packages consume this port;
 //! they do not create Tokio runtimes or call the Agent Engine directly.
 
+use microclaw::clawhub::install::InstallOptions;
 use microclaw::clawhub::service::{ClawHubGateway, RegistryClawHubGateway};
 use microclaw::config::Config;
 #[cfg(test)]
 use microclaw::config::WorkingDirIsolation;
 use microclaw::headless::{HeadlessRunRequest, HeadlessRuntime};
-use microclaw::internal::clawhub::install::InstallOptions;
-use microclaw::internal::storage::db::Database;
 use microclaw::llm::create_provider;
+use microclaw::storage::db::Database;
 use microclaw::tools::{Tool, sync_skills::SyncSkillsTool};
 use microclaw_core::llm_types::{Message, MessageContent, ResponseContentBlock};
 use microclaw_core::run_protocol::{RunId, RunRequest, SessionId};
@@ -2081,7 +2081,7 @@ mod tests {
 
     #[test]
     fn work_lists_and_cancels_durable_subagents() {
-        use microclaw::internal::storage::db::subagents::CreateSubagentRunParams;
+        use microclaw::storage::db::subagents::CreateSubagentRunParams;
 
         let directory = tempfile::tempdir().unwrap();
         let data_dir = directory.path().join("data");

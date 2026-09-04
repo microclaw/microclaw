@@ -29,15 +29,15 @@ pub use channels::telegram;
 pub use microclaw_core::error;
 pub use microclaw_core::llm_types;
 pub use microclaw_core::text;
-pub use microclaw_engine::internal::app::builtin_skills;
-pub use microclaw_engine::internal::app::logging;
-pub use microclaw_engine::internal::app::transcribe;
-pub use microclaw_engine::internal::channels::channel;
-pub use microclaw_engine::internal::channels::channel_adapter;
-pub use microclaw_engine::internal::storage::db;
-pub use microclaw_engine::internal::storage::memory;
-pub use microclaw_engine::internal::storage::memory_quality;
-pub use microclaw_engine::internal::tool_runtime::sandbox;
+pub use microclaw_engine::builtin_skills;
+pub use microclaw_engine::channel;
+pub use microclaw_engine::channel_adapter;
+pub use microclaw_engine::logging;
+pub use microclaw_engine::storage::db;
+pub use microclaw_engine::storage::memory;
+pub use microclaw_engine::storage::memory_quality;
+pub use microclaw_engine::tool_runtime::sandbox;
+pub use microclaw_engine::transcribe;
 
 #[cfg(test)]
 pub mod test_support {

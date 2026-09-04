@@ -15,8 +15,8 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::runtime::AppState;
-use microclaw_engine::internal::channels::channel::send_persisted_outbox_chunk;
-use microclaw_engine::internal::storage::db::call_blocking;
+use microclaw_engine::channel::send_persisted_outbox_chunk;
+use microclaw_engine::storage::db::call_blocking;
 
 const FLUSH_INTERVAL_SECS: u64 = 10;
 const MAX_ATTEMPTS: i64 = 8;

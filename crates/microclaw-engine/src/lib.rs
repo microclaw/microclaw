@@ -7,7 +7,31 @@
 // reachable from this crate's own entry points.
 #![allow(dead_code)]
 
-pub mod internal;
+mod internal;
+
+pub mod channel {
+    pub use crate::internal::channels::channel::*;
+}
+
+pub mod channel_adapter {
+    pub use crate::internal::channels::channel_adapter::*;
+}
+
+pub mod observability {
+    pub use crate::internal::observability::*;
+}
+
+pub mod storage {
+    pub use crate::internal::storage::*;
+}
+
+pub mod tool_runtime {
+    pub use crate::internal::tool_runtime::*;
+}
+
+pub mod worker {
+    pub use crate::internal::worker::*;
+}
 
 pub mod a2a;
 pub mod acp_subagent;
