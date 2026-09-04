@@ -33,7 +33,10 @@ jobs:
       - name: Ensure CI succeeded for tag commit
         env:
           GH_TOKEN: ${{ github.token }}
-          CI_WAIT_TIMEOUT_SECONDS: "900"
+          # Cold Docker and stability builds can exceed 15 minutes after a
+          # workspace-wide version bump. Keep polling the exact tag commit
+          # rather than failing a healthy release before CI can finish.
+          CI_WAIT_TIMEOUT_SECONDS: "3600"
           CI_WAIT_INTERVAL_SECONDS: "30"
           REQUIRED_CI_JOBS_JSON: '["Web And Docs Build (node 22)","Web And Docs Build (node 24)","Docker Build","Security Audit","Rust (ubuntu-latest)","Rust (macos-latest)","Stability Smoke"]'
         shell: bash

@@ -13,6 +13,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - Added a CI release invariant that keeps Server, Work, Work Headless, the
   internal Work crates, Core, Engine, SDK, and web package metadata on one
   product version.
+- Extended the release asset CI guard to accommodate cold Docker and stability
+  builds without timing out a healthy tagged release.
 - Added native Work management for governed local, GitHub, and ClawHub Skills,
   including source/version visibility, enablement, compatibility diagnostics,
   background import, and recoverable removal.
