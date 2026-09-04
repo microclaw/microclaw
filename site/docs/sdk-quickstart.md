@@ -22,7 +22,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 After publication, the SDK dependency becomes:
 
 ```toml
-microclaw-sdk = { version = "0.1", features = ["full"] }
+microclaw-sdk = { version = "0.2", features = ["full"] }
 ```
 
 ## 2. Configure and run an Agent
