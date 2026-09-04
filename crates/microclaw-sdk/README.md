@@ -6,6 +6,7 @@ handles, and Worker contracts without pulling in Server, channel, Web, or deskto
 
 The `minimal` preset is protocol-only, `standard` adds a host-provided `RunExecutor`, and `full`
 starts the same skilled Agent Engine used by Server and Work without exposing either product package.
+`minimal` does not compile the Agent Engine, HTTP clients, SQLite, Tokio, Typst, or OpenTelemetry.
 
 ## Choose a feature set
 
@@ -53,8 +54,8 @@ let microclaw = MicroClaw::configure(config).build().await?;
 ```
 
 Use `microclaw.skills()` to list available and unavailable Skills with diagnostics. See
-`examples/minimal_agent.rs` for a custom executor and `examples/configured_skilled_agent.rs` for
-the full configured Agent Engine.
+`examples/minimal_protocol.rs` for protocol-only integration, `examples/custom_executor.rs` for a
+host executor, and `examples/configured_skilled_agent.rs` for the full configured Agent Engine.
 
 ## Runtime contract
 
@@ -64,6 +65,7 @@ the full configured Agent Engine.
   authoritative terminal `RunResult`.
 - Branch on `RuntimeErrorCode` rather than parsing error messages.
 - Preserve event sequence numbers when projecting runs into a UI or protocol.
+- Call `Runtime::shutdown().await` to stop accepting work and drain active runs.
 
 ## Workers
 

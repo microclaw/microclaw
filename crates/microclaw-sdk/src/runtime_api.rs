@@ -21,11 +21,44 @@ pub enum SdkError {
     #[error("could not initialize the Agent Engine: {0}")]
     Initialization(String),
     #[error("could not build the runtime: {0}")]
-    Runtime(#[from] RuntimeBuildError),
+    Runtime(String),
     #[error("agent name must not be empty")]
     EmptyAgentName,
     #[error("Skill '{0}' is not available in this runtime")]
     SkillUnavailable(String),
+}
+
+impl From<RuntimeBuildError> for SdkError {
+    fn from(error: RuntimeBuildError) -> Self {
+        Self::Runtime(error.to_string())
+    }
+}
+
+/// Stable category for handling SDK failures without parsing display strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SdkErrorCode {
+    Configuration,
+    Initialization,
+    Runtime,
+    InvalidAgent,
+    SkillUnavailable,
+}
+
+impl SdkError {
+    pub fn code(&self) -> SdkErrorCode {
+        match self {
+            Self::Configuration(_) => SdkErrorCode::Configuration,
+            Self::Initialization(_) => SdkErrorCode::Initialization,
+            Self::Runtime(_) => SdkErrorCode::Runtime,
+            Self::EmptyAgentName => SdkErrorCode::InvalidAgent,
+            Self::SkillUnavailable(_) => SdkErrorCode::SkillUnavailable,
+        }
+    }
+
+    pub fn retryable(&self) -> bool {
+        matches!(self, Self::Initialization(_))
+    }
 }
 
 /// Stable, UI-neutral metadata for one discovered Skill.
@@ -429,5 +462,12 @@ mod tests {
             Err(error) => error,
         };
         assert!(matches!(error, SdkError::SkillUnavailable(name) if name == "missing"));
+    }
+
+    #[test]
+    fn sdk_errors_have_stable_codes() {
+        let error = SdkError::EmptyAgentName;
+        assert_eq!(error.code(), SdkErrorCode::InvalidAgent);
+        assert!(!error.retryable());
     }
 }

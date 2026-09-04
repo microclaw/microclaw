@@ -11,18 +11,12 @@ your application. It requires Rust 1.93 or newer and a Tokio runtime.
 
 ## 1. Add dependencies
 
-Until the first crates.io release, depend on the repository:
+Use the published SDK from crates.io:
 
 ```toml title="Cargo.toml"
 [dependencies]
-microclaw-sdk = { version = "0.3", features = ["full"] }
+microclaw-sdk = { version = "0.4", features = ["full"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
-
-After publication, the SDK dependency becomes:
-
-```toml
-microclaw-sdk = { version = "0.3", features = ["full"] }
 ```
 
 ## 2. Configure and run an Agent
@@ -51,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = agent.run("Summarize this project").result().await?;
     println!("{}", result.final_text);
+    microclaw.runtime().shutdown().await;
     Ok(())
 }
 ```

@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-engine"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license.workspace = true
 authors.workspace = true
@@ -12,13 +12,14 @@ keywords = ["ai", "agent", "llm", "microclaw"]
 categories = ["development-tools"]
 
 [features]
-default = []
+default = ["document-tools"]
+document-tools = ["dep:typst", "dep:typst-pdf", "dep:typst-layout"]
 test-support = []
 sqlite-vec = ["dep:sqlite-vec"]
 journald = ["dep:tracing-journald"]
 
 [dependencies]
-microclaw-core = { version = "0.3.0", path = "../microclaw-core" }
+microclaw-core = { version = "0.4.0", path = "../microclaw-core", features = ["http-errors", "sqlite-errors"] }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
@@ -65,9 +66,9 @@ pulldown-cmark = { version = "0.12", default-features = false }
 qrcode = "0.14"
 clap = { version = "4.6", features = ["derive"] }
 http = "1"
-typst = "0.15"
-typst-pdf = "0.15"
-typst-layout = "0.15"
+typst = { version = "0.15", optional = true }
+typst-pdf = { version = "0.15", optional = true }
+typst-layout = { version = "0.15", optional = true }
 toml = "0.8"
 url = "2"
 sqlite-vec = { version = "0.1.8", optional = true }

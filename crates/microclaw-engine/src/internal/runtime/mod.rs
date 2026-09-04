@@ -241,6 +241,7 @@ pub struct RuntimeStats {
     pub active_runs: usize,
     pub queued_runs: usize,
     pub max_concurrent_runs: usize,
+    pub shutting_down: bool,
 }
 
 #[derive(Clone)]
@@ -281,7 +282,19 @@ impl Runtime {
             active_runs: self.active_runs(),
             queued_runs: self.queued_runs(),
             max_concurrent_runs: self.max_concurrent_runs(),
+            shutting_down: self.is_shutting_down(),
         }
+    }
+
+    /// Stop accepting new runs and wait until active and queued work has drained.
+    pub async fn shutdown(&self) {
+        self.inner.permits.close();
+        self.wait_for_idle().await;
+    }
+
+    /// Returns true after graceful shutdown has begun.
+    pub fn is_shutting_down(&self) -> bool {
+        self.inner.permits.is_closed()
     }
 
     pub async fn wait_for_idle(&self) {
@@ -949,6 +962,23 @@ mod tests {
         assert!(a.is_ok());
         assert!(b.is_ok());
         assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn runtime_shutdown_drains_and_rejects_new_runs() {
+        let runtime = Runtime::builder().executor(EchoExecutor).build().unwrap();
+        runtime.shutdown().await;
+        assert!(runtime.is_shutting_down());
+        assert!(runtime.stats().shutting_down);
+
+        let result = runtime
+            .agent(AgentProfile::default())
+            .run(RunRequest::new("after shutdown"))
+            .result()
+            .await
+            .unwrap();
+        assert_eq!(result.status, RunStatus::Failed);
+        assert_eq!(result.error.unwrap().code, RuntimeErrorCode::Unavailable);
     }
 
     #[tokio::test]

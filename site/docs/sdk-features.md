@@ -15,7 +15,7 @@ the same public run protocol.
 ### Complete embedded Agent Engine
 
 ```toml
-microclaw-sdk = { version = "0.3", features = ["full"] }
+microclaw-sdk = { version = "0.4", features = ["full"] }
 ```
 
 Use this for providers, tools, memory, Skills, MCP, hooks, Subagents, and Worker
@@ -25,7 +25,7 @@ transport in one host.
 
 ```toml
 microclaw-sdk = {
-  version = "0.3",
+  version = "0.4",
   default-features = false,
   features = ["minimal"]
 }
@@ -35,11 +35,15 @@ Use the stable request, result, event, control, and Worker wire contracts withou
 pulling `microclaw-engine` into the dependency graph. Add `standard` when the host
 also needs `Runtime`, `Agent`, and `RunExecutor`.
 
+The `minimal` graph excludes the Agent Engine, Reqwest, SQLite, Tokio, Typst, and
+OpenTelemetry. The `standard` graph also excludes the Typst/PDF renderer; `full`
+enables the Engine's `document-tools` feature.
+
 ### Runtime plus remote Worker transport
 
 ```toml
 microclaw-sdk = {
-  version = "0.3",
+  version = "0.4",
   default-features = false,
   features = ["standard", "remote-worker"]
 }

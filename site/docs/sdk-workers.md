@@ -31,7 +31,7 @@ use `full`, which already includes it:
 
 ```toml
 microclaw-sdk = {
-  version = "0.3",
+  version = "0.4",
   default-features = false,
   features = ["standard", "remote-worker"]
 }

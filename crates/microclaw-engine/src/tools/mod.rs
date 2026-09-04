@@ -21,6 +21,7 @@ pub mod mcp;
 pub mod memory;
 pub mod osv_check;
 pub mod read_file;
+#[cfg(feature = "document-tools")]
 pub mod render_pdf;
 pub mod report_progress;
 pub mod schedule;
@@ -373,15 +374,17 @@ impl ToolRegistry {
                 channel_registry.clone(),
                 db.clone(),
             )),
-            Box::new(render_pdf::RenderPdfTool::new(
-                config,
-                channel_registry.clone(),
-                db.clone(),
-            )),
             Box::new(transcribe_audio::TranscribeAudioTool::new(config)),
             Box::new(insights::InsightsTool::new(db.clone())),
             Box::new(fetch_artifact::FetchArtifactTool::new(db.clone())),
         ];
+
+        #[cfg(feature = "document-tools")]
+        tools.push(Box::new(render_pdf::RenderPdfTool::new(
+            config,
+            channel_registry.clone(),
+            db.clone(),
+        )));
 
         // Add ClawHub tools if enabled
         if config.clawhub.agent_tools_enabled {

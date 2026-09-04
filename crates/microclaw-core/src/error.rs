@@ -9,9 +9,11 @@ pub enum MicroClawError {
     #[error("Rate limited, retry after backoff")]
     RateLimited,
 
+    #[cfg(feature = "sqlite-errors")]
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
 
+    #[cfg(feature = "http-errors")]
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 

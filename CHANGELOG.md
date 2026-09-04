@@ -6,6 +6,25 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.4.0 - 2026-09-04
+
+### Added
+
+- Added stable `SdkErrorCode` classification and graceful `Runtime::shutdown`
+  lifecycle support for embedded hosts.
+- Added a post-publication registry smoke test that downloads the immutable SDK
+  release and verifies `minimal`, `standard`, and `full` consumers.
+
+### Changed
+
+- Made Core HTTP and SQLite error conversions opt-in compatibility features.
+  Protocol-only SDK consumers no longer compile Reqwest, SQLite, Tokio, Typst,
+  OpenTelemetry, or the Agent Engine.
+- Moved the Typst/PDF renderer behind the Engine `document-tools` feature.
+  `standard` SDK hosts avoid that dependency graph, while `full`, Server, and
+  Work retain document generation.
+- SDK errors no longer expose `RuntimeBuildError` as a public enum payload.
+
 ## 0.3.0 - 2026-09-04
 
 ### Changed

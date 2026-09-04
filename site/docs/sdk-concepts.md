@@ -60,13 +60,13 @@ the terminal result to observe the outcome.
 
 ## Error handling
 
-Use `SdkError` for SDK construction and Agent validation failures. Execution
+Use `SdkError` and its stable `SdkErrorCode` for SDK construction and Agent validation failures. Execution
 failures use `RuntimeError`, whose `code` is stable enough for application
 logic. Display the message to operators, but branch on `RuntimeErrorCode`
 instead of parsing strings.
 
 ## Shutdown
 
-Stop accepting new work, drain Worker capacity when one is used, await active
-runs where practical, and then drop the runtime. A `LocalWorker` exposes
-`wait_for_idle()` for graceful shutdown. See [Workers](./sdk-workers).
+Call `Runtime::shutdown().await` to stop accepting new work and wait for active
+and queued runs to drain. A `LocalWorker` also exposes `wait_for_idle()` when
+the host manages Worker availability separately. See [Workers](./sdk-workers).

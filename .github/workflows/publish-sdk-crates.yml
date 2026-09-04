@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag to publish from'
+        description: 'Existing SDK release tag (for example sdk-v0.4.0)'
         required: true
         type: string
       version:
@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${CONFIRM}" == "publish" ]]
-          [[ "${EXPECTED_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]
+          [[ "${EXPECTED_TAG}" =~ ^(sdk-)?v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]
           git fetch --force origin "refs/tags/${EXPECTED_TAG}:refs/tags/${EXPECTED_TAG}"
           [[ "$(git rev-parse HEAD)" == "$(git rev-list -n 1 "refs/tags/${EXPECTED_TAG}")" ]]
           actual_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "microclaw-sdk") | .version')"
@@ -73,3 +73,5 @@ jobs:
           git show "${GITHUB_SHA}:scripts/publish_sdk_crates.sh" > /tmp/publish_sdk_crates.sh
           chmod +x /tmp/publish_sdk_crates.sh
           /tmp/publish_sdk_crates.sh --execute
+      - name: Verify published SDK from crates.io
+        run: scripts/ci/check_sdk_registry_release.sh "${{ inputs.version }}"
