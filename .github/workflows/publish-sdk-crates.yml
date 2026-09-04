@@ -66,4 +66,10 @@ jobs:
       - name: Publish dependency-ordered crate set
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: scripts/publish_sdk_crates.sh --execute
+        run: |
+          # A retry of an immutable older tag must still use the current release
+          # runner. Crate sources remain checked out at and packaged from the tag.
+          git fetch --no-tags --depth=1 origin "${GITHUB_SHA}"
+          git show "${GITHUB_SHA}:scripts/publish_sdk_crates.sh" > /tmp/publish_sdk_crates.sh
+          chmod +x /tmp/publish_sdk_crates.sh
+          /tmp/publish_sdk_crates.sh --execute

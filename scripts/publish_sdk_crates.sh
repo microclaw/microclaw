@@ -21,6 +21,13 @@ crates=(
   microclaw-sdk
 )
 
+crates_io_curl=(
+  curl
+  --fail
+  --silent
+  --user-agent "microclaw-release/0.1 (https://github.com/microclaw/microclaw)"
+)
+
 workspace_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "microclaw-sdk") | .version')"
 if [[ -z "${workspace_version}" || "${workspace_version}" == "null" ]]; then
   echo "could not resolve microclaw-sdk version" >&2
@@ -54,13 +61,13 @@ if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
 fi
 
 for crate_name in "${crates[@]}"; do
-  if curl --fail --silent "https://crates.io/api/v1/crates/${crate_name}/${workspace_version}" >/dev/null; then
+  if "${crates_io_curl[@]}" "https://crates.io/api/v1/crates/${crate_name}/${workspace_version}" >/dev/null; then
     echo "${crate_name} ${workspace_version} is already published; skipping"
     continue
   fi
   cargo publish -p "${crate_name}" --locked
   for attempt in $(seq 1 30); do
-    if curl --fail --silent "https://crates.io/api/v1/crates/${crate_name}/${workspace_version}" >/dev/null; then
+    if "${crates_io_curl[@]}" "https://crates.io/api/v1/crates/${crate_name}/${workspace_version}" >/dev/null; then
       break
     fi
     if [[ "${attempt}" == "30" ]]; then
