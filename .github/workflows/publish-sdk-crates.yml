@@ -50,7 +50,9 @@ jobs:
       - name: Detect published API baseline
         id: baseline
         run: |
-          if curl --fail --silent "https://crates.io/api/v1/crates/microclaw-sdk" >/dev/null; then
+          if curl --fail --silent \
+            --user-agent "microclaw-release/0.1 (https://github.com/microclaw/microclaw)" \
+            "https://crates.io/api/v1/crates/microclaw-sdk" >/dev/null; then
             echo "available=true" >> "${GITHUB_OUTPUT}"
           else
             echo "available=false" >> "${GITHUB_OUTPUT}"
