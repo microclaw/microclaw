@@ -66,6 +66,12 @@ For smaller integrations, see `examples/minimal_protocol.rs` for protocol-only i
 `examples/custom_executor.rs` for a host executor, and `examples/configured_skilled_agent.rs` for
 the full configured Agent Engine.
 
+A practical first integration should build one reusable runtime, run one local Agent, consume
+ordered events, branch on `RuntimeErrorCode`, verify cancellation, and shut down cleanly. Add
+managed Skills and remote Workers only after that baseline works. The
+[SDK quickstart](https://microclaw.org/docs/sdk-quickstart) includes a compact acceptance checklist
+and common-failure guide.
+
 ## Runtime contract
 
 - Build one `MicroClaw` runtime and reuse it across Agents.

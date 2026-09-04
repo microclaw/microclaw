@@ -6,6 +6,22 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## Rust SDK 0.5.1 - 2026-09-04
+
+### Added
+
+- Added a first-integration acceptance checklist and failure-recovery guidance
+  to the SDK quickstart.
+
+### Changed
+
+- Work now shows each installed Skill's source and declared version alongside
+  its availability and enablement state.
+- Removed the redundant cold `cargo build --release` job from ordinary CI;
+  release-profile builds remain part of the artifact release workflow.
+- Updated the three public Rust crates together to 0.5.1 without changing the
+  0.5 public API.
+
 ## 0.5.0 - 2026-09-04
 
 ### Added

@@ -47,8 +47,8 @@ channel-matrix = ["dep:matrix-sdk"]
 full = ["channel-matrix"]
 
 [dependencies]
-microclaw-core = { version = "0.5.0", path = "crates/microclaw-core" }
-microclaw-engine = { version = "0.5.0", path = "crates/microclaw-engine", features = ["test-support"] }
+microclaw-core = { version = "0.5.1", path = "crates/microclaw-core" }
+microclaw-engine = { version = "0.5.1", path = "crates/microclaw-engine", features = ["test-support"] }
 teloxide = { version = "0.17", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"

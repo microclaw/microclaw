@@ -2835,6 +2835,19 @@ impl WorkApp {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(skill.description),
                             )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("Source: {}", skill.source))
+                                    .children(
+                                        skill
+                                            .version
+                                            .filter(|version| !version.trim().is_empty())
+                                            .map(|version| format!("Version: {version}")),
+                                    ),
+                            )
                             .children(skill.reason.map(|reason| {
                                 div()
                                     .text_size(px(10.))
