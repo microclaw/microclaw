@@ -15,7 +15,7 @@ the same public run protocol.
 ### Complete embedded Agent Engine
 
 ```toml
-microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
+microclaw-sdk = { version = "0.2", features = ["full"] }
 ```
 
 Use this for providers, tools, memory, Skills, MCP, hooks, Subagents, and Worker
@@ -25,7 +25,7 @@ transport in one host.
 
 ```toml
 microclaw-sdk = {
-  git = "https://github.com/microclaw/microclaw",
+  version = "0.2",
   default-features = false,
   features = ["minimal"]
 }
@@ -39,7 +39,7 @@ model and tool execution.
 
 ```toml
 microclaw-sdk = {
-  git = "https://github.com/microclaw/microclaw",
+  version = "0.2",
   default-features = false,
   features = ["standard", "remote-worker"]
 }
@@ -49,21 +49,16 @@ Use this for a control-plane application that submits work to another process.
 
 ## Published crate topology
 
-The planned crates.io release contains reusable layers beneath the facade:
+The crates.io release exposes three supported layers:
 
 | Crate | Responsibility |
 |---|---|
 | `microclaw-core` | Stable run protocol, events, shared errors, and utilities |
-| `microclaw-storage` | SQLite persistence and queries |
-| `microclaw-tools` | Tool runtime primitives and safety boundaries |
-| `microclaw-engine` | Configured Agent Engine implementation |
-| `microclaw-runtime` | Agent, Run, control, and Worker lifecycle |
-| `microclaw-worker` | Authenticated remote Worker transport and host |
+| `microclaw-engine` | Agent Engine, persistence, tools, channels, runtime, and Worker implementation |
 | `microclaw-sdk` | Supported application-facing facade |
 
-Direct lower-level dependencies are useful for framework integration, but they
-couple the host more closely to MicroClaw internals. Prefer SDK re-exports until
-you have a concrete capability that the facade does not expose.
+The remaining workspace crates are private implementation or application packages.
+Prefer SDK re-exports unless you need the Engine's lower-level integration APIs.
 
 ## Compatibility expectations
 

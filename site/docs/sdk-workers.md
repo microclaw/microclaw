@@ -31,7 +31,7 @@ use `full`, which already includes it:
 
 ```toml
 microclaw-sdk = {
-  git = "https://github.com/microclaw/microclaw",
+  version = "0.2",
   default-features = false,
   features = ["standard", "remote-worker"]
 }

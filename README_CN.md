@@ -142,7 +142,7 @@ Web 控制台、具体渠道适配器或 Work UI。
 
 ```toml
 [dependencies]
-microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
+microclaw-sdk = { version = "0.2", features = ["full"] }
 ```
 
 ```rust
@@ -162,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 然后消费有序运行时事件和最终 `RunResult`。可以直接参考能够编译的
 [`configured_skilled_agent`](crates/microclaw-sdk/examples/configured_skilled_agent.rs) 示例与
 [SDK 快速接入](site/docs/sdk-quickstart.md)、[核心概念](site/docs/sdk-concepts.md)、
-[Skills 指南](site/docs/sdk-skills.md)和 [Worker 指南](site/docs/sdk-workers.md)。这些 SDK crate 目前通过代码仓库使用，尚未单独发布到 crates.io。
+[Skills 指南](site/docs/sdk-skills.md)和 [Worker 指南](site/docs/sdk-workers.md)。公共 Rust 包已作为 `microclaw-core`、`microclaw-engine` 和 `microclaw-sdk` 发布到 crates.io。
 
 ## 能力地图
 

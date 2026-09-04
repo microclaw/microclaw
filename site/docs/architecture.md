@@ -28,13 +28,10 @@ Server / Work / third-party Rust applications
                      |
               microclaw-engine
        Agent Loop + providers + Skills
-        tools + policy + memory + MCP
+       tools + policy + memory + MCP
+       runtime + Worker + persistence
                      |
-              microclaw-runtime
-       RunHandle + controls + events
-          LocalWorker + capacity
-                     |
-        microclaw-core + capability crates
+               microclaw-core
 ```
 
 Server translates channel ingress and delivery at its adapters. Work sends
@@ -47,13 +44,9 @@ Model calls and tool execution never run on the GPUI thread.
 ## Core modules
 
 - `microclaw-core` (`crates/microclaw-core`): stable Agent, Run, Worker, error, LLM, and event contracts.
-- `microclaw-runtime` (`crates/microclaw-runtime`): UI-independent run lifecycle, handles, controls, concurrency, event streams, and Local Worker placement.
-- `microclaw-engine` (`crates/microclaw-engine`): the concrete provider-neutral Agent Loop, providers, prompt/compaction, recovery, Skills, hooks, memory, and built-in tool assembly.
+- `microclaw-engine` (`crates/microclaw-engine`): the concrete provider-neutral Agent Loop plus runtime, Worker, persistence, channels, observability, Skills, hooks, memory, and tool implementation.
 - `microclaw-sdk` (`crates/microclaw-sdk`): supported embedding facade and `minimal`, `standard`, and `full` feature presets.
-- `microclaw-storage` (`crates/microclaw-storage`): DB schema/queries, structured memory lifecycle, usage reporting.
-- `microclaw-tools` (`crates/microclaw-tools`): tool runtime primitives (auth/risk/schema/path), sandbox, shared tool helper engines.
-- `microclaw-channels` (`crates/microclaw-channels`): channel abstraction boundary and routing contracts.
-- `microclaw-app` (`crates/microclaw-app`): app-level support modules (logging, bundled skills, transcribe).
+- Internal workspace crates remain as migration boundaries for the applications, but are not public crates.io packages.
 - `microclaw-work-app` (`crates/microclaw-work-app`): UI-independent Work commands, projections, session persistence, and settings state.
 - `microclaw-work-runtime` (`crates/microclaw-work-runtime`): foreground Work lifecycle and the bridge from the SDK/Agent Engine event stream.
 - `microclaw-work` (`apps/microclaw-work`): native GPUI views, input, macOS integration, and packaging; it contains no separate agent loop.

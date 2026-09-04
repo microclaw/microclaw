@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       version:
-        description: 'Expected SDK crate version (for example 0.1.0)'
+        description: 'Expected SDK crate version (for example 0.2.0)'
         required: true
         type: string
       confirm:
@@ -60,7 +60,7 @@ jobs:
         if: steps.baseline.outputs.available == 'true'
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
-          package: microclaw-core,microclaw-observability,microclaw-storage,microclaw-tools,microclaw-channels,microclaw-clawhub,microclaw-app,microclaw-runtime,microclaw-engine,microclaw-worker,microclaw-sdk
+          package: microclaw-core,microclaw-engine,microclaw-sdk
           feature-group: all-features
           rust-toolchain: 1.95.0
       - name: Publish dependency-ordered crate set

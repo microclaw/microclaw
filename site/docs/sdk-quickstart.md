@@ -15,7 +15,7 @@ Until the first crates.io release, depend on the repository:
 
 ```toml title="Cargo.toml"
 [dependencies]
-microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
+microclaw-sdk = { version = "0.2", features = ["full"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

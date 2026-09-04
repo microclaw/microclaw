@@ -144,7 +144,7 @@ Worker support without pulling in the Server, Web console, concrete channel adap
 
 ```toml
 [dependencies]
-microclaw-sdk = { git = "https://github.com/microclaw/microclaw", features = ["full"] }
+microclaw-sdk = { version = "0.2", features = ["full"] }
 ```
 
 ```rust
@@ -165,8 +165,8 @@ programmatic setup, inspect the Skill catalog, build an Agent with selected Skil
 consume ordered runtime events plus the terminal `RunResult`. See the compiling
 [`configured_skilled_agent`](crates/microclaw-sdk/examples/configured_skilled_agent.rs) example and
 the [SDK quickstart](site/docs/sdk-quickstart.md), [concept guide](site/docs/sdk-concepts.md),
-[Skills guide](site/docs/sdk-skills.md), and [Worker guide](site/docs/sdk-workers.md). The SDK crates are currently consumed from the
-repository and are not yet published separately on crates.io.
+[Skills guide](site/docs/sdk-skills.md), and [Worker guide](site/docs/sdk-workers.md). The public Rust packages are available on crates.io as
+`microclaw-core`, `microclaw-engine`, and `microclaw-sdk`.
 
 ## Capabilities
 

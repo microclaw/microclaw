@@ -13,9 +13,8 @@ contracts while keeping Server, Web, channel adapters, and desktop UI code out
 of your dependency graph.
 
 :::info Current distribution
-The SDK is ready for external use and versioned at `0.1.0`, but its crates have
-not yet been uploaded to crates.io. Until the first publication, use the Git
-dependency shown in the [quickstart](./sdk-quickstart).
+The supported public crates are available on crates.io at `0.2.0`:
+`microclaw-core`, `microclaw-engine`, and `microclaw-sdk`.
 :::
 
 ## Decide whether the SDK is the right entry point

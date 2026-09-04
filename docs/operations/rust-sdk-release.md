@@ -1,8 +1,9 @@
 # Rust SDK release
 
-The public Rust SDK is a dependency-ordered set of crates rather than one
-standalone upload. Publish all of them at the same version from an immutable
-release tag.
+The public Rust SDK has three dependency-ordered crates: `microclaw-core`,
+`microclaw-engine`, and `microclaw-sdk`. Publish all three at the same version
+from an immutable release tag. Application and implementation-only workspace
+crates use `publish = false`.
 
 ## One-time repository setup
 
@@ -51,7 +52,7 @@ resolve the registry release rather than a path dependency:
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.1", features = ["full"] }
+microclaw-sdk = { version = "0.2", features = ["full"] }
 ```
 
 Run `cargo check`, open the matching docs.rs build, and confirm the release

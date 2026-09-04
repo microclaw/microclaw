@@ -42,6 +42,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **Public Rust SDK 0.2.0.** The crates.io surface is now intentionally limited
+  to `microclaw-core`, `microclaw-engine`, and `microclaw-sdk`. Runtime,
+  persistence, tools, channels, observability, bundled Skills, ClawHub, and
+  Worker implementation now ship inside the Engine package; application and
+  migration-only workspace crates are marked non-publishable.
+
 - **SDK-first project documentation.** The README and public documentation now
   present Server, Work, and the Rust SDK as three explicit entry points. The
   website gives each path a separate, color-coded quickstart card instead of a
