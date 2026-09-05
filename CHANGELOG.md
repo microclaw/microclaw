@@ -14,6 +14,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   release builds, reducing repeated patch-release compilation time.
 - Updated official artifact and Docker actions to their current Node 24-based
   major versions.
+- Updated the public Rust SDK install examples and release guide to the stable
+  `0.6.1` release.
+- Allowed the Server Homebrew formula to advance independently when a signed
+  and notarized Work DMG is not available, while preserving the existing Work
+  cask.
 
 ### Fixed
 
@@ -24,6 +29,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   Server, Work, and reliability assets before checksums or publication.
 - Corrected the documentation home page release badge and link, which still
   referenced v0.5.5 after the v0.6.0 release.
+- Added a release-version guard for public SDK snippets and stable-version
+  references across the README files and documentation home page.
 
 ## 0.6.0 - 2026-09-04
 

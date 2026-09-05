@@ -7,7 +7,7 @@ import styles from './index.module.css';
 import {getHomeMessages} from '../home-i18n';
 
 const PATH_COMMANDS = {
-  sdk: 'microclaw-sdk = { version = "0.5", features = ["full"] }',
+  sdk: 'microclaw-sdk = { version = "0.6.1", features = ["full"] }',
   work: 'brew tap microclaw/tap && brew install --cask microclaw-work',
   server: {
     macos: 'curl -fsSL https://microclaw.org/install.sh | bash',

@@ -389,20 +389,24 @@ if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_X86_64_T
   exit 1
 fi
 
-if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_WORK_ARM64_DMG_NAME"; then
-  exit 1
-fi
-
 HOMEBREW_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME")"
 HOMEBREW_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBALL_NAME")"
 HOMEBREW_FULL_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_ARM64_TARBALL_NAME")"
 HOMEBREW_FULL_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_X86_64_TARBALL_NAME")"
-HOMEBREW_WORK_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_WORK_ARM64_DMG_NAME")"
+HOMEBREW_WORK_ARM64_SHA256=""
+HOMEBREW_WORK_AVAILABLE=false
+if HOMEBREW_WORK_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_WORK_ARM64_DMG_NAME" 2>/dev/null)"; then
+  HOMEBREW_WORK_AVAILABLE=true
+fi
 echo "Official Homebrew arm64 SHA256: $HOMEBREW_ARM64_SHA256"
 echo "Official Homebrew x86_64 SHA256: $HOMEBREW_X86_64_SHA256"
 echo "Official Homebrew full arm64 SHA256: $HOMEBREW_FULL_ARM64_SHA256"
 echo "Official Homebrew full x86_64 SHA256: $HOMEBREW_FULL_X86_64_SHA256"
-echo "Official Homebrew Work arm64 SHA256: $HOMEBREW_WORK_ARM64_SHA256"
+if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
+  echo "Official Homebrew Work arm64 SHA256: $HOMEBREW_WORK_ARM64_SHA256"
+else
+  echo "No signed Work DMG is present; preserving the existing Work Cask."
+fi
 
 echo "Resetting tap workspace: $TAP_DIR"
 rm -rf "$TAP_DIR"
@@ -415,7 +419,7 @@ mkdir -p Formula
 
 cat > "$FORMULA_PATH" << RUBY
 class Microclaw < Formula
-  desc "Agentic AI assistant for Telegram - web search, scheduling, memory, tool execution"
+  desc "Self-hosted Rust agent runtime with tools, memory, and scheduling"
   homepage "https://github.com/$GITHUB_REPO"
   license "MIT"
 
@@ -468,7 +472,8 @@ RUBY
 
 mkdir -p Casks
 WORK_CASK_PATH="Casks/microclaw-work.rb"
-cat > "$WORK_CASK_PATH" << RUBY
+if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
+  cat > "$WORK_CASK_PATH" << RUBY
 cask "microclaw-work" do
   version "$NEW_VERSION"
   sha256 "$HOMEBREW_WORK_ARM64_SHA256"
@@ -485,8 +490,12 @@ cask "microclaw-work" do
   app "MicroClaw Work.app"
 end
 RUBY
+fi
 
-git add -- "$FORMULA_PATH" "$FORMULA_FULL_PATH" "$WORK_CASK_PATH"
+git add -- "$FORMULA_PATH" "$FORMULA_FULL_PATH"
+if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
+  git add -- "$WORK_CASK_PATH"
+fi
 git commit -m "microclaw homebrew release $NEW_VERSION"
 sync_rebase_and_push origin
 
@@ -497,4 +506,8 @@ echo "Users can install with:"
 echo "  brew tap microclaw/tap"
 echo "  brew install microclaw          # default (lightweight)"
 echo "  brew install microclaw-full     # full (Matrix + MCP)"
-echo "  brew install --cask microclaw-work  # native desktop app"
+if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
+  echo "  brew install --cask microclaw-work  # native desktop app"
+else
+  echo "  Work Cask unchanged: publish a signed/notarized DMG before updating it."
+fi

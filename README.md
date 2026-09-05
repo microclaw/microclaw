@@ -42,8 +42,8 @@ It is designed for work that lasts longer than one request: multi-step tool use,
 
 Read the [MicroClaw Work product guide](site/docs/work.md) for the local task
 loop, platform support levels, native settings, safety boundary, and packaging
-model. The active delivery plan is
-[Server + Work local-first](docs/roadmap/work-server-local-first-plan-2026-08.md).
+model. The current stable delivery baseline is
+[MicroClaw v0.6.1](docs/roadmap/v0.6.1-plan.md).
 
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw conversation view" width="45%" />
@@ -144,7 +144,7 @@ Worker support without pulling in the Server, Web console, concrete channel adap
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.5", features = ["full"] }
+microclaw-sdk = { version = "0.6.1", features = ["full"] }
 ```
 
 ```rust

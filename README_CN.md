@@ -41,8 +41,8 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含�
 | `microclaw-sdk` | 在 Rust 应用中嵌入同一套 Agent Engine、Skills、事件、控制与 Worker | Rust 1.93+；提供 `minimal`、`standard`、`full` 与 `remote-worker` feature |
 
 有关本地任务闭环、平台支持等级、原生设置、安全边界和打包方式，请阅读
-[MicroClaw Work 产品指南](site/docs/work.md)。当前权威规划是
-[Server + Work local-first 规划](docs/roadmap/work-server-local-first-plan-2026-08.md)。
+[MicroClaw Work 产品指南](site/docs/work.md)。当前稳定交付基线是
+[MicroClaw v0.6.1](docs/roadmap/v0.6.1-plan.md)。
 
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw 对话界面" width="45%" />
@@ -142,7 +142,7 @@ Web 控制台、具体渠道适配器或 Work UI。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.5", features = ["full"] }
+microclaw-sdk = { version = "0.6.1", features = ["full"] }
 ```
 
 ```rust

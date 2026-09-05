@@ -52,7 +52,7 @@ resolve the registry release rather than a path dependency:
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.2", features = ["full"] }
+microclaw-sdk = { version = "0.6.1", features = ["full"] }
 ```
 
 Run `cargo check`, open the matching docs.rs build, and confirm the release
