@@ -12,8 +12,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 - Added reusable per-platform release caches and a bounded timeout for Server
   release builds, reducing repeated patch-release compilation time.
-- Updated official artifact and Docker actions to their current Node 24-based
-  major versions.
+- Updated official artifact, Docker, and Nix actions to their current Node
+  24-based major versions.
 - Updated the public Rust SDK install examples and release guide to the stable
   `0.6.1` release.
 - Allowed the Server Homebrew formula to advance independently when a signed
