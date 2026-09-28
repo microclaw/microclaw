@@ -1260,6 +1260,10 @@ fn strip_slash_command_user_lines(messages: &mut Vec<Message>) {
 struct AgentMetrics {
     input_tokens: i64,
     output_tokens: i64,
+    /// Prompt-cache accounting. `cache_read_input_tokens` staying at zero across
+    /// turns means the cached prompt prefix is not being reused.
+    cache_read_input_tokens: i64,
+    cache_creation_input_tokens: i64,
     tool_calls: i64,
     tool_errors: i64,
     llm_requests: i64,
@@ -1320,6 +1324,14 @@ pub(crate) async fn process_with_agent_impl(
             kv("input", &metrics.input_text),
             kv_int(GEN_AI_USAGE_INPUT_TOKENS, metrics.input_tokens),
             kv_int(GEN_AI_USAGE_OUTPUT_TOKENS, metrics.output_tokens),
+            kv_int(
+                "gen_ai.usage.cache_read_input_tokens",
+                metrics.cache_read_input_tokens,
+            ),
+            kv_int(
+                "gen_ai.usage.cache_creation_input_tokens",
+                metrics.cache_creation_input_tokens,
+            ),
             kv_int(
                 "gen_ai.usage.total_tokens",
                 metrics.input_tokens + metrics.output_tokens,
@@ -2433,6 +2445,8 @@ async fn process_with_agent_logic(
             last_observed_input_tokens = usage.input_tokens as i64;
             metrics.input_tokens += usage.input_tokens as i64;
             metrics.output_tokens += usage.output_tokens as i64;
+            metrics.cache_read_input_tokens += usage.cache_read_input_tokens as i64;
+            metrics.cache_creation_input_tokens += usage.cache_creation_input_tokens as i64;
             let channel = context.caller_channel.to_string();
             let provider = effective_profile.alias.clone();
             let model = effective_model.clone();

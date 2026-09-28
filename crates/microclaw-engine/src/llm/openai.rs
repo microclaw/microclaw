@@ -439,6 +439,25 @@ pub(crate) struct OaiFunction {
 pub(crate) struct OaiUsage {
     pub(crate) prompt_tokens: u32,
     pub(crate) completion_tokens: u32,
+    /// OpenAI-compatible prompt-cache accounting. Both fields are optional
+    /// because most providers omit them entirely.
+    #[serde(default)]
+    pub(crate) prompt_tokens_details: Option<OaiPromptTokensDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct OaiPromptTokensDetails {
+    #[serde(default)]
+    pub(crate) cached_tokens: u32,
+}
+
+impl OaiUsage {
+    pub(crate) fn cache_read_tokens(&self) -> u32 {
+        self.prompt_tokens_details
+            .as_ref()
+            .map(|d| d.cached_tokens)
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -562,6 +581,23 @@ pub(crate) struct OaiResponsesResponse {
 pub(crate) struct OaiResponsesUsage {
     pub(crate) input_tokens: u32,
     pub(crate) output_tokens: u32,
+    #[serde(default)]
+    pub(crate) input_tokens_details: Option<OaiResponsesInputTokensDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct OaiResponsesInputTokensDetails {
+    #[serde(default)]
+    pub(crate) cached_tokens: u32,
+}
+
+impl OaiResponsesUsage {
+    pub(crate) fn cache_read_tokens(&self) -> u32 {
+        self.input_tokens_details
+            .as_ref()
+            .map(|d| d.cached_tokens)
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1264,6 +1300,7 @@ mod tests {
             usage: Some(OaiUsage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
+                prompt_tokens_details: None,
             }),
         };
         let resp = translate_oai_response(oai);
