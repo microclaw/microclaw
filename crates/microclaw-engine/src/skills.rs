@@ -1453,6 +1453,86 @@ ok
     }
 
     #[test]
+    fn build_skills_hot_bodies_inlines_only_matched_skills() {
+        let dir = std::env::temp_dir().join(format!("mc_skills_hot_{}", uuid::Uuid::new_v4()));
+        write_skill(
+            &dir,
+            "deploy-helper",
+            "kubernetes deploy helper",
+            "Step 1: kubectl apply",
+        );
+        write_skill(&dir, "irrelevant", "make tea", "boil water");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+
+        let out = sm.build_skills_hot_bodies_for_query("how do i do a kubernetes deploy?", 3);
+        assert!(out.contains("## deploy-helper"), "got: {out}");
+        assert!(
+            out.contains("Step 1: kubectl apply"),
+            "body not inlined: {out}"
+        );
+        // The cold listing belongs to the catalog half, not the turn block.
+        assert!(
+            !out.contains("Other available skills"),
+            "cold list leaked: {out}"
+        );
+        assert!(
+            !out.contains("- irrelevant: make tea"),
+            "cold list leaked: {out}"
+        );
+        assert!(!out.contains("boil water"), "unmatched body leaked: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_hot_bodies_empty_when_nothing_matches() {
+        let dir =
+            std::env::temp_dir().join(format!("mc_skills_hot_nomatch_{}", uuid::Uuid::new_v4()));
+        write_skill(&dir, "alpha", "alpha skill", "ok");
+        write_skill(&dir, "beta", "beta skill", "ok");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        assert!(sm
+            .build_skills_hot_bodies_for_query("xyz unrelated", 3)
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_hot_bodies_empty_for_zero_top_k_and_blank_query() {
+        let dir = std::env::temp_dir().join(format!("mc_skills_hot_edge_{}", uuid::Uuid::new_v4()));
+        write_skill(&dir, "alpha", "alpha skill", "ok");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        // top_k = 0 disables inlining entirely.
+        assert!(sm
+            .build_skills_hot_bodies_for_query("alpha skill", 0)
+            .is_empty());
+        // Without a query there is nothing to rank against.
+        assert!(sm.build_skills_hot_bodies_for_query("", 3).is_empty());
+        assert!(sm.build_skills_hot_bodies_for_query("   ", 3).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_is_stable_and_name_ordered() {
+        // The canonical catalog is what lands in the cached prompt prefix, so
+        // repeated calls and filesystem enumeration order must not matter.
+        let dir = std::env::temp_dir().join(format!("mc_skills_stable_{}", uuid::Uuid::new_v4()));
+        write_skill(&dir, "zebra", "zebra skill", "z");
+        write_skill(&dir, "alpha", "alpha skill", "a");
+        write_skill(&dir, "mango", "mango skill", "m");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+
+        let first = sm.build_skills_catalog();
+        let second = sm.build_skills_catalog();
+        assert_eq!(first, second, "canonical catalog must be deterministic");
+
+        let alpha = first.find("- alpha:").expect("alpha listed");
+        let mango = first.find("- mango:").expect("mango listed");
+        let zebra = first.find("- zebra:").expect("zebra listed");
+        assert!(alpha < mango && mango < zebra, "not name-ordered: {first}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn build_skills_catalog_for_query_falls_back_when_top_k_zero() {
         let dir = std::env::temp_dir().join(format!(
             "mc_skills_query_top_k_zero_{}",

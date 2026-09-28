@@ -1985,8 +1985,11 @@ async fn process_with_agent_logic(
         build_turn_context(&turn_context, &state.config.timezone)
     };
     if !turn_context_block.is_empty() {
-        // Delivered as its own system message right after the system prompt so
-        // the cached prefix in front of it stays byte-identical across turns.
+        // Load-bearing placement, and currently covered only indirectly: this
+        // must stay the FIRST entry in `messages` so it sits between the cached
+        // system prompt and the conversation. Inserting anywhere else (after a
+        // tool_use/tool_result pair, say) would both leak per-turn data into the
+        // cached prefix and break provider tool-result adjacency rules.
         messages.insert(
             0,
             Message {
@@ -4815,6 +4818,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_split_db_memory_context_on_real_builder_output() {
+        // Exercises the real `build_db_memory_context` render path rather than a
+        // hand-written string, so the omission notice and the query-ranked
+        // layers are covered as actually emitted.
+        let (db, dir) = test_db();
+        db.insert_memory(Some(100), "user profile is Ada", "PROFILE")
+            .unwrap();
+        db.insert_memory(Some(100), "user prefers dark roast coffee", "PREFERENCE")
+            .unwrap();
+        db.insert_memory(Some(100), "user dislikes decaf entirely", "PREFERENCE")
+            .unwrap();
+        let memory_backend = Arc::new(crate::memory_backend::MemoryBackend::local_only(db.clone()));
+        // Small token budget so the ranked sections actually render; with a
+        // large budget every row collapses into the stable Identity/Essential
+        // layers and there is nothing query-scoped left to split.
+        let context = build_db_memory_context(
+            &memory_backend,
+            &db,
+            None,
+            100,
+            "decaf",
+            60,
+            20,
+            30,
+            30.0,
+            true,
+            2,
+            10,
+        )
+        .await;
+        assert!(context.contains("<structured_memories>"), "{context}");
+        let (stable, query_scoped) = crate::memory_service::split_db_memory_context(&context);
+
+        // The contract is a *section* partition, not "text the query matched":
+        // a row can land in the stable Essential layer and still be a match.
+        // What must hold is that the cached half carries only the stable layers
+        // and the transient half carries only the query-scoped ones.
+        assert!(stable.contains("# Identity"), "{stable}");
+        assert!(stable.contains("# Essential"), "{stable}");
+        assert!(
+            !stable.contains("# Relevant"),
+            "leaked into prefix: {stable}"
+        );
+        assert!(
+            !stable.contains("# Connected"),
+            "leaked into prefix: {stable}"
+        );
+
+        assert!(query_scoped.contains("# Relevant"), "{query_scoped}");
+        assert!(!query_scoped.contains("# Identity"), "{query_scoped}");
+        assert!(!query_scoped.contains("# Essential"), "{query_scoped}");
+
+        // Row-level placement follows its section.
+        let identity = "user profile is Ada";
+        let relevant = "user prefers dark roast coffee";
+        assert!(stable.contains(identity), "{stable}");
+        assert!(query_scoped.contains(relevant), "{query_scoped}");
+        assert!(
+            !stable.contains(relevant),
+            "Relevant row leaked into the cached prefix: {stable}"
+        );
+        assert!(
+            !query_scoped.contains(identity),
+            "Identity row leaked into the transient half: {query_scoped}"
+        );
+
+        // Both halves are independently well-formed and free of foreign tags.
+        assert!(stable.trim_end().ends_with("</structured_memories>"));
+        assert!(!query_scoped.contains("<structured_memories>"));
+        assert!(!query_scoped.contains("</structured_memories>"));
+
+        // No content is dropped across the split.
+        for needle in [identity, "user dislikes decaf entirely", relevant] {
+            assert!(
+                stable.contains(needle) || query_scoped.contains(needle),
+                "{needle} vanished during the split"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn test_build_db_memory_context_large_budget_keeps_all() {
         let (db, dir) = test_db();
         db.insert_memory(Some(100), "user likes rust", "PROFILE")
@@ -6086,6 +6172,129 @@ mod tests {
 
         assert!(super::load_project_context(&config, "telegram", 1).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_build_system_prompt_without_clock_is_byte_identical_across_turns() {
+        // The whole point of #490: the system prompt is the provider's cached
+        // prefix, so it must be byte-identical from one turn to the next. With
+        // the clock disabled, any hidden `Utc::now()` in the builder shows up
+        // here immediately.
+        let build = || {
+            super::build_system_prompt(
+                "testbot",
+                "telegram",
+                "<structured_memories>\n# Identity\n[PROFILE] [global] Ada\n</structured_memories>\n",
+                42,
+                "<available_skills>\n- deploy: ship it\n</available_skills>",
+                "UTC",
+                crate::config::SystemPromptTimeDetail::None,
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(build(), build());
+    }
+
+    #[test]
+    fn test_build_system_prompt_date_mode_varies_only_in_the_date_line() {
+        let build = || {
+            super::build_system_prompt(
+                "testbot",
+                "telegram",
+                "",
+                42,
+                "",
+                "UTC",
+                crate::config::SystemPromptTimeDetail::Date,
+                None,
+                None,
+                None,
+            )
+        };
+        let first = build();
+        let second = build();
+        if first != second {
+            // Only the date line is allowed to move; if anything else differs,
+            // the cached prefix is not stable.
+            let without_date = |s: &str| {
+                s.lines()
+                    .filter(|line| !line.starts_with("- current_date:"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            assert_eq!(
+                without_date(&first),
+                without_date(&second),
+                "system prompt changed outside the date line"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_system_prompt_date_mode_emits_wellformed_date() {
+        let prompt = super::build_system_prompt(
+            "testbot",
+            "telegram",
+            "",
+            42,
+            "",
+            "UTC",
+            crate::config::SystemPromptTimeDetail::Date,
+            None,
+            None,
+            None,
+        );
+        assert!(prompt.contains("- current_date: "), "{prompt}");
+        // Date mode must not leak the finer-grained clock back in.
+        assert!(!prompt.contains("current_local_time"), "{prompt}");
+        assert!(!prompt.contains("current_utc_time"), "{prompt}");
+
+        let line = prompt
+            .lines()
+            .find(|l| l.starts_with("- current_date:"))
+            .expect("date line");
+        let date = line.trim_start_matches("- current_date: ").trim();
+        let bytes = date.as_bytes();
+        assert_eq!(bytes.len(), 10, "expected YYYY-MM-DD, got {date:?}");
+        assert!(bytes[..4].iter().all(u8::is_ascii_digit), "{date:?}");
+        assert_eq!(bytes[4], b'-', "{date:?}");
+        assert!(bytes[5..7].iter().all(u8::is_ascii_digit), "{date:?}");
+        assert_eq!(bytes[7], b'-', "{date:?}");
+        assert!(bytes[8..].iter().all(u8::is_ascii_digit), "{date:?}");
+    }
+
+    #[test]
+    fn test_build_system_prompt_date_mode_uses_configured_timezone() {
+        let tokyo = chrono_tz::Tz::Asia__Tokyo;
+        // Bracket the call so a midnight rollover cannot make this flaky.
+        let before = chrono::Utc::now().with_timezone(&tokyo);
+        let prompt = super::build_system_prompt(
+            "testbot",
+            "telegram",
+            "",
+            42,
+            "",
+            "Asia/Tokyo",
+            crate::config::SystemPromptTimeDetail::Date,
+            None,
+            None,
+            None,
+        );
+        let after = chrono::Utc::now().with_timezone(&tokyo);
+
+        let line = prompt
+            .lines()
+            .find(|l| l.starts_with("- current_date:"))
+            .expect("date line");
+        let emitted = line.trim_start_matches("- current_date: ").trim();
+        let lo = before.format("%Y-%m-%d").to_string();
+        let hi = after.format("%Y-%m-%d").to_string();
+        assert!(
+            emitted == lo || emitted == hi,
+            "expected the Tokyo date ({lo}..{hi}), got {emitted}"
+        );
     }
 
     #[test]

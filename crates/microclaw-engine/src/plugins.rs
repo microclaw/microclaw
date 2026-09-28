@@ -1168,6 +1168,42 @@ mod tests {
     }
 
     #[test]
+    fn test_plugin_report_orders_manifests_by_name() {
+        // `read_dir` order is arbitrary, so the report must impose its own
+        // ordering. Plugin tool definitions come from this list and sit in the
+        // provider's cached prefix, so an unstable order silently breaks caching.
+        let dir = make_temp_plugins_dir("order");
+        for name in ["zebra", "mango", "alpha"] {
+            std::fs::write(
+                dir.join(format!("{name}.json")),
+                serde_json::to_string(&json!({
+                    "name": name,
+                    "description": format!("{name} plugin"),
+                    "enabled": true,
+                    "commands": [],
+                    "tools": [],
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let cfg = config_with_plugins_dir(&dir);
+        let report = load_plugin_report(&cfg);
+        let names: Vec<&str> = report.manifests.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "mango", "zebra"]);
+
+        // Repeat: the order must not depend on prior enumeration state.
+        let report_again = load_plugin_report(&cfg);
+        let again: Vec<&str> = report_again
+            .manifests
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(again, names);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_command_matches_first_token() {
         assert!(command_matches("/hello world", "/hello"));
         assert!(command_matches(" /HELLO   world", "/hello"));
