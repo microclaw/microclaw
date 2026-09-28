@@ -67,6 +67,25 @@ pub enum UserMessageLanguage {
     Bilingual,
 }
 
+/// How much time detail the runtime injects into the prompt for the current
+/// turn. Lower values keep the cached prompt prefix stable across turns, which
+/// is what prompt caching requires: anything that changes every turn must live
+/// in the transient turn-context block instead of the system prompt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SystemPromptTimeDetail {
+    /// No clock in the system prompt. The live time is only available through
+    /// the `get_current_time` tool and the transient turn-context block.
+    None,
+    /// Date only (`YYYY-MM-DD`) in the configured timezone. Stable for a whole
+    /// local day, so the prefix still survives within a day.
+    #[default]
+    Date,
+    /// Full local and UTC timestamps. Changes on every turn, so the system
+    /// prompt prefix is invalidated continuously.
+    Full,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     // --- LLM / API ---
@@ -202,6 +221,12 @@ pub struct Config {
     /// flat catalog. Default: 3.
     #[serde(default = "default_skills_catalog_top_k")]
     pub skills_catalog_top_k: usize,
+    /// How much live time detail the system prompt carries. The default `date`
+    /// keeps the cached prefix stable within a local day; the live clock and
+    /// query-scoped context are injected per turn instead. Set to `full` to
+    /// restore the previous always-current timestamps in the system prompt.
+    #[serde(default)]
+    pub system_prompt_time_detail: SystemPromptTimeDetail,
     #[serde(default = "default_max_session_messages")]
     pub max_session_messages: usize,
     /// Cap on rendered unified-diff lines attached by file-modifying tools
@@ -962,6 +987,7 @@ impl Config {
             checkpoints_enabled: false,
             skill_archive_after_days: 30,
             skills_catalog_top_k: 3,
+            system_prompt_time_detail: SystemPromptTimeDetail::default(),
             data_dir: default_data_dir(),
             skills_dir: None,
             working_dir: default_working_dir(),

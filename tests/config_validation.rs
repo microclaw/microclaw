@@ -1,6 +1,6 @@
 //! Integration tests for configuration loading and validation.
 
-use microclaw::config::{Config, WorkingDirIsolation};
+use microclaw::config::{Config, SystemPromptTimeDetail, WorkingDirIsolation};
 
 /// Helper to create a minimal valid config for testing.
 fn minimal_config() -> Config {
@@ -131,6 +131,7 @@ fn minimal_config() -> Config {
         checkpoints_enabled: false,
         skill_archive_after_days: 30,
         skills_catalog_top_k: 3,
+        system_prompt_time_detail: SystemPromptTimeDetail::Date,
     }
 }
 
