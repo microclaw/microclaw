@@ -977,12 +977,32 @@ fn sanitize_xml(s: &str) -> String {
     out
 }
 
-fn format_user_message(sender_name: &str, content: &str) -> String {
-    format!(
-        "<user_message sender=\"{}\">{}</user_message>",
-        sanitize_xml(sender_name),
-        sanitize_xml(content)
+/// Render a stored `messages.timestamp` as a stable RFC 3339 stamp at whole-second
+/// precision in UTC. Truncating the sub-second part is what keeps re-rendering an
+/// unchanged history byte-identical, which is what prompt caching depends on.
+fn format_message_timestamp(stored_timestamp: &str) -> Option<String> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(stored_timestamp).ok()?;
+    Some(
+        parsed
+            .with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     )
+}
+
+fn format_user_message(sender_name: &str, content: &str, timestamp: Option<&str>) -> String {
+    match timestamp.and_then(format_message_timestamp) {
+        Some(stamp) => format!(
+            "<user_message sender=\"{}\" ts=\"{}\">{}</user_message>",
+            sanitize_xml(sender_name),
+            stamp,
+            sanitize_xml(content)
+        ),
+        None => format!(
+            "<user_message sender=\"{}\">{}</user_message>",
+            sanitize_xml(sender_name),
+            sanitize_xml(content)
+        ),
+    }
 }
 
 fn strip_xml_like_tags(input: &str) -> String {
@@ -1540,7 +1560,11 @@ async fn process_with_agent_logic(
                 if is_slash_command_text(&stored_msg.content) {
                     continue;
                 }
-                let content = format_user_message(&stored_msg.sender_name, &stored_msg.content);
+                let content = format_user_message(
+                    &stored_msg.sender_name,
+                    &stored_msg.content,
+                    Some(&stored_msg.timestamp),
+                );
                 // Merge if last message is also from user
                 if let Some(last) = session_messages.last_mut() {
                     if last.role == "user" {
@@ -3816,7 +3840,7 @@ pub fn history_to_claude_messages(history: &[StoredMessage], _bot_username: &str
         let content = if msg.is_from_bot {
             msg.content.clone()
         } else {
-            format_user_message(&msg.sender_name, &msg.content)
+            format_user_message(&msg.sender_name, &msg.content, Some(&msg.timestamp))
         };
 
         // Merge consecutive messages of the same role
@@ -5867,6 +5891,22 @@ mod tests {
 
         assert!(super::load_project_context(&config, "telegram", 1).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_format_message_timestamp_is_second_precision_and_stable() {
+        use super::format_message_timestamp;
+        assert_eq!(
+            format_message_timestamp("2026-09-28T20:33:23.372699628+00:00").as_deref(),
+            Some("2026-09-28T20:33:23Z")
+        );
+        // Sub-second differences must not change the rendered stamp, otherwise
+        // re-rendering an unchanged history invalidates the prompt-cache prefix.
+        assert_eq!(
+            format_message_timestamp("2026-09-28T20:33:23.372699628+00:00"),
+            format_message_timestamp("2026-09-28T20:33:23.999999999+00:00")
+        );
+        assert_eq!(format_message_timestamp("not a timestamp"), None);
     }
 
     #[test]
