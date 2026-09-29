@@ -8,6 +8,7 @@ plan exists first.
 
 | Document | Status | Notes |
 |---|---|---|
+| [`v0.7.0-plan.md`](./v0.7.0-plan.md) | **Active** | Prompt-cache stability release: byte-stable prompt prefix, request-time turn context, and prompt-cache usage accounting. |
 | [`v0.6.1-plan.md`](./v0.6.1-plan.md) | Delivered | Release-quality patch shipped with fully green Server, Work, SDK, container, and documentation pipelines. |
 | [`v0.6.0-plan.md`](./v0.6.0-plan.md) | Delivered | Server, Work, SDK, shared crates, Skills, and controlled delegation aligned and released at 0.6.0. |
 | [`work-server-local-first-plan-2026-08.md`](./work-server-local-first-plan-2026-08.md) | Superseded | Product direction folded into the focused v0.6.0 execution plan. |

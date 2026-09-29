@@ -6,6 +6,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-29
+
+### Changed
+
+- `microclaw-core` `Usage` gained the public `cache_read_input_tokens` and
+  `cache_creation_input_tokens` fields. Code that builds `Usage` with a struct
+  literal must set them or use `..Default::default()`.
+
 ### Fixed
 
 - Stabilized the cached prompt prefix so prompt caching actually takes effect
