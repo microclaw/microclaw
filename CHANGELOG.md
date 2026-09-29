@@ -6,6 +6,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Fixed
+
+- Removed the retired `Build (Release)` job from the release finalizer CI gate,
+  which made the Homebrew tap update wait until it timed out.
+
 ## 0.7.0 - 2026-09-29
 
 ### Changed
