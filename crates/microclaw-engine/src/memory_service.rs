@@ -740,6 +740,51 @@ pub(crate) async fn build_db_memory_context(
     out
 }
 
+/// Split a rendered `<structured_memories>` block into the part that is stable
+/// for a chat and the part that is ranked against the current user query.
+///
+/// `Identity` and `Essential` are the same from turn to turn, so they can live
+/// in the cached system-prompt prefix. `Relevant` and `Connected` are selected
+/// by scoring the current query, so they change on every question and must go
+/// into the per-turn context block instead.
+///
+/// Returns `(stable, query_scoped)`; either side may be empty.
+pub(crate) fn split_db_memory_context(rendered: &str) -> (String, String) {
+    const OPEN_TAG: &str = "<structured_memories>\n";
+    const CLOSE_TAG: &str = "</structured_memories>\n";
+    // First query-scoped section marker wins; either can appear without the other.
+    const MARKERS: [&str; 2] = ["# Relevant\n", "# Connected\n"];
+
+    if !rendered.starts_with(OPEN_TAG) {
+        // Unrecognized shape: keep it all on the stable side rather than
+        // dropping context the model was relying on.
+        return (rendered.to_string(), String::new());
+    }
+
+    let body_start = OPEN_TAG.len();
+    let body_end = rendered
+        .strip_suffix(CLOSE_TAG)
+        .map(|body| body.len())
+        .unwrap_or(rendered.len());
+    if body_start >= body_end {
+        return (rendered.to_string(), String::new());
+    }
+    let body = &rendered[body_start..body_end];
+
+    let split_at = MARKERS
+        .iter()
+        .filter_map(|marker| body.find(marker).map(|idx| (idx, marker.len())))
+        .min_by_key(|(idx, _)| *idx);
+
+    match split_at {
+        Some((idx, _)) => (
+            format!("{OPEN_TAG}{}{CLOSE_TAG}", &body[..idx]),
+            body[idx..].to_string(),
+        ),
+        None => (rendered.to_string(), String::new()),
+    }
+}
+
 pub async fn apply_reflector_extractions(
     state: &Arc<AppState>,
     chat_id: i64,
@@ -954,6 +999,53 @@ pub async fn apply_reflector_extractions(
 #[cfg(feature = "sqlite-vec")]
 pub(crate) fn memory_supports_local_semantic_ranking(memory_backend: &MemoryBackend) -> bool {
     memory_backend.supports_local_semantic_ranking()
+}
+
+#[cfg(test)]
+mod split_context_tests {
+    use super::split_db_memory_context;
+
+    #[test]
+    fn splits_relevant_layer_out_of_the_stable_prefix() {
+        let rendered = "<structured_memories>\n# Identity\n[PROFILE] [global] Ada\n# Essential\n[FACT] [chat] tea\n# Relevant\n[PREFERENCE] [chat] likes earl grey\n</structured_memories>\n";
+        let (stable, volatile) = split_db_memory_context(rendered);
+        assert!(stable.contains("# Identity"));
+        assert!(stable.contains("# Essential"));
+        assert!(!stable.contains("# Relevant"));
+        assert!(!stable.contains("earl grey"));
+        assert!(volatile.contains("# Relevant"));
+        assert!(volatile.contains("earl grey"));
+        // Both halves stay well-formed for the model.
+        assert!(stable.starts_with("<structured_memories>"));
+        assert!(stable.trim_end().ends_with("</structured_memories>"));
+    }
+
+    #[test]
+    fn splits_graph_section_when_no_relevant_layer() {
+        let rendered =
+            "<structured_memories>\n# Essential\n[FACT] [chat] tea\n# Connected\n- a -> b\n</structured_memories>\n";
+        let (stable, volatile) = split_db_memory_context(rendered);
+        assert!(!stable.contains("# Connected"));
+        assert!(!stable.contains("a -> b"));
+        assert!(volatile.contains("# Connected"));
+    }
+
+    #[test]
+    fn keeps_everything_stable_when_no_query_layers_present() {
+        let rendered =
+            "<structured_memories>\n# Identity\n[PROFILE] [global] Ada\n</structured_memories>\n";
+        let (stable, volatile) = split_db_memory_context(rendered);
+        assert_eq!(stable, rendered);
+        assert!(volatile.is_empty());
+    }
+
+    #[test]
+    fn unrecognized_shape_is_preserved_whole() {
+        let rendered = "not a structured block at all";
+        let (stable, volatile) = split_db_memory_context(rendered);
+        assert_eq!(stable, rendered);
+        assert!(volatile.is_empty());
+    }
 }
 
 #[cfg(test)]

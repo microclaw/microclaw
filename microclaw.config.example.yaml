@@ -193,6 +193,18 @@ anthropic_prompt_cache_enabled: true
 # "5m" or "1h". 1h requires extended-cache opt-in on the API key.
 anthropic_prompt_cache_ttl: "5m"
 
+# How much live time detail the system prompt carries.
+# The provider caches the system prompt, so anything that changes every turn
+# (a full clock) defeats prompt caching. Per-turn data — the live clock,
+# query-matched memories, ranked skill bodies, mood — is instead delivered in
+# a transient turn-context block attached to the latest user message, so the
+# system prompt and the earlier history stay cacheable.
+#   "none" - no time in the system prompt at all
+#   "date" - local date only (default); stable for a whole local day
+#   "full" - local + UTC timestamps; prefix is invalidated every turn
+# For exact times, prefer the `get_current_time` tool.
+system_prompt_time_detail: "date"
+
 # Filesystem checkpoints (off by default).
 # When on, microclaw snapshots the chat's working_dir at the start of every
 # agent turn into a shadow git repo under <data_dir>/checkpoints. Use

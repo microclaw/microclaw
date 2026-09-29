@@ -258,6 +258,15 @@ pub fn load_plugin_report(config: &Config) -> PluginLoadReport {
             }
         }
     }
+    // `read_dir` yields entries in arbitrary filesystem order, which would make
+    // the plugin tool list (part of the cached prompt prefix) reshuffle between
+    // restarts. Sort by manifest name so the prefix stays byte-stable.
+    manifests.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+            .then_with(|| a.name.cmp(&b.name))
+    });
     report.manifests = manifests;
     report
 }
@@ -1156,6 +1165,42 @@ mod tests {
         cfg.plugins.dir = Some(dir.to_string_lossy().to_string());
         cfg.working_dir = dir.join("work").to_string_lossy().to_string();
         cfg
+    }
+
+    #[test]
+    fn test_plugin_report_orders_manifests_by_name() {
+        // `read_dir` order is arbitrary, so the report must impose its own
+        // ordering. Plugin tool definitions come from this list and sit in the
+        // provider's cached prefix, so an unstable order silently breaks caching.
+        let dir = make_temp_plugins_dir("order");
+        for name in ["zebra", "mango", "alpha"] {
+            std::fs::write(
+                dir.join(format!("{name}.json")),
+                serde_json::to_string(&json!({
+                    "name": name,
+                    "description": format!("{name} plugin"),
+                    "enabled": true,
+                    "commands": [],
+                    "tools": [],
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let cfg = config_with_plugins_dir(&dir);
+        let report = load_plugin_report(&cfg);
+        let names: Vec<&str> = report.manifests.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "mango", "zebra"]);
+
+        // Repeat: the order must not depend on prior enumeration state.
+        let report_again = load_plugin_report(&cfg);
+        let again: Vec<&str> = report_again
+            .manifests
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(again, names);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

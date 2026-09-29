@@ -486,25 +486,19 @@ impl SkillManager {
         catalog
     }
 
-    /// Build a query-aware skills catalog: inline the full body of the
-    /// top-`top_k` skills whose descriptions overlap the query, and fall
-    /// back to a compact `name: description` listing for the rest.
+    /// Rank discovered skills against `query`, splitting them into a "hot"
+    /// bucket (score > 0, capped at `top_k`) and the remaining "cold" bucket.
     ///
-    /// Tradeoff vs `build_skills_catalog`: spending a bigger token slice
-    /// on the most-relevant skills (so the agent has the procedural
-    /// knowledge inline and doesn't need an extra `activate_skill`
-    /// round-trip) while keeping the long tail cheap.
-    ///
-    /// `top_k = 0` falls back to [`build_skills_catalog`] verbatim. An
-    /// empty `query` also falls back — without a query the relevance
-    /// score is meaningless.
-    pub fn build_skills_catalog_for_query(&self, query: &str, top_k: usize) -> String {
-        if top_k == 0 || query.trim().is_empty() {
-            return self.build_skills_catalog();
-        }
+    /// An empty `hot` vec means the query matched nothing relevant and callers
+    /// should fall back to the canonical catalog.
+    fn rank_skills_for_query(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> (Vec<SkillMetadata>, Vec<SkillMetadata>) {
         let mut skills = self.discover_skills();
         if skills.is_empty() {
-            return String::new();
+            return (Vec::new(), Vec::new());
         }
 
         let query_tokens = crate::memory_service::tokenize_for_relevance(query);
@@ -536,31 +530,51 @@ impl SkillManager {
                 cold.push(meta);
             }
         }
+        (hot, cold)
+    }
+
+    /// Render the query-matched skills with their full instruction bodies
+    /// inlined, as a self-contained `<turn_skills>` block.
+    ///
+    /// This is the query-scoped half of the skills context: it changes with
+    /// every user question, so it belongs in the per-turn context block rather
+    /// than in the cached system-prompt prefix. Returns an empty string when
+    /// the query matched nothing.
+    pub fn build_skills_hot_bodies_for_query(&self, query: &str, top_k: usize) -> String {
+        if top_k == 0 || query.trim().is_empty() {
+            return String::new();
+        }
+        let (hot, _cold) = self.rank_skills_for_query(query, top_k);
+        if hot.is_empty() {
+            return String::new();
+        }
+        render_hot_skill_bodies(&hot)
+    }
+
+    /// Build a query-aware skills catalog: inline the full body of the
+    /// top-`top_k` skills whose descriptions overlap the query, and fall
+    /// back to a compact `name: description` listing for the rest.
+    ///
+    /// Tradeoff vs `build_skills_catalog`: spending a bigger token slice
+    /// on the most-relevant skills (so the agent has the procedural
+    /// knowledge inline and doesn't need an extra `activate_skill`
+    /// round-trip) while keeping the long tail cheap.
+    ///
+    /// `top_k = 0` falls back to [`build_skills_catalog`] verbatim. An
+    /// empty `query` also falls back — without a query the relevance
+    /// score is meaningless.
+    pub fn build_skills_catalog_for_query(&self, query: &str, top_k: usize) -> String {
+        if top_k == 0 || query.trim().is_empty() {
+            return self.build_skills_catalog();
+        }
+        let (hot, mut cold) = self.rank_skills_for_query(query, top_k);
         if hot.is_empty() {
             // No relevant matches — degenerate to the plain catalog.
             return self.build_skills_catalog();
         }
 
         let mut out = String::from("<available_skills>\n");
-        out.push_str("<!-- Hot matches: full body inlined for the most relevant skills. -->\n");
-        for meta in &hot {
-            out.push_str(&format!("## {}\n", meta.name));
-            out.push_str(&format!("Description: {}\n", meta.description));
-            if let Some(version) = &meta.version {
-                out.push_str(&format!("Version: {}\n", version));
-            }
-            let skill_md = meta.dir_path.join("SKILL.md");
-            if let Ok(content) = std::fs::read_to_string(&skill_md) {
-                let body = strip_frontmatter(&content);
-                let body = truncate_chars(body, MAX_INLINED_SKILL_BODY_CHARS);
-                out.push_str("Instructions:\n");
-                out.push_str(&body);
-                if !body.ends_with('\n') {
-                    out.push('\n');
-                }
-            }
-            out.push('\n');
-        }
+        out.push_str(render_hot_skill_bodies(&hot).as_str());
         if !cold.is_empty() {
             out.push_str(
                 "<!-- Other available skills (call activate_skill to load full body): -->\n",
@@ -798,6 +812,31 @@ fn strip_frontmatter(content: &str) -> &str {
         Some(end) => trimmed[4 + end + 5..].trim_start_matches('\n'),
         None => trimmed,
     }
+}
+
+/// Render query-matched skills with their full instruction bodies inlined.
+fn render_hot_skill_bodies(hot: &[SkillMetadata]) -> String {
+    let mut out =
+        String::from("<!-- Hot matches: full body inlined for the most relevant skills. -->\n");
+    for meta in hot {
+        out.push_str(&format!("## {}\n", meta.name));
+        out.push_str(&format!("Description: {}\n", meta.description));
+        if let Some(version) = &meta.version {
+            out.push_str(&format!("Version: {}\n", version));
+        }
+        let skill_md = meta.dir_path.join("SKILL.md");
+        if let Ok(content) = std::fs::read_to_string(&skill_md) {
+            let body = strip_frontmatter(&content);
+            let body = truncate_chars(body, MAX_INLINED_SKILL_BODY_CHARS);
+            out.push_str("Instructions:\n");
+            out.push_str(&body);
+            if !body.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn truncate_chars(s: &str, max_chars: usize) -> String {
@@ -1410,6 +1449,86 @@ ok
         let sm = SkillManager::from_skills_dir(dir.to_str().unwrap())
             .with_clawhub_verification(lock_path, true);
         assert!(sm.discover_skills().iter().any(|s| s.name == "managed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_hot_bodies_inlines_only_matched_skills() {
+        let dir = std::env::temp_dir().join(format!("mc_skills_hot_{}", uuid::Uuid::new_v4()));
+        write_skill(
+            &dir,
+            "deploy-helper",
+            "kubernetes deploy helper",
+            "Step 1: kubectl apply",
+        );
+        write_skill(&dir, "irrelevant", "make tea", "boil water");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+
+        let out = sm.build_skills_hot_bodies_for_query("how do i do a kubernetes deploy?", 3);
+        assert!(out.contains("## deploy-helper"), "got: {out}");
+        assert!(
+            out.contains("Step 1: kubectl apply"),
+            "body not inlined: {out}"
+        );
+        // The cold listing belongs to the catalog half, not the turn block.
+        assert!(
+            !out.contains("Other available skills"),
+            "cold list leaked: {out}"
+        );
+        assert!(
+            !out.contains("- irrelevant: make tea"),
+            "cold list leaked: {out}"
+        );
+        assert!(!out.contains("boil water"), "unmatched body leaked: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_hot_bodies_empty_when_nothing_matches() {
+        let dir =
+            std::env::temp_dir().join(format!("mc_skills_hot_nomatch_{}", uuid::Uuid::new_v4()));
+        write_skill(&dir, "alpha", "alpha skill", "ok");
+        write_skill(&dir, "beta", "beta skill", "ok");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        assert!(sm
+            .build_skills_hot_bodies_for_query("xyz unrelated", 3)
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_hot_bodies_empty_for_zero_top_k_and_blank_query() {
+        let dir = std::env::temp_dir().join(format!("mc_skills_hot_edge_{}", uuid::Uuid::new_v4()));
+        write_skill(&dir, "alpha", "alpha skill", "ok");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+        // top_k = 0 disables inlining entirely.
+        assert!(sm
+            .build_skills_hot_bodies_for_query("alpha skill", 0)
+            .is_empty());
+        // Without a query there is nothing to rank against.
+        assert!(sm.build_skills_hot_bodies_for_query("", 3).is_empty());
+        assert!(sm.build_skills_hot_bodies_for_query("   ", 3).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_skills_catalog_is_stable_and_name_ordered() {
+        // The canonical catalog is what lands in the cached prompt prefix, so
+        // repeated calls and filesystem enumeration order must not matter.
+        let dir = std::env::temp_dir().join(format!("mc_skills_stable_{}", uuid::Uuid::new_v4()));
+        write_skill(&dir, "zebra", "zebra skill", "z");
+        write_skill(&dir, "alpha", "alpha skill", "a");
+        write_skill(&dir, "mango", "mango skill", "m");
+        let sm = SkillManager::from_skills_dir(dir.to_str().unwrap());
+
+        let first = sm.build_skills_catalog();
+        let second = sm.build_skills_catalog();
+        assert_eq!(first, second, "canonical catalog must be deterministic");
+
+        let alpha = first.find("- alpha:").expect("alpha listed");
+        let mango = first.find("- mango:").expect("mango listed");
+        let zebra = first.find("- zebra:").expect("zebra listed");
+        assert!(alpha < mango && mango < zebra, "not name-ordered: {first}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

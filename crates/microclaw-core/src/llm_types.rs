@@ -90,11 +90,19 @@ pub enum ResponseContentBlock {
     Other,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default, Clone, Copy)]
 #[allow(dead_code)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Tokens served from the provider's prompt cache. With a stable prompt
+    /// prefix this is what makes subsequent turns cheap; a value that stays at
+    /// zero across turns means the prefix is not being reused.
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
+    /// Tokens written into the provider's prompt cache by this request.
+    #[serde(default)]
+    pub cache_creation_input_tokens: u32,
 }
 
 #[cfg(test)]

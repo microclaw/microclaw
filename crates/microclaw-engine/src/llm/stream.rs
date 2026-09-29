@@ -18,9 +18,32 @@ pub(crate) fn usage_from_json(v: &serde_json::Value) -> Option<Usage> {
         .and_then(json_u64)
         .or_else(|| v.get("completion_tokens").and_then(json_u64))
         .unwrap_or(0);
+    // Cache accounting: OpenAI-compatible providers nest it under
+    // `prompt_tokens_details`/`input_tokens_details`, Anthropic-style providers
+    // report it as top-level fields.
+    let cache_read = v
+        .get("cache_read_input_tokens")
+        .and_then(json_u64)
+        .or_else(|| {
+            v.get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(json_u64)
+        })
+        .or_else(|| {
+            v.get("input_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(json_u64)
+        })
+        .unwrap_or(0);
+    let cache_creation = v
+        .get("cache_creation_input_tokens")
+        .and_then(json_u64)
+        .unwrap_or(0);
     Some(Usage {
         input_tokens: u32::try_from(input).unwrap_or(u32::MAX),
         output_tokens: u32::try_from(output).unwrap_or(u32::MAX),
+        cache_read_input_tokens: u32::try_from(cache_read).unwrap_or(u32::MAX),
+        cache_creation_input_tokens: u32::try_from(cache_creation).unwrap_or(u32::MAX),
     })
 }
 
@@ -340,6 +363,50 @@ mod tests {
         let usage = usage_from_json(&v).expect("usage should parse");
         assert_eq!(usage.input_tokens, 56);
         assert_eq!(usage.output_tokens, 78);
+    }
+
+    #[test]
+    fn test_usage_from_json_reads_openai_prompt_cache_details() {
+        let v = json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "prompt_tokens_details": { "cached_tokens": 64 }
+        });
+        let usage = usage_from_json(&v).expect("usage should parse");
+        assert_eq!(usage.cache_read_input_tokens, 64);
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn test_usage_from_json_reads_responses_api_input_token_details() {
+        let v = json!({
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "input_tokens_details": { "cached_tokens": 32 }
+        });
+        let usage = usage_from_json(&v).expect("usage should parse");
+        assert_eq!(usage.cache_read_input_tokens, 32);
+    }
+
+    #[test]
+    fn test_usage_from_json_reads_anthropic_style_cache_fields() {
+        let v = json!({
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "cache_read_input_tokens": 70,
+            "cache_creation_input_tokens": 30
+        });
+        let usage = usage_from_json(&v).expect("usage should parse");
+        assert_eq!(usage.cache_read_input_tokens, 70);
+        assert_eq!(usage.cache_creation_input_tokens, 30);
+    }
+
+    #[test]
+    fn test_usage_from_json_defaults_cache_fields_to_zero() {
+        let v = json!({ "prompt_tokens": 5, "completion_tokens": 6 });
+        let usage = usage_from_json(&v).expect("usage should parse");
+        assert_eq!(usage.cache_read_input_tokens, 0);
+        assert_eq!(usage.cache_creation_input_tokens, 0);
     }
 
     #[test]

@@ -6,6 +6,27 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Fixed
+
+- Stabilized the cached prompt prefix so prompt caching actually takes effect
+  across turns. The live clock, query-matched memories, ranked skill bodies,
+  mood read, verified prior experiences, plugin context, and relationship hint
+  moved out of the system prompt into a transient `<turn_context>` block that
+  is attached to the latest user message at request time and never persisted,
+  leaving the system prompt and the stored history byte-identical between turns.
+- Stabilized plugin tool ordering by sorting manifests by name, so the tool
+  definitions in the cached prefix no longer reshuffle between restarts.
+- Rendered stored message timestamps in `<user_message ts="...">` at whole-second
+  UTC precision, so re-rendering an unchanged history produces identical text.
+
+### Added
+
+- Added `system_prompt_time_detail` config (`none` / `date` / `full`), defaulting
+  to `date`, controlling how much clock detail the system prompt carries.
+- Added prompt-cache token accounting (`cache_read_input_tokens` and
+  `cache_creation_input_tokens`) to LLM usage, provider response parsing, and
+  agent metrics, so cache effectiveness is observable per run.
+
 ## 0.6.1 - 2026-09-04
 
 ### Changed

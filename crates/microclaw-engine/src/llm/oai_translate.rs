@@ -515,6 +515,8 @@ pub(crate) fn translate_oai_responses_response(resp: OaiResponsesResponse) -> Me
         usage: resp.usage.map(|usage| Usage {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
+            cache_read_input_tokens: usage.cache_read_tokens(),
+            cache_creation_input_tokens: 0,
         }),
     }
 }
@@ -632,6 +634,8 @@ pub(crate) fn translate_oai_response_with_display_reasoning(
     let usage = oai.usage.map(|u| Usage {
         input_tokens: u.prompt_tokens,
         output_tokens: u.completion_tokens,
+        cache_read_input_tokens: u.cache_read_tokens(),
+        cache_creation_input_tokens: 0,
     });
 
     MessagesResponse {
