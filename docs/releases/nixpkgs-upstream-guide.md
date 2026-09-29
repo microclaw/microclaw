@@ -1,6 +1,6 @@
 # Nixpkgs Upstream Guide
 
-Last reviewed: 2026-03-09
+Last reviewed: 2026-09-29
 
 This guide covers how to upstream `microclaw` to `NixOS/nixpkgs` so users get cache-backed prebuilt binaries from official Nix infrastructure.
 
@@ -10,91 +10,73 @@ This guide covers how to upstream `microclaw` to `NixOS/nixpkgs` so users get ca
 - Keep updates low-friction on each release
 - Ensure Linux + Darwin builds stay healthy
 
-## One-time Upstreaming
+## Current status
 
-1. Fork `NixOS/nixpkgs` and clone locally.
-2. Create package file:
-   - `pkgs/by-name/mi/microclaw/package.nix`
-3. Add entry in:
-   - `pkgs/top-level/all-packages.nix`
-4. Use this baseline expression:
+- Upstream PR: [NixOS/nixpkgs#498144](https://github.com/NixOS/nixpkgs/pull/498144)
+  (`microclaw: init at 0.0.163`, branch `everettjf/nixpkgs:microclaw-init`, still a draft).
+- The nixpkgs reviewer asked that newer versions be force-pushed onto that same
+  branch (then retitle the PR and mark it ready) instead of opening a new PR.
+- Nothing is merged yet, so `nixos-unstable` has no `microclaw` package.
+  The update script therefore seeds the package from
+  [`nix/nixpkgs/package.nix`](../../nix/nixpkgs/package.nix) when it is missing upstream.
 
-```nix
-{
-  lib,
-  rustPlatform,
-  fetchFromGitHub,
-  stdenv,
-  pkg-config,
-  openssl,
-  sqlite,
-  libsodium,
-  udev,
-}:
+To bring the draft up to the current release:
 
-rustPlatform.buildRustPackage rec {
-  pname = "microclaw";
-  version = "0.0.163";
-
-  src = fetchFromGitHub {
-    owner = "microclaw";
-    repo = "microclaw";
-    rev = "v${version}";
-    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-  };
-
-  cargoHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-
-  nativeBuildInputs = [ pkg-config ];
-
-  buildInputs =
-    [
-      openssl
-      sqlite
-      libsodium
-    ]
-    ++ lib.optionals stdenv.hostPlatform.isLinux [ udev ];
-
-  buildFeatures = lib.optionals stdenv.hostPlatform.isLinux [ "journald" "sqlite-vec" ];
-
-  doCheck = false;
-
-  meta = with lib; {
-    description = "Multi-channel agent runtime for Telegram, Discord, Slack, and Web";
-    homepage = "https://github.com/microclaw/microclaw";
-    changelog = "https://github.com/microclaw/microclaw/releases/tag/v${version}";
-    license = licenses.mit;
-    mainProgram = "microclaw";
-    platforms = platforms.linux ++ platforms.darwin;
-    maintainers = with maintainers; [ ];
-  };
-}
+```sh
+scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready
 ```
 
-Note: replace the placeholder `hash` and `cargoHash` with real values from build output.
+This rebuilds `microclaw-init` on top of `upstream/master`, carries over the
+`maintainers/maintainer-list.nix` entry from the old branch, resolves the three
+hashes, builds, pushes with `--force-with-lease`, retitles the PR to
+`microclaw: init at <version>` and marks it ready for review.
 
-## Hash Update Workflow
+## Package expression
+
+The canonical expression lives in `nix/nixpkgs/package.nix` and is copied into
+`pkgs/by-name/mi/microclaw/package.nix` (no `all-packages.nix` entry is needed
+for `by-name` packages). Points that differ from a plain `buildRustPackage`:
+
+- **Web UI bundle.** `build.rs` embeds `web/dist` (feature `embedded-web-ui`,
+  on by default) and will try to run `npm` itself. nixpkgs builds have no
+  network, so the expression pre-fetches the npm cache with `fetchNpmDeps`
+  (`npmDepsHash`), runs `npm --prefix web run build` in `preBuild`, and sets
+  `MICROCLAW_SKIP_WEB_BUILD=1` so `build.rs` only verifies the bundle.
+- **Git dependencies.** `Cargo.lock` pins Git revisions of GPUI/Zed crates for
+  the desktop app. `cargoHash` (fetchCargoVendor) vendors them behind one hash;
+  `cargoBuildFlags = [ "--package" "microclaw" ]` keeps the desktop crates out
+  of the actual build. Expect the vendor step to be large the first time.
+- **Three hashes** to resolve on every bump: `src.hash`, `cargoHash`,
+  `npmDeps.hash`. The script does this by looping on `specified:`/`got:` pairs.
+- Linux-only features `journald` and `sqlite-vec` stay behind
+  `stdenv.hostPlatform.isLinux`; Darwin builds must not pull in `udev`.
+- Minimum Rust is `rust-version` in `Cargo.toml` (1.93 today); check that the
+  target nixpkgs branch ships at least that `rustc`.
+
+## Hash Update Workflow (manual)
 
 When new release `vX.Y.Z` is out:
 
-1. Bump `version` and `src.rev`.
-2. Temporarily set:
-   - `hash = lib.fakeHash;`
-   - `cargoHash = lib.fakeHash;`
+1. Bump `version`.
+2. Set `hash`, `cargoHash` and `npmDeps.hash` to `lib.fakeHash` (or distinct
+   placeholders so each error is attributable).
 3. Run build:
 
 ```sh
-nix build .#microclaw
+nix-build -A microclaw
 ```
 
-4. Copy the "got: sha256-..." values from the error output into `hash` and `cargoHash`.
+4. Copy the "got: sha256-..." values from the error output into the field
+   whose "specified:" value matches.
 5. Rebuild until it succeeds.
 
 Automated path from the MicroClaw repo:
 
 ```sh
-scripts/update-nixpkgs.sh
+scripts/update-nixpkgs.sh                                   # bump on a fresh branch
+scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready   # update the open PR
 ```
+
 ## Validation Before Opening Nixpkgs PR
 
 - Build on Linux and Darwin (`x86_64-linux`, `aarch64-darwin` at minimum).
@@ -114,7 +96,7 @@ result/bin/microclaw --help
 
 ## Recommended PR Metadata
 
-- Title: `microclaw: init at <version>` (first) / `microclaw: <old> -> <new>` (bump)
+- Title: `microclaw: init at <version>` (until the init PR merges) / `microclaw: <old> -> <new>` (bump)
 - Include:
   - release notes link
   - local build logs for Linux/Darwin

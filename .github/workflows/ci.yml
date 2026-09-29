@@ -70,8 +70,10 @@ jobs:
       # RUSTSEC-2026-0194/0195: quick-xml DoS advisories, transitive via the
       # typst 0.15 render stack (citationberg/hayagriva, plist/syntect);
       # fixed only in quick-xml >=0.41 which the parents haven't adopted.
+      # RUSTSEC-2026-0292: imbl-sized-chunks 0.1 panic-safety bug, transitive
+      # via matrix-sdk 0.16 -> imbl 6; the fix (imbl 7.0.2) needs matrix-sdk 0.19+.
       # See the matching entries (with rationale) in deny.toml.
-      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0292
       - run: cargo deny check advisories bans licenses
 
   rust-ubuntu:
