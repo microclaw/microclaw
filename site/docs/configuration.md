@@ -97,7 +97,7 @@ At runtime, at least one channel must be enabled:
 | `compact_keep_recent` | `20` | Number of recent messages kept verbatim during compaction |
 | `anthropic_prompt_cache_enabled` | `true` | Add up to 4 `cache_control` breakpoints (system + last 3 messages) to every Anthropic request so multi-turn chats hit the prompt cache. Anthropic-only; OpenAI-compat path is untouched. |
 | `anthropic_prompt_cache_ttl` | `"5m"` | Cache TTL marker for the breakpoints. `"5m"` (default) or `"1h"`; `"1h"` requires extended-cache opt-in on the API key. |
-| `system_prompt_time_detail` | `"date"` | How much live time detail the system prompt carries. `"none"`, `"date"` (default, stable for a whole local day), or `"full"`. Per-turn data (live clock, query-matched memories, ranked skills, mood) is delivered in a transient `<turn_context>` block after the system prompt so the cached prefix stays stable. |
+| `system_prompt_time_detail` | `"date"` | How much live time detail the system prompt carries. `"none"`, `"date"` (default, stable for a whole local day), or `"full"`. Per-turn data (live clock, query-matched memories, ranked skills, mood) is delivered in a transient `<turn_context>` block attached to the latest user message (never persisted) so the system prompt and the earlier history stay cacheable. |
 | `checkpoints_enabled` | `false` | Snapshot the chat's working directory into a shadow git repo under `<data_dir>/checkpoints/<hash>/` at the start of every agent turn. Required for `/rewind`. Needs `git` on PATH. |
 | `reflector_enabled` | `true` | Enable the background memory reflector (see [Memory System](./memory)) |
 | `reflector_interval_mins` | `15` | How often the reflector runs (minutes) |

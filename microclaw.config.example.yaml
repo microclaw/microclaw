@@ -197,7 +197,8 @@ anthropic_prompt_cache_ttl: "5m"
 # The provider caches the system prompt, so anything that changes every turn
 # (a full clock) defeats prompt caching. Per-turn data — the live clock,
 # query-matched memories, ranked skill bodies, mood — is instead delivered in
-# a transient turn-context block after the system prompt.
+# a transient turn-context block attached to the latest user message, so the
+# system prompt and the earlier history stay cacheable.
 #   "none" - no time in the system prompt at all
 #   "date" - local date only (default); stable for a whole local day
 #   "full" - local + UTC timestamps; prefix is invalidated every turn

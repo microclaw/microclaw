@@ -11,8 +11,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - Stabilized the cached prompt prefix so prompt caching actually takes effect
   across turns. The live clock, query-matched memories, ranked skill bodies,
   mood read, verified prior experiences, plugin context, and relationship hint
-  moved out of the system prompt into a transient `<turn_context>` block
-  delivered after it, leaving the cached prefix byte-identical between turns.
+  moved out of the system prompt into a transient `<turn_context>` block that
+  is attached to the latest user message at request time and never persisted,
+  leaving the system prompt and the stored history byte-identical between turns.
 - Stabilized plugin tool ordering by sorting manifests by name, so the tool
   definitions in the cached prefix no longer reshuffle between restarts.
 - Rendered stored message timestamps in `<user_message ts="...">` at whole-second
