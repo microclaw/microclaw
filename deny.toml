@@ -40,6 +40,12 @@ yanked = "deny"
 # RUSTSEC-2026-0247: `bitmaps` is unmaintained (repo archived 2026-05-03) —
 #   transitive via matrix-sdk -> imbl; no first-party use and no safe upgrade
 #   available until matrix-sdk's imbl chain migrates off it.
+#
+# RUSTSEC-2026-0292: `imbl-sized-chunks` 0.1 double free / use-after-free when
+#   an element's `Drop` panics inside `Chunk`/`InlineArray` removal — transitive
+#   via matrix-sdk 0.16 -> imbl 6 (behind the non-default `channel-matrix`
+#   feature); imbl only moved to the patched 0.2 line in imbl 7.0.2, which
+#   requires matrix-sdk >= 0.19. Remove when matrix-sdk is bumped to 0.19+.
 ignore = [
   "RUSTSEC-2026-0049",
   "RUSTSEC-2026-0098",
@@ -55,6 +61,7 @@ ignore = [
   "RUSTSEC-2026-0192",
   "RUSTSEC-2026-0206",
   "RUSTSEC-2026-0247",
+  "RUSTSEC-2026-0292",
 ]
 
 [bans]
