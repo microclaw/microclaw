@@ -13,11 +13,12 @@ scripts/update-nixpkgs.sh
 By default, the script will:
 - detect version from `Cargo.toml`
 - clone `<your-gh-user>/nixpkgs` into `/tmp/nixpkgs-<timestamp>`
-- branch from `upstream/nixos-unstable`
-- update `pkgs/by-name/mi/microclaw/package.nix`
-- resolve `hash` and `cargoHash`
+- branch from `upstream/master`
+- update `pkgs/by-name/mi/microclaw/package.nix`, seeding it from
+  `nix/nixpkgs/package.nix` if the package is not upstream yet
+- resolve `hash`, `cargoHash` and `npmDeps.hash`
 - run `nix-build -A microclaw` and `result/bin/microclaw --help`
-- commit, push, and open PR to `NixOS/nixpkgs`
+- commit, push, and open a PR to `NixOS/nixpkgs` (or update the open PR for that branch)
 
 ## Deploy Integration
 
@@ -27,13 +28,24 @@ After release, you can trigger nixpkgs automation with:
 AUTO_NIXPKGS_UPDATE=1 ./deploy.sh
 ```
 
+## Updating the open init PR
+
+nixpkgs reviewers want new versions force-pushed onto the existing PR branch
+(NixOS/nixpkgs#498144, branch `microclaw-init`) rather than a new PR:
+
+```sh
+scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready
+```
+
 ## Useful Flags
 
 ```sh
-scripts/update-nixpkgs.sh --version 0.0.164
+scripts/update-nixpkgs.sh --version 0.6.2
 scripts/update-nixpkgs.sh --draft
+scripts/update-nixpkgs.sh --ready
 scripts/update-nixpkgs.sh --no-pr
 scripts/update-nixpkgs.sh --nixpkgs-dir ~/focus/nixpkgs
+scripts/update-nixpkgs.sh --template nix/nixpkgs/package.nix
 ```
 
 ## Failure Recovery
