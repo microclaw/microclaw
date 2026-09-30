@@ -17,6 +17,7 @@
   pkg-config,
   openssl,
   versionCheckHook,
+  nix-update-script,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -74,6 +75,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   nativeInstallCheckInputs = [ versionCheckHook ];
   doInstallCheck = true;
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Multi-channel agent runtime for Telegram, Discord, Slack, Feishu, and Web";
