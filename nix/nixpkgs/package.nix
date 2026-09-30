@@ -16,9 +16,7 @@
   nodejs,
   pkg-config,
   openssl,
-  sqlite,
-  libsodium,
-  udev,
+  versionCheckHook,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -55,12 +53,9 @@ rustPlatform.buildRustPackage (finalAttrs: {
     npmHooks.npmConfigHook
   ];
 
-  buildInputs = [
-    openssl
-    sqlite
-    libsodium
-  ]
-  ++ lib.optionals stdenv.hostPlatform.isLinux [ udev ];
+  # rusqlite and sqlite-vec compile their bundled SQLite; native-tls links
+  # OpenSSL on Linux (Security.framework on Darwin).
+  buildInputs = lib.optionals stdenv.hostPlatform.isLinux [ openssl ];
 
   buildFeatures = lib.optionals stdenv.hostPlatform.isLinux [
     "journald"
@@ -76,6 +71,9 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   # The test suite needs a writable data dir and live provider endpoints.
   doCheck = false;
+
+  nativeInstallCheckInputs = [ versionCheckHook ];
+  doInstallCheck = true;
 
   meta = {
     description = "Multi-channel agent runtime for Telegram, Discord, Slack, Feishu, and Web";
