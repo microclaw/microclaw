@@ -70,8 +70,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
   '';
   env.MICROCLAW_SKIP_WEB_BUILD = "1";
 
-  # The test suite needs a writable data dir and live provider endpoints.
-  doCheck = false;
+  cargoTestFlags = finalAttrs.cargoBuildFlags;
+  checkFlags = [
+    # Resolves api.openai.com through DNS; the build sandbox has no network.
+    "--skip=media_client_accepts_public_https"
+  ];
 
   nativeInstallCheckInputs = [ versionCheckHook ];
   doInstallCheck = true;
