@@ -52,6 +52,8 @@ for `by-name` packages). Points that differ from a plain `buildRustPackage`:
   `stdenv.hostPlatform.isLinux`. The only native library linked is OpenSSL
   (SQLite is bundled by rusqlite/sqlite-vec); don't add `buildInputs` that
   `Cargo.lock` doesn't actually need.
+- `__structuredAttrs = true;` is required for new packages (nixpkgs-vet
+  NPV-166, checked by the `Lint / nixpkgs-vet` CI job).
 - Tests run in the sandbox (`cargoTestFlags` scoped to the server package).
   Tests that need network go in `checkFlags` as `--skip=...`; today that is
   only `media_client_accepts_public_https` (DNS lookup).
