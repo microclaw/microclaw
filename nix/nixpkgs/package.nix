@@ -54,9 +54,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
     npmHooks.npmConfigHook
   ];
 
-  # rusqlite and sqlite-vec compile their bundled SQLite; native-tls links
-  # OpenSSL on Linux (Security.framework on Darwin).
-  buildInputs = lib.optionals stdenv.hostPlatform.isLinux [ openssl ];
+  # rusqlite and sqlite-vec compile their bundled SQLite; only OpenSSL is linked.
+  buildInputs = [ openssl ];
 
   buildFeatures = lib.optionals stdenv.hostPlatform.isLinux [
     "journald"
