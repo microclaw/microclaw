@@ -16,9 +16,8 @@
   nodejs,
   pkg-config,
   openssl,
-  sqlite,
-  libsodium,
-  udev,
+  versionCheckHook,
+  nix-update-script,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -55,12 +54,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
     npmHooks.npmConfigHook
   ];
 
-  buildInputs = [
-    openssl
-    sqlite
-    libsodium
-  ]
-  ++ lib.optionals stdenv.hostPlatform.isLinux [ udev ];
+  # rusqlite and sqlite-vec compile their bundled SQLite; only OpenSSL is linked.
+  buildInputs = [ openssl ];
 
   buildFeatures = lib.optionals stdenv.hostPlatform.isLinux [
     "journald"
@@ -74,8 +69,16 @@ rustPlatform.buildRustPackage (finalAttrs: {
   '';
   env.MICROCLAW_SKIP_WEB_BUILD = "1";
 
-  # The test suite needs a writable data dir and live provider endpoints.
-  doCheck = false;
+  cargoTestFlags = finalAttrs.cargoBuildFlags;
+  checkFlags = [
+    # Resolves api.openai.com through DNS; the build sandbox has no network.
+    "--skip=media_client_accepts_public_https"
+  ];
+
+  nativeInstallCheckInputs = [ versionCheckHook ];
+  doInstallCheck = true;
+
+  passthru.updateScript = nix-update-script { };
 
   meta = {
     description = "Multi-channel agent runtime for Telegram, Discord, Slack, Feishu, and Web";
