@@ -26,12 +26,12 @@
     "use-stick-to-bottom": "^1.1.6"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.1",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^6.0.5",
+    "@vitejs/plugin-react": "^6.1.1",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.6.3",
-    "vite": "^8.2.1"
+    "vite": "^8.3.1"
   }
 }
