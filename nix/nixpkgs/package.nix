@@ -24,6 +24,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   pname = "microclaw";
   version = "0.7.0";
 
+  __structuredAttrs = true;
+
   src = fetchFromGitHub {
     owner = "microclaw";
     repo = "microclaw";
