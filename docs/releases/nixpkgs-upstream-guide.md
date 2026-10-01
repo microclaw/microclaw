@@ -49,7 +49,15 @@ for `by-name` packages). Points that differ from a plain `buildRustPackage`:
 - **Three hashes** to resolve on every bump: `src.hash`, `cargoHash`,
   `npmDeps.hash`. The script does this by looping on `specified:`/`got:` pairs.
 - Linux-only features `journald` and `sqlite-vec` stay behind
-  `stdenv.hostPlatform.isLinux`; Darwin builds must not pull in `udev`.
+  `stdenv.hostPlatform.isLinux`. The only native library linked is OpenSSL
+  (SQLite is bundled by rusqlite/sqlite-vec); don't add `buildInputs` that
+  `Cargo.lock` doesn't actually need.
+- Tests run in the sandbox (`cargoTestFlags` scoped to the server package).
+  Tests that need network go in `checkFlags` as `--skip=...`; today that is
+  only `media_client_accepts_public_https` (DNS lookup).
+- `versionCheckHook` runs `microclaw --version` after install, and
+  `passthru.updateScript = nix-update-script { }` lets the nixpkgs update
+  bot bump version and hashes once the package is merged.
 - Minimum Rust is `rust-version` in `Cargo.toml` (1.93 today); check that the
   target nixpkgs branch ships at least that `rustc`.
 
@@ -86,7 +94,7 @@ scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready   # upda
 result/bin/microclaw --help
 ```
 
-- Confirm no Linux-only deps are used unguarded on Darwin (`udev`, `journald`).
+- Confirm Linux-only features (`journald`, `sqlite-vec`) stay guarded on Darwin.
 
 ## Ongoing Maintenance Policy
 
