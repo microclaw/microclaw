@@ -165,6 +165,15 @@ compact_keep_recent: 20
 # diff_max_lines: 120          # cap on rendered diff lines
 # file_diffs_in_chat: true     # set false to keep diffs out of chat channels
 
+# Governance files: write_file/edit_file refuse to modify the config file,
+# AGENTS.md / SOUL.md / USER.md under data_dir, souls_dir, context_dir and the
+# path allowlist, so a prompt-injected agent cannot rewrite memory or policy
+# that is injected into other users' chats. write_memory keeps its own scope
+# checks. Note this guards the file tools only; with sandbox.mode off, bash
+# still runs as the service user, so untrusted multi-user setups need the
+# sandbox or OS-level permissions as well.
+# allow_governance_file_writes: false
+
 # Context-pressure compaction: compact the session mid-turn once a request
 # consumes this share of the model's context window (0 disables; the
 # compact-and-retry on provider "context length exceeded" errors always applies).

@@ -41,6 +41,7 @@ fn minimal_config() -> Config {
         max_session_messages: 40,
         diff_max_lines: 120,
         file_diffs_in_chat: true,
+        allow_governance_file_writes: false,
         model_context_window: 200_000,
         context_pressure_compact_pct: 85,
         self_recheck: microclaw::config::SelfRecheckConfig::default(),
