@@ -45,6 +45,10 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+      # Zed git crates must move together with gpui-component's rev (wrap_line
+      # API, see #500); the lockfile keeps them on the rev it builds against.
+      - dependency-name: "gpui"
+      - dependency-name: "gpui_platform"
 
   - package-ecosystem: "npm"
     directory: "/web"
@@ -74,3 +78,6 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+      # 0.15 drops useThread, still imported by @assistant-ui/react-ui (see #496).
+      - dependency-name: "@assistant-ui/react"
+        versions: [">=0.15.0"]
