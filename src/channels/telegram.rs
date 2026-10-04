@@ -902,17 +902,9 @@ async fn handle_message(
     // prepend the referenced content so terse follow-ups keep their referent
     // even after the original scrolled out of the session window.
     if !voice_inbound {
-        if let Some(replied) = msg.reply_to_message() {
-            let quoted_text = replied
-                .text()
-                .or_else(|| replied.caption())
-                .unwrap_or_default();
-            let quoted_author = replied
-                .from
-                .as_ref()
-                .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone()));
+        if let Some((quoted_author, quoted_text)) = reply_quote_context(&msg) {
             if let Some(prefix) =
-                microclaw_core::text::quoted_context_prefix(quoted_author.as_deref(), quoted_text)
+                microclaw_core::text::quoted_context_prefix(quoted_author.as_deref(), &quoted_text)
             {
                 text = format!("{prefix}{text}");
             }
@@ -1707,6 +1699,46 @@ fn guess_image_media_type(data: &[u8]) -> String {
     }
 }
 
+/// Resolve the quoted context a reply refers to, as `(author, text)`.
+///
+/// A partial quote populates `quote` and leaves `reply_to_message` empty, so
+/// consulting only the latter drops the referent entirely. `quote_text` and
+/// `replied_body` are the candidates in priority order; blank ones are skipped.
+fn pick_reply_quote(
+    quote_text: Option<&str>,
+    quoted_author: Option<String>,
+    replied_body: Option<&str>,
+    replied_author: Option<String>,
+) -> Option<(Option<String>, String)> {
+    for (body, author) in [
+        (quote_text, quoted_author),
+        (replied_body, replied_author),
+    ] {
+        if let Some(body) = body {
+            if !body.trim().is_empty() {
+                return Some((author, body.to_string()));
+            }
+        }
+    }
+    None
+}
+
+fn reply_quote_context(msg: &Message) -> Option<(Option<String>, String)> {
+    let author = |m: &Message| {
+        m.from
+            .as_ref()
+            .map(|u| u.username.clone().unwrap_or_else(|| u.first_name.clone()))
+    };
+    let replied = msg.reply_to_message();
+
+    pick_reply_quote(
+        msg.quote().map(|q| q.text.as_str()),
+        replied.and_then(author),
+        replied.and_then(|m| m.text().or_else(|| m.caption())),
+        replied.and_then(author),
+    )
+}
+
 fn split_response_text(text: &str) -> Vec<String> {
     const MAX_LEN: usize = 4096;
 
@@ -2162,6 +2194,48 @@ mod tests {
     use crate::config::SystemPromptTimeDetail;
     use microclaw_core::llm_types::Message;
     use microclaw_engine::storage::db::StoredMessage;
+
+    /// A partial quote populates `quote` with no `reply_to_message`; the
+    /// referent must survive or a terse reply reaches the model contextless.
+    #[test]
+    fn test_reply_quote_context_prefers_partial_quote() {
+        let got = pick_reply_quote(Some("only this paragraph"), None, None, None).unwrap();
+        assert_eq!(got.1, "only this paragraph");
+    }
+
+    #[test]
+    fn test_reply_quote_context_falls_back_to_whole_message() {
+        let got = pick_reply_quote(
+            None,
+            None,
+            Some("full original body"),
+            Some("bertil".into()),
+        )
+        .unwrap();
+        assert_eq!(got.1, "full original body");
+        assert_eq!(got.0.as_deref(), Some("bertil"));
+    }
+
+    /// With both present the sender's selection is the actual referent, so the
+    /// full body must not win.
+    #[test]
+    fn test_reply_quote_context_partial_quote_wins_over_body() {
+        let got = pick_reply_quote(
+            Some("selected fragment"),
+            None,
+            Some("much longer original body"),
+            Some("bertil".into()),
+        )
+        .unwrap();
+        assert_eq!(got.1, "selected fragment");
+    }
+
+    #[test]
+    fn test_reply_quote_context_blank_candidates_are_skipped() {
+        assert!(pick_reply_quote(Some("   "), None, Some("body"), None).is_some());
+        assert!(pick_reply_quote(Some(""), None, None, None).is_none());
+        assert!(pick_reply_quote(None, None, None, None).is_none());
+    }
 
     fn make_msg(id: &str, sender: &str, content: &str, is_bot: bool, ts: &str) -> StoredMessage {
         StoredMessage {
