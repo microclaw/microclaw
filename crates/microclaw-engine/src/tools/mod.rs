@@ -68,6 +68,7 @@ pub const IDEMPOTENT_TOOLS: &[&str] = &[
 use crate::config::Config;
 use crate::internal::channels::channel_adapter::ChannelRegistry;
 use crate::internal::storage::db::Database;
+use crate::internal::tool_runtime::path_guard::{self, GovernanceGuard};
 pub use crate::internal::tool_runtime::runtime::{
     auth_context_from_input, authorize_chat_access, resolve_tool_path, resolve_tool_working_dir,
     schema_object, tool_execution_policy, tool_risk, validate_execution_policy, Tool,
@@ -190,14 +191,16 @@ impl ToolRegistry {
                     &config.working_dir,
                     config.working_dir_isolation,
                 )
-                .with_diff_max_lines(config.diff_max_lines),
+                .with_diff_max_lines(config.diff_max_lines)
+                .with_governance_guard(Self::governance_guard(config)),
             ),
             Box::new(
                 edit_file::EditFileTool::new_with_isolation(
                     &config.working_dir,
                     config.working_dir_isolation,
                 )
-                .with_diff_max_lines(config.diff_max_lines),
+                .with_diff_max_lines(config.diff_max_lines)
+                .with_governance_guard(Self::governance_guard(config)),
             ),
             Box::new(glob::GlobTool::new_with_isolation(
                 &config.working_dir,
@@ -455,14 +458,16 @@ impl ToolRegistry {
                     &config.working_dir,
                     config.working_dir_isolation,
                 )
-                .with_diff_max_lines(config.diff_max_lines),
+                .with_diff_max_lines(config.diff_max_lines)
+                .with_governance_guard(Self::governance_guard(config)),
             ),
             Box::new(
                 edit_file::EditFileTool::new_with_isolation(
                     &config.working_dir,
                     config.working_dir_isolation,
                 )
-                .with_diff_max_lines(config.diff_max_lines),
+                .with_diff_max_lines(config.diff_max_lines)
+                .with_governance_guard(Self::governance_guard(config)),
             ),
             Box::new(glob::GlobTool::new_with_isolation(
                 &config.working_dir,
@@ -556,6 +561,58 @@ impl ToolRegistry {
             audit_db,
             risk_overrides: std::collections::HashMap::new(),
         }
+    }
+
+    /// Paths the generic file tools must not modify (issue #501): the agent's
+    /// own config, memory, soul and context files, plus the path allowlist.
+    fn governance_guard(config: &Config) -> GovernanceGuard {
+        if config.allow_governance_file_writes {
+            return GovernanceGuard::default();
+        }
+        let data_root = config.data_root_dir();
+        let souls_dir = PathBuf::from(config.souls_data_dir());
+        let mut guard = GovernanceGuard::default()
+            .protect_data_root(&data_root)
+            .protect_data_root(config.runtime_data_dir())
+            .exempt(&config.working_dir)
+            .exempt(config.skills_data_dir())
+            .protect_dir(&souls_dir)
+            .protect_dir(match &config.context_dir {
+                Some(dir) => PathBuf::from(shellexpand::tilde(dir).into_owned()),
+                None => data_root.join("context"),
+            });
+        if data_root.file_name().and_then(|n| n.to_str()) == Some("runtime") {
+            if let Some(parent) = data_root.parent() {
+                guard = guard.protect_data_root(parent);
+            }
+        }
+        if let Ok(Some(config_path)) = Config::resolve_config_path() {
+            guard = guard.protect_file(config_path);
+        }
+        if let Some(allowlist) = path_guard::path_allowlist_file() {
+            guard = guard.protect_file(allowlist);
+        }
+        // ./SOUL.md in the process directory is the last soul fallback.
+        guard = guard.protect_file("SOUL.md");
+        let mut soul_paths: Vec<String> = config.soul_path.iter().cloned().collect();
+        for (name, value) in &config.channels {
+            soul_paths.extend(config.soul_path_for_channel(name));
+            if let Some(accounts) = value.get("accounts").and_then(|v| v.as_mapping()) {
+                for account in accounts.keys().filter_map(|k| k.as_str()) {
+                    soul_paths.extend(config.soul_path_for_channel(&format!("{name}.{account}")));
+                }
+            }
+        }
+        for soul in soul_paths {
+            let configured = PathBuf::from(shellexpand::tilde(&soul).into_owned());
+            if configured.is_relative() {
+                guard = guard
+                    .protect_file(data_root.join(&configured))
+                    .protect_file(souls_dir.join(&configured));
+            }
+            guard = guard.protect_file(configured);
+        }
+        guard
     }
 
     fn build_extra_mounts(working_dir: &PathBuf, skills_data_dir: &str) -> Vec<ExtraMount> {

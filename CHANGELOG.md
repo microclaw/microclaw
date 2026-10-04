@@ -6,6 +6,18 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Security
+
+- `write_file` and `edit_file` now refuse to modify MicroClaw's own governance
+  files: the active config file, `AGENTS.md` / `SOUL.md` / `USER.md` under the
+  data directory, `souls_dir`, `context_dir` (and chat-scoped `context/`
+  folders), configured `soul_path`s and the path allowlist. Previously these
+  tools sidestepped the `write_memory` scope checks, so a prompt-injected agent
+  could plant global memory that reached other users' chats (#501). Set
+  `allow_governance_file_writes: true` to restore the old behavior. This guards
+  the file tools only; `bash` without the sandbox still runs as the service
+  user.
+
 ### Fixed
 
 - Removed the retired `Build (Release)` job from the release finalizer CI gate,

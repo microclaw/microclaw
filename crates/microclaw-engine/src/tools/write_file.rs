@@ -12,6 +12,7 @@ pub struct WriteFileTool {
     working_dir: PathBuf,
     working_dir_isolation: WorkingDirIsolation,
     diff_max_lines: usize,
+    governance_guard: crate::internal::tool_runtime::path_guard::GovernanceGuard,
 }
 
 impl WriteFileTool {
@@ -27,11 +28,20 @@ impl WriteFileTool {
             working_dir: PathBuf::from(working_dir),
             working_dir_isolation,
             diff_max_lines: microclaw_core::diff::DEFAULT_DIFF_MAX_LINES,
+            governance_guard: Default::default(),
         }
     }
 
     pub fn with_diff_max_lines(mut self, max_lines: usize) -> Self {
         self.diff_max_lines = max_lines;
+        self
+    }
+
+    pub fn with_governance_guard(
+        mut self,
+        guard: crate::internal::tool_runtime::path_guard::GovernanceGuard,
+    ) -> Self {
+        self.governance_guard = guard;
         self
     }
 }
@@ -74,6 +84,9 @@ impl Tool for WriteFileTool {
 
         if let Err(msg) = crate::internal::tool_runtime::path_guard::check_path(&resolved_path_str)
         {
+            return ToolResult::error(msg);
+        }
+        if let Err(msg) = self.governance_guard.check_write(&resolved_path) {
             return ToolResult::error(msg);
         }
 
@@ -139,6 +152,29 @@ impl Tool for WriteFileTool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn test_write_file_refuses_governance_files() {
+        let dir = std::env::temp_dir().join(format!("microclaw_wf_gov_{}", uuid::Uuid::new_v4()));
+        let memory = dir.join("runtime/groups/AGENTS.md");
+        let guard = crate::internal::tool_runtime::path_guard::GovernanceGuard::default()
+            .protect_data_root(&dir)
+            .exempt(dir.join("working_dir"));
+        let tool = WriteFileTool::new(dir.join("working_dir").to_str().unwrap())
+            .with_governance_guard(guard);
+        let result = tool
+            .execute(json!({"path": memory.to_str().unwrap(), "content": "injected"}))
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("governance file"));
+        assert!(!memory.exists());
+
+        let result = tool
+            .execute(json!({"path": "notes.md", "content": "ok"}))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_write_file_definition_prefers_relative_paths() {

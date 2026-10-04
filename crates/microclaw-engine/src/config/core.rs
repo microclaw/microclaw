@@ -237,6 +237,13 @@ pub struct Config {
     /// progress updates. The web UI always receives diff events. Default: true.
     #[serde(default = "default_file_diffs_in_chat")]
     pub file_diffs_in_chat: bool,
+    /// Let write_file / edit_file modify MicroClaw's own governance files
+    /// (the config file, AGENTS.md / SOUL.md / USER.md under data_dir, soul
+    /// and context directories, the path allowlist). Off by default: those
+    /// files are injected into every chat's prompt or define access policy,
+    /// so only scoped tools such as write_memory may change them.
+    #[serde(default)]
+    pub allow_governance_file_writes: bool,
     /// Approximate context window (tokens) of the configured model, used by
     /// the mid-turn context-pressure check. Default: 200000.
     #[serde(default = "default_model_context_window")]
@@ -1004,6 +1011,7 @@ impl Config {
             max_session_messages: 40,
             diff_max_lines: default_diff_max_lines(),
             file_diffs_in_chat: default_file_diffs_in_chat(),
+            allow_governance_file_writes: false,
             model_context_window: default_model_context_window(),
             context_pressure_compact_pct: default_context_pressure_compact_pct(),
             self_recheck: SelfRecheckConfig::default(),
