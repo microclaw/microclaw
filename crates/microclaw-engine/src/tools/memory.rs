@@ -325,9 +325,9 @@ impl Tool for WriteMemoryTool {
                     {
                         if memory_quality::memory_quality_ok(&normalized) {
                             let chat_id = memory_chat_id;
-                            if let Ok(memory_id) = self
+                            if let Ok((memory_id, _inserted)) = self
                                 .memory_backend
-                                .insert_memory_with_metadata(
+                                .insert_memory_dedup_with_metadata(
                                     chat_id,
                                     &normalized,
                                     "KNOWLEDGE",
@@ -529,6 +529,180 @@ mod tests {
         assert!(content.contains("昵称: 大老板"));
         assert!(content.contains("昵称: Bob哥"));
         assert!(!content.contains("昵称: 老板"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Live (non-archived) mirror rows for `write_memory`. Archived rows are
+    /// excluded because supersede-based versioning deliberately keeps them.
+    fn write_memory_rows(db: &Database, chat_id: Option<i64>) -> Vec<(i64, String)> {
+        db.get_all_memories_for_chat(chat_id)
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.source == "write_memory_tool" && !m.is_archived)
+            .map(|m| (m.id, m.content))
+            .collect()
+    }
+
+    /// Regression: rewriting a scope doc with unchanged text used to append a
+    /// new `memories` row every call.
+    #[tokio::test]
+    async fn test_write_memory_repeat_identical_content_is_idempotent() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+        let auth = json!({
+            "caller_channel": "feishu.ops",
+            "caller_chat_id": 42,
+            "control_chat_ids": []
+        });
+
+        for _ in 0..3 {
+            let r = tool
+                .execute(json!({
+                    "scope": "bot",
+                    "content": "# Gunvor — delat hushållsminne\nSmulan needs medicine.",
+                    "__microclaw_auth": auth
+                }))
+                .await;
+            assert!(!r.is_error, "{}", r.content);
+        }
+
+        let rows = write_memory_rows(&db, None);
+        assert_eq!(
+            rows.len(),
+            1,
+            "repeated identical writes must not duplicate rows"
+        );
+        assert_eq!(
+            rows[0].1, "# Gunvor — delat hushållsminne Smulan needs medicine.",
+            "content is whitespace-normalized before it reaches the table"
+        );
+
+        let file = std::fs::read_to_string(dir.join("groups").join("feishu.ops").join("AGENTS.md"))
+            .unwrap();
+        assert_eq!(file.matches("Smulan needs medicine.").count(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Distinct content in the same scope must NOT collapse into one row: chat
+    /// scope writes one row per person, so a scope key would lose facts.
+    #[tokio::test]
+    async fn test_write_memory_distinct_content_coexists() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+        let auth = json!({
+            "caller_channel": "feishu.ops",
+            "caller_chat_id": 42,
+            "control_chat_ids": []
+        });
+
+        for body in [
+            "Niklas litt(er) every other day",
+            "Sara gives Smulan the morning medicine",
+            "Kontoret uses microdos-städning",
+        ] {
+            let r = tool
+                .execute(json!({
+                    "scope": "bot",
+                    "content": body,
+                    "__microclaw_auth": auth
+                }))
+                .await;
+            assert!(!r.is_error, "{}", r.content);
+        }
+
+        let rows = write_memory_rows(&db, None);
+        assert_eq!(rows.len(), 3, "distinct facts must each keep their own row");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Archive-based versioning must keep working: `supersede_memory` keeps the
+    /// old value as an archived row. Dedup only matches live rows, so an
+    /// archived row must never be revived or block a fresh insert.
+    #[tokio::test]
+    async fn test_write_memory_dedup_ignores_archived_rows() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+        let auth = json!({
+            "caller_channel": "feishu.ops",
+            "caller_chat_id": 42,
+            "control_chat_ids": []
+        });
+
+        let r = tool
+            .execute(json!({
+                "scope": "bot",
+                "content": "db port is 5433",
+                "__microclaw_auth": auth
+            }))
+            .await;
+        assert!(!r.is_error, "{}", r.content);
+
+        let first = write_memory_rows(&db, None)[0].0;
+        assert!(db.archive_memory(first).unwrap(), "archive must succeed");
+
+        let r = tool
+            .execute(json!({
+                "scope": "bot",
+                "content": "db port is 5433",
+                "__microclaw_auth": auth
+            }))
+            .await;
+        assert!(!r.is_error, "{}", r.content);
+
+        let all = db.get_all_memories_for_chat(None).unwrap();
+        let archived: Vec<_> = all.iter().filter(|m| m.is_archived).collect();
+        let live = write_memory_rows(&db, None);
+        assert_eq!(archived.len(), 1, "superseded version must stay archived");
+        assert_eq!(
+            live.len(),
+            1,
+            "re-stating an archived fact creates a new live row"
+        );
+        assert_ne!(
+            live[0].0, first,
+            "new live row must not reuse the archived id"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The dedup key includes `chat_id`, so two chats in the same bot keep
+    /// independent mirrors instead of clobbering each other.
+    #[tokio::test]
+    async fn test_write_memory_upsert_is_scoped_per_chat() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        db.resolve_or_create_chat_id("web", "42", Some("web-42"), "web")
+            .unwrap();
+        db.resolve_or_create_chat_id("web", "43", Some("web-43"), "web")
+            .unwrap();
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+
+        store_user_message(&db, 42, "alice", "hi");
+        store_user_message(&db, 43, "bob", "hi");
+        for chat_id in [42, 43] {
+            let r = tool
+                .execute(json!({
+                    "scope": "chat",
+                    "chat_id": chat_id,
+                    "content": "## Person: someone"
+                }))
+                .await;
+            assert!(!r.is_error, "{}", r.content);
+        }
+
+        assert_eq!(write_memory_rows(&db, Some(42)).len(), 1);
+        assert_eq!(write_memory_rows(&db, Some(43)).len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

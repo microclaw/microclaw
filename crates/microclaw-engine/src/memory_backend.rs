@@ -367,6 +367,36 @@ impl MemoryBackend {
             .await
     }
 
+    /// Insert a memory, reusing an identical live row when one exists.
+    /// See [`MemoryProvider::insert_memory_dedup_with_metadata`].
+    pub async fn insert_memory_dedup_with_metadata(
+        &self,
+        chat_id: Option<i64>,
+        content: &str,
+        category: &str,
+        source: &str,
+        confidence: f64,
+    ) -> Result<(i64, bool), MicroClawError> {
+        if !self.data_dir.is_empty() {
+            audit_memory_write(
+                &self.data_dir,
+                serde_json::json!({
+                    "op": "insert_dedup",
+                    "chat_id": chat_id,
+                    "category": category,
+                    "source": source,
+                    "confidence": confidence,
+                    "content_len": content.len(),
+                    "content_preview": &content[..floor_char_boundary(content, 100)],
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                }),
+            );
+        }
+        self.provider
+            .insert_memory_dedup_with_metadata(chat_id, content, category, source, confidence)
+            .await
+    }
+
     pub async fn update_memory_with_metadata(
         &self,
         id: i64,
@@ -462,6 +492,23 @@ pub trait MemoryProvider: Send + Sync {
         source: &str,
         confidence: f64,
     ) -> Result<i64, MicroClawError>;
+
+    /// Insert a memory, reusing an identical live row when one exists.
+    /// Returns `(id, inserted)`. Defaults to a plain insert so providers
+    /// without dedup semantics (MCP, fallback) keep their current behaviour.
+    async fn insert_memory_dedup_with_metadata(
+        &self,
+        chat_id: Option<i64>,
+        content: &str,
+        category: &str,
+        source: &str,
+        confidence: f64,
+    ) -> Result<(i64, bool), MicroClawError> {
+        let id = self
+            .insert_memory_with_metadata(chat_id, content, category, source, confidence)
+            .await?;
+        Ok((id, true))
+    }
 
     async fn update_memory_with_metadata(
         &self,
@@ -658,6 +705,23 @@ impl MemoryProvider for SqliteMemoryProvider {
         let src = source.to_string();
         call_blocking(self.db.clone(), move |db| {
             db.insert_memory_with_metadata(chat_id, &text, &cat, &src, confidence)
+        })
+        .await
+    }
+
+    async fn insert_memory_dedup_with_metadata(
+        &self,
+        chat_id: Option<i64>,
+        content: &str,
+        category: &str,
+        source: &str,
+        confidence: f64,
+    ) -> Result<(i64, bool), MicroClawError> {
+        let text = content.to_string();
+        let cat = category.to_string();
+        let src = source.to_string();
+        call_blocking(self.db.clone(), move |db| {
+            db.insert_memory_dedup_with_metadata(chat_id, &text, &cat, &src, confidence)
         })
         .await
     }

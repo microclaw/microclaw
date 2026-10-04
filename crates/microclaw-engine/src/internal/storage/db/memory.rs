@@ -79,6 +79,59 @@ pub struct MemoryInjectionLog {
     pub tokens_est: i64,
 }
 
+fn chat_ref(
+    conn: &Connection,
+    chat_id: Option<i64>,
+) -> Result<(Option<String>, Option<String>), MicroClawError> {
+    let Some(cid) = chat_id else {
+        return Ok((None, None));
+    };
+    Ok(conn
+        .query_row(
+            "SELECT channel, external_chat_id FROM chats WHERE chat_id = ?1",
+            params![cid],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .optional()?
+        .unwrap_or((None, None)))
+}
+
+fn insert_memory_row(
+    conn: &Connection,
+    chat_id: Option<i64>,
+    content: &str,
+    category: &str,
+    source: &str,
+    confidence: f64,
+    now: &str,
+    chat_channel: Option<String>,
+    external_chat_id: Option<String>,
+) -> Result<(), MicroClawError> {
+    conn.execute(
+        "INSERT INTO memories (
+            chat_id, content, category, created_at, updated_at, embedding_model,
+            confidence, source, last_seen_at, is_archived, archived_at,
+            chat_channel, external_chat_id
+        ) VALUES (?1, ?2, ?3, ?4, ?4, NULL, ?5, ?6, ?4, 0, NULL, ?7, ?8)",
+        params![
+            chat_id,
+            content,
+            category,
+            now,
+            confidence,
+            source,
+            chat_channel,
+            external_chat_id
+        ],
+    )?;
+    Ok(())
+}
+
 impl Database {
     /// Clear memory state for a chat without deleting chat/session/message history.
     /// This removes structured memories and reflector bookkeeping for the chat.
@@ -161,40 +214,73 @@ impl Database {
     ) -> Result<i64, MicroClawError> {
         let conn = self.lock_conn();
         let now = chrono::Utc::now().to_rfc3339();
-        let (chat_channel, external_chat_id) = if let Some(cid) = chat_id {
-            conn.query_row(
-                "SELECT channel, external_chat_id FROM chats WHERE chat_id = ?1",
-                params![cid],
-                |row| {
-                    Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                    ))
-                },
-            )
-            .optional()?
-            .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
-        conn.execute(
-            "INSERT INTO memories (
-                chat_id, content, category, created_at, updated_at, embedding_model,
-                confidence, source, last_seen_at, is_archived, archived_at,
-                chat_channel, external_chat_id
-            ) VALUES (?1, ?2, ?3, ?4, ?4, NULL, ?5, ?6, ?4, 0, NULL, ?7, ?8)",
-            params![
-                chat_id,
-                content,
-                category,
-                now,
-                confidence.clamp(0.0, 1.0),
-                source,
-                chat_channel,
-                external_chat_id
-            ],
+        let (chat_channel, external_chat_id) = chat_ref(&conn, chat_id)?;
+        insert_memory_row(
+            &conn,
+            chat_id,
+            content,
+            category,
+            source,
+            confidence.clamp(0.0, 1.0),
+            &now,
+            chat_channel,
+            external_chat_id,
         )?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// Insert a memory, reusing an existing live row when
+    /// `(chat_id, category, source, content)` matches exactly.
+    ///
+    /// Keyed on content rather than scope: chat scope holds one row per person,
+    /// so a scope key would discard distinct facts. Archived rows are excluded,
+    /// leaving `supersede_memory` history intact.
+    pub fn insert_memory_dedup_with_metadata(
+        &self,
+        chat_id: Option<i64>,
+        content: &str,
+        category: &str,
+        source: &str,
+        confidence: f64,
+    ) -> Result<(i64, bool), MicroClawError> {
+        let conn = self.lock_conn();
+        let now = chrono::Utc::now().to_rfc3339();
+        let confidence = confidence.clamp(0.0, 1.0);
+
+        let existing: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM memories
+                 WHERE chat_id IS ?1 AND category = ?2 AND source = ?3 AND content = ?4
+                   AND is_archived = 0
+                 ORDER BY id LIMIT 1",
+                params![chat_id, category, source, content],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+
+        if let Some(id) = existing {
+            conn.execute(
+                "UPDATE memories
+                 SET last_seen_at = ?1, updated_at = ?1, confidence = MAX(confidence, ?2)
+                 WHERE id = ?3",
+                params![now, confidence, id],
+            )?;
+            return Ok((id, false));
+        }
+
+        let (chat_channel, external_chat_id) = chat_ref(&conn, chat_id)?;
+        insert_memory_row(
+            &conn,
+            chat_id,
+            content,
+            category,
+            source,
+            confidence,
+            &now,
+            chat_channel,
+            external_chat_id,
+        )?;
+        Ok((conn.last_insert_rowid(), true))
     }
 
     pub fn get_memories_for_context(
