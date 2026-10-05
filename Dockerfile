@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG NODE_VERSION=24
-ARG RUST_VERSION=1.95.0
+ARG RUST_VERSION=1.96.1
 
 # Stage 1: Build embedded web assets so the binary does not depend on checked-in dist files.
 FROM node:${NODE_VERSION}-bookworm-slim AS web-builder

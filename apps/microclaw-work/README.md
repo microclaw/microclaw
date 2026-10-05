@@ -325,5 +325,6 @@ approval already have dated live evidence in the macOS smoke report. Windows
 and Linux portable builds receive automated launch smoke, but direct IME,
 accessibility, installer, and long-session acceptance remain later milestones.
 
-The workspace uses Rust 1.95 because the pinned GPUI revision relies on stable
-standard-library APIs that are unavailable in Rust 1.93.
+The workspace uses Rust 1.96 because the optional Matrix channel's matrix-sdk
+0.19 requires it; the pinned GPUI revision separately needs 1.95 or newer for
+stable standard-library APIs that are unavailable in Rust 1.93.

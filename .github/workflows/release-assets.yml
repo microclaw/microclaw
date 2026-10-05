@@ -304,7 +304,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.95.0
+          toolchain: 1.96.1
 
       - uses: Swatinem/rust-cache@v2
         with:

@@ -1878,7 +1878,7 @@ async fn send_matrix_streaming_response(
                                         let content =
                                             RoomMessageEventContent::text_plain("⏳ Thinking...");
                                         match room.send(content).await {
-                                            Ok(response) => response.event_id.to_string(),
+                                            Ok(sent) => sent.response.event_id.to_string(),
                                             Err(_) => {
                                                 // Fallback to HTTP
                                                 let payload = matrix_message_payload_for_text(

@@ -33,7 +33,7 @@ jobs:
           ref: ${{ inputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.95.0
+          toolchain: 1.96.1
       - name: Validate immutable release inputs
         env:
           EXPECTED_TAG: ${{ inputs.tag }}
@@ -64,7 +64,7 @@ jobs:
         with:
           package: microclaw-core,microclaw-engine,microclaw-sdk
           feature-group: all-features
-          rust-toolchain: 1.95.0
+          rust-toolchain: 1.96.1
       - name: Publish dependency-ordered crate set
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
