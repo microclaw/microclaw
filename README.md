@@ -43,7 +43,7 @@ It is designed for work that lasts longer than one request: multi-step tool use,
 Read the [MicroClaw Work product guide](site/docs/work.md) for the local task
 loop, platform support levels, native settings, safety boundary, and packaging
 model. The current stable delivery baseline is
-[MicroClaw v0.7.0](docs/roadmap/v0.7.0-plan.md).
+[MicroClaw v0.8.0](docs/roadmap/v0.8.0-plan.md).
 
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw conversation view" width="45%" />
@@ -69,7 +69,7 @@ brew install --cask microclaw-work
 ```
 
 Linux x86_64/arm64 and Windows x86_64 portable previews are available from the
-[v0.7.0 release](https://github.com/microclaw/microclaw/releases/tag/v0.7.0).
+[v0.8.0 release](https://github.com/microclaw/microclaw/releases/tag/v0.8.0).
 macOS remains the officially supported Work desktop platform while the preview
 builds complete platform acceptance.
 
@@ -95,7 +95,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.7.0**. It makes prompt caching effective across turns by keeping the system prompt and stored history byte-stable, moves per-turn context into a transient request-time block, and reports prompt-cache token usage so cache effectiveness is observable. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.7.0).
+The latest release is **v0.8.0**. It stops the generic file tools from rewriting MicroClaw's own config, memory, soul and context files, so a prompt-injected agent can no longer plant shared memory for other users; it also stops `write_memory` from piling up duplicate memory rows and forwards Telegram partial quotes to the agent. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.8.0).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -144,7 +144,7 @@ Worker support without pulling in the Server, Web console, concrete channel adap
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.7.0", features = ["full"] }
+microclaw-sdk = { version = "0.8.0", features = ["full"] }
 ```
 
 ```rust

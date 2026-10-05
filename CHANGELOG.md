@@ -6,6 +6,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.8.0 - 2026-10-05
+
+### Changed
+
+- `microclaw-engine` `Config` gained the public `allow_governance_file_writes`
+  field (default `false`). Code that builds `Config` with a struct literal must
+  set it.
+
 ### Security
 
 - `write_file` and `edit_file` now refuse to modify MicroClaw's own governance
@@ -26,6 +34,17 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   byte-identical rows. An existing live row with the same content is now
   refreshed in place (archived history is left alone); re-saving without
   `ttl_days` makes the fact durable again (#505).
+- Telegram replies that quote part of a message now forward the selected text
+  to the agent, and cross-chat quotes forward their text instead of nothing
+  (#506).
+- Dependency updates (cargo patch/minor groups, web dev dependencies).
+  Dependabot now holds `@assistant-ui/react` below 0.15 and
+  `@assistant-ui/react-markdown` below 0.14.8, which `@assistant-ui/react-ui`
+  cannot use yet, and leaves the Zed git crates to move with gpui-component.
+- Security Audit ignores RUSTSEC-2026-0318 and RUSTSEC-2026-0319: both come
+  from matrix-sdk 0.16 behind the non-default `channel-matrix` feature, and the
+  affected code path is not reachable. They are removed with the matrix-sdk
+  0.19 upgrade (#510).
 
 - Removed the retired `Build (Release)` job from the release finalizer CI gate,
   which made the Homebrew tap update wait until it timed out.

@@ -4,6 +4,21 @@
 
 Use this guide for rolling upgrades that may include schema/auth/hooks/session/metrics changes.
 
+### SDK and products v0.8.0
+
+Server, Work, Work Headless, and the three public Rust crates move together to
+`0.8.0`. No schema migration is required.
+
+`write_file` and `edit_file` now refuse to modify MicroClaw's own governance
+files (the active config file, `AGENTS.md` / `SOUL.md` / `USER.md` under the
+data directory, `souls_dir`, `context_dir`, configured `soul_path`s and the path
+allowlist). Use `write_memory` for memory; set `allow_governance_file_writes:
+true` only if you relied on the agent editing those files directly.
+
+SDK consumers that construct `microclaw_engine::config::Config` with a struct
+literal must add `allow_governance_file_writes: false`. Configs loaded from
+YAML default it to `false`; reading the existing fields is unaffected.
+
 ### SDK and products v0.7.0
 
 Server, Work, Work Headless, and the three public Rust crates move together to

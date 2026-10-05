@@ -42,7 +42,7 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，包含�
 
 有关本地任务闭环、平台支持等级、原生设置、安全边界和打包方式，请阅读
 [MicroClaw Work 产品指南](site/docs/work.md)。当前稳定交付基线是
-[MicroClaw v0.7.0](docs/roadmap/v0.7.0-plan.md)。
+[MicroClaw v0.8.0](docs/roadmap/v0.8.0-plan.md)。
 
 <p align="center">
   <img src="screenshots/screenshot1.png" alt="MicroClaw 对话界面" width="45%" />
@@ -68,7 +68,7 @@ brew install --cask microclaw-work
 ```
 
 Linux x86_64/arm64 与 Windows x86_64 portable 预览包可从
-[v0.7.0 版本页面](https://github.com/microclaw/microclaw/releases/tag/v0.7.0)下载。
+[v0.8.0 版本页面](https://github.com/microclaw/microclaw/releases/tag/v0.8.0)下载。
 macOS 仍是 Work 当前正式支持的桌面平台，其他平台继续完成验收。
 
 如需运行 MicroClaw Server，在 macOS 或 Linux 上安装：
@@ -93,7 +93,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.7.0**。它让系统提示词与已存储的历史在多轮之间保持字节级稳定，使 prompt 缓存真正生效；每轮上下文改为在请求时临时附加，并新增 prompt 缓存 token 用量统计，缓存效果可直接观测。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.7.0)。
+最新版本为 **v0.8.0**。通用文件工具不再能改写 MicroClaw 自身的配置、记忆、soul 与 context 文件，被提示注入的智能体无法再向其他用户的对话植入共享记忆；同时修复了 `write_memory` 重复写入记忆行的问题，并把 Telegram 的部分引用回复转交给智能体。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.8.0)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -142,7 +142,7 @@ Web 控制台、具体渠道适配器或 Work UI。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.7.0", features = ["full"] }
+microclaw-sdk = { version = "0.8.0", features = ["full"] }
 ```
 
 ```rust
