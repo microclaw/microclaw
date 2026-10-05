@@ -72,8 +72,11 @@ jobs:
       # fixed only in quick-xml >=0.41 which the parents haven't adopted.
       # RUSTSEC-2026-0292: imbl-sized-chunks 0.1 panic-safety bug, transitive
       # via matrix-sdk 0.16 -> imbl 6; the fix (imbl 7.0.2) needs matrix-sdk 0.19+.
+      # RUSTSEC-2026-0318: matrix-sdk-crypto 0.16 panic in custom to-device
+      # encryption; unreachable here (only caller is behind the disabled
+      # experimental-send-custom-to-device feature), fixed in matrix-sdk 0.19+.
       # See the matching entries (with rationale) in deny.toml.
-      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0292
+      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0292 --ignore RUSTSEC-2026-0318
       - run: cargo deny check advisories bans licenses
 
   rust-ubuntu:
