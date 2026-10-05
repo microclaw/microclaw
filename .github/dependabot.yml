@@ -81,3 +81,6 @@ updates:
       # 0.15 drops useThread, still imported by @assistant-ui/react-ui (see #496).
       - dependency-name: "@assistant-ui/react"
         versions: [">=0.15.0"]
+      # react-markdown 0.14.8+ peers on @assistant-ui/react ^0.15 (see #508).
+      - dependency-name: "@assistant-ui/react-markdown"
+        versions: [">=0.14.8"]
