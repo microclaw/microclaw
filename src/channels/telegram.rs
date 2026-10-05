@@ -1710,10 +1710,7 @@ fn pick_reply_quote(
     replied_body: Option<&str>,
     replied_author: Option<String>,
 ) -> Option<(Option<String>, String)> {
-    for (body, author) in [
-        (quote_text, quoted_author),
-        (replied_body, replied_author),
-    ] {
+    for (body, author) in [(quote_text, quoted_author), (replied_body, replied_author)] {
         if let Some(body) = body {
             if !body.trim().is_empty() {
                 return Some((author, body.to_string()));
