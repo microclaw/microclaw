@@ -20,6 +20,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Fixed
 
+- `write_memory` no longer appends a duplicate structured memory row on every
+  save. Rows store the first 180 characters of the written content, and
+  global/bot writes resend the whole file, so repeated saves produced
+  byte-identical rows. An existing live row with the same content is now
+  refreshed in place (archived history is left alone); re-saving without
+  `ttl_days` makes the fact durable again (#505).
+
 - Removed the retired `Build (Release)` job from the release finalizer CI gate,
   which made the Homebrew tap update wait until it timed out.
 

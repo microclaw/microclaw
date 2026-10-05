@@ -207,6 +207,54 @@ impl WriteMemoryTool {
     }
 }
 
+impl WriteMemoryTool {
+    /// Mirror a write into the structured memory store. The row holds the
+    /// normalized (180-char) digest of the content, and global/bot writes
+    /// resend the whole file, so the digest repeats across saves; an existing
+    /// live row with the same digest is refreshed instead of appending a
+    /// duplicate (#505). Returns the row id and whether it was refreshed.
+    async fn upsert_memory_row(
+        &self,
+        chat_id: Option<i64>,
+        normalized: &str,
+    ) -> Option<(i64, bool)> {
+        let existing = self
+            .memory_backend
+            .get_all_memories_for_chat(chat_id)
+            .await
+            .unwrap_or_default();
+        if let Some(dup) = existing
+            .iter()
+            .find(|m| !m.is_archived && m.content.eq_ignore_ascii_case(normalized))
+        {
+            let updated = self
+                .memory_backend
+                .update_memory_with_metadata(
+                    dup.id,
+                    normalized,
+                    &dup.category,
+                    dup.confidence.max(WRITE_MEMORY_CONFIDENCE),
+                    &dup.source,
+                )
+                .await;
+            return matches!(updated, Ok(true)).then_some((dup.id, true));
+        }
+        self.memory_backend
+            .insert_memory_with_metadata(
+                chat_id,
+                normalized,
+                "KNOWLEDGE",
+                "write_memory_tool",
+                WRITE_MEMORY_CONFIDENCE,
+            )
+            .await
+            .ok()
+            .map(|id| (id, false))
+    }
+}
+
+const WRITE_MEMORY_CONFIDENCE: f64 = 0.85;
+
 #[async_trait]
 impl Tool for WriteMemoryTool {
     fn name(&self) -> &str {
@@ -324,25 +372,20 @@ impl Tool for WriteMemoryTool {
                         memory_quality::normalize_memory_content(&memory_content, 180)
                     {
                         if memory_quality::memory_quality_ok(&normalized) {
-                            let chat_id = memory_chat_id;
-                            if let Ok(memory_id) = self
-                                .memory_backend
-                                .insert_memory_with_metadata(
-                                    chat_id,
-                                    &normalized,
-                                    "KNOWLEDGE",
-                                    "write_memory_tool",
-                                    0.85,
-                                )
-                                .await
+                            if let Some((memory_id, refreshed)) =
+                                self.upsert_memory_row(memory_chat_id, &normalized).await
                             {
-                                if let Some(days) = ttl_days {
+                                let expires_at = ttl_days.map(|days| {
                                     let secs = (days * 86_400.0) as i64;
-                                    let expires_at = (chrono::Utc::now()
-                                        + chrono::Duration::seconds(secs))
-                                    .to_rfc3339();
-                                    let _ =
-                                        self.db.set_memory_expires_at(memory_id, Some(&expires_at));
+                                    (chrono::Utc::now() + chrono::Duration::seconds(secs))
+                                        .to_rfc3339()
+                                });
+                                // A re-save without ttl_days re-asserts the fact as
+                                // durable, so a refreshed row drops its old expiry.
+                                if expires_at.is_some() || refreshed {
+                                    let _ = self
+                                        .db
+                                        .set_memory_expires_at(memory_id, expires_at.as_deref());
                                 }
                             }
                         }
@@ -392,6 +435,93 @@ mod tests {
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
         db.store_message(&msg).unwrap();
+    }
+
+    fn live_rows(db: &Database, chat_id: Option<i64>) -> Vec<crate::internal::storage::db::Memory> {
+        db.get_all_memories_for_chat(chat_id)
+            .unwrap()
+            .into_iter()
+            .filter(|m| !m.is_archived)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_write_memory_repeat_global_doc_keeps_one_row() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+        // Whole-document rewrites that only change past the 180-char digest.
+        let header = "# Household memory\n\nThe family prefers vegetarian dinners on weekdays, \
+                      chores rotate weekly between the two kids, and the shared calendar is the \
+                      source of truth for appointments and school events.";
+        for tail in [
+            "",
+            "\n- bins go out on Tuesday",
+            "\n- bins go out on Wednesday",
+        ] {
+            let result = tool
+                .execute(json!({"scope": "global", "content": format!("{header}{tail}")}))
+                .await;
+            assert!(!result.is_error, "{}", result.content);
+        }
+        assert_eq!(live_rows(&db, None).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_write_memory_distinct_facts_and_chats_stay_separate() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+        for (chat_id, content) in [
+            (300, "User prefers concise answers in English"),
+            (300, "User is learning Rust and async programming"),
+            (300, "User prefers concise answers in English"),
+            (301, "User prefers concise answers in English"),
+        ] {
+            tool.execute(json!({"scope": "chat", "chat_id": chat_id, "content": content}))
+                .await;
+        }
+        assert_eq!(live_rows(&db, Some(300)).len(), 2);
+        assert_eq!(live_rows(&db, Some(301)).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_write_memory_does_not_revive_archived_row() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+        let input = json!({"scope": "chat", "chat_id": 302, "content": "User works night shifts on weekends"});
+        tool.execute(input.clone()).await;
+        let first = live_rows(&db, Some(302))[0].id;
+        db.archive_memory(first).unwrap();
+        tool.execute(input).await;
+        let live = live_rows(&db, Some(302));
+        assert_eq!(live.len(), 1);
+        assert_ne!(live[0].id, first);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_write_memory_resave_updates_expiry() {
+        let dir = test_dir();
+        let db = test_db(&dir);
+        let tool =
+            WriteMemoryTool::new(dir.to_str().unwrap(), db.clone(), test_backend(db.clone()));
+        let content = "User is working from Tokyo this week";
+        tool.execute(json!({"scope": "chat", "chat_id": 303, "content": content, "ttl_days": 7}))
+            .await;
+        assert!(live_rows(&db, Some(303))[0].expires_at.is_some());
+        tool.execute(json!({"scope": "chat", "chat_id": 303, "content": content}))
+            .await;
+        let live = live_rows(&db, Some(303));
+        assert_eq!(live.len(), 1);
+        assert!(live[0].expires_at.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
