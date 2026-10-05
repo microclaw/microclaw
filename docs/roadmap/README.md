@@ -8,7 +8,7 @@ plan exists first.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`v0.8.0-plan.md`](./v0.8.0-plan.md) | **Active** | Multi-user hardening release: governance file guard for file tools, `write_memory` row dedup, Telegram partial-quote forwarding. |
+| [`v0.8.0-plan.md`](./v0.8.0-plan.md) | Delivered | Multi-user hardening release shipped: governance file guard for file tools, `write_memory` row dedup, Telegram partial-quote forwarding. |
 | [`v0.7.0-plan.md`](./v0.7.0-plan.md) | Delivered | Prompt-cache stability release shipped: byte-stable prompt prefix, request-time turn context, and prompt-cache usage accounting. |
 | [`v0.6.1-plan.md`](./v0.6.1-plan.md) | Delivered | Release-quality patch shipped with fully green Server, Work, SDK, container, and documentation pipelines. |
 | [`v0.6.0-plan.md`](./v0.6.0-plan.md) | Delivered | Server, Work, SDK, shared crates, Skills, and controlled delegation aligned and released at 0.6.0. |
