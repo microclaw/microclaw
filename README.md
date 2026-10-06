@@ -9,7 +9,7 @@
 
 [![Website](https://img.shields.io/badge/Website-microclaw.org-blue)](https://microclaw.org)
 [![Latest release](https://img.shields.io/github/v/release/microclaw/microclaw?label=release)](https://github.com/microclaw/microclaw/releases/latest)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/pvmezwkAk5)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/eGzEaP6TzR)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2Fmicroclaw-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/microclaw/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -222,7 +222,7 @@ Localized README files cover the project overview and quick start. The English t
 
 ## Community and contributing
 
-Questions and ideas are welcome on [Discord](https://discord.gg/pvmezwkAk5) and [Reddit](https://www.reddit.com/r/microclaw/). For bugs and code changes, read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Security reports should follow [SECURITY.md](SECURITY.md).
+Questions and ideas are welcome on [Discord](https://discord.gg/eGzEaP6TzR) and [Reddit](https://www.reddit.com/r/microclaw/). For bugs and code changes, read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Security reports should follow [SECURITY.md](SECURITY.md).
 
 ## Star history
 

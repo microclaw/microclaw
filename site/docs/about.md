@@ -10,4 +10,4 @@ MicroClaw is maintained by Everett.
 
 - X (Author): https://x.com/everettjf
 - X (MicroClaw): https://x.com/microclaw
-- Discord: https://discord.gg/pvmezwkAk5
+- Discord: https://discord.gg/eGzEaP6TzR

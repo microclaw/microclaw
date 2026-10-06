@@ -9,7 +9,7 @@
 
 [![官网](https://img.shields.io/badge/Website-microclaw.org-blue)](https://microclaw.org)
 [![最新版本](https://img.shields.io/github/v/release/microclaw/microclaw?label=release)](https://github.com/microclaw/microclaw/releases/latest)
-[![Discord](https://img.shields.io/badge/Discord-加入-5865F2?logo=discord&logoColor=white)](https://discord.gg/pvmezwkAk5)
+[![Discord](https://img.shields.io/badge/Discord-加入-5865F2?logo=discord&logoColor=white)](https://discord.gg/eGzEaP6TzR)
 [![Reddit](https://img.shields.io/badge/Reddit-r%2Fmicroclaw-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/microclaw/)
 [![许可证：MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -218,7 +218,7 @@ MicroClaw Work 当前正式支持 Apple Silicon macOS；Linux 和 Windows portab
 
 ## 社区与贡献
 
-欢迎在 [Discord](https://discord.gg/pvmezwkAk5) 和 [Reddit](https://www.reddit.com/r/microclaw/) 交流问题与想法。提交 Issue 或代码前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+欢迎在 [Discord](https://discord.gg/eGzEaP6TzR) 和 [Reddit](https://www.reddit.com/r/microclaw/) 交流问题与想法。提交 Issue 或代码前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
 ## Star History
 
