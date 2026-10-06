@@ -6,6 +6,27 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Changed
+
+- The optional Matrix channel (`channel-matrix`, included in `full`) moved from
+  matrix-sdk 0.16 to 0.19. Its TLS backend is now rustls with aws-lc
+  (`rustls-aws-lc-rs`, matrix-sdk 0.19 dropped `native-tls`), and building it
+  needs Rust 1.96. The pinned toolchain moves to 1.96.1; the workspace MSRV
+  stays 1.93 for builds without Matrix (#510).
+- rusqlite moved from 0.37 to 0.40 across the workspace (matrix-sdk-sqlite 0.19
+  links the same `sqlite3`). `microclaw-core`'s optional `sqlite-errors`
+  feature exposes `MicroClawError::Database(rusqlite::Error)`, so SDK consumers
+  that match on that variant or convert their own rusqlite errors need
+  rusqlite 0.40 too.
+
+### Security
+
+- matrix-sdk 0.19 fixes RUSTSEC-2026-0318 (matrix-sdk-crypto to-device panic)
+  and, through imbl 7, RUSTSEC-2026-0292 (imbl-sized-chunks) and drops the
+  unmaintained `bitmaps` (RUSTSEC-2026-0247); their audit/deny exceptions are
+  removed. `anymap2` (RUSTSEC-2026-0319) is still pulled in by matrix-sdk 0.19
+  and stays ignored.
+
 ## 0.8.0 - 2026-10-05
 
 ### Changed

@@ -37,29 +37,9 @@ yanked = "deny"
 #   local documents, not untrusted network XML. Remove once typst's chain
 #   moves to quick-xml 0.41+.
 #
-# RUSTSEC-2026-0247: `bitmaps` is unmaintained (repo archived 2026-05-03) —
-#   transitive via matrix-sdk -> imbl; no first-party use and no safe upgrade
-#   available until matrix-sdk's imbl chain migrates off it.
-#
 # RUSTSEC-2026-0319: `anymap2` is unmaintained (replacement: anymap3) —
-#   transitive via matrix-sdk 0.16 only (non-default `channel-matrix`); no
-#   first-party use. Re-check with the matrix-sdk 0.19 upgrade.
-#
-# RUSTSEC-2026-0292: `imbl-sized-chunks` 0.1 double free / use-after-free when
-#   an element's `Drop` panics inside `Chunk`/`InlineArray` removal — transitive
-#   via matrix-sdk 0.16 -> imbl 6 (behind the non-default `channel-matrix`
-#   feature); imbl only moved to the patched 0.2 line in imbl 7.0.2, which
-#   requires matrix-sdk >= 0.19. Remove when matrix-sdk is bumped to 0.19+.
-#
-# RUSTSEC-2026-0318: `matrix-sdk-crypto` < 0.19 may panic in
-#   `Device::encrypt_event_raw` / `OlmMachine::encrypt_content_for_devices`
-#   with `IdentityBasedStrategy` when the recipient lacks cross-signing keys.
-#   In matrix-sdk 0.16.1 the only caller is `encrypt_and_send_raw_to_device`,
-#   gated behind `experimental-send-custom-to-device`, which we do not enable
-#   (and the default share strategy is `AllDevices`); our Matrix adapter never
-#   calls either function. Fixed in matrix-sdk 0.19, which also needs Rust
-#   1.96+, rusqlite 0.40 and the rustls-aws-lc-rs TLS backend. Remove with
-#   that upgrade.
+#   transitive via matrix-sdk 0.19 only (non-default `channel-matrix`); no
+#   first-party use and no safe upgrade until matrix-sdk drops it.
 ignore = [
   "RUSTSEC-2026-0049",
   "RUSTSEC-2026-0098",
@@ -74,9 +54,6 @@ ignore = [
   "RUSTSEC-2026-0195",
   "RUSTSEC-2026-0192",
   "RUSTSEC-2026-0206",
-  "RUSTSEC-2026-0247",
-  "RUSTSEC-2026-0292",
-  "RUSTSEC-2026-0318",
   "RUSTSEC-2026-0319",
 ]
 
