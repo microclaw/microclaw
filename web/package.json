@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.14.29",
-    "@assistant-ui/react-markdown": "^0.14.4",
+    "@assistant-ui/react-markdown": "^0.14.7",
     "@assistant-ui/react-ui": "^0.2.1",
     "@radix-ui/themes": "^3.2.1",
     "class-variance-authority": "^0.7.1",
