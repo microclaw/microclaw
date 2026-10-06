@@ -68,6 +68,6 @@ Command ও configuration-এর একটিমাত্র নির্ভর�
 
 ## কমিউনিটি ও লাইসেন্স
 
-[Discord](https://discord.gg/pvmezwkAk5) এবং [Reddit](https://www.reddit.com/r/microclaw/)-এ কমিউনিটিতে যোগ দিন। অবদান রাখার আগে [CONTRIBUTING.md](../../CONTRIBUTING.md) পড়ুন।
+[Discord](https://discord.gg/eGzEaP6TzR) এবং [Reddit](https://www.reddit.com/r/microclaw/)-এ কমিউনিটিতে যোগ দিন। অবদান রাখার আগে [CONTRIBUTING.md](../../CONTRIBUTING.md) পড়ুন।
 
 MicroClaw [MIT License](../../LICENSE)-এর অধীনে প্রকাশিত।

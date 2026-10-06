@@ -68,6 +68,6 @@ Dokumentasi teknis terperinci dipelihara dalam bahasa Inggris sebagai sumber kan
 
 ## Komunitas dan lisensi
 
-Bergabunglah dengan komunitas di [Discord](https://discord.gg/pvmezwkAk5) dan [Reddit](https://www.reddit.com/r/microclaw/). Baca [CONTRIBUTING.md](../../CONTRIBUTING.md) sebelum berkontribusi.
+Bergabunglah dengan komunitas di [Discord](https://discord.gg/eGzEaP6TzR) dan [Reddit](https://www.reddit.com/r/microclaw/). Baca [CONTRIBUTING.md](../../CONTRIBUTING.md) sebelum berkontribusi.
 
 MicroClaw tersedia di bawah [Lisensi MIT](../../LICENSE).

@@ -68,6 +68,6 @@ A documentação técnica detalhada é mantida em inglês como fonte canônica p
 
 ## Comunidade e licença
 
-Participe da comunidade no [Discord](https://discord.gg/pvmezwkAk5) e no [Reddit](https://www.reddit.com/r/microclaw/). Leia [CONTRIBUTING.md](../../CONTRIBUTING.md) antes de contribuir.
+Participe da comunidade no [Discord](https://discord.gg/eGzEaP6TzR) e no [Reddit](https://www.reddit.com/r/microclaw/). Leia [CONTRIBUTING.md](../../CONTRIBUTING.md) antes de contribuir.
 
 MicroClaw é disponibilizado sob a [licença MIT](../../LICENSE).

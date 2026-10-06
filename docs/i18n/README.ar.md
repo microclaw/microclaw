@@ -68,6 +68,6 @@ microclaw start
 
 ## المجتمع والترخيص
 
-انضم إلى المجتمع على [Discord](https://discord.gg/pvmezwkAk5) و[Reddit](https://www.reddit.com/r/microclaw/). اقرأ [CONTRIBUTING.md](../../CONTRIBUTING.md) قبل المساهمة.
+انضم إلى المجتمع على [Discord](https://discord.gg/eGzEaP6TzR) و[Reddit](https://www.reddit.com/r/microclaw/). اقرأ [CONTRIBUTING.md](../../CONTRIBUTING.md) قبل المساهمة.
 
 يتوفر MicroClaw بموجب [ترخيص MIT](../../LICENSE).

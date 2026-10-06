@@ -17,7 +17,7 @@ const LONG_ABOUT: &str = concat!(
     "\x1b[22m\n",
     "\x1b[1mWebsite:\x1b[22m https://microclaw.org\n",
     "\x1b[1mGitHub:\x1b[22m https://github.com/microclaw/microclaw\n",
-    "\x1b[1mDiscord:\x1b[22m https://discord.gg/pvmezwkAk5\n",
+    "\x1b[1mDiscord:\x1b[22m https://discord.gg/eGzEaP6TzR\n",
     "\n",
     "\x1b[1mQuick Start:\x1b[22m\n",
     "  1) microclaw setup\n",

@@ -68,6 +68,6 @@ Commands اور configuration کے لیے ایک قابلِ اعتماد ماخ�
 
 ## کمیونٹی اور لائسنس
 
-[Discord](https://discord.gg/pvmezwkAk5) اور [Reddit](https://www.reddit.com/r/microclaw/) پر کمیونٹی میں شامل ہوں۔ تعاون سے پہلے [CONTRIBUTING.md](../../CONTRIBUTING.md) پڑھیں۔
+[Discord](https://discord.gg/eGzEaP6TzR) اور [Reddit](https://www.reddit.com/r/microclaw/) پر کمیونٹی میں شامل ہوں۔ تعاون سے پہلے [CONTRIBUTING.md](../../CONTRIBUTING.md) پڑھیں۔
 
 MicroClaw [MIT License](../../LICENSE) کے تحت دستیاب ہے۔

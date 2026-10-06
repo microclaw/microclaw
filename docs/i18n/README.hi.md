@@ -68,6 +68,6 @@ Commands और configuration की एक ही भरोसेमंद sour
 
 ## समुदाय और लाइसेंस
 
-[Discord](https://discord.gg/pvmezwkAk5) और [Reddit](https://www.reddit.com/r/microclaw/) पर समुदाय से जुड़ें। योगदान देने से पहले [CONTRIBUTING.md](../../CONTRIBUTING.md) पढ़ें।
+[Discord](https://discord.gg/eGzEaP6TzR) और [Reddit](https://www.reddit.com/r/microclaw/) पर समुदाय से जुड़ें। योगदान देने से पहले [CONTRIBUTING.md](../../CONTRIBUTING.md) पढ़ें।
 
 MicroClaw [MIT License](../../LICENSE) के अंतर्गत उपलब्ध है।

@@ -8,7 +8,7 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
-- Unified website and README Discord community links with the shared XNU community invite.
+- Unified website, CLI help, Snap contact, and all localized README Discord links with the shared XNU community invite.
 
 - The optional Matrix channel (`channel-matrix`, included in `full`) moved from
   matrix-sdk 0.16 to 0.19. Its TLS backend is now rustls with aws-lc
