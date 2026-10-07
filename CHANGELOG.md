@@ -6,10 +6,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-07
+
 ### Changed
 
-- Unified website, CLI help, Snap contact, and all localized README Discord links with the shared XNU community invite.
-
+- Unified website, CLI help, Snap contact, and all localized README Discord
+  links with the shared XNU community invite.
+- `@assistant-ui/react-markdown` 0.14.7 in the web UI.
 - The optional Matrix channel (`channel-matrix`, included in `full`) moved from
   matrix-sdk 0.16 to 0.19. Its TLS backend is now rustls with aws-lc
   (`rustls-aws-lc-rs`, matrix-sdk 0.19 dropped `native-tls`), and building it

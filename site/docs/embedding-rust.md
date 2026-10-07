@@ -13,7 +13,7 @@ contracts while keeping Server, Web, channel adapters, and desktop UI code out
 of your dependency graph.
 
 :::info Current distribution
-The supported public crates are available on crates.io at `0.8.0`:
+The supported public crates are available on crates.io at `0.9.0`:
 `microclaw-core`, `microclaw-engine`, and `microclaw-sdk`.
 :::
 

@@ -2305,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "once_cell",
  "regex",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-engine"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -2376,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-sdk"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "microclaw-core",
  "microclaw-engine",

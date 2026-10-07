@@ -4,6 +4,19 @@
 
 Use this guide for rolling upgrades that may include schema/auth/hooks/session/metrics changes.
 
+### SDK and products v0.9.0
+
+Server, Work, Work Headless, and the three public Rust crates move together to
+`0.9.0`. No configuration or schema migration is required.
+
+Builds with the Matrix channel (`channel-matrix` / `full`) now need Rust 1.96
+and use rustls (aws-lc) instead of the system TLS library; the pinned toolchain
+is 1.96.1. Other builds still support Rust 1.93.
+
+SDK consumers that enable `microclaw-core`'s `sqlite-errors` feature and match
+on `MicroClawError::Database` or convert their own `rusqlite::Error` must move
+to rusqlite 0.40.
+
 ### SDK and products v0.8.0
 
 Server, Work, Work Headless, and the three public Rust crates move together to
