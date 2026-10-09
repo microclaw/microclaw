@@ -61,3 +61,16 @@ This server is considered memory-capable only when it exposes both `memory_query
 - Add remote servers one-by-one.
 - Monitor tool list refresh and probe failures in logs.
 - Treat endpoint auth and command dependencies as first-class operational dependencies.
+
+## Optional Parallel Search MCP
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) adds
+web search and page extraction without a Parallel API key. Copy the repository's
+`mcp.parallel.example.json` into `<data_dir>/mcp.d/parallel.json`, then restart
+MicroClaw. It uses native `streamable_http` and exposes
+`mcp_parallel_web_search` and `mcp_parallel_web_fetch` with the default `limited`
+trust tier. Existing web tools and other MCP servers remain available.
+
+Search takes `objective` and `search_queries`; fetch takes `urls` and an optional
+`objective`. Anonymous access has lower rate limits and is intended for
+exploration and light use. Remove the fragment and restart to disable it.

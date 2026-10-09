@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "parallel": {
+      "transport": "streamable_http",
+      "endpoint": "https://search.parallel.ai/mcp",
+      "headers": {
+        "User-Agent": "microclaw"
+      },
+      "request_timeout_secs": 60
+    }
+  }
+}

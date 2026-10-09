@@ -56,6 +56,28 @@ Minimal example:
 
 Run `microclaw doctor` after editing MCP configuration. It checks configured command dependencies. Startup logs report whether each server connected and which protocol was negotiated.
 
+## Parallel web search and fetch
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) provides
+web search and page extraction without a Parallel API key. Enable it as an
+optional fragment, replacing `<data_dir>` with your configured data directory:
+
+```sh
+mkdir -p <data_dir>/mcp.d
+cp mcp.parallel.example.json <data_dir>/mcp.d/parallel.json
+```
+
+Restart MicroClaw to load the fragment. The server exposes
+`mcp_parallel_web_search` and `mcp_parallel_web_fetch` through the existing MCP
+tool registry. Search takes `objective` and `search_queries`; fetch takes `urls`
+and can use an `objective` to focus the excerpts. Anonymous access has lower rate
+limits and is intended for exploration and light use.
+
+The fragment uses the native `streamable_http` transport, sends a MicroClaw
+User-Agent, and retains the default `limited` trust tier. It does not replace
+built-in web tools or other MCP servers. Remove the fragment and restart to
+disable it.
+
 ## Trust tiers
 
 Each server can carry a named trust tier that maps onto tool-policy risk for

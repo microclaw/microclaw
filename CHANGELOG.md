@@ -6,6 +6,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Added
+
+- Optional Parallel Search MCP fragment for keyless web search and page extraction
+  through the existing Streamable HTTP transport.
+
 ## 0.9.0 - 2026-10-07
 
 ### Changed
