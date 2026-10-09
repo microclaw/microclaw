@@ -49,6 +49,7 @@ async fn parallel_fragment_search_and_fetch() {
         }))
         .await;
     assert!(!result.is_error, "{}", result.content);
+    println!("Search output: {}", result.content);
     assert!(
         result.content.contains("rust-lang.org"),
         "{}",
@@ -61,6 +62,7 @@ async fn parallel_fragment_search_and_fetch() {
         }))
         .await;
     assert!(!result.is_error, "{}", result.content);
+    println!("Fetch output: {}", result.content);
     assert!(result.content.contains("Rust"), "{}", result.content);
 }
 
