@@ -34,8 +34,28 @@ nixpkgs reviewers want new versions force-pushed onto the existing PR branch
 (NixOS/nixpkgs#498144, branch `microclaw-init`) rather than a new PR:
 
 ```sh
-scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready
+scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready \
+  --assisted-by "Claude Code:claude-opus-5-5"
 ```
+
+## Automation/AI policy
+
+nixpkgs requires an `Assisted-by: <tool>:<model>` commit trailer for every
+LLM-assisted commit (`Co-authored-by` does not count) and a separate disclosure
+in the PR description; see
+[CONTRIBUTING.md#automationai-policy](https://github.com/NixOS/nixpkgs/blob/master/CONTRIBUTING.md#automationai-policy).
+
+- Pass `--assisted-by "<tool>:<model>"` once per tool/model used for the
+  release (for example `--assisted-by "Claude Code:claude-opus-5-5"`). The
+  script adds the trailers with `git interpret-trailers`. Without the flag it
+  carries over the `Assisted-by:` trailers of the old branch tip and warns.
+- An open PR keeps its description: only the version in the release link and
+  in "init at" is bumped, and an "AI disclosure" section is inserted before
+  "Things done" if the body has none. A body that is not based on the nixpkgs
+  PR template is rebuilt from `.github/PULL_REQUEST_TEMPLATE.md`.
+- To review before pushing, run with `--no-push --nixpkgs-dir <checkout>`:
+  check `git log -1` there and the rendered PR body in
+  `<checkout>/.git/microclaw-pr-body.md`.
 
 ## Useful Flags
 
@@ -46,6 +66,8 @@ scripts/update-nixpkgs.sh --ready
 scripts/update-nixpkgs.sh --no-pr
 scripts/update-nixpkgs.sh --nixpkgs-dir ~/focus/nixpkgs
 scripts/update-nixpkgs.sh --template nix/nixpkgs/package.nix
+scripts/update-nixpkgs.sh --assisted-by "Claude Code:claude-opus-5-5"
+scripts/update-nixpkgs.sh --no-push --nixpkgs-dir ~/focus/nixpkgs   # review commit + PR body locally
 ```
 
 ## Failure Recovery

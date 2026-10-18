@@ -13,23 +13,31 @@ This guide covers how to upstream `microclaw` to `NixOS/nixpkgs` so users get ca
 ## Current status
 
 - Upstream PR: [NixOS/nixpkgs#498144](https://github.com/NixOS/nixpkgs/pull/498144)
-  (`microclaw: init at 0.0.163`, branch `everettjf/nixpkgs:microclaw-init`, still a draft).
+  (`microclaw: init at 0.9.0`, branch `everettjf/nixpkgs:microclaw-init`) was closed on 2026-10-17 after a reviewer pointed to the nixpkgs automation/AI policy; a new PR will be opened separately later.
 - The nixpkgs reviewer asked that newer versions be force-pushed onto that same
   branch (then retitle the PR and mark it ready) instead of opening a new PR.
 - Nothing is merged yet, so `nixos-unstable` has no `microclaw` package.
   The update script therefore seeds the package from
   [`nix/nixpkgs/package.nix`](../../nix/nixpkgs/package.nix) when it is missing upstream.
 
-To bring the draft up to the current release:
+To bring the PR up to the current release:
 
 ```sh
-scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready
+scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready \
+  --assisted-by "Claude Code:claude-opus-5-5"
 ```
 
 This rebuilds `microclaw-init` on top of `upstream/master`, carries over the
 `maintainers/maintainer-list.nix` entry from the old branch, resolves the three
 hashes, builds, pushes with `--force-with-lease`, retitles the PR to
-`microclaw: init at <version>` and marks it ready for review.
+`microclaw: init at <version>`, bumps the version in the PR body (keeping the
+rest of the description) and marks it ready for review.
+
+The nixpkgs [automation/AI policy](https://github.com/NixOS/nixpkgs/blob/master/CONTRIBUTING.md#automationai-policy)
+requires an `Assisted-by: <tool>:<model>` trailer on LLM-assisted commits and a
+disclosure in the PR description. Each `--assisted-by` value becomes such a
+trailer and an entry in the PR's "AI disclosure" section; see
+[NIXPKGS_README.md](../../NIXPKGS_README.md#automationai-policy).
 
 ## Package expression
 
@@ -84,7 +92,8 @@ Automated path from the MicroClaw repo:
 
 ```sh
 scripts/update-nixpkgs.sh                                   # bump on a fresh branch
-scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready   # update the open PR
+scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready \
+  --assisted-by "Claude Code:claude-opus-5-5"               # update the open PR
 ```
 
 ## Validation Before Opening Nixpkgs PR

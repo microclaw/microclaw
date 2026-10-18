@@ -19,7 +19,17 @@ Reusing an existing PR branch (what nixpkgs reviewers ask for):
   scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready
   The branch is rebuilt on top of upstream/<base>, the maintainer-list entry
   from the old branch is carried over, the push is a --force-with-lease, and
-  the open PR for that branch gets its title updated instead of a new PR.
+  the open PR for that branch gets its title and body updated instead of a
+  new PR.
+
+Automation/AI policy (nixpkgs CONTRIBUTING.md#automationai-policy):
+  Pass --assisted-by "<tool>:<model>" once per LLM tool/model that helped
+  prepare the change; each becomes an "Assisted-by:" commit trailer and is
+  listed in the PR's "AI disclosure" section. When it is omitted, Assisted-by
+  trailers on the old branch's tip commit are carried over.
+  An existing PR description is kept (only the version in release links and
+  "init at" is bumped, and a missing AI disclosure section is added); a body
+  that does not follow the nixpkgs PR template is rebuilt from it.
 
 Options:
   --version <x.y.z>         Target microclaw version (default: from Cargo.toml)
@@ -32,12 +42,17 @@ Options:
                             (default: <microclaw-dir>/nix/nixpkgs/package.nix)
   --draft                   Open PR as draft
   --ready                   Mark an existing draft PR as ready for review
-  --no-push                 Do not push
+  --assisted-by <tool:model>
+                            Add an "Assisted-by: <tool>:<model>" commit trailer
+                            and PR disclosure entry (repeatable)
+  --no-push                 Do not push (the PR body is still rendered to
+                            <nixpkgs-dir>/.git/microclaw-pr-body.md)
   --no-pr                   Do not open/update PR
   -h, --help                Show help
 
-Example:
-  scripts/update-nixpkgs.sh
+Example (what a release runs):
+  scripts/update-nixpkgs.sh --branch microclaw-init --base master --ready \
+    --assisted-by "Claude Code:claude-opus-5-5"
 USAGE
 }
 
@@ -98,6 +113,83 @@ apply_hash_fixes_from_log() {
   return "$changed"
 }
 
+# Version in a PR title such as "microclaw: init at 1.2.3" or "microclaw: 1.2.2 -> 1.2.3".
+version_from_title() {
+  printf '%s\n' "$1" | sed -nE 's/.*(init at|->)[[:space:]]+([^[:space:]]+)[[:space:]]*$/\2/p'
+}
+
+write_ai_disclosure() {
+  local entry
+  echo "## AI disclosure"
+  echo
+  echo "Per the [automation/AI policy], these LLM-based tools were used to prepare this change:"
+  echo
+  for entry in "${ASSISTED_BY[@]}"; do
+    echo "- \`${entry}\`"
+  done
+  echo
+  echo "\`scripts/update-nixpkgs.sh\` from the MicroClaw repository sets the version, resolves the three hashes and builds the package. The commit carries matching \`Assisted-by:\` trailers. I reviewed the resulting \`package.nix\` and the build results below and can answer questions about any part of it."
+}
+
+# PR body from the nixpkgs PR template: summary, AI disclosure, then the
+# template's "Things done" checklist with what this script verified ticked.
+write_template_body() {
+  local template
+  if $INIT_MODE; then
+    echo "Adds [MicroClaw](https://github.com/microclaw/microclaw), a self-hosted Rust chat agent that runs on Telegram, Discord, Slack, Feishu/Lark, Matrix and its own built-in web UI. It supports tool execution, scheduled tasks and persistent memory."
+  else
+    echo "Updates [MicroClaw](https://github.com/microclaw/microclaw) from ${OLD_VERSION} to ${VERSION}."
+  fi
+  echo
+  echo "- Release: https://github.com/microclaw/microclaw/releases/tag/v${VERSION}"
+  echo
+  if [ "${#ASSISTED_BY[@]}" -gt 0 ]; then
+    write_ai_disclosure
+    echo
+  fi
+  if template="$(git show "upstream/${BASE_BRANCH}:.github/PULL_REQUEST_TEMPLATE.md" 2>/dev/null)"; then
+    printf '%s\n' "$template" \
+      | sed -n '/^## Things done/,$p' \
+      | SYSTEM="$CURRENT_SYSTEM" perl -pe '
+          s/^(\s*- )\[ \]( \Q$ENV{SYSTEM}\E)$/$1\[x\]$2/ if length $ENV{SYSTEM};
+          s/^(\s*- )\[ \]( Basic functionality of all binary files)/$1\[x\]$2/;
+        '
+  else
+    echo "WARNING: .github/PULL_REQUEST_TEMPLATE.md not found on upstream/${BASE_BRANCH}; PR body has no checklist." >&2
+    echo "[automation/AI policy]: https://github.com/NixOS/nixpkgs/blob/master/CONTRIBUTING.md#automationai-policy"
+  fi
+}
+
+# Bring an existing PR description up to date without rewriting it.
+update_existing_body() {
+  local body_file="$1"
+  local prev_version="$2"
+  if ! grep -q '^## Things done' "$body_file"; then
+    echo "Existing PR body does not follow the nixpkgs PR template; rebuilding it from the template."
+    write_template_body >"$body_file"
+    return
+  fi
+  if [ -n "$prev_version" ] && [ "$prev_version" != "$VERSION" ]; then
+    PREV="$prev_version" NEW="$VERSION" perl -0777 -i -pe '
+      s{(releases/tag/v)\Q$ENV{PREV}\E(?!\.?[0-9A-Za-z])}{$1$ENV{NEW}}g;
+      s{(init at )\Q$ENV{PREV}\E(?!\.?[0-9A-Za-z])}{$1$ENV{NEW}}g;
+    ' "$body_file"
+  elif [ -z "$prev_version" ]; then
+    echo "WARNING: could not read the old version from the PR title; check version references in the PR body." >&2
+  fi
+  if [ "${#ASSISTED_BY[@]}" -gt 0 ] && ! grep -qi '^## AI disclosure' "$body_file"; then
+    local disclosure
+    disclosure="$(mktemp)"
+    write_ai_disclosure >"$disclosure"
+    DISCLOSURE="$disclosure" perl -0777 -i -pe '
+      BEGIN { local $/; open my $fh, "<", $ENV{DISCLOSURE} or die; $d = <$fh>; }
+      s/^(?=## Things done)/$d\n/m;
+    ' "$body_file"
+    rm -f "$disclosure"
+    echo "Added an AI disclosure section to the PR body."
+  fi
+}
+
 TIMESTAMP="$(date +%Y%m%d%H%M%S)"
 MICROCLAW_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION=""
@@ -110,6 +202,7 @@ DO_PUSH=true
 DO_PR=true
 DO_DRAFT=false
 DO_READY=false
+ASSISTED_BY=()
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -122,6 +215,12 @@ while [ "$#" -gt 0 ]; do
     --template) TEMPLATE="$2"; shift 2 ;;
     --draft) DO_DRAFT=true; shift ;;
     --ready) DO_READY=true; shift ;;
+    --assisted-by)
+      if [ "$#" -lt 2 ] || ! [[ "$2" =~ ^[^:]+:[^:]+$ ]]; then
+        echo "--assisted-by expects \"<tool>:<model>\", e.g. \"Claude Code:claude-opus-5-5\"" >&2
+        exit 1
+      fi
+      ASSISTED_BY+=("$2"); shift 2 ;;
     --no-push) DO_PUSH=false; shift ;;
     --no-pr) DO_PR=false; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -226,6 +325,18 @@ if $BRANCH_EXISTS_ON_FORK; then
   fi
 fi
 
+if [ "${#ASSISTED_BY[@]}" -eq 0 ] && $BRANCH_EXISTS_ON_FORK; then
+  while IFS= read -r trailer; do
+    [ -n "$trailer" ] && ASSISTED_BY+=("$trailer")
+  done < <(git log -1 --format='%(trailers:key=Assisted-by,valueonly,unfold)' "refs/heads/__microclaw_old_${BRANCH}")
+  if [ "${#ASSISTED_BY[@]}" -gt 0 ]; then
+    echo "No --assisted-by given; carrying over Assisted-by trailers from the old ${BRANCH}: ${ASSISTED_BY[*]}"
+  fi
+fi
+if [ "${#ASSISTED_BY[@]}" -eq 0 ]; then
+  echo "WARNING: no --assisted-by given. The nixpkgs automation/AI policy requires an Assisted-by: trailer for LLM-assisted commits." >&2
+fi
+
 if $INIT_MODE && ! grep -q "^  ${FORK_OWNER} = {" "$MAINTAINER_LIST"; then
   echo "WARNING: no maintainer entry for '${FORK_OWNER}' in maintainers/maintainer-list.nix; nixpkgs requires one for meta.maintainers." >&2
 fi
@@ -235,7 +346,8 @@ reset_hashes_to_placeholders "$PACKAGE_FILE"
 
 BUILD_LOG="$(mktemp)"
 PR_BODY="$(mktemp)"
-trap 'rm -f "$BUILD_LOG" "$PR_BODY"' EXIT
+COMMIT_MSG="$(mktemp)"
+trap 'rm -f "$BUILD_LOG" "$PR_BODY" "$COMMIT_MSG"' EXIT
 
 # src, cargoHash and npmDeps.hash are all fixed-output derivations; each failed
 # build reports one or more "specified/got" pairs. Iterate until it builds.
@@ -282,7 +394,13 @@ if $INIT_MODE; then
 else
   COMMIT_TITLE="microclaw: ${OLD_VERSION} -> ${VERSION}"
 fi
-git commit -m "$COMMIT_TITLE" -m "Release: https://github.com/microclaw/microclaw/releases/tag/v${VERSION}"
+TRAILER_ARGS=()
+for entry in ${ASSISTED_BY[@]+"${ASSISTED_BY[@]}"}; do
+  TRAILER_ARGS+=(--trailer "Assisted-by: ${entry}")
+done
+printf '%s\n\nRelease: https://github.com/microclaw/microclaw/releases/tag/v%s\n' "$COMMIT_TITLE" "$VERSION" \
+  | git interpret-trailers --if-exists addIfDifferent ${TRAILER_ARGS[@]+"${TRAILER_ARGS[@]}"} >"$COMMIT_MSG"
+git commit --cleanup=strip -F "$COMMIT_MSG"
 echo "Committed on branch: $BRANCH"
 
 if $DO_PUSH; then
@@ -297,24 +415,25 @@ else
 fi
 
 if $DO_PR; then
-  if ! $DO_PUSH; then
-    echo "--no-push is set, cannot open/update PR automatically." >&2
-    exit 1
-  fi
-  cat > "$PR_BODY" <<BODY
-## Summary
-- ${COMMIT_TITLE}
+  CURRENT_SYSTEM="$(nix-instantiate --eval --expr builtins.currentSystem 2>/dev/null | tr -d '"' || true)"
 
-## Build / test
-- nix-build -A microclaw
-- result/bin/microclaw --help
+  # `gh pr list --head` matches the branch name only; filter on the fork owner.
+  EXISTING_PR="$(gh pr list --repo NixOS/nixpkgs --head "$BRANCH" --state open \
+    --json number,headRepositoryOwner \
+    --jq "map(select(.headRepositoryOwner.login == \"${FORK_OWNER}\")) | .[0].number // empty" 2>/dev/null || true)"
 
-## Upstream release
-- https://github.com/microclaw/microclaw/releases/tag/v${VERSION}
-BODY
-
-  EXISTING_PR="$(gh pr list --repo NixOS/nixpkgs --head "${FORK_OWNER}:${BRANCH}" --state open --json number --jq '.[0].number' 2>/dev/null || true)"
   if [ -n "$EXISTING_PR" ]; then
+    gh pr view "$EXISTING_PR" --repo NixOS/nixpkgs --json body --jq .body >"$PR_BODY"
+    OLD_TITLE="$(gh pr view "$EXISTING_PR" --repo NixOS/nixpkgs --json title --jq .title)"
+    update_existing_body "$PR_BODY" "$(version_from_title "$OLD_TITLE")"
+  else
+    write_template_body >"$PR_BODY"
+  fi
+
+  if ! $DO_PUSH; then
+    cp "$PR_BODY" "$NIXPKGS_DIR/.git/microclaw-pr-body.md"
+    echo "Skip PR due to --no-push; PR body (title: ${COMMIT_TITLE}) rendered to $NIXPKGS_DIR/.git/microclaw-pr-body.md"
+  elif [ -n "$EXISTING_PR" ]; then
     echo "Updating existing PR NixOS/nixpkgs#${EXISTING_PR}"
     gh pr edit "$EXISTING_PR" --repo NixOS/nixpkgs --title "$COMMIT_TITLE" --body-file "$PR_BODY"
     if $DO_READY; then
@@ -332,6 +451,7 @@ BODY
       PR_ARGS+=(--draft)
     fi
     gh pr create "${PR_ARGS[@]}"
+    echo "Review the PR checklist (e.g. \"Follows the automation/AI policy\") before marking it ready."
   fi
 else
   echo "Skip PR due to --no-pr"
