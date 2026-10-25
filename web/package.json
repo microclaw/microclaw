@@ -11,9 +11,8 @@
     "dev": "vite"
   },
   "dependencies": {
-    "@assistant-ui/react": "^0.14.29",
-    "@assistant-ui/react-markdown": "^0.14.7",
-    "@assistant-ui/react-ui": "^0.2.1",
+    "@assistant-ui/react": "^0.15.31",
+    "@assistant-ui/react-markdown": "^0.14.24",
     "@radix-ui/themes": "^3.2.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -33,8 +32,5 @@
     "tailwindcss": "^4.2.1",
     "typescript": "^5.6.3",
     "vite": "^8.3.1"
-  },
-  "overrides": {
-    "@assistant-ui/tap": "0.9.12"
   }
 }

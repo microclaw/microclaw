@@ -17,7 +17,6 @@ import {
   Theme,
 } from '@radix-ui/themes'
 import '@radix-ui/themes/styles.css'
-import '@assistant-ui/react-ui/styles/index.css'
 import './styles.css'
 import { ApiKeysSettings } from './components/api-keys-settings'
 import { PairedDevicesSettings } from './components/paired-devices-settings'
@@ -591,8 +590,10 @@ function App() {
 
             if (event.event === 'tool_start') {
               const payload = data as ToolStartPayload
-              if (!payload.tool_use_id || !payload.name) continue
-              toolState.set(payload.tool_use_id, {
+              // The server publishes `call_id`; `tool_use_id` is the older name.
+              const toolCallId = payload.call_id ?? payload.tool_use_id
+              if (!toolCallId || !payload.name) continue
+              toolState.set(toolCallId, {
                 name: payload.name,
                 args: toJsonObject(payload.input),
               })
@@ -604,18 +605,20 @@ function App() {
 
             if (event.event === 'tool_result') {
               const payload = data as ToolResultPayload
-              if (!payload.tool_use_id || !payload.name) continue
+              const toolCallId = payload.call_id ?? payload.tool_use_id
+              if (!toolCallId || !payload.name) continue
 
-              const previous = toolState.get(payload.tool_use_id)
+              const previous = toolState.get(toolCallId)
               const resultPayload: ReadonlyJSONObject = toJsonObject({
-                output: payload.output ?? '',
+                // The server sends a truncated `preview` of the tool output.
+                output: payload.output ?? payload.preview ?? '',
                 duration_ms: payload.duration_ms ?? null,
                 bytes: payload.bytes ?? null,
                 status_code: payload.status_code ?? null,
                 error_type: payload.error_type ?? null,
               })
 
-              toolState.set(payload.tool_use_id, {
+              toolState.set(toolCallId, {
                 name: payload.name,
                 args: previous?.args ?? {},
                 result: resultPayload,

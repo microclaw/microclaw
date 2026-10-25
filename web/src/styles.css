@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import "@assistant-ui/react-ui/styles/themes/default.css";
+@import "./assistant-ui.css";
 
 html,
 body,

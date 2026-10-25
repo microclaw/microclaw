@@ -110,17 +110,22 @@ export function warningDocUrl(code?: string): string {
   }
 }
 
+// Tool events carry `call_id` (`tool_use_id` is the pre-0.10 name) and a
+// `preview` of the output.
 export type ToolStartPayload = {
-  tool_use_id: string
+  call_id?: string
+  tool_use_id?: string
   name: string
   input?: unknown
 }
 
 export type ToolResultPayload = {
-  tool_use_id: string
+  call_id?: string
+  tool_use_id?: string
   name: string
   is_error?: boolean
   output?: unknown
+  preview?: string
   duration_ms?: number
   bytes?: number
   status_code?: number

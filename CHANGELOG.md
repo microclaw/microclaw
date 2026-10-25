@@ -6,6 +6,26 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Changed
+
+- Web UI: moved to `@assistant-ui/react` 0.15 (0.15.31) with
+  `@assistant-ui/react-markdown` 0.14.24. `@assistant-ui/react-ui` has no
+  release that works with 0.15 (it still imports `useThread`, see #496), so
+  the chat thread is now built directly on the `@assistant-ui/react`
+  primitives, keeping the same `aui-*` class names, a vendored base
+  stylesheet (`web/src/assistant-ui.css`) and the existing look and
+  behaviour (tool-call cards, think-segment disclosure, timestamps, approval
+  button bar, no attachments or message editing). This retires the
+  `@assistant-ui/tap` 0.9.12 override in `web/package.json` and the three
+  assistant-ui Dependabot ignores from 0.10.1 (#517).
+
+### Fixed
+
+- Web UI: tool-call cards never appeared during a run. The server publishes
+  `call_id` and `preview` on `tool_start` / `tool_result` stream events, but
+  the chat adapter still looked for `tool_use_id` / `output` and dropped the
+  events; both key names are accepted now.
+
 ## 0.10.1 - 2026-10-24
 
 ### Fixed

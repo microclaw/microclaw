@@ -1,0 +1,420 @@
+/*
+ * Base styles for the chat thread built on @assistant-ui/react primitives.
+ *
+ * Adapted from the compiled stylesheet of @assistant-ui/react-ui 0.2.1
+ * (MIT, https://github.com/assistant-ui/assistant-ui), trimmed to the
+ * classes chat-thread.tsx emits. react-ui itself stayed on the 0.14 core
+ * line (it imports `useThread`, removed in 0.15), so the pre-styled
+ * components were replaced with primitives and these rules were vendored
+ * to keep the existing `aui-*` theming in styles.css working unchanged.
+ */
+
+:root {
+  --aui-background: 0 0% 100%;
+  --aui-foreground: 240 10% 3.9%;
+  --aui-card: 0 0% 100%;
+  --aui-card-foreground: 240 10% 3.9%;
+  --aui-popover: 0 0% 100%;
+  --aui-popover-foreground: 240 10% 3.9%;
+  --aui-primary: 240 5.9% 10%;
+  --aui-primary-foreground: 0 0% 98%;
+  --aui-secondary: 240 4.8% 95.9%;
+  --aui-secondary-foreground: 240 5.9% 10%;
+  --aui-muted: 240 4.8% 95.9%;
+  --aui-muted-foreground: 240 3.8% 46.1%;
+  --aui-accent: 240 4.8% 95.9%;
+  --aui-accent-foreground: 240 5.9% 10%;
+  --aui-destructive: 0 84.2% 60.2%;
+  --aui-destructive-foreground: 0 0% 98%;
+  --aui-border: 240 5.9% 90%;
+  --aui-input: 240 5.9% 90%;
+  --aui-ring: 240 10% 3.9%;
+  --aui-radius: 0.5rem;
+  --aui-thread-max-width: 42rem;
+}
+
+.dark {
+  --aui-background: 0 0% 7%;
+  --aui-foreground: 0 0% 98%;
+  --aui-card: 240 10% 3.9%;
+  --aui-card-foreground: 0 0% 98%;
+  --aui-popover: 240 10% 3.9%;
+  --aui-popover-foreground: 0 0% 98%;
+  --aui-primary: 0 0% 98%;
+  --aui-primary-foreground: 240 5.9% 10%;
+  --aui-secondary: 240 3.7% 15.9%;
+  --aui-secondary-foreground: 0 0% 98%;
+  --aui-muted: 240 3.7% 15.9%;
+  --aui-muted-foreground: 240 5% 64.9%;
+  --aui-accent: 240 3.7% 15.9%;
+  --aui-accent-foreground: 0 0% 98%;
+  --aui-destructive: 0 62.8% 30.6%;
+  --aui-destructive-foreground: 0 0% 98%;
+  --aui-border: 240 3.7% 15.9%;
+  --aui-input: 240 3.7% 15.9%;
+  --aui-ring: 240 4.9% 83.9%;
+}
+
+/* root */
+
+.aui-root {
+  color: hsl(var(--aui-foreground));
+}
+
+.aui-root * {
+  border-color: hsl(var(--aui-border));
+}
+
+/* buttons */
+
+.aui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+  border-radius: calc(var(--aui-radius) - 2px);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 500;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+.aui-button:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 1px hsl(var(--aui-ring));
+}
+
+.aui-button:disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.aui-button svg {
+  pointer-events: none;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.aui-button-primary {
+  background-color: hsl(var(--aui-primary));
+  color: hsl(var(--aui-primary-foreground));
+  box-shadow:
+    0 1px 3px 0 rgb(0 0 0 / 0.1),
+    0 1px 2px -1px rgb(0 0 0 / 0.1);
+}
+
+.aui-button-primary:hover {
+  background-color: hsl(var(--aui-primary) / 0.9);
+}
+
+.aui-button-outline {
+  border-width: 1px;
+  border-color: hsl(var(--aui-input));
+  background-color: hsl(var(--aui-background));
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+
+.aui-button-outline:hover,
+.aui-button-ghost:hover {
+  background-color: hsl(var(--aui-accent));
+  color: hsl(var(--aui-accent-foreground));
+}
+
+.aui-button-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0.25rem;
+}
+
+.aui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* avatar */
+
+.aui-avatar-root {
+  position: relative;
+  display: flex;
+  height: 2.5rem;
+  width: 2.5rem;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 9999px;
+}
+
+.aui-avatar-fallback {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background-color: hsl(var(--aui-muted));
+}
+
+/* thread */
+
+.aui-thread-root {
+  box-sizing: border-box;
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: hsl(var(--aui-background));
+}
+
+.aui-thread-viewport {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: scroll;
+  scroll-behavior: smooth;
+  background-color: inherit;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 2rem;
+}
+
+.aui-thread-viewport-footer {
+  position: sticky;
+  bottom: 0px;
+  margin-top: 0.75rem;
+  display: flex;
+  width: 100%;
+  max-width: var(--aui-thread-max-width);
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  border-top-left-radius: var(--aui-radius);
+  border-top-right-radius: var(--aui-radius);
+  background-color: inherit;
+  padding-bottom: 1rem;
+}
+
+.aui-thread-scroll-to-bottom {
+  position: absolute;
+  top: -2rem;
+  border-radius: 9999px;
+}
+
+.aui-thread-scroll-to-bottom:disabled {
+  visibility: hidden;
+}
+
+/* thread welcome */
+
+.aui-thread-welcome-root {
+  display: flex;
+  width: 100%;
+  max-width: var(--aui-thread-max-width);
+  flex-grow: 1;
+  flex-direction: column;
+}
+
+.aui-thread-welcome-center {
+  display: flex;
+  width: 100%;
+  flex-grow: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.aui-thread-welcome-message {
+  margin-top: 1rem;
+  font-weight: 500;
+}
+
+/* composer */
+
+.aui-composer-root {
+  display: flex;
+  width: 100%;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  border-radius: var(--aui-radius);
+  border-width: 1px;
+  background-color: inherit;
+  padding-left: 0.625rem;
+  padding-right: 0.625rem;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+}
+
+.aui-composer-root:focus-within {
+  border-color: hsl(var(--aui-ring) / 0.2);
+}
+
+.aui-composer-input {
+  max-height: 10rem;
+  flex-grow: 1;
+  resize: none;
+  border-style: none;
+  background-color: transparent;
+  padding: 1rem 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.aui-composer-input::placeholder {
+  color: hsl(var(--aui-muted-foreground));
+}
+
+.aui-composer-input:focus {
+  box-shadow: none;
+}
+
+.aui-composer-input:disabled {
+  cursor: not-allowed;
+}
+
+.aui-composer-send,
+.aui-composer-cancel {
+  margin-top: 0.625rem;
+  margin-bottom: 0.625rem;
+  width: 2rem;
+  height: 2rem;
+  padding: 0.5rem;
+  transition-property: opacity;
+  transition-duration: 150ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* user message */
+
+.aui-user-message-root {
+  display: grid;
+  grid-auto-rows: auto;
+  grid-template-columns: minmax(72px, 1fr) auto;
+  row-gap: 0.5rem;
+  width: 100%;
+  max-width: var(--aui-thread-max-width);
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+:where(.aui-user-message-root) > .aui-branch-picker-root {
+  grid-column: 1 / -1;
+  grid-row-start: 3;
+  margin-right: -0.25rem;
+  justify-content: flex-end;
+}
+
+.aui-user-message-content {
+  max-width: calc(var(--aui-thread-max-width) * 0.8);
+  overflow-wrap: break-word;
+  border-radius: 1.5rem;
+  background-color: hsl(var(--aui-muted));
+  padding: 0.625rem 1.25rem;
+  color: hsl(var(--aui-foreground));
+  grid-column-start: 2;
+  grid-row-start: 2;
+}
+
+/* assistant message */
+
+.aui-assistant-message-root {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  grid-template-rows: auto 1fr;
+  position: relative;
+  width: 100%;
+  max-width: var(--aui-thread-max-width);
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+:where(.aui-assistant-message-root) > .aui-avatar-root {
+  grid-column-start: 1;
+  grid-row: 1 / -1;
+  margin-right: 1rem;
+}
+
+:where(.aui-assistant-message-root) > .aui-branch-picker-root {
+  grid-column-start: 2;
+  grid-row-start: 2;
+  margin-left: -0.5rem;
+  margin-right: 0.5rem;
+}
+
+.aui-assistant-message-content {
+  max-width: calc(var(--aui-thread-max-width) * 0.8);
+  overflow-wrap: break-word;
+  line-height: 1.75rem;
+  color: hsl(var(--aui-foreground));
+  grid-column: 2 / span 2;
+  grid-row-start: 1;
+  margin-top: 0.375rem;
+  margin-bottom: 0.375rem;
+}
+
+/* assistant action bar */
+
+.aui-assistant-action-bar-root {
+  display: flex;
+  gap: 0.25rem;
+  color: hsl(var(--aui-muted-foreground));
+  grid-column-start: 3;
+  grid-row-start: 2;
+  margin-left: -0.25rem;
+}
+
+.aui-assistant-action-bar-root[data-floating] {
+  position: absolute;
+  border-radius: calc(var(--aui-radius) - 2px);
+  border-width: 1px;
+  background-color: hsl(var(--aui-background));
+  padding: 0.25rem;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+
+/* branch picker */
+
+.aui-branch-picker-root {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: hsl(var(--aui-muted-foreground));
+}
+
+.aui-branch-picker-state {
+  font-weight: 500;
+}
+
+/* text */
+
+.aui-text {
+  white-space: pre-line;
+}
+
+@keyframes aui-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.aui-text-running::after {
+  animation: aui-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  content: "\25cf";
+  margin-left: 0.25rem;
+}
