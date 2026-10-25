@@ -73,6 +73,29 @@ Web streamed runs, scheduled jobs, reflector passes, and session-native subagent
 
 See [Concurrency and responsiveness](concurrency-and-responsiveness.md) for limits and tuning.
 
+## Browser smoke test
+
+`web/e2e/` holds a small Playwright suite that runs against the real embedded
+bundle rather than a Vite dev server. It boots `microclaw start` from the built
+binary with a generated web-only config (placeholder API key, scratch
+`data_dir`, free port, password set through `microclaw web password`), signs
+in, types into the composer, sends, reloads with history rendered, and types
+again. It fails on any uncaught browser error or `console.error`, which is the
+class of regression that shipped unnoticed in v0.8.0 through v0.10.0 (issue
+#517: `Maximum update depth exceeded` on the first keystroke).
+
+```sh
+cargo build                                   # the test drives target/debug/microclaw
+npm --prefix web/e2e ci                       # first time only
+npm --prefix web/e2e run install-browser      # first time only: downloads Chromium
+npm --prefix web run e2e                      # same as: npm --prefix web/e2e test
+```
+
+Point `MICROCLAW_BIN` at another binary to test a release build. In CI the
+`Web UI Browser Smoke` job downloads the binary built by the ubuntu Rust job
+and runs `scripts/ci/web_e2e.sh --no-build`; a failed run uploads the
+Playwright report and traces as the `web-e2e-report` artifact.
+
 ## Troubleshooting
 
 - Run `microclaw doctor` before changing configuration.

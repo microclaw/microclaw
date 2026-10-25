@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "e2e": "npm --prefix e2e test"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.14.29",

@@ -38,6 +38,19 @@ For sandbox or policy changes, also run:
 scripts/ci/stability_smoke.sh
 ```
 
+For changes under `web/` (or a dependency bump that touches it), also run the
+browser smoke test. It boots the built binary with a throwaway web-only config
+and drives the embedded UI in Chromium, so it needs `cargo build` first:
+
+```sh
+cargo build
+npm --prefix web run e2e
+```
+
+The first run installs Playwright and Chromium (`npm --prefix web/e2e ci`,
+`npm --prefix web/e2e run install-browser`). `scripts/ci/web_e2e.sh` does the
+same steps non-interactively; see [Web UI operations](docs/operations/web-ui.md#browser-smoke-test).
+
 ## PR Expectations
 
 - Explain the user impact, not just the code delta.

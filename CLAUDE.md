@@ -68,6 +68,10 @@ cargo run -- setup    # interactive setup wizard to create config.yaml
 cargo run -- help
 ```
 
+Web UI browser smoke test (Playwright, `web/e2e/`; needs `cargo build` first):
+`npm --prefix web run e2e` — boots the built binary with a web-only config and
+types/sends in the real embedded composer. See `docs/operations/web-ui.md`.
+
 ## Configuration
 
 MicroClaw uses `microclaw.config.yaml` (or `.yml`) for configuration. Override the path with `MICROCLAW_CONFIG` env var. See `microclaw.config.example.yaml` for all available fields.
