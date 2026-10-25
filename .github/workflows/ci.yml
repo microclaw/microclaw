@@ -97,6 +97,15 @@ jobs:
       - run: cargo test
       - name: Trajectory eval gate
         run: cargo run --quiet -- eval docs/test/eval-fixtures
+      # The dev binary built above embeds the real web bundle; hand it to the
+      # browser smoke test instead of compiling the workspace a second time.
+      - name: Upload microclaw binary for web e2e
+        uses: actions/upload-artifact@v7
+        with:
+          name: microclaw-debug-ubuntu
+          path: target/debug/microclaw
+          retention-days: 1
+          if-no-files-found: error
 
   rust-macos:
     name: Rust (macos-latest)
@@ -115,6 +124,40 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+
+  web-e2e:
+    name: Web UI Browser Smoke
+    runs-on: ubuntu-latest
+    needs: [rust-ubuntu]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/e2e/package-lock.json
+      - uses: actions/download-artifact@v7
+        with:
+          name: microclaw-debug-ubuntu
+          path: target/debug
+      - run: chmod +x target/debug/microclaw
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('web/e2e/package-lock.json') }}
+      # Drives the embedded Web UI in Chromium: sign in, type, send, reload,
+      # type again; fails on any uncaught browser error (see issue #517).
+      - run: scripts/ci/web_e2e.sh --no-build
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-e2e-report
+          path: |
+            web/e2e/playwright-report
+            web/e2e/test-results
+          if-no-files-found: ignore
 
   stability-smoke:
     name: Stability Smoke
