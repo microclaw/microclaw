@@ -500,6 +500,18 @@ html.dark .aui-assistant-message-content pre code {
   padding: 0;
 }
 
+html.dark .aui-assistant-message-content .aui-code-header-root {
+  border-color: color-mix(in srgb, var(--mc-accent) 34%, #1d2930);
+  background: color-mix(in srgb, var(--mc-accent) 20%, #0a1116);
+  color: color-mix(in srgb, var(--mc-accent) 55%, #d9e5e5);
+}
+
+html.dark .aui-assistant-message-content .aui-code-header-root + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 html.dark .aui-assistant-message-content blockquote {
   margin: 10px 0;
   border-left: 3px solid color-mix(in srgb, var(--mc-accent) 66%, #0c1817);
@@ -735,6 +747,18 @@ html:not(.dark) .aui-assistant-message-content pre code {
   border: 0;
   background: transparent;
   padding: 0;
+}
+
+html:not(.dark) .aui-assistant-message-content .aui-code-header-root {
+  border-color: color-mix(in srgb, var(--mc-accent) 26%, #cbd5e1);
+  background: color-mix(in srgb, var(--mc-accent) 16%, #e2e8f0);
+  color: color-mix(in srgb, var(--mc-accent) 45%, #334155);
+}
+
+html:not(.dark) .aui-assistant-message-content .aui-code-header-root + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 html:not(.dark) .aui-assistant-message-content blockquote {

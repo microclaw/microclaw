@@ -418,3 +418,32 @@
   content: "\25cf";
   margin-left: 0.25rem;
 }
+
+/* code block header (language label + copy button, rendered above <pre>) */
+
+.aui-code-header-root {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 10px;
+  border: 1px solid hsl(var(--aui-border));
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background-color: hsl(var(--aui-muted));
+  color: hsl(var(--aui-muted-foreground));
+  padding: 4px 8px 4px 12px;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 600;
+}
+
+.aui-code-header-language {
+  text-transform: lowercase;
+}
+
+.aui-code-header-root + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}

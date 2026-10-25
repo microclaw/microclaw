@@ -113,7 +113,11 @@ async fn start_stream_run_internal(
                                 )
                                 .await;
                         }
-                        AgentEvent::ToolStart { call_id, name, .. } => {
+                        AgentEvent::ToolStart {
+                            call_id,
+                            name,
+                            input,
+                        } => {
                             super::metrics_apply_agent_event(
                                 &state_for_events,
                                 &AgentEvent::ToolStart {
@@ -127,7 +131,8 @@ async fn start_stream_run_internal(
                                 .publish(
                                     &run_id_for_events,
                                     "tool_start",
-                                    json!({"call_id": call_id, "name": name}).to_string(),
+                                    json!({"call_id": call_id, "name": name, "input": input})
+                                        .to_string(),
                                     run_history_limit,
                                 )
                                 .await;

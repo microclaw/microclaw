@@ -7,7 +7,7 @@
 // UserMessage/BranchPicker/action-bar components and `makeMarkdownText` are
 // reproduced here with the same `aui-*` class names; the matching base
 // styles live in ../assistant-ui.css and the theming in ../styles.css.
-import { memo, type ButtonHTMLAttributes, type FC, type SVGProps } from 'react'
+import { memo, useState, type ButtonHTMLAttributes, type FC, type SVGProps } from 'react'
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -27,6 +27,7 @@ import {
   MarkdownTextPrimitive,
   memoizeMarkdownComponents,
   useIsMarkdownCodeBlock,
+  type CodeHeaderProps,
 } from '@assistant-ui/react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
@@ -133,6 +134,26 @@ function AssistantAvatar() {
 
 // --- markdown ---------------------------------------------------------------
 
+// Header bar above fenced code blocks: language label plus copy-to-clipboard.
+function CodeHeader({ language, code }: CodeHeaderProps) {
+  const [copied, setCopied] = useState(false)
+  const onCopy = () => {
+    if (!code || copied) return
+    void navigator.clipboard.writeText(code).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 3000)
+    })
+  }
+  return (
+    <div className="aui-code-header-root">
+      <span className="aui-code-header-language">{language}</span>
+      <IconButton tooltip="Copy" type="button" onClick={onCopy}>
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </IconButton>
+    </div>
+  )
+}
+
 const markdownComponents = memoizeMarkdownComponents({
   h1: ({ className, ...props }) => <h1 className={cx('aui-md-h1', className)} {...props} />,
   h2: ({ className, ...props }) => <h2 className={cx('aui-md-h2', className)} {...props} />,
@@ -158,6 +179,7 @@ const markdownComponents = memoizeMarkdownComponents({
     const isCodeBlock = useIsMarkdownCodeBlock()
     return <code className={cx(!isCodeBlock && 'aui-md-inline-code', className)} {...props} />
   },
+  CodeHeader,
 })
 
 const remarkPlugins = [remarkGfm, remarkBreaks]

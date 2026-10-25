@@ -24,7 +24,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - Web UI: tool-call cards never appeared during a run. The server publishes
   `call_id` and `preview` on `tool_start` / `tool_result` stream events, but
   the chat adapter still looked for `tool_use_id` / `output` and dropped the
-  events; both key names are accepted now.
+  events; both key names are accepted now, and `tool_start` also carries the
+  tool `input` so the card shows the arguments.
 
 ## 0.10.1 - 2026-10-24
 
