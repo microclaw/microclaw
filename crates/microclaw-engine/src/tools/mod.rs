@@ -743,7 +743,7 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
-        if matches!(auth.caller_channel.as_str(), "work" | "code")
+        if auth.caller_channel == "work"
             && auth.principal.starts_with("subagent:")
             && !matches!(
                 name,

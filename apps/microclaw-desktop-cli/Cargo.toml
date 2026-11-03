@@ -1,0 +1,25 @@
+[package]
+name = "microclaw-desktop-cli"
+version = "0.11.1"
+edition = "2024"
+license = "MIT"
+description = "mcdesk: the terminal entry point of MicroClaw Desktop, a local agent for your projects"
+publish = false
+
+[[bin]]
+name = "mcdesk"
+path = "src/main.rs"
+
+[dependencies]
+microclaw-sdk = { version = "0.11.1", path = "../../crates/microclaw-sdk", features = ["full"] }
+microclaw-work-app = { version = "0.11.1", path = "../../crates/microclaw-work-app" }
+microclaw-work-runtime = { version = "0.11.1", path = "../../crates/microclaw-work-runtime" }
+anyhow = "1"
+clap = { version = "4.6", features = ["derive"] }
+dirs = "6"
+regex = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"

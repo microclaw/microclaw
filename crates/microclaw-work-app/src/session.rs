@@ -813,12 +813,16 @@ impl WorkSessionSnapshot {
             });
         }
 
-        let expected = if self.runtime_run_id.as_deref() == Some(envelope.run_id.as_str()) {
+        let same_run = self.runtime_run_id.as_deref() == Some(envelope.run_id.as_str());
+        let expected = if same_run {
             self.last_runtime_sequence.saturating_add(1)
         } else {
             1
         };
-        if envelope.sequence != expected {
+        // The embedded SDK runtime numbers a run's events from 0, remote
+        // Server streams from 1; accept either as the first event of a run.
+        let first_of_new_run = !same_run && envelope.sequence == 0;
+        if envelope.sequence != expected && !first_of_new_run {
             return Err(WorkCommandError::UnexpectedRuntimeEventSequence {
                 run_id: envelope.run_id,
                 expected,
@@ -1667,6 +1671,36 @@ mod tests {
         );
         assert_eq!(snapshot.last_runtime_sequence, 0);
         assert!(snapshot.runtime_run_id.is_none());
+    }
+
+    #[test]
+    fn accepts_zero_based_sequences_from_the_embedded_runtime() {
+        let mut snapshot = WorkSessionSnapshot::new("/workspace");
+        snapshot
+            .apply(WorkCommand::StartTask {
+                task: "embedded events".into(),
+            })
+            .unwrap();
+        for sequence in 0..2 {
+            snapshot
+                .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                    "sdk-run-1",
+                    sequence,
+                    RuntimeEvent::Iteration { iteration: 1 },
+                )))
+                .unwrap();
+        }
+        assert_eq!(snapshot.last_runtime_sequence, 1);
+        // A gap within the same run is still rejected.
+        assert!(
+            snapshot
+                .apply(WorkCommand::ApplyRuntimeEvent(RuntimeEventEnvelope::new(
+                    "sdk-run-1",
+                    3,
+                    RuntimeEvent::Iteration { iteration: 2 },
+                )))
+                .is_err()
+        );
     }
 
     #[test]

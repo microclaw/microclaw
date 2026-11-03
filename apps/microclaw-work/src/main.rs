@@ -21,7 +21,7 @@ use microclaw_work_runtime::{
     AgentSettingsDraft, DiagnosticStatus, ModelProviderPreset, ModelSettingsDraft,
     RuntimeConfigSummary, WorkDiagnosticsReport, WorkRunCancellation, WorkRunRequest,
     WorkRunSteering, WorkRuntimeMessage, WorkRuntimeService, WorkSkill, WorkSubagent,
-    popular_model_provider_presets,
+    popular_model_provider_presets, work_data_root,
 };
 use smol::Timer;
 use std::fs;
@@ -4658,29 +4658,6 @@ fn inspect_workspace(workspace: &Path) -> WorkspaceContext {
     }
 }
 
-fn work_data_root() -> PathBuf {
-    resolve_work_data_root(
-        std::env::var_os("MICROCLAW_WORK_DATA_DIR"),
-        dirs::data_local_dir(),
-        std::env::temp_dir(),
-    )
-}
-
-fn resolve_work_data_root(
-    override_path: Option<std::ffi::OsString>,
-    platform_data_dir: Option<PathBuf>,
-    temporary_dir: PathBuf,
-) -> PathBuf {
-    override_path
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            platform_data_dir
-                .unwrap_or(temporary_dir)
-                .join("microclaw-work")
-        })
-}
-
 fn open_work_window(cx: &mut App) {
     if !cx.windows().is_empty() {
         cx.activate(true);
@@ -4721,10 +4698,10 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        SettingsSection, format_elapsed, inspect_workspace, inspector_fits, resolve_work_data_root,
-        sidebar_width_for,
+        SettingsSection, format_elapsed, inspect_workspace, inspector_fits, sidebar_width_for,
     };
     use gpui::px;
+    use microclaw_work_runtime::resolve_work_data_root;
     use std::ffi::OsString;
     use std::path::PathBuf;
 

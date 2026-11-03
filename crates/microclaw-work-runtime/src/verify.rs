@@ -124,7 +124,7 @@ pub fn tail(text: &str, max: usize) -> &str {
 pub fn fix_prompt(outcome: &CheckOutcome, round: u32, max_rounds: u32) -> String {
     let output = tail(outcome.output.trim_end(), FAILURE_TAIL_CHARS);
     format!(
-        "[MicroClaw Code verification, round {round}/{max_rounds}] The project check `{name}` (`{run}`) {status} after your changes.\n\
+        "[MicroClaw Desktop verification, round {round}/{max_rounds}] The project check `{name}` (`{run}`) {status} after your changes.\n\
          Output (last {limit} characters):\n```\n{output}\n```\n\
          Fix the cause and stop when the change is complete. Do not delete, skip or weaken tests or checks to make them pass; if the failure is unrelated to your change, say so instead of changing unrelated code.",
         name = outcome.check.name,

@@ -8,17 +8,22 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
-- **MicroClaw Code** (`apps/microclaw-code`, Preview): a local, terminal-first
-  coding agent and the fourth product next to the SDK, Server and Work. Built
-  only on the public `microclaw-sdk` facade. Interactive sessions and
-  `-p` one-shot runs (`--json` JSON Lines events) in the repository that
-  contains the current directory; `plan` / `ask` / `auto` permission modes
-  (auto still asks for destructive shell commands); automatic verification
-  with the project's own checks (Rust, Node, Python, Go, Make) that hands
-  failures back to the agent; `.microclaw/code.yaml` project settings;
-  `check` / `init` / `info` subcommands. `microclaw code …` forwards to the
-  `microclaw-code` binary. Proposal:
-  `docs/roadmap/microclaw-code-proposal-cn.md`.
+- **MicroClaw Desktop CLI** (`mcdesk`, `apps/microclaw-desktop-cli`, Preview).
+  MicroClaw Desktop is now the local product: the desktop app (currently
+  shipped as MicroClaw Work) plus this terminal entry point, sharing one
+  Agent Engine, session store and state machine. `mcdesk` runs interactive
+  sessions or `-p` one-shot runs (`--json` JSON Lines events) in the
+  repository that contains the current directory; its sessions appear in the
+  desktop app and `/desktop` / `mcdesk desktop` hand them over. `plan` / `ask`
+  / `auto` permission modes (auto still asks for destructive shell commands);
+  automatic verification with the project's own checks (Rust, Node, Python,
+  Go, Make) that hands failures back to the agent;
+  `.microclaw/project.yaml` settings, honoured only for projects the user
+  trusted (`mcdesk trust`, `--trust`); `check` / `init` / `info` / `sessions`
+  subcommands. `microclaw desktop …` forwards to `mcdesk`. Proposal:
+  `docs/roadmap/microclaw-desktop-proposal-cn.md`.
+- `microclaw-work-runtime` gains shared `project`, `trust` and `verify`
+  modules and exports `work_data_root()`.
 - `bash` gains `run_in_background`, with new `bash_output` (incremental,
   filterable output) and `bash_kill` tools for dev servers, watchers and long
   test runs. Processes are scoped to the session; refused while the sandbox
@@ -42,8 +47,13 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   the user or a formatter are not clobbered.
 - In a direct workspace (`working_dir_isolation: direct`, used by Work and
   Code) `bash` runs in the workspace root instead of its `tmp/` subdirectory.
-- High-risk tool approval and the read-only sub-agent restriction cover the
-  `code` caller channel, as they already did for `work`.
+
+### Fixed
+
+- The Work session state machine dropped the first runtime event of every
+  embedded run (usually the checkpoint): the SDK runtime numbers events from
+  0 while the projection only accepted 1. A new run now starts at 0 or 1;
+  gaps within a run are still rejected.
 
 ## 0.11.1 - 2026-10-25
 

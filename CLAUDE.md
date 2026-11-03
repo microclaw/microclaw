@@ -6,7 +6,7 @@ MicroClaw is a Rust multi-platform chat bot with a channel-agnostic core and pla
 
 Rust 2021, Tokio, teloxide 0.17, serenity 0.12, provider-agnostic LLM runtime (Anthropic + OpenAI-compatible), SQLite (rusqlite bundled), cron crate for scheduling.
 
-Product line (all share one Agent Engine): **MicroClaw SDK** (`crates/microclaw-sdk`), **MicroClaw Server** (`microclaw`, this root crate), **MicroClaw Code** (`apps/microclaw-code`, local terminal coding agent) and **MicroClaw Work** (`apps/microclaw-work`, GPUI desktop).
+Product line (all share one Agent Engine): **MicroClaw SDK** (`crates/microclaw-sdk`), **MicroClaw Server** (`microclaw`, this root crate) and **MicroClaw Desktop**, the local product with two entry points: the GPUI app (`apps/microclaw-work`, still shipped as "MicroClaw Work") and the terminal CLI `mcdesk` (`apps/microclaw-desktop-cli`).
 
 ## Directory overview
 
@@ -21,7 +21,7 @@ Product line (all share one Agent Engine): **MicroClaw SDK** (`crates/microclaw-
 - `crates/microclaw-tools/` -- tool runtime primitives (trait/auth/risk/schema/path) + sandbox
 - `crates/microclaw-channels/` -- channel abstraction and delivery boundary modules
 - `crates/microclaw-app/` -- app-level support modules (logging, builtin skills, transcribe)
-- `apps/microclaw-code/` -- MicroClaw Code: terminal coding agent on `microclaw-sdk` (project detection, permission modes, verification loop); `microclaw code` forwards to it
+- `apps/microclaw-desktop-cli/` -- `mcdesk`, MicroClaw Desktop's terminal entry point on `microclaw-sdk`; drives the shared `microclaw-work-app` session snapshot/store; `microclaw desktop` forwards to it
 - `src/main.rs` -- entry point, CLI
 - `src/runtime.rs` -- app wiring (`AppState`), provider/tool initialization, channel boot
 - `src/config/` -- config model split by domain (core, defaults, media, llm_profiles, subagents, autonomy, integrations, governance)
@@ -60,7 +60,7 @@ Product line (all share one Agent Engine): **MicroClaw SDK** (`crates/microclaw-
 - **Per-chat model override**: `/model here <name>` / `/provider here <alias>` scope overrides to one chat (runtime-only, key `channel#chat_id`)
 - **Interrupted-turn recovery**: interactive turns are tracked in the `active_turns` table (with a rolling `progress_text` checkpoint per tool iteration); on restart `src/turn_recovery.rs` notifies chats whose turn was killed mid-run — including how far it got — and retires orphaned sub-agent runs as `interrupted`
 - **Work ↔ Server pairing**: `src/web/pairing.rs` mints single-use codes (in-memory `PairingHub`) and trades them for hashed device tokens in `paired_devices` (schema v44, `db/pairing.rs`); `middleware.rs` resolves them to `device:<id>` actors with read+write scopes; `POST /api/runs/:run_id/cancel` is the HTTP twin of WS `chat.abort`. Work's `microclaw-work-runtime::remote` maps the Server SSE stream back onto `RuntimeEventEnvelope`s so the same session state machine drives local and remote runs
-- **MicroClaw Code**: `apps/microclaw-code` drives the SDK `Agent` with caller channel `code` and a direct workspace; `plan` mode uses `ToolPolicy::ReadOnly`, other modes `ToolPolicy::WorkspaceWrite` (`is_workspace_tool`); approvals end the run and are answered by re-running with `1`/`2`/`3`; after edits it runs `.microclaw/code.yaml` / detected `auto` checks and feeds failures back (`verify.rs`)
+- **MicroClaw Desktop CLI (`mcdesk`)**: drives the SDK `Agent` with caller channel `work` and a direct workspace, projecting every event into a `WorkSessionSnapshot` saved in the shared `WorkSessionStore` (runtime session = snapshot `session_id`), so sessions appear in the desktop app; `plan` mode uses `ToolPolicy::ReadOnly`, other modes `ToolPolicy::WorkspaceWrite` (`is_workspace_tool`); approvals end the run and are answered by re-running with `1`/`2`/`3` (`WorkCommand::ResolveApproval`); project detection, trust (`trusted-projects.json` in `work_data_root()`) and verification live in `microclaw-work-runtime::{project, trust, verify}`; `.microclaw/project.yaml` is honoured only for trusted projects, and auto checks only run there
 - **Coding tool primitives**: `glob`/`grep` walk via `tools/workspace_walk.rs` (gitignore-aware); `tools/file_state.rs` is the stale-read guard for `edit_file`/`write_file`; `bash` `run_in_background` + `bash_output`/`bash_kill` live in `tools/background_process.rs`
 - **Delivery outbox**: final replies whose channel send fails are queued in `outbox_messages` and redelivered with backoff by `src/outbox.rs` (supervised loop); depth surfaces in the web Governance tab
 

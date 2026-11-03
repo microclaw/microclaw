@@ -440,8 +440,7 @@ pub fn resolve_tool_working_dir(
 
 fn requires_high_risk_approval(risk: ToolRisk, auth: &ToolAuthContext) -> bool {
     risk == ToolRisk::High
-        && (matches!(auth.caller_channel.as_str(), "web" | "work" | "code")
-            || auth.is_control_chat())
+        && (auth.caller_channel == "web" || auth.caller_channel == "work" || auth.is_control_chat())
 }
 
 /// Input marker injected after explicit operator approval so a high-risk

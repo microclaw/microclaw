@@ -6100,23 +6100,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "microclaw-code"
-version = "0.11.1"
-dependencies = [
- "anyhow",
- "clap",
- "dirs",
- "microclaw-sdk",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "microclaw-core"
 version = "0.11.1"
 dependencies = [
@@ -6128,6 +6111,22 @@ dependencies = [
  "serde_json",
  "similar",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "microclaw-desktop-cli"
+version = "0.11.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "microclaw-sdk",
+ "microclaw-work-app",
+ "microclaw-work-runtime",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -6262,6 +6261,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

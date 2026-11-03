@@ -67,10 +67,10 @@ enum MainCommand {
     Acp,
     /// Run a single prompt headlessly and print the reply (for scripts/CI)
     Run(RunCommand),
-    /// Open MicroClaw Code, the local coding agent, in the current repository
+    /// Open MicroClaw Desktop in the terminal (`mcdesk`) in the current repository
     #[command(disable_help_flag = true)]
-    Code {
-        /// Arguments passed to `microclaw-code` (see `microclaw code --help`).
+    Desktop {
+        /// Arguments passed to `mcdesk` (see `microclaw desktop --help`).
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -602,13 +602,13 @@ fn migrate_legacy_skills_dir(legacy_dir: &Path, preferred_dir: &Path) {
     }
 }
 
-/// Locate the `microclaw-code` executable: next to this binary first (release
+/// Locate the `mcdesk` executable: next to this binary first (release
 /// archives and `cargo build` put them side by side), then on `PATH`.
-fn find_code_binary() -> Option<PathBuf> {
+fn find_desktop_cli_binary() -> Option<PathBuf> {
     let name = if cfg!(windows) {
-        "microclaw-code.exe"
+        "mcdesk.exe"
     } else {
-        "microclaw-code"
+        "mcdesk"
     };
     if let Some(dir) = std::env::current_exe()
         .ok()
@@ -626,14 +626,14 @@ fn find_code_binary() -> Option<PathBuf> {
     })
 }
 
-/// `microclaw code …` hands off to the MicroClaw Code binary, like git
-/// subcommands. Returns the process exit code.
-fn launch_code(args: &[String]) -> i32 {
-    let Some(binary) = find_code_binary() else {
+/// `microclaw desktop …` hands off to `mcdesk`, the MicroClaw Desktop CLI,
+/// like git subcommands. Returns the process exit code.
+fn launch_desktop_cli(args: &[String]) -> i32 {
+    let Some(binary) = find_desktop_cli_binary() else {
         eprintln!(
-            "MicroClaw Code is not installed.\n\
-             Install it with `cargo install --git https://github.com/microclaw/microclaw microclaw-code`,\n\
-             or build it from a checkout with `cargo build --release -p microclaw-code` and put `microclaw-code` on your PATH."
+            "The MicroClaw Desktop CLI (mcdesk) is not installed.\n\
+             Install it with `cargo install --git https://github.com/microclaw/microclaw microclaw-desktop-cli`,\n\
+             or build it from a checkout with `cargo build --release -p microclaw-desktop-cli` and put `mcdesk` on your PATH."
         );
         return 127;
     };
@@ -804,8 +804,8 @@ async fn main() -> anyhow::Result<()> {
             run_command = Some(run);
             Some("run")
         }
-        Some(MainCommand::Code { args }) => {
-            std::process::exit(launch_code(&args));
+        Some(MainCommand::Desktop { args }) => {
+            std::process::exit(launch_desktop_cli(&args));
         }
         Some(MainCommand::Gateway { args }) => {
             gateway::handle_gateway_cli(&args)?;

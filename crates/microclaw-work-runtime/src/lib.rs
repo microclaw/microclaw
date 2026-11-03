@@ -16,7 +16,10 @@ use microclaw_core::runtime_event::RuntimeEventEnvelope;
 use microclaw_engine as microclaw;
 use microclaw_sdk::MicroClaw;
 
+pub mod project;
 pub mod remote;
+pub mod trust;
+pub mod verify;
 pub use remote::{
     MappedServerEvent, RemoteError, RemoteIdentity, RemoteRuntimeService, RemoteServerClient,
     RemoteServerCredentials, ServerSseEvent, credentials_path, map_server_event,
@@ -30,6 +33,32 @@ use std::{fs, io};
 
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Data directory shared by the MicroClaw Desktop app and the `mcdesk` CLI:
+/// sessions, trust decisions and the Desktop-owned model configuration.
+/// `MICROCLAW_WORK_DATA_DIR` overrides it.
+pub fn work_data_root() -> PathBuf {
+    resolve_work_data_root(
+        std::env::var_os("MICROCLAW_WORK_DATA_DIR"),
+        dirs::data_local_dir(),
+        std::env::temp_dir(),
+    )
+}
+
+pub fn resolve_work_data_root(
+    override_path: Option<std::ffi::OsString>,
+    platform_data_dir: Option<PathBuf>,
+    temporary_dir: PathBuf,
+) -> PathBuf {
+    override_path
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            platform_data_dir
+                .unwrap_or(temporary_dir)
+                .join("microclaw-work")
+        })
+}
 
 #[derive(Debug, Clone)]
 pub struct WorkRunRequest {

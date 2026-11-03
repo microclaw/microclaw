@@ -1,8 +1,8 @@
-//! System prompt for the MicroClaw Code agent profile.
+//! System prompt for the MicroClaw Desktop CLI agent profile.
 
-use crate::project::{Mode, Project};
+use microclaw_work_runtime::project::{Mode, Project};
 
-const CODE_GUIDE: &str = "You are MicroClaw Code, a coding agent working directly in the user's repository on their own machine. \
+const CODE_GUIDE: &str = "You are MicroClaw Desktop, a local agent working directly in the user's repository on their own machine. \
 The working directory for every file and shell tool is the repository root shown below.
 
 How to work:
@@ -70,11 +70,11 @@ mod tests {
         std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
         std::fs::create_dir_all(dir.path().join(".microclaw")).unwrap();
         std::fs::write(
-            dir.path().join(".microclaw/code.yaml"),
+            dir.path().join(".microclaw/project.yaml"),
             "instructions: Always run fmt.\n",
         )
         .unwrap();
-        let project = Project::discover(dir.path()).unwrap();
+        let project = Project::discover(dir.path(), |_| true).unwrap();
         let prompt = system_prompt(&project, Mode::Plan, Some("branch: main"));
         assert!(prompt.contains("cargo check --all-targets` (run automatically"));
         assert!(prompt.contains("Always run fmt."));

@@ -1,17 +1,18 @@
-//! MicroClaw Code: a local, terminal-first coding agent.
+//! `mcdesk`: the terminal entry point of MicroClaw Desktop.
 //!
-//! A thin application over the MicroClaw SDK: it opens the repository that
-//! contains the current directory as a direct workspace, runs the shared
-//! Agent Engine with a coding profile, renders tool calls and diffs in the
-//! terminal, handles approvals according to the permission mode, and
-//! verifies edits with the project's own build/lint commands, handing
-//! failures back to the agent.
+//! MicroClaw Desktop is the local product: the desktop app and this CLI share
+//! one Agent Engine (through `microclaw-sdk`), one session store and state
+//! machine (`microclaw-work-app`), and the project, trust and verification
+//! services in `microclaw-work-runtime`. A session started here appears in the
+//! desktop app and `/desktop` hands it over.
+//!
+//! The CLI opens the repository that contains the current directory as a
+//! direct workspace, renders tool calls and diffs, resolves approvals
+//! according to the permission mode, and verifies edits with the project's
+//! own checks, handing failures back to the agent.
 
-mod project;
 mod prompt;
 mod render;
-mod session;
-mod verify;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -19,17 +20,21 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use microclaw_sdk::{
-    Agent, MicroClaw, RunHandle, RunRequest, RunStatus, RuntimeEvent, SessionId, ToolPolicy,
-};
+use microclaw_sdk::{Agent, MicroClaw, RunHandle, RunRequest, RunStatus, SessionId, ToolPolicy};
+use microclaw_work_app::session::{WorkCommand, WorkSessionSnapshot, WorkStatus};
+use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
+use microclaw_work_runtime::project::{self, Check, Mode, Project};
+use microclaw_work_runtime::trust::TrustStore;
+use microclaw_work_runtime::{verify, work_data_root};
 use tokio::sync::mpsc;
 
-use project::{Mode, Project};
 use render::{PendingApproval, Renderer, Style};
-use session::SessionIndex;
 
-const AGENT_NAME: &str = "MicroClaw Code";
-const CALLER_CHANNEL: &str = "code";
+const AGENT_NAME: &str = "MicroClaw Desktop";
+/// Same caller channel as the desktop app, so sessions, run control and
+/// sub-agent listings are shared.
+const CALLER_CHANNEL: &str = "work";
+const DESKTOP_BUNDLE_ID: &str = "org.microclaw.work";
 
 /// Shell commands that still ask for approval in auto mode.
 const ALWAYS_ASK_PATTERNS: &[&str] = &[
@@ -51,10 +56,10 @@ const ALWAYS_ASK_PATTERNS: &[&str] = &[
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "microclaw-code",
+    name = "mcdesk",
     version,
-    about = "MicroClaw Code: a local coding agent for your repository",
-    long_about = "MicroClaw Code opens the repository that contains the current directory and runs the MicroClaw Agent Engine in it.\n\nRun without arguments for an interactive session, or pass -p for a single non-interactive task. Model credentials come from your MicroClaw configuration (~/.microclaw/microclaw.config.yaml, MICROCLAW_CONFIG, or --config)."
+    about = "MicroClaw Desktop in your terminal: a local agent for your repository",
+    long_about = "mcdesk opens the repository that contains the current directory and runs the MicroClaw Agent Engine in it. Sessions are shared with the MicroClaw Desktop app.\n\nRun without arguments for an interactive session, or pass -p for a single non-interactive task. Model credentials come from --config, MICROCLAW_WORK_CONFIG, MICROCLAW_CONFIG, the Desktop app's settings, or ~/.microclaw/microclaw.config.yaml."
 )]
 struct Cli {
     /// Initial task for an interactive session.
@@ -77,9 +82,13 @@ struct Cli {
     #[arg(short = 'c', long = "continue")]
     continue_last: bool,
 
-    /// Use a named session.
-    #[arg(long, value_name = "NAME", conflicts_with = "continue_last")]
+    /// Resume a session by id (see `mcdesk sessions`).
+    #[arg(long, value_name = "ID", conflicts_with = "continue_last")]
     session: Option<String>,
+
+    /// Trust this project (honour .microclaw/project.yaml, run checks automatically).
+    #[arg(long)]
+    trust: bool,
 
     /// MicroClaw configuration file with model credentials.
     #[arg(long, value_name = "PATH")]
@@ -108,14 +117,23 @@ enum Command {
         /// Check names; default: all checks.
         names: Vec<String>,
     },
-    /// Write a .microclaw/code.yaml template for this project.
+    /// Write a .microclaw/project.yaml template for this project.
     Init {
         /// Overwrite an existing file.
         #[arg(long)]
         force: bool,
     },
-    /// Show what MicroClaw Code detected for this project.
+    /// Show what MicroClaw Desktop detected for this project.
     Info,
+    /// List this project's sessions (shared with the desktop app).
+    Sessions,
+    /// Trust this project, or revoke trust with --revoke.
+    Trust {
+        #[arg(long)]
+        revoke: bool,
+    },
+    /// Open the desktop app on this project's most recent session.
+    Desktop,
 }
 
 #[tokio::main]
@@ -124,10 +142,29 @@ async fn main() -> ExitCode {
     match run(cli).await {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("microclaw-code: {error:#}");
+            eprintln!("mcdesk: {error:#}");
             ExitCode::from(1)
         }
     }
+}
+
+fn session_store() -> WorkSessionStore {
+    WorkSessionStore::new(work_data_root().join("work-sessions"))
+}
+
+/// Sessions whose workspace is this project, most recent first.
+fn project_sessions(
+    store: &WorkSessionStore,
+    root: &Path,
+) -> anyhow::Result<Vec<WorkSessionSummary>> {
+    let root = root.to_string_lossy();
+    let mut sessions: Vec<_> = store
+        .list()?
+        .into_iter()
+        .filter(|s| s.workspace == root)
+        .collect();
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.updated_at_ms));
+    Ok(sessions)
 }
 
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
@@ -135,8 +172,14 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(dir) => dir.clone(),
         None => std::env::current_dir()?,
     };
-    let project = Project::discover(&start)?;
+    let mut trust_store = TrustStore::load(TrustStore::default_path());
+    let mut project = Project::discover(&start, |root| trust_store.is_trusted(root))?;
     let style = Style::detect();
+
+    if cli.trust && !project.trusted {
+        trust_store.set(&project.root, true)?;
+        project.set_trusted(true);
+    }
 
     match &cli.command {
         Some(Command::Info) => {
@@ -144,31 +187,36 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Init { force }) => return init_project(&project, *force),
-        Some(Command::Check { names }) => {
-            return check_command(&project, names, style).await;
+        Some(Command::Check { names }) => return check_command(&project, names, style).await,
+        Some(Command::Sessions) => {
+            print_sessions(&project, style)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Command::Trust { revoke }) => {
+            trust_store.set(&project.root, !revoke)?;
+            println!(
+                "{} {}",
+                if *revoke {
+                    "Revoked trust for"
+                } else {
+                    "Trusted"
+                },
+                project.root.display()
+            );
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Command::Desktop) => {
+            let store = session_store();
+            if let Some(latest) = project_sessions(&store, &project.root)?.first() {
+                // Saving makes it the active session the desktop app opens.
+                let snapshot = store.load(&latest.session_id)?;
+                store.save(&snapshot)?;
+            }
+            open_desktop_app()?;
+            return Ok(ExitCode::SUCCESS);
         }
         None => {}
     }
-
-    let mode = match cli.mode.as_deref() {
-        Some(raw) => Mode::parse(raw)
-            .ok_or_else(|| anyhow::anyhow!("unknown mode '{raw}' (expected plan, ask or auto)"))?,
-        None => project.config.mode.unwrap_or_default(),
-    };
-    let config_path = resolve_config(cli.config.as_deref())?;
-
-    let mut index = SessionIndex::load(SessionIndex::default_path());
-    let session = if let Some(name) = &cli.session {
-        name.clone()
-    } else if cli.continue_last {
-        index
-            .last(&project.root)
-            .map(str::to_string)
-            .ok_or_else(|| anyhow::anyhow!("no previous MicroClaw Code session for this project"))?
-    } else {
-        session::new_session_name(&project.root)
-    };
-    index.remember(&project.root, &session);
 
     let print_prompt = match cli.print.as_deref() {
         Some("-") => {
@@ -186,16 +234,54 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         );
     }
 
+    let mut input = interactive.then(spawn_stdin_reader);
+    if !project.trusted && trust_store.decision(&project.root).is_none() {
+        if interactive {
+            if ask_trust(&project, style, &mut input).await {
+                trust_store.set(&project.root, true)?;
+                project.set_trusted(true);
+            } else {
+                trust_store.set(&project.root, false)?;
+            }
+        } else if !cli.json {
+            eprintln!(
+                "{}",
+                style.dim("Project not trusted: .microclaw/project.yaml is ignored and checks do not run automatically. Pass --trust to trust it.")
+            );
+        }
+    }
+
+    let mode = match cli.mode.as_deref() {
+        Some(raw) => Mode::parse(raw)
+            .ok_or_else(|| anyhow::anyhow!("unknown mode '{raw}' (expected plan, ask or auto)"))?,
+        None => project.config.mode.unwrap_or_default(),
+    };
+    let config_path = resolve_config(cli.config.as_deref())?;
+
+    let store = session_store();
+    let snapshot = if let Some(id) = &cli.session {
+        store.open(id)?
+    } else if cli.continue_last {
+        let latest = project_sessions(&store, &project.root)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no previous session for this project"))?;
+        store.open(&latest.session_id)?
+    } else {
+        store.create(project.root.to_string_lossy())?
+    };
+
     if interactive || !cli.json {
         eprintln!(
             "{} {} {}",
-            style.bold("MicroClaw Code"),
+            style.bold("MicroClaw Desktop"),
             style.dim(&format!(
-                "· {} · mode {}",
+                "· {} · mode {}{}",
                 project.root.display(),
-                mode.as_str()
+                mode.as_str(),
+                if project.trusted { "" } else { " · untrusted" }
             )),
-            style.dim(&format!("· session {session}"))
+            style.dim(&format!("· session {}", snapshot.session_id))
         );
         eprintln!("{}", style.dim("Loading the Agent Engine…"));
     }
@@ -217,11 +303,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         project,
         microclaw,
         mode,
-        session,
+        store,
+        snapshot,
         style,
         json: cli.json && !interactive,
         interactive,
-        input: None,
+        input,
         last_interrupt: None,
     };
 
@@ -231,7 +318,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let line = serde_json::json!({
                 "type": "result",
                 "status": report.status,
-                "session": app.session,
+                "session": app.snapshot.session_id,
                 "final_text": report.final_text,
                 "changed_files": report.changed_files,
                 "checks_passed": report.checks_passed,
@@ -257,7 +344,7 @@ fn resolve_config(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
         );
         return Ok(path.to_path_buf());
     }
-    for var in ["MICROCLAW_CODE_CONFIG", "MICROCLAW_CONFIG"] {
+    for var in ["MICROCLAW_WORK_CONFIG", "MICROCLAW_CONFIG"] {
         if let Some(value) = std::env::var_os(var) {
             let path = PathBuf::from(value);
             anyhow::ensure!(
@@ -268,11 +355,14 @@ fn resolve_config(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
             return Ok(path);
         }
     }
+    let desktop_owned = work_data_root().join("microclaw.config.yaml");
+    if desktop_owned.is_file() {
+        return Ok(desktop_owned);
+    }
     if let Some(home) = dirs::home_dir() {
         for name in [
             ".microclaw/microclaw.config.yaml",
             ".microclaw/microclaw.config.yml",
-            ".microclaw/code/config.yaml",
         ] {
             let path = home.join(name);
             if path.is_file() {
@@ -281,7 +371,62 @@ fn resolve_config(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
         }
     }
     anyhow::bail!(
-        "no MicroClaw configuration found. Run `microclaw setup`, create ~/.microclaw/microclaw.config.yaml with llm_provider/model/api_key, or pass --config <PATH>."
+        "no MicroClaw configuration found. Configure a model in the MicroClaw Desktop app, run `microclaw setup`, create ~/.microclaw/microclaw.config.yaml with llm_provider/model/api_key, or pass --config <PATH>."
+    )
+}
+
+fn open_desktop_app() -> anyhow::Result<()> {
+    let status = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+            .args(["-b", DESKTOP_BUNDLE_ID])
+            .status()
+    } else {
+        let name = if cfg!(windows) {
+            "microclaw-work.exe"
+        } else {
+            "microclaw-work"
+        };
+        let sibling = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join(name)))
+            .filter(|p| p.is_file());
+        let program = sibling.unwrap_or_else(|| PathBuf::from(name));
+        std::process::Command::new(program)
+            .spawn()
+            .map(|_| std::process::ExitStatus::default())
+    };
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        _ => anyhow::bail!(
+            "could not start the MicroClaw Desktop app; install it (macOS: `brew install --cask microclaw-work`) and try again"
+        ),
+    }
+}
+
+async fn ask_trust(
+    project: &Project,
+    style: Style,
+    input: &mut Option<mpsc::UnboundedReceiver<Input>>,
+) -> bool {
+    eprintln!(
+        "{} {}",
+        style.yellow("?"),
+        style.bold(&format!("Trust {}?", project.root.display()))
+    );
+    if project.has_config_file {
+        eprintln!(
+            "  It has {}, which can set the permission mode, add instructions and define check commands.",
+            project.config_path().display()
+        );
+    }
+    eprintln!(
+        "  Trusted projects run their checks (build scripts included) automatically after edits. Untrusted projects ignore the project file."
+    );
+    eprint!("{} ", style.yellow("trust this project? [y/N]"));
+    let _ = std::io::stderr().flush();
+    matches!(
+        recv_input(input).await,
+        Some(Input::Line(line)) if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
     )
 }
 
@@ -311,10 +456,19 @@ fn print_info(project: &Project, style: Style) {
             project.kinds.join(", ")
         }
     );
-    let config_state = if project.config_path().is_file() {
-        "present"
-    } else {
-        "absent (run `microclaw-code init`)"
+    println!(
+        "{} {}",
+        style.bold("trusted:"),
+        if project.trusted {
+            "yes"
+        } else {
+            "no (run `mcdesk trust`)"
+        }
+    );
+    let config_state = match (project.has_config_file, project.trusted) {
+        (true, true) => "present",
+        (true, false) => "present, ignored until trusted",
+        (false, _) => "absent (run `mcdesk init`)",
     };
     println!(
         "{} {} ({config_state})",
@@ -348,9 +502,37 @@ fn print_info(project: &Project, style: Style) {
         Ok(path) => println!("{} {}", style.bold("model config:"), path.display()),
         Err(e) => println!("{} {e}", style.bold("model config:")),
     }
+    println!(
+        "{} {}",
+        style.bold("desktop data:"),
+        work_data_root().display()
+    );
     if let Some(git) = project::git_summary(&project.root) {
         println!("{}\n{git}", style.bold("git:"));
     }
+}
+
+fn print_sessions(project: &Project, style: Style) -> anyhow::Result<()> {
+    let sessions = project_sessions(&session_store(), &project.root)?;
+    if sessions.is_empty() {
+        println!("No sessions for {} yet.", project.root.display());
+        return Ok(());
+    }
+    for s in sessions {
+        let task: String = s.task.split_whitespace().collect::<Vec<_>>().join(" ");
+        let task: String = task.chars().take(70).collect();
+        println!(
+            "{}  {:<17} {}",
+            style.bold(&s.session_id),
+            format!("{:?}", s.status).to_lowercase(),
+            task
+        );
+    }
+    println!(
+        "{}",
+        style.dim("Resume with `mcdesk --session <id>`, or `mcdesk -c` for the most recent.")
+    );
+    Ok(())
 }
 
 fn init_project(project: &Project, force: bool) -> anyhow::Result<ExitCode> {
@@ -364,6 +546,9 @@ fn init_project(project: &Project, force: bool) -> anyhow::Result<ExitCode> {
     std::fs::create_dir_all(path.parent().unwrap_or(&project.root))?;
     std::fs::write(&path, project::config_template(project))?;
     println!("Wrote {}", path.display());
+    if !project.trusted {
+        println!("Run `mcdesk trust` so these settings take effect for you.");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -383,10 +568,10 @@ async fn check_command(
     })
 }
 
-fn select_checks(project: &Project, names: &[String]) -> anyhow::Result<Vec<project::Check>> {
+fn select_checks(project: &Project, names: &[String]) -> anyhow::Result<Vec<Check>> {
     if project.checks.is_empty() {
         anyhow::bail!(
-            "no checks detected for this project; add them to {} (see `microclaw-code init`)",
+            "no checks detected for this project; add them to {} (see `mcdesk init`)",
             project.config_path().display()
         );
     }
@@ -412,7 +597,7 @@ fn select_checks(project: &Project, names: &[String]) -> anyhow::Result<Vec<proj
 /// Run checks in order, stopping at the first failure, which is returned.
 async fn run_checks(
     root: &Path,
-    checks: &[project::Check],
+    checks: &[Check],
     style: Style,
     show_output_on_failure: bool,
 ) -> Option<verify::CheckOutcome> {
@@ -514,7 +699,8 @@ struct App {
     project: Project,
     microclaw: MicroClaw,
     mode: Mode,
-    session: String,
+    store: WorkSessionStore,
+    snapshot: WorkSessionSnapshot,
     style: Style,
     json: bool,
     interactive: bool,
@@ -547,12 +733,33 @@ impl App {
 
     fn start_run(&self, prompt: &str) -> anyhow::Result<RunHandle> {
         let mut request = RunRequest::new(prompt);
-        request.session_id = Some(SessionId::new(self.session.clone()));
+        request.session_id = Some(SessionId::new(self.snapshot.session_id.clone()));
         request.workspace = Some(self.project.root.clone());
         Ok(self.agent()?.run_request(request))
     }
 
-    /// Drive one agent run to completion, rendering its events.
+    /// Apply a state-machine command; a rejected transition is reported but
+    /// never stops the run (the engine stays the source of truth).
+    fn apply(&mut self, command: WorkCommand) {
+        if let Err(error) = self.snapshot.apply(command)
+            && !self.json
+        {
+            eprintln!("{}", self.style.dim(&format!("  (session: {error})")));
+        }
+    }
+
+    fn persist(&self) {
+        if let Err(error) = self.store.save(&self.snapshot) {
+            eprintln!(
+                "{}",
+                self.style
+                    .red(&format!("could not save the session: {error}"))
+            );
+        }
+    }
+
+    /// Drive one agent run to completion, rendering its events and
+    /// projecting them into the shared session snapshot.
     async fn drive(&mut self, prompt: &str) -> anyhow::Result<RunOutcome> {
         let mut run = self.start_run(prompt)?;
         let controller = run.controller();
@@ -567,23 +774,18 @@ impl App {
                             if let Ok(line) = serde_json::to_string(&envelope) {
                                 println!("{line}");
                             }
-                            if let RuntimeEvent::FileDiff { path, .. } = &envelope.event {
-                                if !renderer.changed_files.contains(path) {
-                                    renderer.changed_files.push(path.clone());
-                                }
-                            }
-                            if let RuntimeEvent::ApprovalRequired { .. } = &envelope.event {
-                                renderer.event(&mut std::io::sink(), &envelope.event);
-                            }
+                            renderer.event(&mut std::io::sink(), &envelope.event);
                         } else {
                             renderer.event(&mut stdout, &envelope.event);
                         }
+                        self.apply(WorkCommand::ApplyRuntimeEvent(envelope));
                     }
                     None => break,
                 },
                 _ = tokio::signal::ctrl_c() => {
                     if cancel_sent {
                         eprintln!("{}", self.style.red("Interrupted twice; exiting."));
+                        self.persist();
                         std::process::exit(130);
                     }
                     cancel_sent = true;
@@ -594,7 +796,10 @@ impl App {
                     match line {
                         Some(Input::Line(text)) if !text.trim().is_empty() => {
                             match controller.steer_confirmed(text.trim()).await {
-                                Ok(()) => eprintln!("{}", self.style.dim("  ↪ sent to the agent")),
+                                Ok(()) => {
+                                    self.apply(WorkCommand::RecordSteering { message: text.trim().to_string() });
+                                    eprintln!("{}", self.style.dim("  ↪ sent to the agent"));
+                                }
                                 Err(e) => eprintln!("{}", self.style.dim(&format!("  ↪ not delivered: {e}"))),
                             }
                         }
@@ -605,7 +810,7 @@ impl App {
             }
         }
         let result = run.result().await;
-        let (status, final_text, error) = match result {
+        let (mut status, final_text, error) = match result {
             Ok(result) => (
                 result.status,
                 result.final_text,
@@ -613,7 +818,30 @@ impl App {
             ),
             Err(e) => (RunStatus::Failed, String::new(), Some(e.message)),
         };
-        let approval = renderer.approval.take();
+        if cancel_sent && status != RunStatus::Failed {
+            status = RunStatus::Cancelled;
+        }
+        match status {
+            RunStatus::Failed | RunStatus::TimedOut => self.apply(WorkCommand::FailRun {
+                message: error.clone().unwrap_or_else(|| "run failed".into()),
+            }),
+            RunStatus::Cancelled
+                if matches!(
+                    self.snapshot.status,
+                    WorkStatus::Running | WorkStatus::Verifying | WorkStatus::AwaitingApproval
+                ) =>
+            {
+                self.apply(WorkCommand::CancelRun)
+            }
+            _ => {}
+        }
+        self.persist();
+
+        let approval = if status == RunStatus::Cancelled {
+            None
+        } else {
+            renderer.approval.take()
+        };
         // The approval prompt text is rendered as a card instead.
         let shown_text = if approval.is_some() {
             ""
@@ -622,15 +850,6 @@ impl App {
         };
         if !self.json {
             renderer.finish(&mut stdout, shown_text);
-        }
-        if cancel_sent && status != RunStatus::Failed {
-            return Ok(RunOutcome {
-                status: RunStatus::Cancelled,
-                final_text,
-                error,
-                changed_files: renderer.changed_files,
-                approval: None,
-            });
         }
         Ok(RunOutcome {
             status,
@@ -666,10 +885,36 @@ impl App {
         }
     }
 
+    /// Start a run for a resolved approval (the engine re-enters its
+    /// approval path from the reply).
+    fn resolve_approval(&mut self, value: &str) {
+        if self.snapshot.status == WorkStatus::AwaitingApproval {
+            self.apply(WorkCommand::ResolveApproval {
+                value: value.to_string(),
+            });
+        }
+    }
+
     /// One user turn: run the agent, resolve approvals, verify edits and
     /// hand check failures back for fixing.
     async fn turn(&mut self, prompt: &str) -> anyhow::Result<TurnReport> {
         let mut report = TurnReport::default();
+        // A bare option value answers a pending approval (e.g. `-p 1` to
+        // resume a run that stopped for approval).
+        let answers_pending = self.snapshot.status == WorkStatus::AwaitingApproval
+            && self
+                .snapshot
+                .pending_approval
+                .as_ref()
+                .is_some_and(|a| a.options.iter().any(|o| o.value == prompt));
+        if answers_pending {
+            self.resolve_approval(prompt);
+        } else {
+            self.apply(WorkCommand::StartTask {
+                task: prompt.to_string(),
+            });
+        }
+        self.persist();
         let mut next_prompt = prompt.to_string();
         let mut fix_round = 0u32;
         loop {
@@ -710,6 +955,8 @@ impl App {
                 };
                 match reply {
                     Some(reply) => {
+                        self.resolve_approval(&reply);
+                        self.persist();
                         next_prompt = reply;
                         continue;
                     }
@@ -724,8 +971,8 @@ impl App {
                             eprintln!(
                                 "{}",
                                 self.style.yellow(&format!(
-                                    "Approval needed. Resume with `microclaw-code --session {} -p 1` (approve once) or `-p 3` (deny).{auto_hint}",
-                                    self.session
+                                    "Approval needed. Resume with `mcdesk --session {} -p 1` (approve once) or `-p 3` (deny), or open it in the desktop app.{auto_hint}",
+                                    self.snapshot.session_id
                                 ))
                             );
                         }
@@ -772,6 +1019,10 @@ impl App {
                         ))
                     );
                     next_prompt = verify::fix_prompt(&failure, fix_round, self.max_fix_rounds);
+                    self.apply(WorkCommand::StartTask {
+                        task: next_prompt.clone(),
+                    });
+                    self.persist();
                 }
             }
         }
@@ -815,7 +1066,9 @@ impl App {
     }
 
     async fn repl(&mut self, initial: String) -> anyhow::Result<ExitCode> {
-        self.input = Some(spawn_stdin_reader());
+        if self.input.is_none() {
+            self.input = Some(spawn_stdin_reader());
+        }
         eprintln!(
             "{}",
             self.style.dim("Type a task, /help for commands. Lines ending in \\ continue. Type while the agent works to steer it.")
@@ -853,23 +1106,24 @@ impl App {
                         .yellow("Execute this plan? [y = switch to ask mode and run it / N]")
                 );
                 let _ = std::io::stderr().flush();
-                if let Some(answer) = self.read_line().await {
-                    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-                        self.mode = Mode::Ask;
-                        eprintln!("{}", self.style.dim("mode: ask"));
-                        pending = Some(
-                            "The plan above is approved. Execute it now, then verify the result."
-                                .into(),
-                        );
-                    }
+                if let Some(answer) = self.read_line().await
+                    && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+                {
+                    self.mode = Mode::Ask;
+                    eprintln!("{}", self.style.dim("mode: ask"));
+                    pending = Some(
+                        "The plan above is approved. Execute it now, then verify the result."
+                            .into(),
+                    );
                 }
             }
         }
+        self.persist();
         eprintln!(
             "{}",
             self.style.dim(&format!(
-                "Session saved: {}  (resume with `microclaw-code -c`)",
-                self.session
+                "Session saved: {}  (resume with `mcdesk -c`, or open it in the desktop app with `mcdesk desktop`)",
+                self.snapshot.session_id
             ))
         );
         Ok(ExitCode::SUCCESS)
@@ -910,6 +1164,10 @@ impl App {
                 Err(e) => eprintln!("{}", style.red(&e.to_string())),
             },
             "/verify" => match args.first().map(String::as_str) {
+                Some("on") if !self.project.trusted => eprintln!(
+                    "{}",
+                    style.red("this project is not trusted; run /trust first")
+                ),
                 Some("on") => self.verify = true,
                 Some("off") => self.verify = false,
                 _ => eprintln!(
@@ -923,6 +1181,18 @@ impl App {
                         .join(", ")
                 ),
             },
+            "/trust" => {
+                let mut store = TrustStore::load(TrustStore::default_path());
+                match store.set(&self.project.root, true) {
+                    Ok(()) => {
+                        self.project.set_trusted(true);
+                        self.verify = self.project.verify_enabled();
+                        self.always_ask = compile_always_ask(&self.project.config.always_ask);
+                        eprintln!("trusted {}", self.project.root.display());
+                    }
+                    Err(e) => eprintln!("{}", style.red(&e.to_string())),
+                }
+            }
             "/diff" => {
                 let mut cmd = std::process::Command::new("git");
                 cmd.current_dir(&self.project.root);
@@ -931,31 +1201,50 @@ impl App {
                 } else {
                     cmd.args(["--no-pager", "diff", "--stat"]);
                 }
-                match cmd.status() {
-                    Ok(_) => {}
-                    Err(e) => eprintln!("{}", style.red(&format!("git diff failed: {e}"))),
+                if let Err(e) = cmd.status() {
+                    eprintln!("{}", style.red(&format!("git diff failed: {e}")));
                 }
             }
-            "/new" | "/clear" => {
-                self.session = session::new_session_name(&self.project.root);
-                self.git = project::git_summary(&self.project.root);
-                let mut index = SessionIndex::load(SessionIndex::default_path());
-                index.remember(&self.project.root, &self.session);
-                eprintln!("new session: {}", self.session);
+            "/new" | "/clear" => match self.store.create(self.project.root.to_string_lossy()) {
+                Ok(snapshot) => {
+                    self.snapshot = snapshot;
+                    self.git = project::git_summary(&self.project.root);
+                    eprintln!("new session: {}", self.snapshot.session_id);
+                }
+                Err(e) => eprintln!("{}", style.red(&e.to_string())),
+            },
+            "/sessions" => {
+                if let Err(e) = print_sessions(&self.project, style) {
+                    eprintln!("{}", style.red(&e.to_string()));
+                }
             }
-            "/session" => eprintln!("session: {}", self.session),
+            "/session" => eprintln!("session: {}", self.snapshot.session_id),
+            "/desktop" => {
+                self.persist();
+                match open_desktop_app() {
+                    Ok(()) => eprintln!(
+                        "Opened the desktop app on session {}.",
+                        self.snapshot.session_id
+                    ),
+                    Err(e) => eprintln!("{}", style.red(&e.to_string())),
+                }
+            }
             "/status" | "/info" => {
                 eprintln!(
-                    "mode: {}  verify: {}  session: {}",
+                    "mode: {}  verify: {}  session: {}  status: {:?}",
                     self.mode.as_str(),
                     if self.verify { "on" } else { "off" },
-                    self.session
+                    self.snapshot.session_id,
+                    self.snapshot.status
                 );
                 print_info(&self.project, style);
             }
             "/init" => match init_project(&self.project, false) {
                 Ok(_) => {
-                    if let Ok(project) = Project::discover(&self.project.root) {
+                    let store = TrustStore::load(TrustStore::default_path());
+                    if let Ok(project) =
+                        Project::discover(&self.project.root, |root| store.is_trusted(root))
+                    {
                         self.project = project;
                     }
                 }
@@ -981,10 +1270,12 @@ const HELP: &str = "Commands:
   /plan [task]           switch to plan mode (read-only), optionally with a task
   /check [name|all]      run project checks (default: all)
   /verify [on|off]       toggle automatic checks after edits
+  /trust                 trust this project (honour .microclaw/project.yaml)
   /diff [full]           git diff --stat (or the full diff)
-  /new                   start a new session
+  /new  /sessions        start a new session / list this project's sessions
+  /desktop               continue this session in the desktop app
   /session  /status      show the session / project status
-  /init                  write .microclaw/code.yaml
+  /init                  write .microclaw/project.yaml
   /exit                  quit (Ctrl-C twice also quits)
 While the agent is working, type a message to steer it; Ctrl-C stops the run.";
 
@@ -1029,15 +1320,18 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_print_mode() {
-        let cli =
-            Cli::try_parse_from(["microclaw-code", "-p", "fix it", "--mode", "auto", "--json"])
-                .unwrap();
+    fn cli_parses_print_mode_and_subcommands() {
+        let cli = Cli::try_parse_from([
+            "mcdesk", "-p", "fix it", "--mode", "auto", "--json", "--trust",
+        ])
+        .unwrap();
         assert_eq!(cli.print.as_deref(), Some("fix it"));
         assert_eq!(cli.mode.as_deref(), Some("auto"));
-        assert!(cli.json);
-        let cli = Cli::try_parse_from(["microclaw-code", "check", "build"]).unwrap();
+        assert!(cli.json && cli.trust);
+        let cli = Cli::try_parse_from(["mcdesk", "check", "build"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Check { ref names }) if names == &["build"]));
+        let cli = Cli::try_parse_from(["mcdesk", "trust", "--revoke"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Trust { revoke: true })));
     }
 
     #[test]
@@ -1053,5 +1347,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(failing.exit_code(), ExitCode::from(1));
+    }
+
+    #[test]
+    fn project_sessions_are_filtered_by_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkSessionStore::new(dir.path().join("sessions"));
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let mine = store.create(repo.to_string_lossy()).unwrap();
+        store.create(dir.path().to_string_lossy()).unwrap();
+        let listed = project_sessions(&store, &repo).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].session_id, mine.session_id);
     }
 }
