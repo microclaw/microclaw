@@ -104,6 +104,7 @@ pub fn tool_risk(name: &str) -> ToolRisk {
         "bash" => ToolRisk::High,
         "write_file"
         | "edit_file"
+        | "bash_kill"
         | "write_memory"
         | "a2a_send"
         | "send_message"
@@ -135,6 +136,33 @@ pub enum ToolConcurrencyClass {
     Exclusive,
 }
 
+/// Tools offered to an Agent Profile with `ToolPolicy::WorkspaceWrite`: everything
+/// read-only plus the tools that change files or run commands in the workspace,
+/// planning helpers and operator-configured MCP tools. Tools that reach outside
+/// the workspace (channel delivery, scheduling, A2A, media generation, skill and
+/// memory management) are excluded.
+pub fn is_workspace_tool(name: &str) -> bool {
+    tool_concurrency_class(name) == ToolConcurrencyClass::ReadOnly
+        || name.starts_with("mcp_")
+        || name.starts_with("subagents_")
+        || matches!(
+            name,
+            "write_file"
+                | "edit_file"
+                | "bash"
+                | "bash_kill"
+                | "todo_write"
+                | "clarify"
+                | "activate_skill"
+                | "report_progress"
+                | "sessions_spawn"
+                | "session_search"
+                | "osv_check"
+                | "describe_image"
+                | "consult_specialist"
+        )
+}
+
 /// Returns the concurrency class for a built-in tool.
 /// MCP tools (prefixed with `mcp_`) default to `SideEffect`.
 /// Callers may override via `tool_concurrency_overrides` config.
@@ -163,6 +191,7 @@ pub fn tool_concurrency_class(name: &str) -> ToolConcurrencyClass {
         | "subagents_focused"
         | "subagents_log"
         | "browser"
+        | "bash_output"
         | "fetch_artifact" => ToolConcurrencyClass::ReadOnly,
         // Exclusive tools: must run alone
         "bash" | "activate_skill" | "sessions_spawn" => ToolConcurrencyClass::Exclusive,
@@ -411,7 +440,7 @@ pub fn resolve_tool_working_dir(
 
 fn requires_high_risk_approval(risk: ToolRisk, auth: &ToolAuthContext) -> bool {
     risk == ToolRisk::High
-        && (auth.caller_channel == "web" || auth.caller_channel == "work" || auth.is_control_chat())
+        && (auth.caller_channel == "web" || auth.caller_channel == "code" || auth.is_control_chat())
 }
 
 /// Input marker injected after explicit operator approval so a high-risk
@@ -477,6 +506,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn workspace_tool_set_keeps_coding_tools_and_drops_outbound_ones() {
+        for name in [
+            "read_file",
+            "grep",
+            "glob",
+            "edit_file",
+            "write_file",
+            "bash",
+            "bash_output",
+            "bash_kill",
+            "todo_write",
+            "mcp_github_search",
+            "subagents_list",
+        ] {
+            assert!(is_workspace_tool(name), "{name} should be a workspace tool");
+        }
+        for name in [
+            "send_message",
+            "schedule_task",
+            "a2a_send",
+            "generate_image",
+            "write_memory",
+            "sync_skills",
+            "text_to_speech",
+        ] {
+            assert!(
+                !is_workspace_tool(name),
+                "{name} should not be a workspace tool"
+            );
+        }
+    }
+
+    #[test]
     fn test_tool_execution_policy_levels() {
         assert_eq!(tool_execution_policy("bash"), ToolExecutionPolicy::Dual);
         assert_eq!(
@@ -505,7 +567,7 @@ mod tests {
             env_files: Vec::new(),
         };
 
-        assert!(require_high_risk_approval("bash", &auth("work"), &json!({})).is_some());
+        assert!(require_high_risk_approval("bash", &auth("code"), &json!({})).is_some());
         assert!(require_high_risk_approval("bash", &auth("headless"), &json!({})).is_none());
     }
 }

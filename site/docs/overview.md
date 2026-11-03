@@ -7,31 +7,30 @@ sidebar_position: 1
 # MicroClaw
 
 MicroClaw is a self-hosted Rust agent platform with one embeddable Agent Engine,
-two product surfaces, and a Rust SDK:
+three products that share one Agent Engine:
 
 - **MicroClaw Server** is the always-on runtime for chat channels, the local
   Web console, APIs, schedules, background work, and agent protocols. It ships
   for macOS, Linux, and Windows.
-- **MicroClaw Work** is a native GPUI desktop application for local
-  conversations, project workspaces, approvals, checkpoints, and settings. It
-  is officially supported on Apple Silicon macOS 13+; launch-smoked Linux and
-  Windows portable previews are published with each release while native
-  platform acceptance continues.
+- **MicroClaw Code** (`mccode`, preview) is a terminal coding agent: a
+  full-screen TUI and a `-p` scripting mode that work directly in your
+  repository, show diffs, ask before running commands, and verify edits with
+  the project's own checks.
 - **`microclaw-sdk`** lets another Rust application use the same Agent, Run,
   event, control, Skill, and Worker model without importing Server or UI code.
 
-Both surfaces share the Agent Engine, provider abstraction, tool registry,
+All three share the Agent Engine, provider abstraction, tool registry,
 policy and approval path, memory, skills, MCP integration, checkpoints, and
-runtime event protocol. Work is not a packaged copy of the Web console, and it
-does not maintain a desktop-only agent loop.
+runtime event protocol. MicroClaw Code reaches the engine only through the SDK
+and does not maintain its own agent loop.
 
 The latest release is **v0.11.1**. Use the `stable` branch for conservative
 production deployments; `main` is the active development branch.
 
 ## What makes it different
 
-- One shared agent loop across Server channels, Web, protocols, and native Work
-- A native Rust/GPUI desktop workspace without a bundled browser or duplicated runtime
+- One shared agent loop across Server channels, Web, protocols, and MicroClaw Code
+- A terminal coding agent that verifies its edits with your project's own checks
 - Humanlike chat surface: short-first / multi-bubble replies, mood-adaptive tone, group etiquette
 - Bounded, observable **Subagents** with named tasks, cancellation, native or ACP workers, and colleague-style progress reports
 - Long-lived memory backed by `AGENTS.md` files plus structured SQLite memory, with graph-augmented recall over a temporal knowledge graph
@@ -89,6 +88,5 @@ MicroClaw enters an agentic loop for every message. LLM can call tools, inspect 
 - Conversation archiving (automatic before compaction, manual via `/archive`)
 - Typing indicator that stays active during tool use
 - Local Web operator console with chat, session controls, task history, configuration, governance, usage, skills, and diagnostics
-- Native MicroClaw Work desktop with durable conversations, project workspaces, inline approvals, checkpoints, model and SOUL settings, and light/dark themes
 
 Continue with the Quickstart to get a bot running in minutes.

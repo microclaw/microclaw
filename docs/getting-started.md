@@ -35,20 +35,6 @@ Install the full build:
 
 ### Homebrew on macOS
 
-Install the native MicroClaw Work desktop app on Apple Silicon macOS 13+:
-
-```sh
-brew tap microclaw/tap
-brew install --cask microclaw-work
-```
-
-MicroClaw Work is officially supported on Apple Silicon macOS. Each GitHub
-release also includes launch-smoked portable previews for Linux x86_64/arm64
-and Windows x86_64. Download and extract the archive for your platform from the
-[release page](https://github.com/microclaw/microclaw/releases); these previews
-are not yet covered by the full native acceptance matrix. The Server remains
-supported on macOS, Linux, and Windows.
-
 Install MicroClaw Server:
 
 ```sh
@@ -58,8 +44,18 @@ brew install microclaw
 
 Use `brew install microclaw-full` when Matrix support is required.
 
-Work releases are signed with Developer ID, notarized by Apple, stapled, and
-verified before the Homebrew Cask is updated.
+### MicroClaw Code
+
+MicroClaw Code (`mccode`) is a terminal coding agent (preview). Build it from a
+checkout, configure a model once, then run it in any repository:
+
+```sh
+cargo install --path apps/microclaw-code
+mccode setup
+cd path/to/your/repo && mccode
+```
+
+See the [MicroClaw Code guide](../apps/microclaw-code/README.md).
 
 ### Build from source
 

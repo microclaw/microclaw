@@ -4,25 +4,25 @@ title: Architecture - Core Principles
 sidebar_position: 9
 ---
 
-This section explains how MicroClaw supports two product surfaces and embedded
-Rust applications without forking agent behavior. The always-on Server, native
-desktop Work app, and third-party applications all enter the same Agent Engine
-through stable SDK and Runtime boundaries.
+This section explains how MicroClaw supports three products without forking
+agent behavior. The always-on Server, the MicroClaw Code terminal coding agent,
+and third-party Rust applications all enter the same Agent Engine through
+stable SDK and Runtime boundaries.
 
 ## Design goals
 
-- Platform-agnostic agent core: conversation + tool behavior is not coupled to Server channel handlers or GPUI views.
-- Multiple consumers, one execution model: Server, Work, and embedded applications consume the same provider-neutral requests, tools, policy, checkpoints, and runtime events.
+- Platform-agnostic agent core: conversation + tool behavior is not coupled to Server channel handlers or the Code terminal UI.
+- Multiple consumers, one execution model: Server, Code, and embedded applications consume the same provider-neutral requests, tools, policy, checkpoints, and runtime events.
 - Safe-by-default execution: tool permissions, risk levels, and explicit approval for dangerous operations.
 - Durable state: sessions, messages, tasks, and memory persisted in SQLite/filesystem.
-- Native Rust distribution: Server remains a predictable standalone service, while Work is a separate native desktop application with no bundled Web frontend.
+- Native Rust distribution: Server remains a predictable standalone service, while MicroClaw Code is a separate `mccode` binary without the Web frontend or channel adapters.
 - Embeddability: applications use a small Rust facade without importing Server, Web, channel, or desktop UI code.
 - Extensibility: MCP tools + local Skills + built-in tools, with clear boundaries.
 
 ## High-level runtime flow
 
 ```text
-Server / Work / third-party Rust applications
+Server / Code / third-party Rust applications
                      |
                microclaw-sdk
                      |
@@ -34,12 +34,11 @@ Server / Work / third-party Rust applications
                microclaw-core
 ```
 
-Server translates channel ingress and delivery at its adapters. Work sends
-foreground task requests through `microclaw-sdk` and `microclaw-work-runtime`,
-then projects shared runtime events into UI-independent Work state before GPUI
-renders it. Embedded applications create an `AgentProfile`, submit a
+Server translates channel ingress and delivery at its adapters. MicroClaw Code
+submits runs through `microclaw-sdk` only: `microclaw-code-core` drives a turn
+(approvals, verification, fix rounds) and emits UI-independent updates that the
+terminal UI renders. Embedded applications create an `AgentProfile`, submit a
 `RunRequest`, and consume the same ordered events and terminal `RunResult`.
-Model calls and tool execution never run on the GPUI thread.
 
 ## Core modules
 
@@ -47,25 +46,24 @@ Model calls and tool execution never run on the GPUI thread.
 - `microclaw-engine` (`crates/microclaw-engine`): the concrete provider-neutral Agent Loop plus runtime, Worker, persistence, channels, observability, Skills, hooks, memory, and tool implementation.
 - `microclaw-sdk` (`crates/microclaw-sdk`): supported embedding facade and `minimal`, `standard`, and `full` feature presets.
 - Internal workspace crates remain as migration boundaries for the applications, but are not public crates.io packages.
-- `microclaw-work-app` (`crates/microclaw-work-app`): UI-independent Work commands, projections, session persistence, and settings state.
-- `microclaw-work-runtime` (`crates/microclaw-work-runtime`): foreground Work lifecycle and the bridge from the SDK/Agent Engine event stream.
-- `microclaw-work` (`apps/microclaw-work`): native GPUI views, input, macOS integration, and packaging; it contains no separate agent loop.
+- `microclaw-code-core` (`crates/microclaw-code-core`): MicroClaw Code's UI-independent core — project discovery, trust, verification, session index, and the turn driver. It depends on `microclaw-sdk`, never on the engine directly (enforced in CI).
+- `microclaw-code` (`apps/microclaw-code`): the `mccode` binary — full-screen TUI and `-p` mode; it contains no separate agent loop.
 - root `src/`: Server CLI, Web/API, scheduler, gateway, and concrete channel assembly; it re-exports Engine modules temporarily for source compatibility.
 
 ## Product boundaries
 
-| Boundary | MicroClaw Server | MicroClaw Work | Shared core |
+| Boundary | MicroClaw Server | MicroClaw Code | Shared core |
 |---|---|---|---|
-| Primary role | Always-on service and delivery hub | Local desktop workspace | Agent execution and policy |
-| Interface | Chat adapters, Web UI, HTTP/SSE/WebSocket, A2A/ACP | Native GPUI conversation and settings | Provider-neutral messages and runtime events |
-| Lifecycle | Long-running channels, schedules, background tasks | Foreground local runs and durable Work sessions | Recovery, cancellation, checkpoints, tool loop |
-| Platform | macOS, Linux, Windows | Apple Silicon macOS 13+ supported; Linux/Windows portable previews | Portable Rust crates |
+| Primary role | Always-on service and delivery hub | Coding agent in a local repository | Agent execution and policy |
+| Interface | Chat adapters, Web UI, HTTP/SSE/WebSocket, A2A/ACP | Full-screen TUI and `-p` / JSON Lines | Provider-neutral messages and runtime events |
+| Lifecycle | Long-running channels, schedules, background tasks | Foreground turns, approvals, verification and fix rounds | Recovery, cancellation, checkpoints, tool loop |
+| Data | `~/.microclaw` | `~/.microclaw/code` (separate database and memory) | SQLite-backed storage |
+| Platform | macOS, Linux, Windows | macOS, Linux, Windows (preview, from source) | Portable Rust crates |
 
-Work attachment handling follows the same boundary. GPUI receives native file
-drops, while `microclaw-work-app` canonicalizes each path against the selected
-Workspace, persists only the relative reference, and rejects escapes. The
-runtime then adds those references to the provider-neutral task request so the
-existing governed filesystem tools—not the view—read any content.
+A repository's `.microclaw/project.yaml` can change MicroClaw Code's mode,
+instructions and check commands, so it is honoured only after the user trusts
+that exact file content; trust decisions live in the Code home, never in the
+repository. A repository-local `microclaw.config.yaml` is never loaded.
 
 ## Recommended reading order
 

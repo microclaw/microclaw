@@ -397,6 +397,39 @@ impl MicroClaw {
     }
 }
 
+/// A model provider the Agent Engine can be configured for, with its default
+/// endpoint and suggested models (used by setup flows).
+#[cfg(feature = "full")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelProvider {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub default_base_url: &'static str,
+    pub models: &'static [&'static str],
+}
+
+/// The model providers known to this Agent Engine.
+#[cfg(feature = "full")]
+pub fn model_providers() -> Vec<ModelProvider> {
+    microclaw_engine::setup::provider_catalog()
+        .map(|entry| ModelProvider {
+            id: entry.id,
+            label: entry.label,
+            default_base_url: entry.default_base_url,
+            models: entry.models,
+        })
+        .collect()
+}
+
+/// Validate a MicroClaw configuration file for a channel-free embedded
+/// runtime without starting the Agent Engine.
+#[cfg(feature = "full")]
+pub fn validate_config_file(path: impl AsRef<Path>) -> Result<(), SdkError> {
+    microclaw_engine::config::Config::load_from_path_for_headless(path.as_ref())
+        .map(|_| ())
+        .map_err(|error| SdkError::Configuration(error.to_string()))
+}
+
 /// Minimal provider configuration for a full embedded Agent Engine.
 #[cfg(feature = "full")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -752,5 +785,23 @@ mod tests {
         let removed = sdk.remove_skill("sdk-second").unwrap();
         assert!(removed.archived_at.join("SKILL.md").is_file());
         assert!(removed.skills.find("sdk-second").is_none());
+    }
+
+    #[cfg(feature = "full")]
+    #[test]
+    fn exposes_provider_catalog_and_config_validation() {
+        let providers = model_providers();
+        assert!(providers.iter().any(|p| p.id == "anthropic"));
+        assert!(providers.iter().any(|p| p.id == "openai"));
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(&path, "llm_provider: ollama\nmodel: local\napi_key: \"\"\n").unwrap();
+        validate_config_file(&path).unwrap();
+        std::fs::write(&path, "llm_provider: [not, a, string]\n").unwrap();
+        assert_eq!(
+            validate_config_file(&path).unwrap_err().code(),
+            SdkErrorCode::Configuration
+        );
     }
 }

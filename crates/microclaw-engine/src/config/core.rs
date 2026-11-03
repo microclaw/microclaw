@@ -1286,7 +1286,7 @@ impl Config {
     ///
     /// All provider, tool, path, and security validation is retained. Only the
     /// Server requirement that at least one delivery channel be enabled is
-    /// waived, because Work and other headless callers deliver results through
+    /// waived, because MicroClaw Code and other headless callers deliver results through
     /// their own application boundary.
     pub fn load_from_path_for_headless(path: &Path) -> Result<Self, MicroClawError> {
         Self::load_from_path_inner(path, true)

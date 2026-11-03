@@ -394,7 +394,7 @@ mod tests {
         request.agent_id = Some(AgentId::new("coder"));
         request.workspace = Some(PathBuf::from("/workspace"));
         request.caller = CallerContext {
-            channel: "work".into(),
+            channel: "code".into(),
             principal: Some("local-user".into()),
             chat_id: Some(42),
         };

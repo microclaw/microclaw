@@ -1,4 +1,4 @@
-//! Provider-neutral runtime events shared by Server, Work, and headless clients.
+//! Provider-neutral runtime events shared by Server, MicroClaw Code, and headless clients.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

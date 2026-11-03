@@ -35,7 +35,7 @@ use microclaw_core::run_protocol::{
 use microclaw_core::runtime_event::RuntimeEventEnvelope;
 
 pub const HEADLESS_CHANNEL: &str = "headless";
-pub const WORK_CHANNEL: &str = "work";
+pub const CODE_CHANNEL: &str = "code";
 
 #[derive(Debug, Clone)]
 pub struct HeadlessRunRequest {
@@ -57,13 +57,13 @@ impl HeadlessRunRequest {
         }
     }
 
-    pub fn work(prompt: String, session: Option<String>, run_id: String) -> Self {
+    pub fn code(prompt: String, session: Option<String>, run_id: String) -> Self {
         Self {
             prompt,
             session,
-            sender_name: "work".into(),
+            sender_name: "code".into(),
             run_id: Some(run_id),
-            caller_channel: WORK_CHANNEL.into(),
+            caller_channel: CODE_CHANNEL.into(),
         }
     }
 }
@@ -96,7 +96,7 @@ pub struct HeadlessSubagentRun {
 /// Reusable application service for one-shot tasks.
 ///
 /// It owns the existing provider-neutral Agent Engine state but starts no
-/// channel, Web server, or scheduler. Both the CLI and Work adapters call this
+/// channel, Web server, or scheduler. Both `microclaw run` and MicroClaw Code call this
 /// service instead of assembling or copying an Agent Loop.
 #[derive(Clone)]
 pub struct HeadlessRuntime {
@@ -344,7 +344,7 @@ impl HeadlessRuntime {
 
     /// Build a standalone runtime from a loaded product config.
     ///
-    /// This is the Work/headless bootstrap path. It intentionally initializes
+    /// This is the Code/headless bootstrap path. It intentionally initializes
     /// no chat adapters, Web routes, scheduler, or gateway.
     pub async fn load(mut config: Config) -> anyhow::Result<Self> {
         let data_root = config.data_root_dir();
@@ -524,8 +524,8 @@ impl HeadlessRuntime {
             .await
     }
 
-    pub async fn cancel_work_session(&self, session: &str) -> anyhow::Result<usize> {
-        self.cancel_session_for_channel(WORK_CHANNEL, session).await
+    pub async fn cancel_code_session(&self, session: &str) -> anyhow::Result<usize> {
+        self.cancel_session_for_channel(CODE_CHANNEL, session).await
     }
 
     async fn cancel_session_for_channel(
@@ -547,8 +547,8 @@ impl HeadlessRuntime {
             .await
     }
 
-    pub async fn steer_work_session(&self, session: &str, content: &str) -> anyhow::Result<bool> {
-        self.steer_session_for_channel(WORK_CHANNEL, session, content)
+    pub async fn steer_code_session(&self, session: &str, content: &str) -> anyhow::Result<bool> {
+        self.steer_session_for_channel(CODE_CHANNEL, session, content)
             .await
     }
 
@@ -566,7 +566,7 @@ impl HeadlessRuntime {
         let message_id = uuid::Uuid::new_v4().to_string();
         let timestamp = chrono::Utc::now().to_rfc3339();
         let pending = PendingMessage {
-            sender_name: "work".into(),
+            sender_name: "code".into(),
             content: content.to_string(),
             message_id: message_id.clone(),
             timestamp: timestamp.clone(),
@@ -583,7 +583,7 @@ impl HeadlessRuntime {
         let stored = StoredMessage {
             id: message_id,
             chat_id,
-            sender_name: "work".into(),
+            sender_name: "code".into(),
             content: content.to_string(),
             is_from_bot: false,
             timestamp,
@@ -906,7 +906,7 @@ mod tests {
 
         let result = runtime
             .run(
-                HeadlessRunRequest::work(
+                HeadlessRunRequest::code(
                     "answer through the shared loop".into(),
                     Some("work-test".into()),
                     "work-run-test".into(),
@@ -990,7 +990,7 @@ mod tests {
             "---\nname: rust-review\ndescription: Review Rust\n---\nCHECK_AGENT_SKILL_BODY\n",
         )
         .unwrap();
-        let runtime = headless.into_embedded_runtime(WORK_CHANNEL, 1).unwrap();
+        let runtime = headless.into_embedded_runtime(CODE_CHANNEL, 1).unwrap();
         let profile = AgentProfile {
             name: "reviewer".into(),
             system_prompt: Some("CHECK_AGENT_PROFILE_PROMPT".into()),
@@ -1022,7 +1022,7 @@ mod tests {
                 tools: captured.clone(),
             }),
         )
-        .into_embedded_runtime(WORK_CHANNEL, 1)
+        .into_embedded_runtime(CODE_CHANNEL, 1)
         .unwrap();
         let profile = AgentProfile {
             name: "reviewer".into(),
@@ -1053,7 +1053,7 @@ mod tests {
         let run = tokio::spawn(async move {
             running_runtime
                 .run(
-                    HeadlessRunRequest::work(
+                    HeadlessRunRequest::code(
                         "wait for cancellation".into(),
                         Some("cancel-test".into()),
                         "cancel-run-test".into(),
@@ -1065,7 +1065,7 @@ mod tests {
 
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if runtime.cancel_work_session("cancel-test").await.unwrap() > 0 {
+                if runtime.cancel_code_session("cancel-test").await.unwrap() > 0 {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1111,7 +1111,7 @@ mod tests {
             .drain_pending(HEADLESS_CHANNEL, chat_id)
             .await;
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].sender_name, "work");
+        assert_eq!(pending[0].sender_name, "code");
         assert_eq!(pending[0].content, "Focus on the parser first");
         drop(turn);
 
@@ -1140,7 +1140,7 @@ mod tests {
         let run = tokio::spawn(async move {
             running_runtime
                 .run(
-                    HeadlessRunRequest::work(
+                    HeadlessRunRequest::code(
                         "Start with the whole task".into(),
                         Some("live-steer".into()),
                         "live-steer-run".into(),
@@ -1157,7 +1157,7 @@ mod tests {
         .await
         .expect("first model call should start");
         assert!(runtime
-            .steer_work_session("live-steer", "Focus on the parser first")
+            .steer_code_session("live-steer", "Focus on the parser first")
             .await
             .unwrap());
         let result = run.await.unwrap().unwrap();

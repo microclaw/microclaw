@@ -11,6 +11,7 @@ use super::{schema_object, Tool, ToolResult};
 pub struct ReadFileTool {
     working_dir: PathBuf,
     working_dir_isolation: WorkingDirIsolation,
+    file_state: std::sync::Arc<super::file_state::FileStateTable>,
 }
 
 impl ReadFileTool {
@@ -25,7 +26,17 @@ impl ReadFileTool {
         Self {
             working_dir: PathBuf::from(working_dir),
             working_dir_isolation,
+            file_state: Default::default(),
         }
+    }
+
+    /// Share the stale-read table with the other file tools of a registry.
+    pub fn with_file_state(
+        mut self,
+        file_state: std::sync::Arc<super::file_state::FileStateTable>,
+    ) -> Self {
+        self.file_state = file_state;
+        self
     }
 }
 
@@ -80,6 +91,7 @@ impl Tool for ReadFileTool {
             Ok(c) => c,
             Err(e) => return ToolResult::error(format!("Failed to read file: {e}")),
         };
+        self.file_state.record(&resolved_path, content.as_bytes());
 
         let lines: Vec<&str> = content.lines().collect();
         let offset = input
