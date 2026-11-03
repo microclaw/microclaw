@@ -2300,7 +2300,7 @@ function App() {
                       <div className={`${sectionCardClass} mt-4`} style={sectionCardStyle}>
                         <Text size="3" weight="bold">Paired devices</Text>
                         <Text size="1" color="gray" className="mt-1 block">
-                          Connect MicroClaw Work desktop clients to this Server with revocable device credentials.
+                          Connect MicroClaw Desktop clients to this Server with revocable device credentials.
                         </Text>
                         <div className="mt-4">
                           <PairedDevicesSettings open={configOpen} authenticated={authAuthenticated} />

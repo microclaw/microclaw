@@ -8,7 +8,7 @@ import {getHomeMessages} from '../home-i18n';
 
 const PATH_COMMANDS = {
   sdk: 'microclaw-sdk = { version = "0.11.1", features = ["full"] }',
-  work: 'brew tap microclaw/tap && brew install --cask microclaw-work',
+  work: 'brew tap microclaw/tap && brew install --cask microclaw-desktop',
   server: {
     macos: 'curl -fsSL https://microclaw.org/install.sh | bash',
     linux: 'curl -fsSL https://microclaw.org/install.sh | bash',
@@ -83,10 +83,10 @@ function HomepageHeader() {
       ...messages.paths.sdk,
     },
     {
-      id: 'work',
+      id: 'desktop',
       className: styles.pathCardWork,
       command: PATH_COMMANDS.work,
-      href: '/docs/work',
+      href: '/docs/desktop',
       ...messages.paths.work,
     },
     {
@@ -169,7 +169,7 @@ function ArchitectureMap({label}) {
         </div>
         <div className={`${styles.archEntry} ${styles.archEntryWork}`}>
           <span>02 · Desktop</span>
-          <strong>MicroClaw Work</strong>
+          <strong>MicroClaw Desktop</strong>
         </div>
         <div className={`${styles.archEntry} ${styles.archEntryServer}`}>
           <span>03 · Service</span>

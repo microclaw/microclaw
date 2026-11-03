@@ -22,7 +22,7 @@ The supported public crates are available on crates.io at `0.11.1`:
 | Choose | When you need | What owns the process |
 |---|---|---|
 | MicroClaw Server | Channels, Web/API access, schedules, and an always-on service | MicroClaw |
-| MicroClaw Work | A native project workspace with approvals and checkpoints | MicroClaw Work |
+| MicroClaw Desktop | A native project workspace with approvals and checkpoints | MicroClaw Desktop |
 | `microclaw-sdk` | Agent behavior inside your own Rust product or service | Your application |
 
 All three paths converge on the same provider-neutral Agent Engine. The SDK is

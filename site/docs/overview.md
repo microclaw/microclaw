@@ -12,7 +12,7 @@ two product surfaces, and a Rust SDK:
 - **MicroClaw Server** is the always-on runtime for chat channels, the local
   Web console, APIs, schedules, background work, and agent protocols. It ships
   for macOS, Linux, and Windows.
-- **MicroClaw Work** is a native GPUI desktop application for local
+- **MicroClaw Desktop** is a native GPUI desktop application for local
   conversations, project workspaces, approvals, checkpoints, and settings. It
   is officially supported on Apple Silicon macOS 13+; launch-smoked Linux and
   Windows portable previews are published with each release while native
@@ -22,7 +22,7 @@ two product surfaces, and a Rust SDK:
 
 Both surfaces share the Agent Engine, provider abstraction, tool registry,
 policy and approval path, memory, skills, MCP integration, checkpoints, and
-runtime event protocol. Work is not a packaged copy of the Web console, and it
+runtime event protocol. Desktop is not a packaged copy of the Web console, and it
 does not maintain a desktop-only agent loop.
 
 The latest release is **v0.11.1**. Use the `stable` branch for conservative
@@ -30,7 +30,7 @@ production deployments; `main` is the active development branch.
 
 ## What makes it different
 
-- One shared agent loop across Server channels, Web, protocols, and native Work
+- One shared agent loop across Server channels, Web, protocols, and native Desktop
 - A native Rust/GPUI desktop workspace without a bundled browser or duplicated runtime
 - Humanlike chat surface: short-first / multi-bubble replies, mood-adaptive tone, group etiquette
 - Bounded, observable **Subagents** with named tasks, cancellation, native or ACP workers, and colleague-style progress reports
@@ -89,6 +89,6 @@ MicroClaw enters an agentic loop for every message. LLM can call tools, inspect 
 - Conversation archiving (automatic before compaction, manual via `/archive`)
 - Typing indicator that stays active during tool use
 - Local Web operator console with chat, session controls, task history, configuration, governance, usage, skills, and diagnostics
-- Native MicroClaw Work desktop with durable conversations, project workspaces, inline approvals, checkpoints, model and SOUL settings, and light/dark themes
+- Native MicroClaw Desktop app with durable conversations, project workspaces, inline approvals, checkpoints, model and SOUL settings, and light/dark themes
 
 Continue with the Quickstart to get a bot running in minutes.

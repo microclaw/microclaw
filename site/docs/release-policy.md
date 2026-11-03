@@ -25,8 +25,8 @@ Current release asset target set:
 - macOS x86_64
 - macOS arm64
 - Windows x86_64
-- MicroClaw Work signed/notarized DMG for Apple Silicon macOS
-- MicroClaw Work portable previews for Linux x86_64/arm64 and Windows x86_64
+- MicroClaw Desktop signed/notarized DMG for Apple Silicon macOS
+- MicroClaw Desktop portable previews for Linux x86_64/arm64 and Windows x86_64
 
 If a target is temporarily missing, the release notes should say so explicitly.
 
@@ -42,7 +42,7 @@ Release candidates should satisfy:
 - `node scripts/generate_docs_artifacts.mjs --check`
 - security dependency audit
 - release asset packaging smoke
-- native launch smoke for each MicroClaw Work portable preview
+- native launch smoke for each MicroClaw Desktop portable preview
 - container image build/publish smoke
 
 ## Rollback Standard

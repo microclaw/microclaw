@@ -1,9 +1,10 @@
-# MicroClaw Desktop：本地产品合并提案（Work + 终端 CLI `mcdesk`）
+# MicroClaw Desktop：本地产品合并提案（原 Work + 终端 CLI `mcdesk`）
 
 状态：**已批准，首版在 `feat/microclaw-code` 实现** · 日期：**2026-11-03**
 
 本文在 [`microclaw-work-proposal-cn.md`](./microclaw-work-proposal-cn.md) 的基础上，把本地产品统一为
-**MicroClaw Desktop**：同一个产品，两个入口——图形桌面端（现在的 MicroClaw Work）和终端 CLI `mcdesk`。
+**MicroClaw Desktop**：同一个产品，两个入口——图形桌面端（原 MicroClaw Work，已整体改名）和终端 CLI `mcdesk`。
+Work 改名**不保留兼容**：包名、二进制、bundle 标识、Homebrew cask、环境变量、数据目录和运行时渠道名一次性切换。
 
 ## 一、产品线
 
@@ -18,10 +19,10 @@ Server 和 Desktop 对称：一个跑在服务器上、常驻无人值守；一�
 
 ```text
 MicroClaw Desktop
-├─ 桌面 app（apps/microclaw-work，GPUI）
+├─ 桌面 app（apps/microclaw-desktop，GPUI）
 └─ mcdesk（apps/microclaw-desktop-cli，终端 + -p/--json）
-      共用：microclaw-work-app      会话快照状态机 + 会话库
-            microclaw-work-runtime  项目识别、信任、验证、数据目录、模型配置
+      共用：microclaw-desktop-app      会话快照状态机 + 会话库
+            microclaw-desktop-runtime  项目识别、信任、验证、数据目录、模型配置
                      ↓
                microclaw-sdk → microclaw-engine
 ```
@@ -29,7 +30,7 @@ MicroClaw Desktop
 ## 二、为什么合并
 
 - 两个入口本来共用直连工作区、Checkpoint、审批语义和同一个 Agent Engine。
-- `microclaw-work-app` 已有完整的会话状态机（计划、进度、审批、验证、完成、中断恢复）和会话库；
+- `microclaw-desktop-app`（原 `microclaw-work-app`）已有完整的会话状态机（计划、进度、审批、验证、完成、中断恢复）和会话库；
   终端版直接驱动它，不再另写一套。
 - 竞品都是一个品牌多个入口：Codex 有 CLI / IDE / 桌面 / 云，CLI 能把会话转给桌面端；
   DeepSeek Harness 用 web / desktop / acp 等 profile 区分入口。
@@ -44,7 +45,7 @@ CI 继续检查两者都只通过 `microclaw-sdk` 进入 Agent 执行、不依�
 
 - **入口**：`mcdesk`（交互式）、`mcdesk -p "任务"`（单次运行，`--json` 输出 JSONL 事件）、`microclaw desktop …`。
 - **共享会话**：会话写入桌面端的会话库（`<Desktop 数据目录>/work-sessions`），运行时会话名就是快照的
-  `session_id`，调用方渠道与桌面端相同（`work`）。终端里的会话会出现在桌面端列表里；
+  `session_id`，调用方渠道与桌面端相同（`desktop`）。终端里的会话会出现在桌面端列表里；
   `/desktop`、`mcdesk desktop` 把当前会话设为活动会话并打开桌面 app。
   `mcdesk sessions` 列出本项目的会话，`-c` 续接最近一个，`--session <id>` 续接指定会话。
 - **权限模式**：
@@ -58,7 +59,7 @@ CI 继续检查两者都只通过 `microclaw-sdk` 进入 Agent 执行、不依�
   技能/记忆管理等对外工具（64 → 40 个）。
 - **验证闭环**：识别 Rust / Node / Python / Go / Make 的检查命令，Agent 改了文件后自动运行 `auto` 检查，
   失败输出交回 Agent 修复（默认最多 2 轮），明确禁止删除或削弱测试。
-- **模型配置**：`--config` → `MICROCLAW_WORK_CONFIG` → `MICROCLAW_CONFIG` → 桌面端设置里保存的配置 →
+- **模型配置**：`--config` → `MICROCLAW_DESKTOP_CONFIG` → `MICROCLAW_CONFIG` → 桌面端设置里保存的配置 →
   `~/.microclaw/microclaw.config.yaml`。仓库里的 `microclaw.config.yaml` **不会**被加载。
 
 ### 2. 项目信任（安全边界）
@@ -70,14 +71,27 @@ CI 继续检查两者都只通过 `microclaw-sdk` 进入 Agent 执行、不依�
 - **未信任**：忽略项目文件；识别出的检查命令只用于展示和手动 `check`，**不会自动运行**（检查会执行仓库自己的构建脚本）。
 - `-p` 模式需要显式 `--trust`；`mcdesk trust [--revoke]`、交互里的 `/trust` 修改决定。
 
-### 3. 共用层（`microclaw-work-runtime` / `microclaw-work-app`）
+### 3. 共用层（`microclaw-desktop-runtime` / `microclaw-desktop-app`）
 
 - 新增 `project`（项目识别、模式、项目配置）、`trust`、`verify`（运行检查、生成修复提示）模块。
-- `work_data_root()` 移到 `microclaw-work-runtime`，桌面端和 CLI 用同一个数据目录。
+- `desktop_data_root()`（原 GUI 内的 `work_data_root`）移到 `microclaw-desktop-runtime`，桌面端和 CLI 用同一个数据目录。
 - 修复会话状态机丢第一个事件的问题：SDK 运行时的事件序号从 0 开始，状态机原来只接受从 1 开始，
   每轮第一个事件（通常是 Checkpoint）被丢弃；现在新一轮接受 0 或 1，同一轮内的跳号仍会拒绝。
 
-### 4. 引擎改进（所有产物受益）
+### 4. Work → Desktop 整体改名（不兼容）
+
+| 项 | 原 | 新 |
+|---|---|---|
+| 目录 / 包 | `apps/microclaw-work`、`microclaw-work-app`、`microclaw-work-runtime`、`microclaw-work-headless` | `apps/microclaw-desktop`、`microclaw-desktop-app`、`microclaw-desktop-runtime`、`microclaw-desktop-headless` |
+| 类型 | `WorkSessionSnapshot`、`WorkCommand`、`WorkRuntimeService` … | `DesktopSessionSnapshot`、`DesktopCommand`、`DesktopRuntimeService` … |
+| app / 二进制 / bundle | `MicroClaw Work.app`、`microclaw-work`、`org.microclaw.work` | `MicroClaw Desktop.app`、`microclaw-desktop`、`org.microclaw.desktop` |
+| 发布 | cask `microclaw-work`、`microclaw-work-*` 安装包与归档、`*_work_*` 脚本 | cask `microclaw-desktop`（发布脚本删除旧 cask）、`microclaw-desktop-*`、`*_desktop_*` |
+| 环境变量 / 数据目录 | `MICROCLAW_WORK_*`、`<平台数据目录>/microclaw-work` | `MICROCLAW_DESKTOP_*`、`<平台数据目录>/microclaw-desktop`（旧会话和设置不迁移） |
+| 运行时渠道 | `work`、`WORK_CHANNEL`、`HeadlessRunRequest::work` | `desktop`、`DESKTOP_CHANNEL`、`HeadlessRunRequest::desktop` |
+
+历史记录（旧 CHANGELOG 条目、`docs/reports` 阶段报告、旧版本 roadmap、RFC、博客）保持原样。
+
+### 5. 引擎改进（所有产物受益）
 
 | 改动 | 说明 |
 |---|---|
@@ -99,8 +113,7 @@ CI 继续检查两者都只通过 `microclaw-sdk` 进入 Agent 执行、不依�
 
 ## 五、后续
 
-1. **打包改名**（单独 PR）：桌面 app 对外改名为 MicroClaw Desktop——app 名、cask（`microclaw-work` 保留别名）、
-   bundle 标识、签名与公证流程；`MICROCLAW_WORK_*` 环境变量和数据目录保持兼容。内部 crate 名暂不改。
+1. **发布验证**：首个 Desktop 版本需要按新 bundle 标识重新签名、公证，并在 tap 中发布 `microclaw-desktop` cask。
 2. **桌面端接入共用能力**：模式切换、项目信任、自动验证在 GPUI 界面中可用。
 3. **安全**：系统级沙箱（Landlock/seccomp、bwrap、Seatbelt）、按命令前缀的放行规则、auto 模式的模型复核。
 4. **体验**：全屏 TUI（ratatui）、`/fork`、`/undo`、`/compact`、`/cost`、`apply_patch`、可交互的持久终端、

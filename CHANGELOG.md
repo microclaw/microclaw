@@ -9,9 +9,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 ### Added
 
 - **MicroClaw Desktop CLI** (`mcdesk`, `apps/microclaw-desktop-cli`, Preview).
-  MicroClaw Desktop is now the local product: the desktop app (currently
-  shipped as MicroClaw Work) plus this terminal entry point, sharing one
-  Agent Engine, session store and state machine. `mcdesk` runs interactive
+  MicroClaw Desktop is now the local product: the desktop app plus this
+  terminal entry point, sharing one Agent Engine, session store and state
+  machine. `mcdesk` runs interactive
   sessions or `-p` one-shot runs (`--json` JSON Lines events) in the
   repository that contains the current directory; its sessions appear in the
   desktop app and `/desktop` / `mcdesk desktop` hand them over. `plan` / `ask`
@@ -22,8 +22,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   trusted (`mcdesk trust`, `--trust`); `check` / `init` / `info` / `sessions`
   subcommands. `microclaw desktop …` forwards to `mcdesk`. Proposal:
   `docs/roadmap/microclaw-desktop-proposal-cn.md`.
-- `microclaw-work-runtime` gains shared `project`, `trust` and `verify`
-  modules and exports `work_data_root()`.
+- `microclaw-desktop-runtime` gains shared `project`, `trust` and `verify`
+  modules and exports `desktop_data_root()`.
 - `bash` gains `run_in_background`, with new `bash_output` (incremental,
   filterable output) and `bash_kill` tools for dev servers, watchers and long
   test runs. Processes are scoped to the session; refused while the sandbox
@@ -39,6 +39,20 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
+- **MicroClaw Work is now MicroClaw Desktop** (breaking, no compatibility
+  layer). The app is named "MicroClaw Desktop" (bundle id
+  `org.microclaw.desktop`, executable `microclaw-desktop`, Homebrew cask
+  `microclaw-desktop`, Windows installer and portable archives renamed to
+  match). Packages and crates are renamed: `microclaw-desktop`,
+  `microclaw-desktop-app`, `microclaw-desktop-runtime`,
+  `microclaw-desktop-headless` (types `Work*` → `Desktop*`). Environment
+  variables `MICROCLAW_WORK_*` → `MICROCLAW_DESKTOP_*`; the data directory
+  moves from `microclaw-work` to `microclaw-desktop` (existing Work sessions
+  and settings are not migrated); the runtime caller channel `work` →
+  `desktop`, with `HeadlessRunRequest::desktop`,
+  `HeadlessRuntime::{cancel,steer}_desktop_session` and
+  `headless::DESKTOP_CHANNEL`. Build, smoke and release scripts are renamed
+  `*_desktop_*`.
 - `glob` and `grep` respect `.gitignore` / `.ignore` files (also outside a git
   checkout); `include_ignored: true` restores the old traversal, and `glob`
   falls back to a literal match when nothing visible matches.

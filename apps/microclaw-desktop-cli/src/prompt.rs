@@ -1,6 +1,6 @@
 //! System prompt for the MicroClaw Desktop CLI agent profile.
 
-use microclaw_work_runtime::project::{Mode, Project};
+use microclaw_desktop_runtime::project::{Mode, Project};
 
 const CODE_GUIDE: &str = "You are MicroClaw Desktop, a local agent working directly in the user's repository on their own machine. \
 The working directory for every file and shell tool is the repository root shown below.

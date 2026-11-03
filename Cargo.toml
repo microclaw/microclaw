@@ -2,11 +2,11 @@
 members = [
     ".",
     "apps/microclaw-desktop-cli",
-    "apps/microclaw-work",
-    "apps/microclaw-work-headless",
+    "apps/microclaw-desktop",
+    "apps/microclaw-desktop-headless",
     "crates/microclaw-core",
-    "crates/microclaw-work-app",
-    "crates/microclaw-work-runtime",
+    "crates/microclaw-desktop-app",
+    "crates/microclaw-desktop-runtime",
     "crates/microclaw-engine",
     "crates/microclaw-sdk",
 ]

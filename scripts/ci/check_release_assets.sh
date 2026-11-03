@@ -31,9 +31,9 @@ expected=(
   "microclaw-full-${release_version}-x86_64-apple-darwin.tar.gz"
   "microclaw-full-${release_version}-x86_64-linux-gnu.tar.gz"
   "microclaw-full-${release_version}-x86_64-windows-msvc.zip"
-  "microclaw-work-${release_version}-aarch64-linux-gnu.tar.gz"
-  "microclaw-work-${release_version}-x86_64-linux-gnu.tar.gz"
-  "microclaw-work-${release_version}-x86_64-windows-msvc.zip"
+  "microclaw-desktop-${release_version}-aarch64-linux-gnu.tar.gz"
+  "microclaw-desktop-${release_version}-x86_64-linux-gnu.tar.gz"
+  "microclaw-desktop-${release_version}-x86_64-windows-msvc.zip"
   "reliability-scorecard-${release_tag}.json"
   "reliability-scorecard-${release_tag}.md"
 )
@@ -56,9 +56,9 @@ while IFS= read -r asset; do
     fi
   done
 
-  # A signed/notarized Apple Silicon Work DMG can be uploaded separately and
+  # A signed/notarized Apple Silicon Desktop DMG can be uploaded separately and
   # folded into the release when it exists.
-  if [[ "$asset" == "microclaw-work-${release_version}-arm64-macos.dmg" ]]; then
+  if [[ "$asset" == "microclaw-desktop-${release_version}-arm64-macos.dmg" ]]; then
     allowed=1
   fi
 

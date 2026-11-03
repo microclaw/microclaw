@@ -2,8 +2,8 @@
 //!
 //! MicroClaw Desktop is the local product: the desktop app and this CLI share
 //! one Agent Engine (through `microclaw-sdk`), one session store and state
-//! machine (`microclaw-work-app`), and the project, trust and verification
-//! services in `microclaw-work-runtime`. A session started here appears in the
+//! machine (`microclaw-desktop-app`), and the project, trust and verification
+//! services in `microclaw-desktop-runtime`. A session started here appears in the
 //! desktop app and `/desktop` hands it over.
 //!
 //! The CLI opens the repository that contains the current directory as a
@@ -20,12 +20,12 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
+use microclaw_desktop_app::session::{DesktopCommand, DesktopSessionSnapshot, DesktopStatus};
+use microclaw_desktop_app::store::{DesktopSessionStore, DesktopSessionSummary};
+use microclaw_desktop_runtime::project::{self, Check, Mode, Project};
+use microclaw_desktop_runtime::trust::TrustStore;
+use microclaw_desktop_runtime::{desktop_data_root, verify};
 use microclaw_sdk::{Agent, MicroClaw, RunHandle, RunRequest, RunStatus, SessionId, ToolPolicy};
-use microclaw_work_app::session::{WorkCommand, WorkSessionSnapshot, WorkStatus};
-use microclaw_work_app::store::{WorkSessionStore, WorkSessionSummary};
-use microclaw_work_runtime::project::{self, Check, Mode, Project};
-use microclaw_work_runtime::trust::TrustStore;
-use microclaw_work_runtime::{verify, work_data_root};
 use tokio::sync::mpsc;
 
 use render::{PendingApproval, Renderer, Style};
@@ -33,8 +33,8 @@ use render::{PendingApproval, Renderer, Style};
 const AGENT_NAME: &str = "MicroClaw Desktop";
 /// Same caller channel as the desktop app, so sessions, run control and
 /// sub-agent listings are shared.
-const CALLER_CHANNEL: &str = "work";
-const DESKTOP_BUNDLE_ID: &str = "org.microclaw.work";
+const CALLER_CHANNEL: &str = "desktop";
+const DESKTOP_BUNDLE_ID: &str = "org.microclaw.desktop";
 
 /// Shell commands that still ask for approval in auto mode.
 const ALWAYS_ASK_PATTERNS: &[&str] = &[
@@ -59,7 +59,7 @@ const ALWAYS_ASK_PATTERNS: &[&str] = &[
     name = "mcdesk",
     version,
     about = "MicroClaw Desktop in your terminal: a local agent for your repository",
-    long_about = "mcdesk opens the repository that contains the current directory and runs the MicroClaw Agent Engine in it. Sessions are shared with the MicroClaw Desktop app.\n\nRun without arguments for an interactive session, or pass -p for a single non-interactive task. Model credentials come from --config, MICROCLAW_WORK_CONFIG, MICROCLAW_CONFIG, the Desktop app's settings, or ~/.microclaw/microclaw.config.yaml."
+    long_about = "mcdesk opens the repository that contains the current directory and runs the MicroClaw Agent Engine in it. Sessions are shared with the MicroClaw Desktop app.\n\nRun without arguments for an interactive session, or pass -p for a single non-interactive task. Model credentials come from --config, MICROCLAW_DESKTOP_CONFIG, MICROCLAW_CONFIG, the Desktop app's settings, or ~/.microclaw/microclaw.config.yaml."
 )]
 struct Cli {
     /// Initial task for an interactive session.
@@ -148,15 +148,15 @@ async fn main() -> ExitCode {
     }
 }
 
-fn session_store() -> WorkSessionStore {
-    WorkSessionStore::new(work_data_root().join("work-sessions"))
+fn session_store() -> DesktopSessionStore {
+    DesktopSessionStore::new(desktop_data_root().join("work-sessions"))
 }
 
 /// Sessions whose workspace is this project, most recent first.
 fn project_sessions(
-    store: &WorkSessionStore,
+    store: &DesktopSessionStore,
     root: &Path,
-) -> anyhow::Result<Vec<WorkSessionSummary>> {
+) -> anyhow::Result<Vec<DesktopSessionSummary>> {
     let root = root.to_string_lossy();
     let mut sessions: Vec<_> = store
         .list()?
@@ -344,7 +344,7 @@ fn resolve_config(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
         );
         return Ok(path.to_path_buf());
     }
-    for var in ["MICROCLAW_WORK_CONFIG", "MICROCLAW_CONFIG"] {
+    for var in ["MICROCLAW_DESKTOP_CONFIG", "MICROCLAW_CONFIG"] {
         if let Some(value) = std::env::var_os(var) {
             let path = PathBuf::from(value);
             anyhow::ensure!(
@@ -355,7 +355,7 @@ fn resolve_config(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
             return Ok(path);
         }
     }
-    let desktop_owned = work_data_root().join("microclaw.config.yaml");
+    let desktop_owned = desktop_data_root().join("microclaw.config.yaml");
     if desktop_owned.is_file() {
         return Ok(desktop_owned);
     }
@@ -382,9 +382,9 @@ fn open_desktop_app() -> anyhow::Result<()> {
             .status()
     } else {
         let name = if cfg!(windows) {
-            "microclaw-work.exe"
+            "microclaw-desktop.exe"
         } else {
-            "microclaw-work"
+            "microclaw-desktop"
         };
         let sibling = std::env::current_exe()
             .ok()
@@ -398,7 +398,7 @@ fn open_desktop_app() -> anyhow::Result<()> {
     match status {
         Ok(status) if status.success() => Ok(()),
         _ => anyhow::bail!(
-            "could not start the MicroClaw Desktop app; install it (macOS: `brew install --cask microclaw-work`) and try again"
+            "could not start the MicroClaw Desktop app; install it (macOS: `brew install --cask microclaw-desktop`) and try again"
         ),
     }
 }
@@ -505,7 +505,7 @@ fn print_info(project: &Project, style: Style) {
     println!(
         "{} {}",
         style.bold("desktop data:"),
-        work_data_root().display()
+        desktop_data_root().display()
     );
     if let Some(git) = project::git_summary(&project.root) {
         println!("{}\n{git}", style.bold("git:"));
@@ -699,8 +699,8 @@ struct App {
     project: Project,
     microclaw: MicroClaw,
     mode: Mode,
-    store: WorkSessionStore,
-    snapshot: WorkSessionSnapshot,
+    store: DesktopSessionStore,
+    snapshot: DesktopSessionSnapshot,
     style: Style,
     json: bool,
     interactive: bool,
@@ -740,7 +740,7 @@ impl App {
 
     /// Apply a state-machine command; a rejected transition is reported but
     /// never stops the run (the engine stays the source of truth).
-    fn apply(&mut self, command: WorkCommand) {
+    fn apply(&mut self, command: DesktopCommand) {
         if let Err(error) = self.snapshot.apply(command)
             && !self.json
         {
@@ -778,7 +778,7 @@ impl App {
                         } else {
                             renderer.event(&mut stdout, &envelope.event);
                         }
-                        self.apply(WorkCommand::ApplyRuntimeEvent(envelope));
+                        self.apply(DesktopCommand::ApplyRuntimeEvent(envelope));
                     }
                     None => break,
                 },
@@ -797,7 +797,7 @@ impl App {
                         Some(Input::Line(text)) if !text.trim().is_empty() => {
                             match controller.steer_confirmed(text.trim()).await {
                                 Ok(()) => {
-                                    self.apply(WorkCommand::RecordSteering { message: text.trim().to_string() });
+                                    self.apply(DesktopCommand::RecordSteering { message: text.trim().to_string() });
                                     eprintln!("{}", self.style.dim("  ↪ sent to the agent"));
                                 }
                                 Err(e) => eprintln!("{}", self.style.dim(&format!("  ↪ not delivered: {e}"))),
@@ -822,16 +822,18 @@ impl App {
             status = RunStatus::Cancelled;
         }
         match status {
-            RunStatus::Failed | RunStatus::TimedOut => self.apply(WorkCommand::FailRun {
+            RunStatus::Failed | RunStatus::TimedOut => self.apply(DesktopCommand::FailRun {
                 message: error.clone().unwrap_or_else(|| "run failed".into()),
             }),
             RunStatus::Cancelled
                 if matches!(
                     self.snapshot.status,
-                    WorkStatus::Running | WorkStatus::Verifying | WorkStatus::AwaitingApproval
+                    DesktopStatus::Running
+                        | DesktopStatus::Verifying
+                        | DesktopStatus::AwaitingApproval
                 ) =>
             {
-                self.apply(WorkCommand::CancelRun)
+                self.apply(DesktopCommand::CancelRun)
             }
             _ => {}
         }
@@ -888,8 +890,8 @@ impl App {
     /// Start a run for a resolved approval (the engine re-enters its
     /// approval path from the reply).
     fn resolve_approval(&mut self, value: &str) {
-        if self.snapshot.status == WorkStatus::AwaitingApproval {
-            self.apply(WorkCommand::ResolveApproval {
+        if self.snapshot.status == DesktopStatus::AwaitingApproval {
+            self.apply(DesktopCommand::ResolveApproval {
                 value: value.to_string(),
             });
         }
@@ -901,7 +903,7 @@ impl App {
         let mut report = TurnReport::default();
         // A bare option value answers a pending approval (e.g. `-p 1` to
         // resume a run that stopped for approval).
-        let answers_pending = self.snapshot.status == WorkStatus::AwaitingApproval
+        let answers_pending = self.snapshot.status == DesktopStatus::AwaitingApproval
             && self
                 .snapshot
                 .pending_approval
@@ -910,7 +912,7 @@ impl App {
         if answers_pending {
             self.resolve_approval(prompt);
         } else {
-            self.apply(WorkCommand::StartTask {
+            self.apply(DesktopCommand::StartTask {
                 task: prompt.to_string(),
             });
         }
@@ -1019,7 +1021,7 @@ impl App {
                         ))
                     );
                     next_prompt = verify::fix_prompt(&failure, fix_round, self.max_fix_rounds);
-                    self.apply(WorkCommand::StartTask {
+                    self.apply(DesktopCommand::StartTask {
                         task: next_prompt.clone(),
                     });
                     self.persist();
@@ -1352,7 +1354,7 @@ mod tests {
     #[test]
     fn project_sessions_are_filtered_by_workspace() {
         let dir = tempfile::tempdir().unwrap();
-        let store = WorkSessionStore::new(dir.path().join("sessions"));
+        let store = DesktopSessionStore::new(dir.path().join("sessions"));
         let repo = dir.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let mine = store.create(repo.to_string_lossy()).unwrap();

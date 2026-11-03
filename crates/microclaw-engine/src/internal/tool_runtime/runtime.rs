@@ -440,7 +440,9 @@ pub fn resolve_tool_working_dir(
 
 fn requires_high_risk_approval(risk: ToolRisk, auth: &ToolAuthContext) -> bool {
     risk == ToolRisk::High
-        && (auth.caller_channel == "web" || auth.caller_channel == "work" || auth.is_control_chat())
+        && (auth.caller_channel == "web"
+            || auth.caller_channel == "desktop"
+            || auth.is_control_chat())
 }
 
 /// Input marker injected after explicit operator approval so a high-risk
@@ -567,7 +569,7 @@ mod tests {
             env_files: Vec::new(),
         };
 
-        assert!(require_high_risk_approval("bash", &auth("work"), &json!({})).is_some());
+        assert!(require_high_risk_approval("bash", &auth("desktop"), &json!({})).is_some());
         assert!(require_high_risk_approval("bash", &auth("headless"), &json!({})).is_none());
     }
 }

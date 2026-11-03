@@ -35,14 +35,14 @@ Install the full build:
 
 ### Homebrew on macOS
 
-Install the native MicroClaw Work desktop app on Apple Silicon macOS 13+:
+Install the native MicroClaw Desktop app on Apple Silicon macOS 13+:
 
 ```sh
 brew tap microclaw/tap
-brew install --cask microclaw-work
+brew install --cask microclaw-desktop
 ```
 
-MicroClaw Work is officially supported on Apple Silicon macOS. Each GitHub
+MicroClaw Desktop is officially supported on Apple Silicon macOS. Each GitHub
 release also includes launch-smoked portable previews for Linux x86_64/arm64
 and Windows x86_64. Download and extract the archive for your platform from the
 [release page](https://github.com/microclaw/microclaw/releases); these previews
@@ -58,7 +58,7 @@ brew install microclaw
 
 Use `brew install microclaw-full` when Matrix support is required.
 
-Work releases are signed with Developer ID, notarized by Apple, stapled, and
+Desktop releases are signed with Developer ID, notarized by Apple, stapled, and
 verified before the Homebrew Cask is updated.
 
 ### Build from source

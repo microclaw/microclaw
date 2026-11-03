@@ -24,14 +24,14 @@ for task in microclaw.delegated_tasks("session-1", 100)? {
 ```
 
 Cancel an active delegated task through the same persisted cancellation path
-used by Work:
+used by Desktop:
 
 ```rust
 let accepted = microclaw.cancel_delegated_task("session-1", "subagent-run-id")?;
 ```
 
 `true` means the cancellation request was recorded and signalled; the terminal
-task state remains authoritative. Work Subagents are read-only at the Workspace
+task state remains authoritative. Desktop Subagents are read-only at the Workspace
 tool boundary, so the Main Agent remains the single writer and presents one
 ordered change set for review.
 

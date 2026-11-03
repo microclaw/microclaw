@@ -18,9 +18,9 @@ assets=(
   "microclaw-full-${version}-x86_64-apple-darwin.tar.gz"
   "microclaw-full-${version}-x86_64-linux-gnu.tar.gz"
   "microclaw-full-${version}-x86_64-windows-msvc.zip"
-  "microclaw-work-${version}-aarch64-linux-gnu.tar.gz"
-  "microclaw-work-${version}-x86_64-linux-gnu.tar.gz"
-  "microclaw-work-${version}-x86_64-windows-msvc.zip"
+  "microclaw-desktop-${version}-aarch64-linux-gnu.tar.gz"
+  "microclaw-desktop-${version}-x86_64-linux-gnu.tar.gz"
+  "microclaw-desktop-${version}-x86_64-windows-msvc.zip"
   "reliability-scorecard-${tag}.json"
   "reliability-scorecard-${tag}.md"
 )

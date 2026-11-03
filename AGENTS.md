@@ -53,8 +53,8 @@ The repository pins Rust in `rust-toolchain.toml`. Use that toolchain rather tha
 - `microclaw-core`: shared errors, LLM types, text utilities, redaction, and injection scanning
 - `microclaw-engine`: Agent loop plus reusable storage, tools, channels, Worker, Skills, and observability services
 - `microclaw-sdk`: stable public facade with protocol-only, runtime, and full Engine feature tiers
-- `microclaw-work-app`: UI-independent Work commands, projections, and session persistence
-- `microclaw-work-runtime`: foreground Work runtime lifecycle and Agent Engine event bridge
+- `microclaw-desktop-app`: UI-independent Desktop commands, projections, and session persistence
+- `microclaw-desktop-runtime`: foreground Desktop runtime lifecycle and Agent Engine event bridge
 
 ### Other important directories
 

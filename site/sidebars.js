@@ -23,7 +23,7 @@ const sidebars = {
         'overview',
         'quickstart',
         'installation',
-        'work',
+        'desktop',
         {
           type: 'category',
           label: 'Channel Setup',

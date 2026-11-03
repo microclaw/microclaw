@@ -69,7 +69,7 @@ These pages are generated from source. Do not hand-edit them.
 - [Release policy](releases/release-policy.md)
 - [Release checklist](releases/pr-release-checklist.md)
 - [Upgrade guide](releases/upgrade-guide.md)
-- [MicroClaw Work macOS release and Homebrew Cask](operations/microclaw-work-release.md)
+- [MicroClaw Desktop macOS release and Homebrew Cask](operations/microclaw-desktop-release.md)
 - [Changelog](../CHANGELOG.md)
 
 ## Design records and project status

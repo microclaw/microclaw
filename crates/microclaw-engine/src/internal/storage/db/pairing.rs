@@ -1,6 +1,6 @@
 use super::*;
 
-/// A Work client (or any other device) that paired with this Server and
+/// A Desktop client (or any other device) that paired with this Server and
 /// holds a revocable device token. Only the token hash is stored.
 #[derive(Debug, Clone)]
 pub struct PairedDeviceRecord {

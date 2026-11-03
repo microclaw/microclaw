@@ -257,7 +257,7 @@ jobs:
           if-no-files-found: error
 
   build-work-portable-assets:
-    name: Build MicroClaw Work portable (${{ matrix.label }})
+    name: Build MicroClaw Desktop portable (${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
     needs: verify-ci
     env:
@@ -308,26 +308,26 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: microclaw-work-portable-${{ matrix.label }}
+          shared-key: microclaw-desktop-portable-${{ matrix.label }}
 
-      - name: Build portable Work binary
+      - name: Build portable Desktop binary
         shell: bash
-        run: cargo build -p microclaw-work --profile work-release --locked
+        run: cargo build -p microclaw-desktop --profile work-release --locked
 
       - name: Launch-smoke Linux portable binary
         if: runner.os == 'Linux'
         shell: bash
-        run: xvfb-run -a scripts/smoke_work_linux_app.sh work-release
+        run: xvfb-run -a scripts/smoke_desktop_linux_app.sh work-release
 
       - name: Launch-smoke Windows portable binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $binary = Resolve-Path 'target/work-release/microclaw-work.exe'
+          $binary = Resolve-Path 'target/work-release/microclaw-desktop.exe'
           $process = Start-Process -FilePath $binary -PassThru
           Start-Sleep -Seconds 3
           if ($process.HasExited) {
-            throw "MicroClaw Work portable exited during launch smoke with $($process.ExitCode)"
+            throw "MicroClaw Desktop portable exited during launch smoke with $($process.ExitCode)"
           }
           Stop-Process -Id $process.Id
           $process.WaitForExit()
@@ -337,29 +337,29 @@ jobs:
         shell: bash
         run: |
           RELEASE_VERSION="${RELEASE_TAG#v}"
-          ASSET_NAME="microclaw-work-${RELEASE_VERSION}-${{ matrix.asset_triple }}.tar.gz"
-          mkdir -p work-portable/microclaw-work work-release-assets
-          cp target/work-release/microclaw-work work-portable/microclaw-work/
-          cp LICENSE work-portable/microclaw-work/LICENSE.txt
-          cp apps/microclaw-work/README.md work-portable/microclaw-work/README.md
-          tar -czf "work-release-assets/${ASSET_NAME}" -C work-portable microclaw-work
+          ASSET_NAME="microclaw-desktop-${RELEASE_VERSION}-${{ matrix.asset_triple }}.tar.gz"
+          mkdir -p work-portable/microclaw-desktop work-release-assets
+          cp target/work-release/microclaw-desktop work-portable/microclaw-desktop/
+          cp LICENSE work-portable/microclaw-desktop/LICENSE.txt
+          cp apps/microclaw-desktop/README.md work-portable/microclaw-desktop/README.md
+          tar -czf "work-release-assets/${ASSET_NAME}" -C work-portable microclaw-desktop
 
       - name: Package Windows portable archive
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $releaseVersion = $env:RELEASE_TAG -replace '^v', ''
-          $assetName = "microclaw-work-${releaseVersion}-${{ matrix.asset_triple }}.zip"
-          New-Item -ItemType Directory -Force -Path 'work-portable/microclaw-work', 'work-release-assets' | Out-Null
-          Copy-Item 'target/work-release/microclaw-work.exe' 'work-portable/microclaw-work/'
-          Copy-Item 'LICENSE' 'work-portable/microclaw-work/LICENSE.txt'
-          Copy-Item 'apps/microclaw-work/README.md' 'work-portable/microclaw-work/README.md'
-          Compress-Archive -Path 'work-portable/microclaw-work' -DestinationPath "work-release-assets/$assetName" -Force
+          $assetName = "microclaw-desktop-${releaseVersion}-${{ matrix.asset_triple }}.zip"
+          New-Item -ItemType Directory -Force -Path 'work-portable/microclaw-desktop', 'work-release-assets' | Out-Null
+          Copy-Item 'target/work-release/microclaw-desktop.exe' 'work-portable/microclaw-desktop/'
+          Copy-Item 'LICENSE' 'work-portable/microclaw-desktop/LICENSE.txt'
+          Copy-Item 'apps/microclaw-desktop/README.md' 'work-portable/microclaw-desktop/README.md'
+          Compress-Archive -Path 'work-portable/microclaw-desktop' -DestinationPath "work-release-assets/$assetName" -Force
 
-      - name: Upload Work portable artifact
+      - name: Upload Desktop portable artifact
         uses: actions/upload-artifact@v7
         with:
-          name: microclaw-work-portable-${{ matrix.label }}
+          name: microclaw-desktop-portable-${{ matrix.label }}
           path: work-release-assets/*
           if-no-files-found: error
 
@@ -611,10 +611,10 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Download Work artifacts
+      - name: Download Desktop artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: microclaw-work-portable-*
+          pattern: microclaw-desktop-portable-*
           path: dist
           merge-multiple: true
 
@@ -625,12 +625,12 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Include locally notarized Work DMG when present
+      - name: Include locally notarized Desktop DMG when present
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          WORK_DMG="microclaw-work-${RELEASE_TAG#v}-arm64-macos.dmg"
+          WORK_DMG="microclaw-desktop-${RELEASE_TAG#v}-arm64-macos.dmg"
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 \
             && gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
               --json assets --jq '.assets[].name' | grep -Fxq "${WORK_DMG}"; then
@@ -640,7 +640,7 @@ jobs:
               --dir dist \
               --clobber
           else
-            echo "No locally notarized Work DMG is present for ${RELEASE_TAG}."
+            echo "No locally notarized Desktop DMG is present for ${RELEASE_TAG}."
           fi
 
       - name: Verify release artifact set

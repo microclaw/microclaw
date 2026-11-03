@@ -6,7 +6,7 @@ Use this guide for rolling upgrades that may include schema/auth/hooks/session/m
 
 ### SDK and products v0.10.0
 
-Server, Work, Work Headless, and the three public Rust crates move together to
+Server, Desktop, Desktop Headless, and the three public Rust crates move together to
 `0.10.0`. The SQLite schema migrates automatically to v44 (new
 `paired_devices` table); no configuration change is required.
 
@@ -18,7 +18,7 @@ header, WebSocket `connect`) but only with `operator.read` and
 
 ### SDK and products v0.9.0
 
-Server, Work, Work Headless, and the three public Rust crates move together to
+Server, Desktop, Desktop Headless, and the three public Rust crates move together to
 `0.9.0`. No configuration or schema migration is required.
 
 Builds with the Matrix channel (`channel-matrix` / `full`) now need Rust 1.96
@@ -31,7 +31,7 @@ to rusqlite 0.40.
 
 ### SDK and products v0.8.0
 
-Server, Work, Work Headless, and the three public Rust crates move together to
+Server, Desktop, Desktop Headless, and the three public Rust crates move together to
 `0.8.0`. No schema migration is required.
 
 `write_file` and `edit_file` now refuse to modify MicroClaw's own governance
@@ -46,7 +46,7 @@ YAML default it to `false`; reading the existing fields is unaffected.
 
 ### SDK and products v0.7.0
 
-Server, Work, Work Headless, and the three public Rust crates move together to
+Server, Desktop, Desktop Headless, and the three public Rust crates move together to
 `0.7.0`. No configuration or schema migration is required. The new
 `system_prompt_time_detail` setting defaults to `date`; set it to `full` to keep
 a minute-level clock in the system prompt, at the cost of prompt-cache reuse.
@@ -58,19 +58,19 @@ or use `..Default::default()`. Reading the existing fields is unaffected.
 ### SDK and products v0.6.1
 
 Version `0.6.1` is a patch release with no intended SDK API or configuration
-breaks. Server, Work, Work Headless, and the three public Rust crates move
+breaks. Server, Desktop, Desktop Headless, and the three public Rust crates move
 together to `0.6.1`. Release automation now validates the complete artifact
 set and excludes internal Docker Buildx records from GitHub Release uploads.
 
 ### SDK and products v0.6.0
 
-Server, Work, all shared Rust crates, and the web package metadata now use one
+Server, Desktop, all shared Rust crates, and the web package metadata now use one
 `0.6.0` version. SDK consumers should update `microclaw-core`,
 `microclaw-engine`, and `microclaw-sdk` together. The SDK feature tiers remain
 `minimal`, `standard`, and `full`; no compatibility shim is required for 0.5
 Skill or delegated-task APIs.
 
-Work hosts gain the same governed Skill lifecycle and durable Subagent
+Desktop hosts gain the same governed Skill lifecycle and durable Subagent
 projections exposed by the SDK. Custom hosts should keep all Workspace writes
 behind one authorization and mutation boundary even when delegated work runs
 in parallel.

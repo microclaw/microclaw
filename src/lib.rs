@@ -21,7 +21,7 @@ pub use microclaw_engine::{
 };
 
 /// Whether this build embeds the React operator console. Server builds enable
-/// it by default; native Work builds deliberately disable it.
+/// it by default; native Desktop builds deliberately disable it.
 pub const EMBEDDED_WEB_UI_ENABLED: bool = cfg!(feature = "embedded-web-ui");
 
 pub use channels::discord;

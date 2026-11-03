@@ -1,0 +1,17 @@
+[package]
+name = "microclaw-desktop-headless"
+version = "0.11.1"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+microclaw-sdk = { version = "0.11.1", path = "../../crates/microclaw-sdk", features = ["full"] }
+microclaw-desktop-app = { version = "0.11.1", path = "../../crates/microclaw-desktop-app" }
+microclaw-desktop-runtime = { version = "0.11.1", path = "../../crates/microclaw-desktop-runtime" }
+dirs = "6"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile = "3"

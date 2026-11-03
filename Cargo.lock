@@ -6114,19 +6114,85 @@ dependencies = [
 ]
 
 [[package]]
+name = "microclaw-desktop"
+version = "0.11.1"
+dependencies = [
+ "dirs",
+ "embed-resource",
+ "gpui",
+ "gpui-base",
+ "gpui-component",
+ "gpui_platform",
+ "microclaw-core",
+ "microclaw-desktop-app",
+ "microclaw-desktop-runtime",
+ "serde_json",
+ "smol",
+ "tempfile",
+ "url",
+]
+
+[[package]]
+name = "microclaw-desktop-app"
+version = "0.11.1"
+dependencies = [
+ "microclaw-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "microclaw-desktop-cli"
 version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "microclaw-desktop-app",
+ "microclaw-desktop-runtime",
  "microclaw-sdk",
- "microclaw-work-app",
- "microclaw-work-runtime",
  "regex",
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "microclaw-desktop-headless"
+version = "0.11.1"
+dependencies = [
+ "dirs",
+ "microclaw-desktop-app",
+ "microclaw-desktop-runtime",
+ "microclaw-sdk",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "microclaw-desktop-runtime"
+version = "0.11.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "futures-util",
+ "microclaw-core",
+ "microclaw-engine",
+ "microclaw-sdk",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.8.23",
+ "url",
 ]
 
 [[package]]
@@ -6201,72 +6267,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
-]
-
-[[package]]
-name = "microclaw-work"
-version = "0.11.1"
-dependencies = [
- "dirs",
- "embed-resource",
- "gpui",
- "gpui-base",
- "gpui-component",
- "gpui_platform",
- "microclaw-core",
- "microclaw-work-app",
- "microclaw-work-runtime",
- "serde_json",
- "smol",
- "tempfile",
- "url",
-]
-
-[[package]]
-name = "microclaw-work-app"
-version = "0.11.1"
-dependencies = [
- "microclaw-core",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "microclaw-work-headless"
-version = "0.11.1"
-dependencies = [
- "dirs",
- "microclaw-sdk",
- "microclaw-work-app",
- "microclaw-work-runtime",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "microclaw-work-runtime"
-version = "0.11.1"
-dependencies = [
- "anyhow",
- "chrono",
- "dirs",
- "futures-util",
- "microclaw-core",
- "microclaw-engine",
- "microclaw-sdk",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "toml 0.8.23",
- "url",
 ]
 
 [[package]]

@@ -12,8 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 microclaw-sdk = { version = "0.11.1", path = "../../crates/microclaw-sdk", features = ["full"] }
-microclaw-work-app = { version = "0.11.1", path = "../../crates/microclaw-work-app" }
-microclaw-work-runtime = { version = "0.11.1", path = "../../crates/microclaw-work-runtime" }
+microclaw-desktop-app = { version = "0.11.1", path = "../../crates/microclaw-desktop-app" }
+microclaw-desktop-runtime = { version = "0.11.1", path = "../../crates/microclaw-desktop-runtime" }
 anyhow = "1"
 clap = { version = "4.6", features = ["derive"] }
 dirs = "6"

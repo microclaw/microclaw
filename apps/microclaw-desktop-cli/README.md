@@ -1,10 +1,10 @@
 # mcdesk — MicroClaw Desktop in your terminal
 
 `mcdesk` is the terminal entry point of **MicroClaw Desktop**, the local
-MicroClaw product. The desktop app (`apps/microclaw-work`) and `mcdesk` share
+MicroClaw product. The desktop app (`apps/microclaw-desktop`) and `mcdesk` share
 one Agent Engine (through `microclaw-sdk`), one session store and state
-machine (`microclaw-work-app`), and the project, trust and verification
-services in `microclaw-work-runtime`. A session started in the terminal shows
+machine (`microclaw-desktop-app`), and the project, trust and verification
+services in `microclaw-desktop-runtime`. A session started in the terminal shows
 up in the desktop app, and `/desktop` hands it over.
 
 Status: **Preview**.
@@ -24,7 +24,7 @@ mcdesk desktop                       # continue in the desktop app
 microclaw desktop …                  # same, through the main microclaw binary
 ```
 
-Model credentials: `--config <PATH>`, `MICROCLAW_WORK_CONFIG`,
+Model credentials: `--config <PATH>`, `MICROCLAW_DESKTOP_CONFIG`,
 `MICROCLAW_CONFIG`, the model settings saved by the desktop app, or
 `~/.microclaw/microclaw.config.yaml`. A `microclaw.config.yaml` inside the
 repository is never loaded, so a cloned project cannot choose the model

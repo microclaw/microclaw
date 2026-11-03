@@ -1,4 +1,4 @@
-//! Authenticated WebSocket transport and host for MicroClaw Workers.
+//! Authenticated WebSocket transport and host for MicroClaw Desktopers.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -17,7 +17,7 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{accept_hdr_async, connect_async, MaybeTlsStream, WebSocketStream};
 
-/// Creates authenticated WebSocket connections to a MicroClaw Worker host.
+/// Creates authenticated WebSocket connections to a MicroClaw Desktoper host.
 #[derive(Debug, Clone)]
 pub struct WebSocketWorkerTransport {
     url: String,

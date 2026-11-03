@@ -743,7 +743,7 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
-        if auth.caller_channel == "work"
+        if auth.caller_channel == "desktop"
             && auth.principal.starts_with("subagent:")
             && !matches!(
                 name,
@@ -770,7 +770,7 @@ impl ToolRegistry {
             )
         {
             return ToolResult::error(format!(
-                "Tool `{name}` is not available to Work Subagents; Workspace writes are owned by the Main Agent"
+                "Tool `{name}` is not available to Desktop Subagents; Workspace writes are owned by the Main Agent"
             ))
             .with_error_type("work_subagent_read_only");
         }
@@ -1270,7 +1270,7 @@ mod tests {
             ],
         };
         let mut auth = ToolAuthContext {
-            caller_channel: "work".into(),
+            caller_channel: "desktop".into(),
             caller_chat_id: 1,
             principal: "subagent:run-1".into(),
             control_chat_ids: vec![],

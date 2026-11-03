@@ -249,7 +249,7 @@ homebrew_macos_asset_name() {
 homebrew_work_macos_asset_name() {
   local version="$1"
   local arch="$2"
-  echo "microclaw-work-${version}-${arch}-macos.dmg"
+  echo "microclaw-desktop-${version}-${arch}-macos.dmg"
 }
 
 previous_release_tag() {
@@ -403,9 +403,9 @@ echo "Official Homebrew x86_64 SHA256: $HOMEBREW_X86_64_SHA256"
 echo "Official Homebrew full arm64 SHA256: $HOMEBREW_FULL_ARM64_SHA256"
 echo "Official Homebrew full x86_64 SHA256: $HOMEBREW_FULL_X86_64_SHA256"
 if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
-  echo "Official Homebrew Work arm64 SHA256: $HOMEBREW_WORK_ARM64_SHA256"
+  echo "Official Homebrew Desktop arm64 SHA256: $HOMEBREW_WORK_ARM64_SHA256"
 else
-  echo "No signed Work DMG is present; preserving the existing Work Cask."
+  echo "No signed Desktop DMG is present; preserving the existing Desktop Cask."
 fi
 
 echo "Resetting tap workspace: $TAP_DIR"
@@ -471,23 +471,23 @@ end
 RUBY
 
 mkdir -p Casks
-WORK_CASK_PATH="Casks/microclaw-work.rb"
+WORK_CASK_PATH="Casks/microclaw-desktop.rb"
 if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
   cat > "$WORK_CASK_PATH" << RUBY
-cask "microclaw-work" do
+cask "microclaw-desktop" do
   version "$NEW_VERSION"
   sha256 "$HOMEBREW_WORK_ARM64_SHA256"
 
-  url "https://github.com/$GITHUB_REPO/releases/download/$TAG/microclaw-work-#{version}-arm64-macos.dmg"
+  url "https://github.com/$GITHUB_REPO/releases/download/$TAG/microclaw-desktop-#{version}-arm64-macos.dmg"
 
-  name "MicroClaw Work"
+  name "MicroClaw Desktop"
   desc "Native desktop agent workspace powered by the shared MicroClaw runtime"
   homepage "https://github.com/$GITHUB_REPO"
 
   depends_on arch: :arm64
   depends_on macos: :ventura
 
-  app "MicroClaw Work.app"
+  app "MicroClaw Desktop.app"
 end
 RUBY
 fi
@@ -495,6 +495,11 @@ fi
 git add -- "$FORMULA_PATH" "$FORMULA_FULL_PATH"
 if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
   git add -- "$WORK_CASK_PATH"
+  # MicroClaw Work was renamed to MicroClaw Desktop without a compatibility
+  # alias; drop the old cask once the Desktop cask is published.
+  if [ -f Casks/microclaw-work.rb ]; then
+    git rm -q -- Casks/microclaw-work.rb
+  fi
 fi
 git commit -m "microclaw homebrew release $NEW_VERSION"
 sync_rebase_and_push origin
@@ -507,7 +512,7 @@ echo "  brew tap microclaw/tap"
 echo "  brew install microclaw          # default (lightweight)"
 echo "  brew install microclaw-full     # full (Matrix + MCP)"
 if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
-  echo "  brew install --cask microclaw-work  # native desktop app"
+  echo "  brew install --cask microclaw-desktop  # native desktop app"
 else
-  echo "  Work Cask unchanged: publish a signed/notarized DMG before updating it."
+  echo "  Desktop Cask unchanged: publish a signed/notarized DMG before updating it."
 fi

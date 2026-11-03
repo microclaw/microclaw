@@ -5,7 +5,7 @@ application. It exposes provider-neutral requests, events, controls, terminal re
 handles, and Worker contracts without pulling in Server, channel, Web, or desktop UI code.
 
 The `minimal` preset is protocol-only, `standard` adds a host-provided `RunExecutor`, and `full`
-starts the same skilled Agent Engine used by Server and Work without exposing either product package.
+starts the same skilled Agent Engine used by Server and Desktop without exposing either product package.
 `minimal` does not compile the Agent Engine, HTTP clients, SQLite, Tokio, Typst, or OpenTelemetry.
 
 ## Choose a feature set

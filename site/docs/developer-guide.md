@@ -23,7 +23,7 @@ crates/
     microclaw-core/      # Shared error/types/text modules
     microclaw-engine/    # Agent loop plus storage/tools/channels/runtime services
     microclaw-sdk/       # Stable public embedding facade
-    microclaw-work-*/    # UI-independent Work application services
+    microclaw-desktop-*/    # UI-independent Desktop application services
 
 src/
     main.rs             # CLI entrypoint

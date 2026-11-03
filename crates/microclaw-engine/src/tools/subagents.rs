@@ -304,7 +304,7 @@ static RUNTIME: LazyLock<Mutex<Option<Arc<SubagentRuntime>>>> = LazyLock::new(||
 // Subagent runs must outlive the Tokio runtime of the foreground caller. Work
 // intentionally creates a short-lived runtime for each turn; spawning on that
 // runtime used to abort accepted background runs as soon as the Main Agent
-// finished. A process-lifetime executor gives Server and Work the same durable
+// finished. A process-lifetime executor gives Server and Desktop the same durable
 // in-process lifecycle while SQLite remains the restart recovery authority.
 static TASK_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()

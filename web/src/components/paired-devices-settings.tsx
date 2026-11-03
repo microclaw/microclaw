@@ -114,7 +114,7 @@ export function PairedDevicesSettings({
         label: String(data.label || ''),
         expiresAt: data.expires_at ?? null,
       })
-      setNotice('Pairing code ready. Enter it in MicroClaw Work → Settings → Server.')
+      setNotice('Pairing code ready. Enter it in MicroClaw Desktop → Settings → Server.')
       await loadDevices()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -153,7 +153,7 @@ export function PairedDevicesSettings({
     <div className="space-y-4">
       <Callout.Root size="1" variant="soft">
         <Callout.Text>
-          Pair a MicroClaw Work desktop client with this Server. A pairing code is single-use and short-lived;
+          Pair a MicroClaw Desktop client with this Server. A pairing code is single-use and short-lived;
           the device token it issues carries <code>operator.read</code> and <code>operator.write</code> only
           and can be revoked here at any time.
         </Callout.Text>
