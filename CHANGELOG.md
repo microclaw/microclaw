@@ -4,6 +4,47 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Added
+
+- **MicroClaw Code** (`apps/microclaw-code`, Preview): a local, terminal-first
+  coding agent and the fourth product next to the SDK, Server and Work. Built
+  only on the public `microclaw-sdk` facade. Interactive sessions and
+  `-p` one-shot runs (`--json` JSON Lines events) in the repository that
+  contains the current directory; `plan` / `ask` / `auto` permission modes
+  (auto still asks for destructive shell commands); automatic verification
+  with the project's own checks (Rust, Node, Python, Go, Make) that hands
+  failures back to the agent; `.microclaw/code.yaml` project settings;
+  `check` / `init` / `info` subcommands. `microclaw code …` forwards to the
+  `microclaw-code` binary. Proposal:
+  `docs/roadmap/microclaw-code-proposal-cn.md`.
+- `bash` gains `run_in_background`, with new `bash_output` (incremental,
+  filterable output) and `bash_kill` tools for dev servers, watchers and long
+  test runs. Processes are scoped to the session; refused while the sandbox
+  is on.
+- `edit_file` accepts `edits[]` (several replacements applied all-or-nothing)
+  and `replace_all`.
+- `ToolPolicy::WorkspaceWrite` now has a meaning: the Agent Profile is offered
+  workspace tools only (read/search, file edits, shell, planning, sub-agents,
+  MCP) and calls to anything else are refused.
+- ACP (`microclaw acp`) streams tool calls with kind/status/location, file
+  diffs and plan updates, and shows final-only replies such as approval
+  prompts.
+
+### Changed
+
+- `glob` and `grep` respect `.gitignore` / `.ignore` files (also outside a git
+  checkout); `include_ignored: true` restores the old traversal, and `glob`
+  falls back to a literal match when nothing visible matches.
+- `edit_file` and `write_file` refuse to overwrite a file that changed on disk
+  after the agent last read or wrote it (`stale_read`), so concurrent edits by
+  the user or a formatter are not clobbered.
+- In a direct workspace (`working_dir_isolation: direct`, used by Work and
+  Code) `bash` runs in the workspace root instead of its `tmp/` subdirectory.
+- High-risk tool approval and the read-only sub-agent restriction cover the
+  `code` caller channel, as they already did for `work`.
+
 ## 0.11.1 - 2026-10-25
 
 ### Security

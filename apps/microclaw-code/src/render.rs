@@ -294,7 +294,11 @@ impl Renderer {
 
 /// Render the approval card and return the text shown to the user.
 pub fn approval_card(style: Style, approval: &PendingApproval) -> String {
-    let mut text = format!("{} {}", style.yellow("?"), style.bold(&format!("Allow {}?", approval.tool)));
+    let mut text = format!(
+        "{} {}",
+        style.yellow("?"),
+        style.bold(&format!("Allow {}?", approval.tool))
+    );
     if let Some(preview) = &approval.preview {
         for line in preview.lines().take(12) {
             text.push_str(&format!("\n    {}", line));
@@ -316,12 +320,18 @@ mod tests {
 
     #[test]
     fn summarizes_common_tools() {
-        assert_eq!(tool_summary("bash", &json!({"command": "cargo   test\n-q"})), "cargo test -q");
+        assert_eq!(
+            tool_summary("bash", &json!({"command": "cargo   test\n-q"})),
+            "cargo test -q"
+        );
         assert_eq!(
             tool_summary("edit_file", &json!({"path": "a.rs", "edits": [{}, {}]})),
             "a.rs (2 edits)"
         );
-        assert_eq!(tool_summary("grep", &json!({"pattern": "fn main"})), "/fn main/");
+        assert_eq!(
+            tool_summary("grep", &json!({"pattern": "fn main"})),
+            "/fn main/"
+        );
         assert!(tool_summary("bash", &json!({"command": "x".repeat(300)})).ends_with('…'));
     }
 

@@ -206,8 +206,7 @@ pub fn detect_checks(root: &Path) -> (Vec<Check>, Vec<&'static str>) {
     }
 
     let pyproject = std::fs::read_to_string(root.join("pyproject.toml")).ok();
-    if pyproject.is_some() || root.join("setup.py").is_file() || root.join("setup.cfg").is_file()
-    {
+    if pyproject.is_some() || root.join("setup.py").is_file() || root.join("setup.cfg").is_file() {
         kinds.push("python");
         let text = pyproject.unwrap_or_default();
         if text.contains("ruff") || root.join("ruff.toml").is_file() {
@@ -216,7 +215,9 @@ pub fn detect_checks(root: &Path) -> (Vec<Check>, Vec<&'static str>) {
         if text.contains("mypy") {
             checks.push(check("typecheck", "mypy .", false));
         }
-        if text.contains("pytest") || root.join("tests").is_dir() || root.join("pytest.ini").is_file()
+        if text.contains("pytest")
+            || root.join("tests").is_dir()
+            || root.join("pytest.ini").is_file()
         {
             checks.push(check("test", "python -m pytest -q", false));
         }
@@ -233,7 +234,10 @@ pub fn detect_checks(root: &Path) -> (Vec<Check>, Vec<&'static str>) {
         if let Ok(makefile) = std::fs::read_to_string(root.join("Makefile")) {
             kinds.push("make");
             for target in ["check", "lint", "test"] {
-                if makefile.lines().any(|l| l.starts_with(&format!("{target}:"))) {
+                if makefile
+                    .lines()
+                    .any(|l| l.starts_with(&format!("{target}:")))
+                {
                     checks.push(check(target, format!("make {target}"), false));
                 }
             }
@@ -286,10 +290,11 @@ pub fn git_summary(root: &Path) -> Option<String> {
             .stderr(std::process::Stdio::null())
             .output()
             .ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).trim_end().to_string())
+        output.status.success().then(|| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim_end()
+                .to_string()
+        })
     };
     let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"])?;
     let status = run(&["status", "--porcelain"]).unwrap_or_default();
@@ -298,7 +303,10 @@ pub fn git_summary(root: &Path) -> Option<String> {
     if changed.is_empty() {
         summary.push_str("\nworking tree: clean");
     } else {
-        summary.push_str(&format!("\nworking tree: {} changed path(s)", changed.len()));
+        summary.push_str(&format!(
+            "\nworking tree: {} changed path(s)",
+            changed.len()
+        ));
         for line in changed.iter().take(20) {
             summary.push_str(&format!("\n  {line}"));
         }
@@ -379,7 +387,11 @@ mod tests {
             vec!["build", "lint", "test", "lint-2", "build-2", "test-2"]
         );
         assert!(checks.iter().any(|c| c.run == "pnpm run lint" && c.auto));
-        assert!(checks.iter().any(|c| c.run == "cargo check --all-targets" && c.auto));
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.run == "cargo check --all-targets" && c.auto)
+        );
     }
 
     #[test]

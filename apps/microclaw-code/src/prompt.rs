@@ -20,7 +20,10 @@ End your reply with a numbered implementation plan (files to change, approach, h
 
 pub fn system_prompt(project: &Project, mode: Mode, git: Option<&str>) -> String {
     let mut prompt = String::from(CODE_GUIDE);
-    prompt.push_str(&format!("\n\n# Repository\n\nroot: {}\n", project.root.display()));
+    prompt.push_str(&format!(
+        "\n\n# Repository\n\nroot: {}\n",
+        project.root.display()
+    ));
     if !project.kinds.is_empty() {
         prompt.push_str(&format!("project types: {}\n", project.kinds.join(", ")));
     }

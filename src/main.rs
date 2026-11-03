@@ -610,7 +610,10 @@ fn find_code_binary() -> Option<PathBuf> {
     } else {
         "microclaw-code"
     };
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)) {
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+    {
         let candidate = dir.join(name);
         if candidate.is_file() {
             return Some(candidate);

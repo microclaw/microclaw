@@ -143,11 +143,7 @@ impl Tool for EditFileTool {
                     }
                 }
                 Err(msg) => {
-                    let unchanged = if multi {
-                        " No edits were applied."
-                    } else {
-                        ""
-                    };
+                    let unchanged = if multi { " No edits were applied." } else { "" };
                     return ToolResult::error(format!("{label}{msg}{unchanged}"));
                 }
             }
@@ -166,11 +162,8 @@ impl Tool for EditFileTool {
                 } else {
                     String::new()
                 };
-                let diff = microclaw_core::diff::unified_diff(
-                    &content,
-                    &new_content,
-                    self.diff_max_lines,
-                );
+                let diff =
+                    microclaw_core::diff::unified_diff(&content, &new_content, self.diff_max_lines);
                 let mut result = ToolResult::success(match &diff {
                     Some(d) => format!(
                         "Successfully edited {}{} ({}){}",
@@ -259,13 +252,17 @@ fn apply_edit(content: &str, edit: &Edit) -> Result<(String, Option<String>), St
                     .into(),
             );
         }
-        let note = format!("replaced {count} occurrence{}", if count == 1 { "" } else { "s" });
+        let note = format!(
+            "replaced {count} occurrence{}",
+            if count == 1 { "" } else { "s" }
+        );
         return Ok((
             content.replace(edit.old_string.as_str(), &edit.new_string),
             Some(note),
         ));
     }
-    let fm = super::fuzzy_match::fuzzy_find_and_replace(content, &edit.old_string, &edit.new_string)?;
+    let fm =
+        super::fuzzy_match::fuzzy_find_and_replace(content, &edit.old_string, &edit.new_string)?;
     let note = (fm.strategy != "exact").then(|| {
         format!(
             "matched via `{}` strategy — re-read the file if you want to confirm the byte-exact form",
@@ -491,7 +488,10 @@ mod tests {
             .await;
         assert!(result.is_error);
         assert_eq!(result.error_type.as_deref(), Some("stale_read"));
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "changed by the user");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "changed by the user"
+        );
 
         let _ = read.execute(json!({"path": file.to_str().unwrap()})).await;
         let retry = tool

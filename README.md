@@ -30,13 +30,14 @@
   <a href="#documentation">Documentation</a>
 </p>
 
-MicroClaw is a self-hosted Rust agent platform with two product surfaces and an embeddable SDK. **MicroClaw Server** runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Work** is a native GPUI desktop application for local, workspace-centered agent work. Other Rust applications can use **`microclaw-sdk`** to run the same channel-independent Agent Engine, tools, policy, memory, skills, and runtime events.
+MicroClaw is a self-hosted Rust agent platform with three product surfaces and an embeddable SDK. **MicroClaw Server** runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Code** (preview) is a terminal coding agent that works directly in your repository and verifies its edits with your project's own checks. **MicroClaw Work** is a native GPUI desktop application for local, workspace-centered agent work. Other Rust applications can use **`microclaw-sdk`** to run the same channel-independent Agent Engine, tools, policy, memory, skills, and runtime events.
 
 It is designed for work that lasts longer than one request: multi-step tool use, resumable sessions, durable delivery, persistent memory, scheduled tasks, and governed extensions all run in the same runtime.
 
 | Entry point | Best for | Availability |
 |---|---|---|
 | MicroClaw Server | Always-on agents, chat channels, Web/API access, scheduled work, and remote automation | macOS, Linux, and Windows |
+| MicroClaw Code | Coding in a local repository from the terminal or an ACP editor: plan/ask/auto modes, diffs, automatic build/lint verification | Preview; build with `cargo build --release -p microclaw-code` ([guide](apps/microclaw-code/README.md)) |
 | MicroClaw Work | Native local conversations, project workspaces, approvals, checkpoints, and desktop settings | Apple Silicon macOS 13+; Linux/Windows portable previews |
 | `microclaw-sdk` | Embedding the same Agent Engine, Skills, events, controls, and Workers in a Rust application | Rust 1.93+; `minimal`, `standard`, `full`, and `remote-worker` feature sets |
 
@@ -58,6 +59,7 @@ Choose the path that matches what you are building:
 | I want to… | Start here |
 |---|---|
 | Use MicroClaw as a native project coworker | Install MicroClaw Work below |
+| Code in a local repository from the terminal | Read the [MicroClaw Code guide](apps/microclaw-code/README.md) |
 | Run an always-on agent service | Install MicroClaw Server below |
 | Add agents to an existing Rust application | Follow the [SDK quickstart](site/docs/sdk-quickstart.md) |
 

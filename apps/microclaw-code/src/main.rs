@@ -181,14 +181,20 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     };
     let interactive = print_prompt.is_none();
     if interactive && !std::io::stdin().is_terminal() && cli.prompt.is_empty() {
-        anyhow::bail!("stdin is not a terminal; pass a task with -p \"...\" (or -p - to read it from stdin)");
+        anyhow::bail!(
+            "stdin is not a terminal; pass a task with -p \"...\" (or -p - to read it from stdin)"
+        );
     }
 
     if interactive || !cli.json {
         eprintln!(
             "{} {} {}",
             style.bold("MicroClaw Code"),
-            style.dim(&format!("· {} · mode {}", project.root.display(), mode.as_str())),
+            style.dim(&format!(
+                "· {} · mode {}",
+                project.root.display(),
+                mode.as_str()
+            )),
             style.dim(&format!("· session {session}"))
         );
         eprintln!("{}", style.dim("Loading the Agent Engine…"));
@@ -204,7 +210,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let mut app = App {
         git: project::git_summary(&project.root),
         verify: project.verify_enabled() && !cli.no_verify,
-        max_fix_rounds: cli.max_fix_rounds.unwrap_or_else(|| project.max_fix_rounds()),
+        max_fix_rounds: cli
+            .max_fix_rounds
+            .unwrap_or_else(|| project.max_fix_rounds()),
         always_ask: compile_always_ask(&project.config.always_ask),
         project,
         microclaw,
@@ -242,13 +250,21 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 /// project must not be able to choose the model endpoint or tool policy.
 fn resolve_config(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
     if let Some(path) = explicit {
-        anyhow::ensure!(path.is_file(), "config file {} does not exist", path.display());
+        anyhow::ensure!(
+            path.is_file(),
+            "config file {} does not exist",
+            path.display()
+        );
         return Ok(path.to_path_buf());
     }
     for var in ["MICROCLAW_CODE_CONFIG", "MICROCLAW_CONFIG"] {
         if let Some(value) = std::env::var_os(var) {
             let path = PathBuf::from(value);
-            anyhow::ensure!(path.is_file(), "{var} points to missing file {}", path.display());
+            anyhow::ensure!(
+                path.is_file(),
+                "{var} points to missing file {}",
+                path.display()
+            );
             return Ok(path);
         }
     }
@@ -318,7 +334,11 @@ fn print_info(project: &Project, style: Style) {
         } else {
             "detected"
         },
-        if project.checks.is_empty() { " (none)" } else { "" }
+        if project.checks.is_empty() {
+            " (none)"
+        } else {
+            ""
+        }
     );
     for check in &project.checks {
         let auto = if check.auto { " [auto]" } else { "" };
@@ -336,7 +356,10 @@ fn print_info(project: &Project, style: Style) {
 fn init_project(project: &Project, force: bool) -> anyhow::Result<ExitCode> {
     let path = project.config_path();
     if path.exists() && !force {
-        anyhow::bail!("{} already exists (use --force to overwrite)", path.display());
+        anyhow::bail!(
+            "{} already exists (use --force to overwrite)",
+            path.display()
+        );
     }
     std::fs::create_dir_all(path.parent().unwrap_or(&project.root))?;
     std::fs::write(&path, project::config_template(project))?;
@@ -344,10 +367,20 @@ fn init_project(project: &Project, force: bool) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-async fn check_command(project: &Project, names: &[String], style: Style) -> anyhow::Result<ExitCode> {
+async fn check_command(
+    project: &Project,
+    names: &[String],
+    style: Style,
+) -> anyhow::Result<ExitCode> {
     let checks = select_checks(project, names)?;
-    let ok = run_checks(&project.root, &checks, style, true).await.is_none();
-    Ok(if ok { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    let ok = run_checks(&project.root, &checks, style, true)
+        .await
+        .is_none();
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 fn select_checks(project: &Project, names: &[String]) -> anyhow::Result<Vec<project::Check>> {
@@ -384,14 +417,27 @@ async fn run_checks(
     show_output_on_failure: bool,
 ) -> Option<verify::CheckOutcome> {
     for check in checks {
-        eprint!("{} {} {}", style.cyan("▸"), style.bold(&check.name), style.dim(&check.run));
+        eprint!(
+            "{} {} {}",
+            style.cyan("▸"),
+            style.bold(&check.name),
+            style.dim(&check.run)
+        );
         let _ = std::io::stderr().flush();
         let outcome = verify::run_check(root, check).await;
         let secs = outcome.duration.as_secs_f32();
         if outcome.success {
-            eprintln!("  {} {}", style.green("passed"), style.dim(&format!("{secs:.1}s")));
+            eprintln!(
+                "  {} {}",
+                style.green("passed"),
+                style.dim(&format!("{secs:.1}s"))
+            );
         } else {
-            eprintln!("  {} {}", style.red(&outcome.status_label()), style.dim(&format!("{secs:.1}s")));
+            eprintln!(
+                "  {} {}",
+                style.red(&outcome.status_label()),
+                style.dim(&format!("{secs:.1}s"))
+            );
             if show_output_on_failure {
                 for line in verify::tail(outcome.output.trim_end(), 4_000).lines() {
                     eprintln!("    {}", style.dim(line));
@@ -569,7 +615,11 @@ impl App {
         };
         let approval = renderer.approval.take();
         // The approval prompt text is rendered as a card instead.
-        let shown_text = if approval.is_some() { "" } else { final_text.as_str() };
+        let shown_text = if approval.is_some() {
+            ""
+        } else {
+            final_text.as_str()
+        };
         if !self.json {
             renderer.finish(&mut stdout, shown_text);
         }
@@ -648,7 +698,8 @@ impl App {
                     if !self.json {
                         eprintln!(
                             "{}",
-                            self.style.dim(&format!("  auto-approved {} (auto mode)", approval.tool))
+                            self.style
+                                .dim(&format!("  auto-approved {} (auto mode)", approval.tool))
                         );
                     }
                     Some("1".to_string())
@@ -798,7 +849,8 @@ impl App {
             if self.mode == Mode::Plan {
                 eprint!(
                     "{} ",
-                    self.style.yellow("Execute this plan? [y = switch to ask mode and run it / N]")
+                    self.style
+                        .yellow("Execute this plan? [y = switch to ask mode and run it / N]")
                 );
                 let _ = std::io::stderr().flush();
                 if let Some(answer) = self.read_line().await {
@@ -813,7 +865,13 @@ impl App {
                 }
             }
         }
-        eprintln!("{}", self.style.dim(&format!("Session saved: {}  (resume with `microclaw-code -c`)", self.session)));
+        eprintln!(
+            "{}",
+            self.style.dim(&format!(
+                "Session saved: {}  (resume with `microclaw-code -c`)",
+                self.session
+            ))
+        );
         Ok(ExitCode::SUCCESS)
     }
 
@@ -903,7 +961,10 @@ impl App {
                 }
                 Err(e) => eprintln!("{}", style.red(&e.to_string())),
             },
-            _ => eprintln!("{}", style.red(&format!("unknown command {name}; /help lists commands"))),
+            _ => eprintln!(
+                "{}",
+                style.red(&format!("unknown command {name}; /help lists commands"))
+            ),
         }
         Ok(Flow::Continue)
     }
@@ -956,14 +1017,22 @@ mod tests {
         ] {
             assert!(asks(cmd), "{cmd} should ask");
         }
-        for cmd in ["cargo test", "rm file.txt", "git status", "git checkout -b feature", "npm run lint"] {
+        for cmd in [
+            "cargo test",
+            "rm file.txt",
+            "git status",
+            "git checkout -b feature",
+            "npm run lint",
+        ] {
             assert!(!asks(cmd), "{cmd} should not ask");
         }
     }
 
     #[test]
     fn cli_parses_print_mode() {
-        let cli = Cli::try_parse_from(["microclaw-code", "-p", "fix it", "--mode", "auto", "--json"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["microclaw-code", "-p", "fix it", "--mode", "auto", "--json"])
+                .unwrap();
         assert_eq!(cli.print.as_deref(), Some("fix it"));
         assert_eq!(cli.mode.as_deref(), Some("auto"));
         assert!(cli.json);

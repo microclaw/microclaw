@@ -99,12 +99,17 @@ impl BashTool {
         let mut envs = std::collections::HashMap::new();
         for env_file in env_files {
             if let Ok(content) = std::fs::read_to_string(env_file) {
-                envs.extend(crate::internal::tool_runtime::env_file::parse_dotenv(&content));
+                envs.extend(crate::internal::tool_runtime::env_file::parse_dotenv(
+                    &content,
+                ));
             }
         }
         match super::background_process::spawn(session_key, exec_command, working_dir, &envs) {
             Ok(id) => {
-                info!("Started background bash {id} in {}: {command}", working_dir.display());
+                info!(
+                    "Started background bash {id} in {}: {command}",
+                    working_dir.display()
+                );
                 ToolResult::success(format!(
                     "Started background process {id}: {command}\nRead its output with bash_output {{\"id\": \"{id}\"}} and stop it with bash_kill when you no longer need it."
                 ))
@@ -388,7 +393,13 @@ impl Tool for BashTool {
             .unwrap_or(false)
         {
             return self
-                .start_background(&session_key, command, &exec_command, &working_dir, &env_files)
+                .start_background(
+                    &session_key,
+                    command,
+                    &exec_command,
+                    &working_dir,
+                    &env_files,
+                )
                 .await;
         }
         let env_files_for_redact = env_files.clone();

@@ -11,14 +11,14 @@ use crate::skills::SkillManager;
 use crate::tools::ToolRegistry;
 use agent_client_protocol::{
     Agent, AgentCapabilities, AgentSideConnection, AuthenticateRequest, AuthenticateResponse,
-    AvailableCommand, AvailableCommandsUpdate, CancelNotification, Client, ContentBlock,
+    AvailableCommand, AvailableCommandsUpdate, CancelNotification, Client, Content, ContentBlock,
     ContentChunk, CurrentModeUpdate, Error, Implementation, InitializeRequest, InitializeResponse,
     LoadSessionRequest, LoadSessionResponse, McpCapabilities, NewSessionRequest,
-    NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse, Result as AcpResult,
-    Content, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionId, SessionMode,
-    SessionModeState, SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason,
-    ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind,
+    NewSessionResponse, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptCapabilities,
+    PromptRequest, PromptResponse, Result as AcpResult, SessionId, SessionMode, SessionModeState,
+    SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason, ToolCall,
+    ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ToolKind,
 };
 use microclaw_engine::channel::ConversationKind;
 use microclaw_engine::channel_adapter::{ChannelAdapter, ChannelRegistry};
@@ -437,7 +437,9 @@ impl AcpEventMapper {
                     delta.clone().into(),
                 ))]
             }
-            AgentEvent::FinalResponse { text } if !self.streamed_text && !text.trim().is_empty() => {
+            AgentEvent::FinalResponse { text }
+                if !self.streamed_text && !text.trim().is_empty() =>
+            {
                 self.streamed_text = true;
                 vec![SessionUpdate::AgentMessageChunk(ContentChunk::new(
                     text.clone().into(),
@@ -494,7 +496,11 @@ impl AcpEventMapper {
                     return Vec::new();
                 };
                 self.calls_with_diff.insert(call_id.clone());
-                let note = if *truncated { "\n… diff truncated" } else { "" };
+                let note = if *truncated {
+                    "\n… diff truncated"
+                } else {
+                    ""
+                };
                 let text = format!("{path} (+{added} -{removed})\n```diff\n{diff}\n```{note}");
                 vec![SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                     call_id,
@@ -716,16 +722,24 @@ mod tests {
         });
         let json = serde_json::to_value(&result[0]).unwrap();
         assert_eq!(json["status"], "completed");
-        assert!(json.get("content").is_none(), "diff content must not be replaced");
+        assert!(
+            json.get("content").is_none(),
+            "diff content must not be replaced"
+        );
 
         // No text was streamed, so the final response (e.g. an approval
         // prompt) is forwarded once.
         let final_text = mapper.map(&AgentEvent::FinalResponse {
             text: "Approve once? 1/2/3".into(),
         });
-        assert!(matches!(&final_text[..], [SessionUpdate::AgentMessageChunk(_)]));
+        assert!(matches!(
+            &final_text[..],
+            [SessionUpdate::AgentMessageChunk(_)]
+        ));
         assert!(mapper
-            .map(&AgentEvent::FinalResponse { text: "again".into() })
+            .map(&AgentEvent::FinalResponse {
+                text: "again".into()
+            })
             .is_empty());
     }
 }

@@ -206,13 +206,17 @@ fn lookup(session: &str, id: &str) -> Result<Arc<BackgroundProcess>, ToolResult>
             } else {
                 format!("Known processes: {}", known.join(", "))
             };
-            Err(ToolResult::error(format!("Unknown background process '{id}'. {hint}")))
+            Err(ToolResult::error(format!(
+                "Unknown background process '{id}'. {hint}"
+            )))
         }
     }
 }
 
 fn status_line(process: &BackgroundProcess) -> String {
-    let elapsed = (chrono::Utc::now() - process.started_at).num_seconds().max(0);
+    let elapsed = (chrono::Utc::now() - process.started_at)
+        .num_seconds()
+        .max(0);
     match *lock(&process.exit_code) {
         Some(code) => format!("status: exited with code {code} (after {elapsed}s)"),
         None => format!("status: running ({elapsed}s)"),
@@ -254,7 +258,12 @@ impl Tool for BashOutputTool {
             let mut rows: Vec<_> = registry
                 .iter()
                 .filter(|(_, p)| p.session == session)
-                .map(|(id, p)| (p.started_at, format!("{id}  {}  {}", status_line(p), p.command)))
+                .map(|(id, p)| {
+                    (
+                        p.started_at,
+                        format!("{id}  {}  {}", status_line(p), p.command),
+                    )
+                })
                 .collect();
             rows.sort();
             return if rows.is_empty() {
@@ -338,7 +347,10 @@ impl Tool for BashKillTool {
             Err(result) => return result,
         };
         if lock(&process.exit_code).is_some() {
-            return ToolResult::success(format!("{id} already finished; {}", status_line(&process)));
+            return ToolResult::success(format!(
+                "{id} already finished; {}",
+                status_line(&process)
+            ));
         }
         if let Some(tx) = lock(&process.kill_tx).take() {
             let _ = tx.send(());

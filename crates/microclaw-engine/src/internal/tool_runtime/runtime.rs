@@ -440,7 +440,8 @@ pub fn resolve_tool_working_dir(
 
 fn requires_high_risk_approval(risk: ToolRisk, auth: &ToolAuthContext) -> bool {
     risk == ToolRisk::High
-        && (matches!(auth.caller_channel.as_str(), "web" | "work" | "code") || auth.is_control_chat())
+        && (matches!(auth.caller_channel.as_str(), "web" | "work" | "code")
+            || auth.is_control_chat())
 }
 
 /// Input marker injected after explicit operator approval so a high-risk
@@ -508,16 +509,33 @@ mod tests {
     #[test]
     fn workspace_tool_set_keeps_coding_tools_and_drops_outbound_ones() {
         for name in [
-            "read_file", "grep", "glob", "edit_file", "write_file", "bash", "bash_output",
-            "bash_kill", "todo_write", "mcp_github_search", "subagents_list",
+            "read_file",
+            "grep",
+            "glob",
+            "edit_file",
+            "write_file",
+            "bash",
+            "bash_output",
+            "bash_kill",
+            "todo_write",
+            "mcp_github_search",
+            "subagents_list",
         ] {
             assert!(is_workspace_tool(name), "{name} should be a workspace tool");
         }
         for name in [
-            "send_message", "schedule_task", "a2a_send", "generate_image", "write_memory",
-            "sync_skills", "text_to_speech",
+            "send_message",
+            "schedule_task",
+            "a2a_send",
+            "generate_image",
+            "write_memory",
+            "sync_skills",
+            "text_to_speech",
         ] {
-            assert!(!is_workspace_tool(name), "{name} should not be a workspace tool");
+            assert!(
+                !is_workspace_tool(name),
+                "{name} should not be a workspace tool"
+            );
         }
     }
 

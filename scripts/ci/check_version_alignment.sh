@@ -12,6 +12,7 @@ rust_packages=(
   microclaw-core
   microclaw-engine
   microclaw-sdk
+  microclaw-code
   microclaw-work
   microclaw-work-app
   microclaw-work-runtime
