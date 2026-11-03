@@ -115,8 +115,14 @@ impl Tool for WriteFileTool {
 
         // Previous content (empty for a new file) so overwrites render as a
         // diff instead of a bare success line. Non-UTF-8 files skip the diff.
-        let previous = tokio::fs::read_to_string(&resolved_path)
-            .await
+        let previous_bytes = tokio::fs::read(&resolved_path).await.ok();
+        if let Some(bytes) = &previous_bytes {
+            if let Err(msg) = super::file_state::check_fresh(&resolved_path, bytes) {
+                return ToolResult::error(msg).with_error_type("stale_read");
+            }
+        }
+        let previous = previous_bytes
+            .and_then(|bytes| String::from_utf8(bytes).ok())
             .unwrap_or_default();
 
         if let Some(parent) = resolved_path.parent() {
@@ -127,6 +133,7 @@ impl Tool for WriteFileTool {
 
         match tokio::fs::write(&resolved_path, content).await {
             Ok(()) => {
+                super::file_state::record(&resolved_path, content.as_bytes());
                 let diff =
                     microclaw_core::diff::unified_diff(&previous, content, self.diff_max_lines);
                 let mut result = ToolResult::success(match &diff {

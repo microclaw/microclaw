@@ -1,5 +1,6 @@
 pub mod a2a;
 pub mod activate_skill;
+pub mod background_process;
 pub mod bash;
 pub mod browser;
 pub mod clarify;
@@ -9,6 +10,7 @@ pub mod describe_image;
 pub mod edit_file;
 pub mod export_chat;
 pub mod fetch_artifact;
+pub mod file_state;
 pub mod fuzzy_match;
 pub mod generate_image;
 pub mod generate_podcast;
@@ -38,6 +40,7 @@ pub mod todo;
 pub mod transcribe_audio;
 pub mod web_fetch;
 pub mod web_search;
+pub mod workspace_walk;
 pub mod write_file;
 
 use std::sync::{Arc, OnceLock};
@@ -178,6 +181,8 @@ impl ToolRegistry {
                 .with_dangerous_patterns(&config.bash_dangerous_patterns)
                 .with_rtk(&config.rtk),
             ),
+            Box::new(background_process::BashOutputTool),
+            Box::new(background_process::BashKillTool),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),
@@ -445,6 +450,8 @@ impl ToolRegistry {
                 .with_dangerous_patterns(&config.bash_dangerous_patterns)
                 .with_rtk(&config.rtk),
             ),
+            Box::new(background_process::BashOutputTool),
+            Box::new(background_process::BashKillTool),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),
@@ -736,7 +743,7 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
-        if auth.caller_channel == "work"
+        if matches!(auth.caller_channel.as_str(), "work" | "code")
             && auth.principal.starts_with("subagent:")
             && !matches!(
                 name,

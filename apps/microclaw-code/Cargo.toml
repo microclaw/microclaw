@@ -1,0 +1,26 @@
+[package]
+name = "microclaw-code"
+version = "0.11.1"
+edition = "2024"
+license = "MIT"
+description = "MicroClaw Code: a local, terminal-first coding agent built on the MicroClaw SDK"
+publish = false
+
+[[bin]]
+name = "microclaw-code"
+path = "src/main.rs"
+
+[dependencies]
+microclaw-sdk = { version = "0.11.1", path = "../../crates/microclaw-sdk", features = ["full"] }
+anyhow = "1"
+clap = { version = "4.6", features = ["derive"] }
+dirs = "6"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "process", "io-util"] }
+
+[dev-dependencies]
+tempfile = "3"

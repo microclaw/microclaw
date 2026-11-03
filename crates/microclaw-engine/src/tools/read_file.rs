@@ -80,6 +80,7 @@ impl Tool for ReadFileTool {
             Ok(c) => c,
             Err(e) => return ToolResult::error(format!("Failed to read file: {e}")),
         };
+        super::file_state::record(&resolved_path, content.as_bytes());
 
         let lines: Vec<&str> = content.lines().collect();
         let offset = input

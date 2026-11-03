@@ -6100,6 +6100,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "microclaw-code"
+version = "0.11.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "microclaw-sdk",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "microclaw-core"
 version = "0.11.1"
 dependencies = [
@@ -6129,6 +6146,7 @@ dependencies = [
  "glob",
  "http",
  "iana-time-zone",
+ "ignore",
  "include_dir",
  "md5",
  "microclaw-core",

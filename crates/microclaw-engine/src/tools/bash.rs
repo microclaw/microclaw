@@ -77,6 +77,41 @@ impl BashTool {
         }
         self
     }
+
+    async fn start_background(
+        &self,
+        session_key: &str,
+        command: &str,
+        exec_command: &str,
+        working_dir: &Path,
+        env_files: &[PathBuf],
+    ) -> ToolResult {
+        if self
+            .sandbox_router
+            .as_ref()
+            .is_some_and(|router| router.mode() != SandboxMode::Off)
+        {
+            return ToolResult::error(
+                "run_in_background is only available when the sandbox is off; run the command in the foreground with a longer timeout_secs instead.".into(),
+            )
+            .with_error_type("execution_policy_blocked");
+        }
+        let mut envs = std::collections::HashMap::new();
+        for env_file in env_files {
+            if let Ok(content) = std::fs::read_to_string(env_file) {
+                envs.extend(crate::internal::tool_runtime::env_file::parse_dotenv(&content));
+            }
+        }
+        match super::background_process::spawn(session_key, exec_command, working_dir, &envs) {
+            Ok(id) => {
+                info!("Started background bash {id} in {}: {command}", working_dir.display());
+                ToolResult::success(format!(
+                    "Started background process {id}: {command}\nRead its output with bash_output {{\"id\": \"{id}\"}} and stop it with bash_kill when you no longer need it."
+                ))
+            }
+            Err(msg) => ToolResult::error(msg).with_error_type("spawn_error"),
+        }
+    }
 }
 
 use crate::internal::tool_runtime::runtime::HIGH_RISK_APPROVED_KEY as BASH_HIGH_RISK_APPROVED_KEY;
@@ -247,6 +282,10 @@ impl Tool for BashTool {
                         "type": "string",
                         "description": "The bash command to execute"
                     },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "Start the command in the background (dev servers, watchers, long test runs) and return immediately with a process id; read its output with bash_output and stop it with bash_kill"
+                    },
                     "timeout_secs": {
                         "type": "integer",
                         "description": "Timeout in seconds (defaults to configured tool timeout budget)"
@@ -287,9 +326,16 @@ impl Tool for BashTool {
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
             .unwrap_or(self.default_timeout_secs);
-        let working_dir =
-            super::resolve_tool_working_dir(&self.working_dir, self.working_dir_isolation, &input)
-                .join("tmp");
+        let base_dir =
+            super::resolve_tool_working_dir(&self.working_dir, self.working_dir_isolation, &input);
+        // A direct workspace (MicroClaw Code / Work project folder) runs
+        // commands from the project root so build and test tools find their
+        // manifests; isolated chat workspaces keep the scratch `tmp/` subdir.
+        let working_dir = if self.working_dir_isolation == WorkingDirIsolation::Direct {
+            base_dir.clone()
+        } else {
+            base_dir.join("tmp")
+        };
         if let Err(e) = tokio::fs::create_dir_all(&working_dir).await {
             return ToolResult::error(format!(
                 "Failed to create working directory {}: {e}",
@@ -335,9 +381,16 @@ impl Tool for BashTool {
             exec_command
         );
 
-        let session_key = super::auth_context_from_input(&input)
-            .map(|auth| format!("{}-{}", auth.caller_channel, auth.caller_chat_id))
-            .unwrap_or_else(|| "shared".to_string());
+        let session_key = super::background_process::session_key(&input);
+        if input
+            .get("run_in_background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return self
+                .start_background(&session_key, command, &exec_command, &working_dir, &env_files)
+                .await;
+        }
         let env_files_for_redact = env_files.clone();
         let exec_opts = SandboxExecOptions {
             timeout: std::time::Duration::from_secs(timeout_secs),
