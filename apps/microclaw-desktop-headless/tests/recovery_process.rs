@@ -21,7 +21,7 @@ fn snapshot(output: std::process::Output) -> DesktopSessionSnapshot {
 #[test]
 fn crash_resume_and_retry_cross_real_process_boundaries() {
     let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().join("work-sessions");
+    let root = directory.path().join("sessions");
 
     let crashed = run("recovery-crash", &root);
     assert!(!crashed.status.success());

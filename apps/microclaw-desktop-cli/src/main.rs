@@ -149,7 +149,7 @@ async fn main() -> ExitCode {
 }
 
 fn session_store() -> DesktopSessionStore {
-    DesktopSessionStore::new(desktop_data_root().join("work-sessions"))
+    DesktopSessionStore::new(desktop_data_root().join("sessions"))
 }
 
 /// Sessions whose workspace is this project, most recent first.

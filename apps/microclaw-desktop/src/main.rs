@@ -318,7 +318,7 @@ impl DesktopApp {
         } else {
             ExecutionTarget::Local
         };
-        let session_root = desktop_data_root.join("work-sessions");
+        let session_root = desktop_data_root.join("sessions");
         let runtime_service =
             DesktopRuntimeService::discover(desktop_data_root.join("microclaw.config.yaml"));
         let runtime_config = runtime_service.config_summary();
