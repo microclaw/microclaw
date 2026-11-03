@@ -1,0 +1,22 @@
+[package]
+name = "microclaw-code-core"
+version = "0.11.1"
+edition = "2024"
+license = "MIT"
+description = "UI-independent core of MicroClaw Code: project discovery, trust, verification and the turn driver"
+publish = false
+
+[dependencies]
+microclaw-sdk = { version = "0.11.1", path = "../microclaw-sdk", features = ["full"] }
+anyhow = "1"
+chrono = "0.4"
+dirs = "6"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "sync", "time", "io-util"] }
+
+[dev-dependencies]
+tempfile = "3"
