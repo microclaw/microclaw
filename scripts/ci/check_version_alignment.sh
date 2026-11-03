@@ -12,10 +12,8 @@ rust_packages=(
   microclaw-core
   microclaw-engine
   microclaw-sdk
-  microclaw-work
-  microclaw-work-app
-  microclaw-work-runtime
-  microclaw-work-headless
+  microclaw-code
+  microclaw-code-core
 )
 
 metadata="$(cargo metadata --no-deps --format-version 1)"
@@ -69,4 +67,4 @@ for file in README.md README_CN.md site/src/pages/index.js site/src/home-i18n.js
   fi
 done
 
-echo "Server, Work, SDK, UI packages, and public release snippets are aligned at $release_version."
+echo "Server, Code, SDK, UI packages, and public release snippets are aligned at $release_version."

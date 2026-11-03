@@ -38,7 +38,7 @@ impl Tool for GrepTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "grep".into(),
-            description: "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers.".into(),
+            description: "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Directory searches respect .gitignore/.ignore files and skip hidden, node_modules and target directories; set include_ignored to search ignored files too.".into(),
             input_schema: schema_object(
                 json!({
                     "pattern": {
@@ -52,6 +52,10 @@ impl Tool for GrepTool {
                     "glob": {
                         "type": "string",
                         "description": "Glob pattern to filter files (e.g., '*.rs')"
+                    },
+                    "include_ignored": {
+                        "type": "boolean",
+                        "description": "Also search files excluded by .gitignore/.ignore (default: false)"
                     }
                 }),
                 &["pattern"],
@@ -74,6 +78,10 @@ impl Tool for GrepTool {
             return ToolResult::error(msg);
         }
         let file_glob = input.get("glob").and_then(|v| v.as_str());
+        let include_ignored = input
+            .get("include_ignored")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         info!("Grep: {} in {}", pattern, resolved_path.display());
 
@@ -88,6 +96,7 @@ impl Tool for GrepTool {
         if let Err(e) = grep_recursive(
             &resolved_path,
             file_glob,
+            include_ignored,
             &re,
             &mut results,
             &mut file_count,
@@ -110,6 +119,7 @@ impl Tool for GrepTool {
 fn grep_recursive(
     path: &Path,
     file_glob: Option<&str>,
+    include_ignored: bool,
     re: &regex::Regex,
     results: &mut Vec<String>,
     file_count: &mut usize,
@@ -120,33 +130,25 @@ fn grep_recursive(
         grep_file(path, re, results)?;
     } else if metadata.is_dir() {
         let glob_pattern = file_glob.and_then(|g| glob::Pattern::new(g).ok());
-
-        for entry in std::fs::read_dir(path)? {
-            let entry = entry?;
-            let entry_path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-
-            // Skip hidden directories and common non-code dirs
-            if name.starts_with('.') || name == "node_modules" || name == "target" {
-                continue;
-            }
-
-            if entry_path.is_dir() {
-                grep_recursive(&entry_path, file_glob, re, results, file_count)?;
-            } else if entry_path.is_file() {
-                if crate::internal::tool_runtime::path_guard::is_blocked(&entry_path) {
+        let options = super::workspace_walk::WalkOptions {
+            include_ignored,
+            include_dirs: false,
+        };
+        for entry_path in super::workspace_walk::walk(path, options) {
+            if let Some(ref pat) = glob_pattern {
+                let name = entry_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let relative = entry_path.strip_prefix(path).unwrap_or(&entry_path);
+                if !pat.matches(&name) && !pat.matches_path(relative) {
                     continue;
                 }
-                if let Some(ref pat) = glob_pattern {
-                    if !pat.matches(&name) {
-                        continue;
-                    }
-                }
-                *file_count += 1;
-                if *file_count > 10000 {
-                    return Ok(());
-                }
-                grep_file(&entry_path, re, results)?;
+            }
+            *file_count += 1;
+            grep_file(&entry_path, re, results)?;
+            if results.len() >= 500 {
+                return Ok(());
             }
         }
     }
@@ -277,7 +279,7 @@ mod tests {
         let re = regex::Regex::new("match_me").unwrap();
         let mut results: Vec<String> = Vec::new();
         let mut count = 0;
-        grep_recursive(&dir, None, &re, &mut results, &mut count).unwrap();
+        grep_recursive(&dir, None, false, &re, &mut results, &mut count).unwrap();
 
         // Should only find in visible.txt
         assert_eq!(results.len(), 1);
@@ -300,5 +302,31 @@ mod tests {
         assert!(result.content.contains("a.txt"));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn test_grep_respects_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "generated/\n").unwrap();
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        std::fs::write(root.join("generated/out.txt"), "needle").unwrap();
+        std::fs::write(root.join("kept.txt"), "needle").unwrap();
+
+        let tool = GrepTool::new(".");
+        let result = tool
+            .execute(json!({"pattern": "needle", "path": root.to_str().unwrap()}))
+            .await;
+        assert!(result.content.contains("kept.txt"));
+        assert!(!result.content.contains("out.txt"));
+
+        let result = tool
+            .execute(json!({
+                "pattern": "needle",
+                "path": root.to_str().unwrap(),
+                "include_ignored": true
+            }))
+            .await;
+        assert!(result.content.contains("out.txt"));
     }
 }

@@ -14,22 +14,19 @@ Rust 2021, Tokio, teloxide 0.17, serenity 0.12, provider-agnostic LLM runtime (A
 
 ## Project layout
 
-- `crates/microclaw-core/` -- shared error/types/text modules (`error`, `llm_types`, `text`)
-- `crates/microclaw-storage/` -- SQLite DB schema/query layer + memory/usage domain modules
-- `crates/microclaw-tools/` -- tool runtime primitives (trait/auth/risk/schema/path) + sandbox
-- `crates/microclaw-channels/` -- channel abstraction and delivery boundary modules
-- `crates/microclaw-app/` -- app-level support modules (logging, builtin skills, transcribe)
-- `src/main.rs` -- entry point, CLI
-- `src/runtime.rs` -- app wiring (`AppState`), provider/tool initialization, channel boot
-- `src/config/` -- config model split by domain (core, defaults, media, llm_profiles, subagents, autonomy, integrations, governance)
-- `src/setup/` -- interactive setup wizard (keys, values, presets, app, pickers, fields, validate, save, ui, wizard)
-- `src/agent_engine.rs` -- shared agent loop (`process_with_agent`)
-- `src/llm/` -- provider implementations (anthropic, openai, oai_translate, key_pool, sse, stream, resilience)
-- `src/web/` -- web API routes and streaming (state, server, dto, api_* route groups + per-feature submodules)
-- `src/memory.rs` -- file-memory manager (`runtime/groups/.../AGENTS.md`)
-- `src/scheduler.rs` -- background scheduler + memory reflector loops
-- `src/channels/*.rs` -- Telegram/Discord/Slack/Feishu adapters
-- `src/tools/*.rs` -- concrete built-in tools; registry assembly in `src/tools/mod.rs`
+Products (all share one Agent Engine): **MicroClaw** (Server, this root crate), **MicroClaw Code** (`mccode`, `apps/microclaw-code`) and **MicroClaw SDK** (`crates/microclaw-sdk`).
+
+- `crates/microclaw-core/` -- stable contracts: run protocol, runtime events, errors, LLM types, text/diff/redaction helpers
+- `crates/microclaw-engine/` -- the Agent Engine: `agent_engine.rs` (agent loop), `tool_executor.rs`, `config/`, `llm/` (anthropic, openai, oai_translate, key_pool, sse, stream, resilience), `tools/` (built-in tools; registry in `tools/mod.rs`), `internal/storage/db/` (SQLite schema + query modules), `internal/tool_runtime/` (risk, auth, sandbox, path guard), `headless.rs`, `skills.rs`, `mcp.rs`, `hooks.rs`, `memory*.rs`
+- `crates/microclaw-sdk/` -- supported embedding facade (`minimal` / `standard` / `full` presets)
+- `crates/microclaw-code-core/` -- MicroClaw Code's UI-independent core: `home` (Code home + config), `project`, `trust`, `verify`, `git`, `sessions`, `driver` (one turn: run, approvals, verification, fix rounds)
+- `apps/microclaw-code/` -- the `mccode` binary: full-screen TUI (`tui/`), `-p` / JSON printer (`print.rs`), `setup.rs`
+- `src/main.rs` -- Server CLI entry point (`microclaw code …` forwards to `mccode`)
+- `src/runtime.rs` -- Server wiring (`AppState`), provider/tool initialization, channel boot
+- `src/setup/` -- interactive Server setup wizard
+- `src/web/` -- web API routes and streaming (state, server, dto, api_* route groups, pairing)
+- `src/channels/*.rs` -- channel adapters (Telegram, Discord, Slack, Feishu, Weixin, …)
+- `src/scheduler.rs` -- background scheduler + memory reflector loops; `src/outbox.rs` -- delivery outbox; `src/acp.rs` -- ACP server
 
 ## Key patterns
 
@@ -56,7 +53,9 @@ Rust 2021, Tokio, teloxide 0.17, serenity 0.12, provider-agnostic LLM runtime (A
 - **API key rotation**: `api_keys` (top-level or per provider profile) forms a round-robin pool rotated on 401/403/429 (`KeyPool` in `src/llm/key_pool.rs`)
 - **Per-chat model override**: `/model here <name>` / `/provider here <alias>` scope overrides to one chat (runtime-only, key `channel#chat_id`)
 - **Interrupted-turn recovery**: interactive turns are tracked in the `active_turns` table (with a rolling `progress_text` checkpoint per tool iteration); on restart `src/turn_recovery.rs` notifies chats whose turn was killed mid-run — including how far it got — and retires orphaned sub-agent runs as `interrupted`
-- **Work ↔ Server pairing**: `src/web/pairing.rs` mints single-use codes (in-memory `PairingHub`) and trades them for hashed device tokens in `paired_devices` (schema v44, `db/pairing.rs`); `middleware.rs` resolves them to `device:<id>` actors with read+write scopes; `POST /api/runs/:run_id/cancel` is the HTTP twin of WS `chat.abort`. Work's `microclaw-work-runtime::remote` maps the Server SSE stream back onto `RuntimeEventEnvelope`s so the same session state machine drives local and remote runs
+- **Server device pairing**: `src/web/pairing.rs` mints single-use codes (in-memory `PairingHub`) and trades them for hashed device tokens in `paired_devices` (schema v44, `db/pairing.rs`); `middleware.rs` resolves them to `device:<id>` actors with read+write scopes; `POST /api/runs/:run_id/cancel` is the HTTP twin of WS `chat.abort`. Kept for local clients (MicroClaw Code remote execution is planned); the old Work client was removed
+- **MicroClaw Code**: `mccode` reaches the engine only through `microclaw-sdk` (CI forbids a direct `microclaw-engine` dependency); caller channel `code`; `plan` mode uses `ToolPolicy::ReadOnly`, other modes `ToolPolicy::WorkspaceWrite` (`is_workspace_tool`); approvals currently end the run and are answered by re-running with `1`/`2`/`3`; verification runs `.microclaw/project.yaml` / detected `auto` checks when the git worktree fingerprint changed and feeds failures back; `.microclaw/project.yaml` is honoured only for trusted projects (trust bound to the file's SHA-256, stored in `~/.microclaw/code/trusted-projects.json`); all Code state lives in `~/.microclaw/code` (`MICROCLAW_CODE_HOME`)
+- **Coding tool primitives**: `glob`/`grep` walk via `tools/workspace_walk.rs` (gitignore-aware); `tools/file_state.rs` `FileStateTable` (shared by a registry's read/write/edit tools) is the stale-read guard; `bash` `run_in_background` + `bash_output`/`bash_kill` use the registry-owned `ProcessRegistry` (`tools/background_process.rs`), which kills its processes on drop
 - **Delivery outbox**: final replies whose channel send fails are queued in `outbox_messages` and redelivered with backoff by `src/outbox.rs` (supervised loop); depth surfaces in the web Governance tab
 
 ## Build & run
@@ -93,13 +92,13 @@ MicroClaw supports a `SOUL.md` file that defines the bot's personality, voice, v
 
 ## Adding a tool
 
-1. Create `src/tools/my_tool.rs` implementing the `Tool` trait
-2. Add `pub mod my_tool;` to `src/tools/mod.rs`
+1. Create `crates/microclaw-engine/src/tools/my_tool.rs` implementing the `Tool` trait
+2. Add `pub mod my_tool;` to `crates/microclaw-engine/src/tools/mod.rs`
 3. Register in `ToolRegistry::new()` with `Box::new(my_tool::MyTool::new(...))`
 
 ## Database
 
-Core persistence is provided by `microclaw-storage` (`Database` wrapper over SQLite). The query layer lives in `crates/microclaw-storage/src/db/` as domain modules (chats, sessions, tasks, subagents, memory, learning/{experience,skills,tracks}, auth, audit, outbox, turns, tool_cache, meta, usage) that each contribute an `impl Database` block behind the single facade; `schema.rs` holds the versioned migrations (frozen text — append new version blocks, never edit old ones).
+Core persistence is the engine's `Database` wrapper over SQLite. The query layer lives in `crates/microclaw-engine/src/internal/storage/db/` as domain modules (chats, sessions, tasks, subagents, memory, learning/{experience,skills,tracks}, auth, audit, outbox, turns, tool_cache, meta, usage) that each contribute an `impl Database` block behind the single facade; `schema.rs` holds the versioned migrations (frozen text — append new version blocks, never edit old ones).
 
 ## Important conventions
 

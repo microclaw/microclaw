@@ -8,7 +8,7 @@ import {getHomeMessages} from '../home-i18n';
 
 const PATH_COMMANDS = {
   sdk: 'microclaw-sdk = { version = "0.11.1", features = ["full"] }',
-  work: 'brew tap microclaw/tap && brew install --cask microclaw-work',
+  code: 'cargo install --path apps/microclaw-code && mccode setup',
   server: {
     macos: 'curl -fsSL https://microclaw.org/install.sh | bash',
     linux: 'curl -fsSL https://microclaw.org/install.sh | bash',
@@ -83,11 +83,11 @@ function HomepageHeader() {
       ...messages.paths.sdk,
     },
     {
-      id: 'work',
+      id: 'code',
       className: styles.pathCardWork,
-      command: PATH_COMMANDS.work,
-      href: '/docs/work',
-      ...messages.paths.work,
+      command: PATH_COMMANDS.code,
+      href: '/docs/code',
+      ...messages.paths.code,
     },
     {
       id: 'server',
@@ -168,8 +168,8 @@ function ArchitectureMap({label}) {
           <strong>Rust SDK</strong>
         </div>
         <div className={`${styles.archEntry} ${styles.archEntryWork}`}>
-          <span>02 · Desktop</span>
-          <strong>MicroClaw Work</strong>
+          <span>02 · Code</span>
+          <strong>MicroClaw Code</strong>
         </div>
         <div className={`${styles.archEntry} ${styles.archEntryServer}`}>
           <span>03 · Service</span>

@@ -11,12 +11,14 @@ use crate::skills::SkillManager;
 use crate::tools::ToolRegistry;
 use agent_client_protocol::{
     Agent, AgentCapabilities, AgentSideConnection, AuthenticateRequest, AuthenticateResponse,
-    AvailableCommand, AvailableCommandsUpdate, CancelNotification, Client, ContentBlock,
+    AvailableCommand, AvailableCommandsUpdate, CancelNotification, Client, Content, ContentBlock,
     ContentChunk, CurrentModeUpdate, Error, Implementation, InitializeRequest, InitializeResponse,
     LoadSessionRequest, LoadSessionResponse, McpCapabilities, NewSessionRequest,
-    NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse, Result as AcpResult,
-    SessionId, SessionMode, SessionModeState, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason,
+    NewSessionResponse, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptCapabilities,
+    PromptRequest, PromptResponse, Result as AcpResult, SessionId, SessionMode, SessionModeState,
+    SessionUpdate, SetSessionModeRequest, SetSessionModeResponse, StopReason, ToolCall,
+    ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ToolKind,
 };
 use microclaw_engine::channel::ConversationKind;
 use microclaw_engine::channel_adapter::{ChannelAdapter, ChannelRegistry};
@@ -322,11 +324,12 @@ impl Agent for MicroClawAcpAgent {
         let outbound_tx = self.outbound_tx.clone();
         let session_id = args.session_id.clone();
         let forward_task = tokio::spawn(async move {
+            let mut mapper = AcpEventMapper::default();
             while let Some(event) = event_rx.recv().await {
-                if let AgentEvent::TextDelta { delta } = event {
+                for update in mapper.map(&event) {
                     let _ = outbound_tx.send(OutboundNotification {
                         session_id: session_id.clone(),
-                        update: SessionUpdate::AgentMessageChunk(ContentChunk::new(delta.into())),
+                        update,
                     });
                 }
             }
@@ -408,6 +411,160 @@ impl ChannelAdapter for AcpAdapter {
 
     async fn send_text(&self, _external_chat_id: &str, _text: &str) -> Result<(), String> {
         Ok(())
+    }
+}
+
+/// Translates Agent Engine events into ACP session updates: streamed text,
+/// tool calls with kind/status/location, file diffs attached to the tool call
+/// that produced them, and plan updates. Text that only arrives as the final
+/// response (for example an approval prompt) is forwarded when nothing was
+/// streamed, so editors always show it.
+#[derive(Default)]
+struct AcpEventMapper {
+    streamed_text: bool,
+    /// Tool call id by the `path` argument of in-flight file tools.
+    call_by_path: HashMap<String, String>,
+    /// Calls whose content is a diff; their result update must not replace it.
+    calls_with_diff: std::collections::HashSet<String>,
+}
+
+impl AcpEventMapper {
+    fn map(&mut self, event: &AgentEvent) -> Vec<SessionUpdate> {
+        match event {
+            AgentEvent::TextDelta { delta } if !delta.is_empty() => {
+                self.streamed_text = true;
+                vec![SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                    delta.clone().into(),
+                ))]
+            }
+            AgentEvent::FinalResponse { text }
+                if !self.streamed_text && !text.trim().is_empty() =>
+            {
+                self.streamed_text = true;
+                vec![SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                    text.clone().into(),
+                ))]
+            }
+            AgentEvent::ToolStart {
+                call_id,
+                name,
+                input,
+            } => {
+                let path = input.get("path").and_then(|v| v.as_str());
+                if let Some(path) = path {
+                    self.call_by_path.insert(path.to_string(), call_id.clone());
+                }
+                let mut call = ToolCall::new(call_id.clone(), acp_tool_title(name, input))
+                    .kind(acp_tool_kind(name))
+                    .status(ToolCallStatus::InProgress)
+                    .raw_input(input.clone());
+                if let Some(path) = path {
+                    call = call.locations(vec![ToolCallLocation::new(path)]);
+                }
+                vec![SessionUpdate::ToolCall(call)]
+            }
+            AgentEvent::ToolResult {
+                call_id,
+                is_error,
+                preview,
+                ..
+            } => {
+                let status = if *is_error {
+                    ToolCallStatus::Failed
+                } else {
+                    ToolCallStatus::Completed
+                };
+                let mut fields = ToolCallUpdateFields::new().status(status);
+                if !self.calls_with_diff.contains(call_id) && !preview.trim().is_empty() {
+                    fields = fields.content(vec![ToolCallContent::Content(Content::new(
+                        ContentBlock::from(preview.clone()),
+                    ))]);
+                }
+                vec![SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    call_id.clone(),
+                    fields,
+                ))]
+            }
+            AgentEvent::FileDiff {
+                path,
+                diff,
+                added,
+                removed,
+                truncated,
+            } => {
+                let Some(call_id) = self.call_by_path.get(path).cloned() else {
+                    return Vec::new();
+                };
+                self.calls_with_diff.insert(call_id.clone());
+                let note = if *truncated {
+                    "\n… diff truncated"
+                } else {
+                    ""
+                };
+                let text = format!("{path} (+{added} -{removed})\n```diff\n{diff}\n```{note}");
+                vec![SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    call_id,
+                    ToolCallUpdateFields::new()
+                        .content(vec![ToolCallContent::Content(Content::new(
+                            ContentBlock::from(text),
+                        ))])
+                        .locations(vec![ToolCallLocation::new(path.clone())]),
+                ))]
+            }
+            AgentEvent::PlanUpdated { steps } => {
+                let entries = steps
+                    .iter()
+                    .map(|step| {
+                        let status = match step.status {
+                            microclaw_core::runtime_event::RuntimePlanStepStatus::Completed => {
+                                PlanEntryStatus::Completed
+                            }
+                            microclaw_core::runtime_event::RuntimePlanStepStatus::InProgress => {
+                                PlanEntryStatus::InProgress
+                            }
+                            microclaw_core::runtime_event::RuntimePlanStepStatus::Pending => {
+                                PlanEntryStatus::Pending
+                            }
+                        };
+                        PlanEntry::new(step.title.clone(), PlanEntryPriority::Medium, status)
+                    })
+                    .collect();
+                vec![SessionUpdate::Plan(Plan::new(entries))]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
+fn acp_tool_kind(name: &str) -> ToolKind {
+    match name {
+        "read_file" | "read_memory" | "bash_output" => ToolKind::Read,
+        "edit_file" | "write_file" => ToolKind::Edit,
+        "grep" | "glob" | "session_search" | "structured_memory_search" => ToolKind::Search,
+        "bash" | "bash_kill" => ToolKind::Execute,
+        "web_fetch" | "web_search" | "deep_research" | "fetch_artifact" => ToolKind::Fetch,
+        "todo_write" | "todo_read" => ToolKind::Think,
+        _ => ToolKind::Other,
+    }
+}
+
+fn acp_tool_title(name: &str, input: &serde_json::Value) -> String {
+    let field = |key: &str| input.get(key).and_then(|v| v.as_str());
+    let detail = match name {
+        "bash" => field("command"),
+        "read_file" | "write_file" | "edit_file" => field("path"),
+        "grep" | "glob" => field("pattern"),
+        "web_fetch" => field("url"),
+        "web_search" => field("query"),
+        _ => None,
+    };
+    match detail {
+        Some(detail) => {
+            let detail: String = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+            let detail: String = detail.chars().take(120).collect();
+            format!("{name}: {detail}")
+        }
+        None => name.to_string(),
     }
 }
 
@@ -493,7 +650,7 @@ fn to_acp_error(err: impl std::fmt::Display) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::flatten_prompt;
+    use super::{flatten_prompt, AcpEventMapper, AgentEvent, SessionUpdate};
     use agent_client_protocol::{
         BlobResourceContents, ContentBlock, EmbeddedResource, EmbeddedResourceResource,
         ResourceLink, TextResourceContents,
@@ -523,5 +680,66 @@ mod tests {
         assert!(text.contains("README"));
         assert!(text.contains("body"));
         assert!(text.contains("binary content omitted"));
+    }
+
+    #[test]
+    fn event_mapper_emits_tool_calls_diffs_and_fallback_text() {
+        let mut mapper = AcpEventMapper::default();
+        let start = mapper.map(&AgentEvent::ToolStart {
+            call_id: "c1".into(),
+            name: "edit_file".into(),
+            input: serde_json::json!({"path": "src/lib.rs"}),
+        });
+        assert!(matches!(&start[..], [SessionUpdate::ToolCall(_)]));
+        let json = serde_json::to_value(&start[0]).unwrap();
+        assert_eq!(json["kind"], "edit");
+        assert_eq!(json["status"], "in_progress");
+        assert_eq!(json["locations"][0]["path"], "src/lib.rs");
+
+        let diff = mapper.map(&AgentEvent::FileDiff {
+            path: "src/lib.rs".into(),
+            diff: "@@ -1 +1 @@\n-a\n+b".into(),
+            added: 1,
+            removed: 1,
+            truncated: false,
+        });
+        let json = serde_json::to_value(&diff[0]).unwrap();
+        assert_eq!(json["toolCallId"], "c1");
+        assert!(json["content"][0]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("```diff"));
+
+        let result = mapper.map(&AgentEvent::ToolResult {
+            call_id: "c1".into(),
+            name: "edit_file".into(),
+            is_error: false,
+            preview: "Successfully edited".into(),
+            duration_ms: 1,
+            status_code: None,
+            bytes: 0,
+            error_type: None,
+        });
+        let json = serde_json::to_value(&result[0]).unwrap();
+        assert_eq!(json["status"], "completed");
+        assert!(
+            json.get("content").is_none(),
+            "diff content must not be replaced"
+        );
+
+        // No text was streamed, so the final response (e.g. an approval
+        // prompt) is forwarded once.
+        let final_text = mapper.map(&AgentEvent::FinalResponse {
+            text: "Approve once? 1/2/3".into(),
+        });
+        assert!(matches!(
+            &final_text[..],
+            [SessionUpdate::AgentMessageChunk(_)]
+        ));
+        assert!(mapper
+            .map(&AgentEvent::FinalResponse {
+                text: "again".into()
+            })
+            .is_empty());
     }
 }

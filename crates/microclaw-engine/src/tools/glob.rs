@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde_json::json;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::config::WorkingDirIsolation;
@@ -38,7 +38,7 @@ impl Tool for GlobTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "glob".into(),
-            description: "Find files matching a glob pattern. Returns matching file paths.".into(),
+            description: "Find files matching a glob pattern. Returns matching file paths. Relative patterns respect .gitignore/.ignore files and skip hidden, node_modules and target directories; set include_ignored (or target a hidden/ignored path explicitly) to match everything.".into(),
             input_schema: schema_object(
                 json!({
                     "pattern": {
@@ -48,6 +48,10 @@ impl Tool for GlobTool {
                     "path": {
                         "type": "string",
                         "description": "Base directory to search from (default: current directory)"
+                    },
+                    "include_ignored": {
+                        "type": "boolean",
+                        "description": "Also match hidden files and files excluded by .gitignore/.ignore (default: false)"
                     }
                 }),
                 &["pattern"],
@@ -73,35 +77,78 @@ impl Tool for GlobTool {
 
         info!("Glob: {} in {}", pattern, resolved_base.display());
 
-        let full_pattern = if pattern.starts_with('/') {
-            pattern.to_string()
+        let include_ignored = input
+            .get("include_ignored")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let mut matches = if include_ignored || pattern.starts_with('/') {
+            None
         } else {
-            format!("{}/{}", resolved_base.display(), pattern)
-        };
-
-        match glob::glob(&full_pattern) {
-            Ok(paths) => {
-                let mut matches: Vec<String> = paths
-                    .filter_map(|p| p.ok())
-                    .map(|p| p.display().to_string())
-                    .collect();
-                matches = crate::internal::tool_runtime::path_guard::filter_paths(matches);
-                matches.sort();
-
-                if matches.is_empty() {
-                    ToolResult::success("No files found matching pattern.".into())
-                } else {
-                    let count = matches.len();
-                    if count > 500 {
-                        matches.truncate(500);
-                        matches.push(format!("... and {} more files", count - 500));
-                    }
-                    ToolResult::success(matches.join("\n"))
-                }
+            match workspace_matches(&resolved_base, pattern) {
+                Ok(found) => Some(found),
+                Err(e) => return ToolResult::error(format!("Invalid glob pattern: {e}")),
             }
-            Err(e) => ToolResult::error(format!("Invalid glob pattern: {e}")),
+        };
+        // Nothing visible matched: fall back to a literal filesystem glob so
+        // explicitly targeted hidden or ignored paths (".github/**", "dist/*")
+        // keep working.
+        if matches.as_ref().is_none_or(|found| found.is_empty()) {
+            matches = match literal_matches(&resolved_base, pattern) {
+                Ok(found) => Some(found),
+                Err(e) => return ToolResult::error(format!("Invalid glob pattern: {e}")),
+            };
+        }
+        let mut matches =
+            crate::internal::tool_runtime::path_guard::filter_paths(matches.unwrap_or_default());
+        matches.sort();
+        matches.dedup();
+
+        if matches.is_empty() {
+            ToolResult::success("No files found matching pattern.".into())
+        } else {
+            let count = matches.len();
+            if count > 500 {
+                matches.truncate(500);
+                matches.push(format!("... and {} more files", count - 500));
+            }
+            ToolResult::success(matches.join("\n"))
         }
     }
+}
+
+fn workspace_matches(base: &Path, pattern: &str) -> Result<Vec<String>, glob::PatternError> {
+    let compiled = glob::Pattern::new(pattern)?;
+    let options = glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let walk_options = super::workspace_walk::WalkOptions {
+        include_ignored: false,
+        include_dirs: true,
+    };
+    Ok(super::workspace_walk::walk(base, walk_options)
+        .into_iter()
+        .filter(|path| {
+            path.strip_prefix(base)
+                .map(|relative| compiled.matches_path_with(relative, options))
+                .unwrap_or(false)
+        })
+        .map(|path| path.display().to_string())
+        .collect())
+}
+
+fn literal_matches(base: &Path, pattern: &str) -> Result<Vec<String>, glob::PatternError> {
+    let full_pattern = if pattern.starts_with('/') {
+        pattern.to_string()
+    } else {
+        format!("{}/{}", base.display(), pattern)
+    };
+    Ok(glob::glob(&full_pattern)?
+        .filter_map(|p| p.ok())
+        .map(|p| p.display().to_string())
+        .collect())
 }
 
 #[cfg(test)]
@@ -166,5 +213,36 @@ mod tests {
         assert!(result.content.contains("x.txt"));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn test_glob_respects_gitignore_with_literal_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "dist/\n").unwrap();
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        std::fs::create_dir_all(root.join("src/nested")).unwrap();
+        std::fs::write(root.join("dist/app.js"), "").unwrap();
+        std::fs::write(root.join("src/main.js"), "").unwrap();
+        std::fs::write(root.join("src/nested/util.js"), "").unwrap();
+
+        let tool = GlobTool::new(".");
+        let result = tool
+            .execute(json!({"pattern": "**/*.js", "path": root.to_str().unwrap()}))
+            .await;
+        assert!(result.content.contains("main.js"));
+        assert!(result.content.contains("util.js"));
+        assert!(!result.content.contains("app.js"));
+
+        let top_level = tool
+            .execute(json!({"pattern": "*.js", "path": root.join("src").to_str().unwrap()}))
+            .await;
+        assert!(top_level.content.contains("main.js"));
+        assert!(!top_level.content.contains("util.js"));
+
+        let explicit = tool
+            .execute(json!({"pattern": "dist/*.js", "path": root.to_str().unwrap()}))
+            .await;
+        assert!(explicit.content.contains("app.js"));
     }
 }

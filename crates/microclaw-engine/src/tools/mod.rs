@@ -1,5 +1,6 @@
 pub mod a2a;
 pub mod activate_skill;
+pub mod background_process;
 pub mod bash;
 pub mod browser;
 pub mod clarify;
@@ -9,6 +10,7 @@ pub mod describe_image;
 pub mod edit_file;
 pub mod export_chat;
 pub mod fetch_artifact;
+pub mod file_state;
 pub mod fuzzy_match;
 pub mod generate_image;
 pub mod generate_podcast;
@@ -38,6 +40,7 @@ pub mod todo;
 pub mod transcribe_audio;
 pub mod web_fetch;
 pub mod web_search;
+pub mod workspace_walk;
 pub mod write_file;
 
 use std::sync::{Arc, OnceLock};
@@ -167,6 +170,8 @@ impl ToolRegistry {
             backend = sandbox_router.backend_name(),
             "Sandbox initialized"
         );
+        let processes = Arc::new(background_process::ProcessRegistry::default());
+        let file_state = Arc::new(file_state::FileStateTable::default());
         let mut tools: Vec<Box<dyn Tool>> = vec![
             Box::new(
                 bash::BashTool::new_with_isolation(
@@ -176,23 +181,30 @@ impl ToolRegistry {
                 .with_default_timeout_secs(config.tool_timeout_secs("bash", 120))
                 .with_sandbox_router(sandbox_router.clone())
                 .with_dangerous_patterns(&config.bash_dangerous_patterns)
-                .with_rtk(&config.rtk),
+                .with_rtk(&config.rtk)
+                .with_process_registry(processes.clone()),
             ),
+            Box::new(background_process::BashOutputTool(processes.clone())),
+            Box::new(background_process::BashKillTool(processes.clone())),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),
             ),
-            Box::new(read_file::ReadFileTool::new_with_isolation(
-                &config.working_dir,
-                config.working_dir_isolation,
-            )),
+            Box::new(
+                read_file::ReadFileTool::new_with_isolation(
+                    &config.working_dir,
+                    config.working_dir_isolation,
+                )
+                .with_file_state(file_state.clone()),
+            ),
             Box::new(
                 write_file::WriteFileTool::new_with_isolation(
                     &config.working_dir,
                     config.working_dir_isolation,
                 )
                 .with_diff_max_lines(config.diff_max_lines)
-                .with_governance_guard(Self::governance_guard(config)),
+                .with_governance_guard(Self::governance_guard(config))
+                .with_file_state(file_state.clone()),
             ),
             Box::new(
                 edit_file::EditFileTool::new_with_isolation(
@@ -200,7 +212,8 @@ impl ToolRegistry {
                     config.working_dir_isolation,
                 )
                 .with_diff_max_lines(config.diff_max_lines)
-                .with_governance_guard(Self::governance_guard(config)),
+                .with_governance_guard(Self::governance_guard(config))
+                .with_file_state(file_state.clone()),
             ),
             Box::new(glob::GlobTool::new_with_isolation(
                 &config.working_dir,
@@ -434,6 +447,8 @@ impl ToolRegistry {
             Self::build_extra_mounts(&working_dir, &skills_data_dir),
         ));
         let memory_backend = Arc::new(MemoryBackend::local_only(db.clone()));
+        let processes = Arc::new(background_process::ProcessRegistry::default());
+        let file_state = Arc::new(file_state::FileStateTable::default());
         let mut tools: Vec<Box<dyn Tool>> = vec![
             Box::new(
                 bash::BashTool::new_with_isolation(
@@ -443,23 +458,30 @@ impl ToolRegistry {
                 .with_default_timeout_secs(config.tool_timeout_secs("bash", 120))
                 .with_sandbox_router(sandbox_router.clone())
                 .with_dangerous_patterns(&config.bash_dangerous_patterns)
-                .with_rtk(&config.rtk),
+                .with_rtk(&config.rtk)
+                .with_process_registry(processes.clone()),
             ),
+            Box::new(background_process::BashOutputTool(processes.clone())),
+            Box::new(background_process::BashKillTool(processes.clone())),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),
             ),
-            Box::new(read_file::ReadFileTool::new_with_isolation(
-                &config.working_dir,
-                config.working_dir_isolation,
-            )),
+            Box::new(
+                read_file::ReadFileTool::new_with_isolation(
+                    &config.working_dir,
+                    config.working_dir_isolation,
+                )
+                .with_file_state(file_state.clone()),
+            ),
             Box::new(
                 write_file::WriteFileTool::new_with_isolation(
                     &config.working_dir,
                     config.working_dir_isolation,
                 )
                 .with_diff_max_lines(config.diff_max_lines)
-                .with_governance_guard(Self::governance_guard(config)),
+                .with_governance_guard(Self::governance_guard(config))
+                .with_file_state(file_state.clone()),
             ),
             Box::new(
                 edit_file::EditFileTool::new_with_isolation(
@@ -467,7 +489,8 @@ impl ToolRegistry {
                     config.working_dir_isolation,
                 )
                 .with_diff_max_lines(config.diff_max_lines)
-                .with_governance_guard(Self::governance_guard(config)),
+                .with_governance_guard(Self::governance_guard(config))
+                .with_file_state(file_state.clone()),
             ),
             Box::new(glob::GlobTool::new_with_isolation(
                 &config.working_dir,
@@ -736,7 +759,7 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
-        if auth.caller_channel == "work"
+        if auth.caller_channel == "code"
             && auth.principal.starts_with("subagent:")
             && !matches!(
                 name,
@@ -763,7 +786,7 @@ impl ToolRegistry {
             )
         {
             return ToolResult::error(format!(
-                "Tool `{name}` is not available to Work Subagents; Workspace writes are owned by the Main Agent"
+                "Tool `{name}` is not available to MicroClaw Code Subagents; Workspace writes are owned by the Main Agent"
             ))
             .with_error_type("work_subagent_read_only");
         }
@@ -1263,7 +1286,7 @@ mod tests {
             ],
         };
         let mut auth = ToolAuthContext {
-            caller_channel: "work".into(),
+            caller_channel: "code".into(),
             caller_chat_id: 1,
             principal: "subagent:run-1".into(),
             control_chat_ids: vec![],

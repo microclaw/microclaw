@@ -4,6 +4,75 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Added
+
+- **MicroClaw Code** (`mccode`, `apps/microclaw-code`, Preview): a terminal
+  coding agent and one of the three products, next to the Server and the SDK.
+  It reaches the Agent Engine only through `microclaw-sdk`, and CI forbids a
+  direct engine dependency. It has:
+  - a full-screen TUI: streamed replies, tool calls, coloured diffs, plan
+    checklists, and dialogs for approvals, project trust and executing a
+    plan; `@file` / `/command` completion, steering while the agent works,
+    and Shift+Tab mode switching;
+  - `-p` one-shot runs with `--json` JSON Lines output and exit codes
+    0 / 1 / 2 (2 = approval pending; resume with `--session <id> -p 1|3`);
+  - `plan` / `ask` / `auto` permission modes, where auto still asks for
+    destructive shell commands;
+  - automatic verification with the project's checks (Rust, Node, Python,
+    Go, Make) whenever a turn changed the git working tree, including
+    through shell commands, with failures handed back for a bounded number
+    of fix rounds;
+  - `.microclaw/project.yaml`, honoured only after the user trusts that
+    exact file content;
+  - its own home, `~/.microclaw/code`, holding config, engine data,
+    sessions and trust decisions, separate from a Server's `~/.microclaw`;
+  - `setup`, `doctor`, `check`, `init`, `info`, `sessions` and `trust`
+    subcommands; `microclaw code …` forwards to `mccode`.
+
+  The UI-independent core (project discovery, trust, verification, session
+  index, turn driver) is `crates/microclaw-code-core`. Proposal:
+  `docs/roadmap/microclaw-code-proposal-cn.md`.
+- `microclaw-sdk` (`full`) exposes `model_providers()` and
+  `validate_config_file()`.
+- `bash` gains `run_in_background`, with new `bash_output` (incremental,
+  filterable output) and `bash_kill` tools. Processes are scoped to the
+  session and owned by the tool registry, which kills them when it is
+  dropped. They are refused while the sandbox is on.
+- `edit_file` accepts `edits[]` (several replacements applied
+  all-or-nothing) and `replace_all`.
+- `ToolPolicy::WorkspaceWrite` now has a meaning: the Agent Profile is
+  offered workspace tools only, and calls to anything else are refused.
+- ACP (`microclaw acp`) streams tool calls with kind, status and location,
+  plus file diffs and plan updates. It also shows replies that only arrive
+  as the final response, such as approval prompts.
+
+### Changed
+
+- `glob` and `grep` respect `.gitignore` / `.ignore` files, also outside a
+  git checkout. `include_ignored: true` restores the old traversal, and
+  `glob` falls back to a literal match when nothing visible matches.
+- `edit_file` and `write_file` refuse to overwrite a file that changed on
+  disk after the agent last read or wrote it (`stale_read`).
+- In a direct workspace (`working_dir_isolation: direct`), `bash` runs in
+  the workspace root instead of its `tmp/` subdirectory.
+- The high-risk approval gate and the read-only sub-agent restriction now
+  apply to the `code` caller channel instead of `work`.
+  `HeadlessRunRequest::work` / `{cancel,steer}_work_session` /
+  `WORK_CHANNEL` are now `::code` / `{cancel,steer}_code_session` /
+  `CODE_CHANNEL`.
+
+### Removed
+
+- **MicroClaw Work (the GPUI desktop app) is discontinued.** This removes
+  `apps/microclaw-work`, `apps/microclaw-work-headless`,
+  `crates/microclaw-work-app` and `crates/microclaw-work-runtime`, together
+  with their packaging, build/smoke/notarization scripts, the macOS CI job,
+  the portable release assets and the `work-release` Cargo profile. The
+  release script removes the `microclaw-work` Homebrew cask from the tap.
+  Server device pairing remains, for local clients.
+
 ## 0.11.1 - 2026-10-25
 
 ### Security

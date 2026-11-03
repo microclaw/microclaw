@@ -18,8 +18,8 @@
 </p>
 
 <p align="center">
-  <strong>One embeddable Rust agent core. Two products, one SDK.</strong><br />
-  Run MicroClaw Server, use the native Work app, or embed the same Agent Engine in your own Rust application.
+  <strong>One embeddable Rust agent core: Server, Code, and an SDK.</strong><br />
+  Run MicroClaw Server, code in your repository with MicroClaw Code, or embed the same Agent Engine in your own Rust application.
 </p>
 
 <p align="center">
@@ -30,19 +30,19 @@
   <a href="#documentation">Documentation</a>
 </p>
 
-MicroClaw is a self-hosted Rust agent platform with two product surfaces and an embeddable SDK. **MicroClaw Server** runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Work** is a native GPUI desktop application for local, workspace-centered agent work. Other Rust applications can use **`microclaw-sdk`** to run the same channel-independent Agent Engine, tools, policy, memory, skills, and runtime events.
+MicroClaw is a self-hosted Rust agent platform with three products that share one Agent Engine. **MicroClaw Server** (`microclaw`) runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Code** (`mccode`) is a terminal coding agent that works directly in your repository and verifies its edits with your project's own checks. **`microclaw-sdk`** lets other Rust applications run the same channel-independent Agent Engine, tools, policy, memory, skills, and runtime events.
 
 It is designed for work that lasts longer than one request: multi-step tool use, resumable sessions, durable delivery, persistent memory, scheduled tasks, and governed extensions all run in the same runtime.
 
 | Entry point | Best for | Availability |
 |---|---|---|
 | MicroClaw Server | Always-on agents, chat channels, Web/API access, scheduled work, and remote automation | macOS, Linux, and Windows |
-| MicroClaw Work | Native local conversations, project workspaces, approvals, checkpoints, and desktop settings | Apple Silicon macOS 13+; Linux/Windows portable previews |
+| MicroClaw Code (`mccode`) | Coding in a local repository: full-screen TUI, plan/ask/auto modes, diffs, approvals, automatic build/lint verification | Preview; macOS, Linux, and Windows from source |
 | `microclaw-sdk` | Embedding the same Agent Engine, Skills, events, controls, and Workers in a Rust application | Rust 1.93+; `minimal`, `standard`, `full`, and `remote-worker` feature sets |
 
-Read the [MicroClaw Work product guide](site/docs/work.md) for the local task
-loop, platform support levels, native settings, safety boundary, and packaging
-model. The current stable delivery baseline is
+Read the [MicroClaw Code guide](apps/microclaw-code/README.md) for the
+coding workflow, permission modes, project trust and verification. The current
+stable delivery baseline is
 [MicroClaw v0.11.0](docs/roadmap/v0.11.0-plan.md).
 
 <p align="center">
@@ -57,21 +57,18 @@ Choose the path that matches what you are building:
 
 | I want to… | Start here |
 |---|---|
-| Use MicroClaw as a native project coworker | Install MicroClaw Work below |
+| Code in a local repository from the terminal | Build MicroClaw Code below |
 | Run an always-on agent service | Install MicroClaw Server below |
 | Add agents to an existing Rust application | Follow the [SDK quickstart](site/docs/sdk-quickstart.md) |
 
-Install the native MicroClaw Work desktop app on Apple Silicon macOS 13+:
+Build MicroClaw Code (preview) from a checkout, configure a model once, and
+run it in any repository:
 
 ```sh
-brew tap microclaw/tap
-brew install --cask microclaw-work
+cargo install --path apps/microclaw-code   # installs `mccode`
+mccode setup
+cd path/to/your/repo && mccode
 ```
-
-Linux x86_64/arm64 and Windows x86_64 portable previews are available from the
-[v0.11.1 release](https://github.com/microclaw/microclaw/releases/tag/v0.11.1).
-macOS remains the officially supported Work desktop platform while the preview
-builds complete platform acceptance.
 
 To run MicroClaw Server, install on macOS or Linux:
 
@@ -101,9 +98,9 @@ For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service 
 
 ## Why MicroClaw
 
-- **One core, two product surfaces.** Server and Work share the same Agent Engine, provider layer, tools, memory, policy, and recovery model.
+- **One core, three products.** Server, Code, and SDK applications share the same Agent Engine, provider layer, tools, memory, policy, and recovery model.
 - **An embeddable Rust SDK.** Applications can use stable Agent, Run, event, control, and Worker contracts without depending on Server, Web, channel, or desktop UI code.
-- **A local-first native Workspace.** Work shows project and Git branch context, supports native Workspace-file drag and drop, and keeps attachment access inside the shared runtime's folder guards.
+- **A coding agent that checks its work.** MicroClaw Code edits your repository with reviewable diffs and approvals, then runs your project's build and lint checks and hands failures back to the agent.
 - **Execution that can continue.** Sessions, safe tool boundaries, scheduled work, and outbound delivery survive process restarts.
 - **Provider freedom.** Use native Anthropic or a broad set of OpenAI-compatible and local providers through one internal message model.
 - **Extensible by design.** Add skills, MCP servers, plugins, hooks, tools, or channel adapters without replacing the core runtime.
@@ -134,13 +131,13 @@ Every message follows the same flow:
   <img src="docs/assets/readme/microclaw-architecture.svg" alt="MicroClaw architecture overview" width="96%" />
 </p>
 
-Server channel adapters translate ingress and delivery events only. Work projects the same runtime events into native GPUI state through `microclaw-work-runtime` and `microclaw-work-app`. Neither surface carries a separate agent loop or provider implementation.
+Server channel adapters translate ingress and delivery events only. MicroClaw Code consumes the same runtime events through `microclaw-sdk` and renders them in its terminal UI. Neither product carries a separate agent loop or provider implementation.
 
 ## Embed MicroClaw in Rust
 
 `microclaw-sdk` exposes the shared run lifecycle to other Rust applications. Its `full` preset
 includes the configured Agent Engine, Skills, tools, MCP, memory, hooks, Subagents, and Local
-Worker support without pulling in the Server, Web console, concrete channel adapters, or Work UI.
+Worker support without pulling in the Server, Web console, or concrete channel adapters.
 
 ```toml
 [dependencies]
@@ -176,7 +173,7 @@ the [SDK quickstart](site/docs/sdk-quickstart.md), [concept guide](site/docs/sdk
 | Continuity | Resumable sessions, context compaction, checkpoints, durable outbound delivery, scheduling, and cancellation | [Concurrency](docs/operations/concurrency-and-responsiveness.md), [task lifecycle](docs/scheduled-task-lifecycle.md) |
 | Memory and learning | File and SQLite memory, semantic recall, temporal knowledge graph, experience evidence, and governed skill evolution | [Long-horizon learning](docs/long-horizon-learning.md), [Learning Foundry](docs/learning-foundry.md) |
 | Extension | Skills, manifest plugins, hooks, MCP, ClawHub, A2A, and ACP | [Plugins](docs/plugins/overview.md), [MCP](docs/integrations/mcp.md), [ClawHub](docs/clawhub/overview.md), [A2A](docs/a2a.md) |
-| Interfaces | Rust SDK, native MicroClaw Work, local Web UI, HTTP/SSE/WebSocket APIs, chat adapters, and agent protocols | [SDK](crates/microclaw-sdk/README.md), [Work release](docs/operations/microclaw-work-release.md), [Web UI](docs/operations/web-ui.md), [HTTP triggers](docs/operations/http-hook-trigger.md), [ACP](docs/operations/acp-stdio.md) |
+| Interfaces | Rust SDK, MicroClaw Code TUI, local Web UI, HTTP/SSE/WebSocket APIs, chat adapters, and agent protocols | [SDK](crates/microclaw-sdk/README.md), [MicroClaw Code](apps/microclaw-code/README.md), [Web UI](docs/operations/web-ui.md), [HTTP triggers](docs/operations/http-hook-trigger.md), [ACP](docs/operations/acp-stdio.md) |
 | Safety and operations | Tool approvals, scoped capability grants, Docker sandboxing, egress policy, secret redaction, metrics, traces, and diagnostics | [Execution model](docs/security/execution-model.md), [secure runtime](docs/security/secure-runtime.md), [runbook](docs/operations/runbook.md) |
 
 ### Channels and providers
@@ -192,13 +189,12 @@ Anthropic has a native provider path. OpenAI, OpenAI Codex, OpenRouter, Ollama, 
 | Installer | Fastest macOS/Linux setup | `curl -fsSL https://microclaw.org/install.sh \| bash` |
 | PowerShell | Fastest Windows setup | `iwr https://microclaw.org/install.ps1 -UseBasicParsing \| iex` |
 | Homebrew | Managed macOS upgrades | `brew tap microclaw/tap && brew install microclaw` |
-| Homebrew Cask | Native MicroClaw Work desktop on Apple Silicon macOS 13+ | `brew tap microclaw/tap && brew install --cask microclaw-work` |
 | Container | Isolated deployment | `ghcr.io/microclaw/microclaw:latest` |
 | Source | Development or custom features | `cargo build --release` |
 
 The prebuilt Linux binary has glibc and OpenSSL requirements. Read [Getting started](docs/getting-started.md) before installing on an older distribution.
 
-MicroClaw Work is officially supported on Apple Silicon macOS. Linux and Windows portable previews are published automatically with each release while native platform acceptance continues. MicroClaw Server remains supported on all three platforms.
+MicroClaw Server is supported on macOS, Linux, and Windows. MicroClaw Code is a preview built from source. MicroClaw Work, the earlier desktop app, has been discontinued.
 
 ## Documentation
 

@@ -13,6 +13,7 @@ pub struct WriteFileTool {
     working_dir_isolation: WorkingDirIsolation,
     diff_max_lines: usize,
     governance_guard: crate::internal::tool_runtime::path_guard::GovernanceGuard,
+    file_state: std::sync::Arc<super::file_state::FileStateTable>,
 }
 
 impl WriteFileTool {
@@ -29,7 +30,17 @@ impl WriteFileTool {
             working_dir_isolation,
             diff_max_lines: microclaw_core::diff::DEFAULT_DIFF_MAX_LINES,
             governance_guard: Default::default(),
+            file_state: Default::default(),
         }
+    }
+
+    /// Share the stale-read table with the other file tools of a registry.
+    pub fn with_file_state(
+        mut self,
+        file_state: std::sync::Arc<super::file_state::FileStateTable>,
+    ) -> Self {
+        self.file_state = file_state;
+        self
     }
 
     pub fn with_diff_max_lines(mut self, max_lines: usize) -> Self {
@@ -115,8 +126,14 @@ impl Tool for WriteFileTool {
 
         // Previous content (empty for a new file) so overwrites render as a
         // diff instead of a bare success line. Non-UTF-8 files skip the diff.
-        let previous = tokio::fs::read_to_string(&resolved_path)
-            .await
+        let previous_bytes = tokio::fs::read(&resolved_path).await.ok();
+        if let Some(bytes) = &previous_bytes {
+            if let Err(msg) = self.file_state.check_fresh(&resolved_path, bytes) {
+                return ToolResult::error(msg).with_error_type("stale_read");
+            }
+        }
+        let previous = previous_bytes
+            .and_then(|bytes| String::from_utf8(bytes).ok())
             .unwrap_or_default();
 
         if let Some(parent) = resolved_path.parent() {
@@ -127,6 +144,7 @@ impl Tool for WriteFileTool {
 
         match tokio::fs::write(&resolved_path, content).await {
             Ok(()) => {
+                self.file_state.record(&resolved_path, content.as_bytes());
                 let diff =
                     microclaw_core::diff::unified_diff(&previous, content, self.diff_max_lines);
                 let mut result = ToolResult::success(match &diff {

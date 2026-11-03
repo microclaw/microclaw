@@ -70,22 +70,3 @@ jobs:
           use-gha-cache: enabled
           use-flakehub: disabled
       - run: nix build .#microclaw
-
-  work-desktop:
-    name: MicroClaw Work (macos-latest)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.96.1
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: microclaw-work-macos
-      - run: cargo check -p microclaw-work --locked
-      - run: cargo test -p microclaw-work-app --locked
-      - run: cargo test -p microclaw-work-headless --locked
-      - run: cargo clippy -p microclaw-work-app --all-targets --locked -- -D warnings
-      - run: cargo clippy -p microclaw-work --all-targets --no-deps --locked -- -D warnings
-      - run: cargo clippy -p microclaw-work-headless --all-targets --no-deps --locked -- -D warnings

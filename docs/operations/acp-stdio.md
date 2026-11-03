@@ -30,6 +30,12 @@ Typical cases:
 - persists ACP conversations through the standard runtime storage
 - supports `/stop` to cancel the active run for the ACP session
 - keeps the normal tool loop and provider stack
+- streams tool calls as ACP `tool_call` / `tool_call_update` notifications
+  (kind, status, file location), attaches each file-edit diff to the tool call
+  that produced it, and sends `todo_write` plans as ACP `plan` updates
+- forwards the final reply as a message chunk when nothing was streamed (for
+  example an approval prompt), so the editor always shows it; answer it with
+  `1` / `2` / `3` in the next prompt
 
 ## Verification
 

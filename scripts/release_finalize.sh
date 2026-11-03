@@ -246,12 +246,6 @@ homebrew_macos_asset_name() {
   fi
 }
 
-homebrew_work_macos_asset_name() {
-  local version="$1"
-  local arch="$2"
-  echo "microclaw-work-${version}-${arch}-macos.dmg"
-}
-
 previous_release_tag() {
   local current_tag="$1"
   git tag --list 'v*' --sort=-version:refname | awk -v current="$current_tag" '$0 != current { print; exit }'
@@ -371,7 +365,6 @@ HOMEBREW_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64
 HOMEBREW_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64")"
 HOMEBREW_FULL_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64" "full")"
 HOMEBREW_FULL_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64" "full")"
-HOMEBREW_WORK_ARM64_DMG_NAME="$(homebrew_work_macos_asset_name "$NEW_VERSION" "arm64")"
 
 if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME"; then
   exit 1
@@ -393,20 +386,10 @@ HOMEBREW_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_A
 HOMEBREW_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBALL_NAME")"
 HOMEBREW_FULL_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_ARM64_TARBALL_NAME")"
 HOMEBREW_FULL_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_X86_64_TARBALL_NAME")"
-HOMEBREW_WORK_ARM64_SHA256=""
-HOMEBREW_WORK_AVAILABLE=false
-if HOMEBREW_WORK_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_WORK_ARM64_DMG_NAME" 2>/dev/null)"; then
-  HOMEBREW_WORK_AVAILABLE=true
-fi
 echo "Official Homebrew arm64 SHA256: $HOMEBREW_ARM64_SHA256"
 echo "Official Homebrew x86_64 SHA256: $HOMEBREW_X86_64_SHA256"
 echo "Official Homebrew full arm64 SHA256: $HOMEBREW_FULL_ARM64_SHA256"
 echo "Official Homebrew full x86_64 SHA256: $HOMEBREW_FULL_X86_64_SHA256"
-if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
-  echo "Official Homebrew Work arm64 SHA256: $HOMEBREW_WORK_ARM64_SHA256"
-else
-  echo "No signed Work DMG is present; preserving the existing Work Cask."
-fi
 
 echo "Resetting tap workspace: $TAP_DIR"
 rm -rf "$TAP_DIR"
@@ -470,31 +453,10 @@ class MicroclawFull < Formula
 end
 RUBY
 
-mkdir -p Casks
-WORK_CASK_PATH="Casks/microclaw-work.rb"
-if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
-  cat > "$WORK_CASK_PATH" << RUBY
-cask "microclaw-work" do
-  version "$NEW_VERSION"
-  sha256 "$HOMEBREW_WORK_ARM64_SHA256"
-
-  url "https://github.com/$GITHUB_REPO/releases/download/$TAG/microclaw-work-#{version}-arm64-macos.dmg"
-
-  name "MicroClaw Work"
-  desc "Native desktop agent workspace powered by the shared MicroClaw runtime"
-  homepage "https://github.com/$GITHUB_REPO"
-
-  depends_on arch: :arm64
-  depends_on macos: :ventura
-
-  app "MicroClaw Work.app"
-end
-RUBY
-fi
-
 git add -- "$FORMULA_PATH" "$FORMULA_FULL_PATH"
-if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
-  git add -- "$WORK_CASK_PATH"
+# MicroClaw Work has been discontinued; retire its cask from the tap.
+if [ -f Casks/microclaw-work.rb ]; then
+  git rm -q -- Casks/microclaw-work.rb
 fi
 git commit -m "microclaw homebrew release $NEW_VERSION"
 sync_rebase_and_push origin
@@ -506,8 +468,4 @@ echo "Users can install with:"
 echo "  brew tap microclaw/tap"
 echo "  brew install microclaw          # default (lightweight)"
 echo "  brew install microclaw-full     # full (Matrix + MCP)"
-if [ "$HOMEBREW_WORK_AVAILABLE" = true ]; then
-  echo "  brew install --cask microclaw-work  # native desktop app"
-else
-  echo "  Work Cask unchanged: publish a signed/notarized DMG before updating it."
-fi
+

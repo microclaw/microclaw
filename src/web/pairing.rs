@@ -1,13 +1,16 @@
-//! Work ↔ Server device pairing.
+//! Server device pairing for local MicroClaw clients.
 //!
 //! An operator mints a short-lived, single-use pairing code (Web console
-//! Access tab or `POST /api/pairing/codes`). A Work client claims it once
+//! Access tab or `POST /api/pairing/codes`). A client claims it once
 //! with `POST /api/pairing/claim` and receives a device token that it then
 //! presents as a Bearer token exactly like an API key. Device tokens carry
 //! `operator.read` + `operator.write` only, are stored hashed in
 //! `paired_devices`, and can be revoked at any time from the console.
 
 use super::*;
+
+/// Label used when the operator does not name the pairing code.
+const DEFAULT_PAIRING_LABEL: &str = "MicroClaw client";
 
 /// Characters used for pairing codes: no 0/O/1/I so the code survives being
 /// read aloud or typed from a phone screen.
@@ -134,7 +137,7 @@ pub(super) async fn api_pairing_create_code(
         .label
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
-        .unwrap_or_else(|| "MicroClaw Work".to_string());
+        .unwrap_or_else(|| DEFAULT_PAIRING_LABEL.to_string());
     let minutes = body
         .expires_minutes
         .unwrap_or(PAIRING_CODE_DEFAULT_MINUTES)
@@ -239,7 +242,7 @@ pub(super) async fn api_pairing_claim(
     let raw_token = format!("mcd_{}", uuid::Uuid::new_v4().simple());
     let prefix = raw_token.chars().take(10).collect::<String>();
     let token_hash = sha256_hex(&raw_token);
-    let label = if pending.label.trim().is_empty() || pending.label == "MicroClaw Work" {
+    let label = if pending.label.trim().is_empty() || pending.label == DEFAULT_PAIRING_LABEL {
         device_name.clone()
     } else {
         format!("{} · {}", pending.label, device_name)

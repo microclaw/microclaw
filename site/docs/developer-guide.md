@@ -23,7 +23,10 @@ crates/
     microclaw-core/      # Shared error/types/text modules
     microclaw-engine/    # Agent loop plus storage/tools/channels/runtime services
     microclaw-sdk/       # Stable public embedding facade
-    microclaw-work-*/    # UI-independent Work application services
+    microclaw-code-core/ # MicroClaw Code core (project, trust, verification, turn driver)
+
+apps/
+    microclaw-code/      # `mccode`: MicroClaw Code TUI and -p mode
 
 src/
     main.rs             # CLI entrypoint

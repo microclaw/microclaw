@@ -2078,7 +2078,18 @@ async fn process_with_agent_logic(
     let profile_read_only = runtime_profile
         .as_ref()
         .is_some_and(|profile| profile.tool_policy == ToolPolicy::ReadOnly);
-    let tool_defs = if profile_read_only {
+    let profile_workspace_write = runtime_profile
+        .as_ref()
+        .is_some_and(|profile| profile.tool_policy == ToolPolicy::WorkspaceWrite);
+    let tool_defs = if profile_workspace_write {
+        available_tools
+            .iter()
+            .filter(|definition| {
+                crate::internal::tool_runtime::runtime::is_workspace_tool(&definition.name)
+            })
+            .cloned()
+            .collect()
+    } else if profile_read_only {
         available_tools
             .iter()
             .filter(|definition| {
@@ -2129,7 +2140,7 @@ async fn process_with_agent_logic(
     } else {
         available_tools
     };
-    let profile_allowed_tools = profile_read_only.then(|| {
+    let profile_allowed_tools = (profile_read_only || profile_workspace_write).then(|| {
         tool_defs
             .iter()
             .map(|definition| definition.name.clone())
@@ -2916,10 +2927,17 @@ async fn process_with_agent_logic(
                         call.id.clone(),
                         ContentBlock::ToolResult {
                             tool_use_id: call.id,
-                            content: format!(
-                                "Tool `{}` is unavailable because this Agent Profile is read-only.",
-                                call.name
-                            ),
+                            content: if profile_read_only {
+                                format!(
+                                    "Tool `{}` is unavailable because this Agent Profile is read-only.",
+                                    call.name
+                                )
+                            } else {
+                                format!(
+                                    "Tool `{}` is unavailable because this Agent Profile is limited to workspace tools.",
+                                    call.name
+                                )
+                            },
                             is_error: Some(true),
                         },
                     ));
