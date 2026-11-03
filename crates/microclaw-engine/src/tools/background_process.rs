@@ -191,7 +191,7 @@ pub fn spawn(
     Ok(id)
 }
 
-fn lookup(session: &str, id: &str) -> Result<Arc<BackgroundProcess>, ToolResult> {
+fn lookup(session: &str, id: &str) -> Result<Arc<BackgroundProcess>, String> {
     let registry = lock(registry());
     match registry.get(id) {
         Some(process) if process.session == session => Ok(process.clone()),
@@ -206,9 +206,7 @@ fn lookup(session: &str, id: &str) -> Result<Arc<BackgroundProcess>, ToolResult>
             } else {
                 format!("Known processes: {}", known.join(", "))
             };
-            Err(ToolResult::error(format!(
-                "Unknown background process '{id}'. {hint}"
-            )))
+            Err(format!("Unknown background process '{id}'. {hint}"))
         }
     }
 }
@@ -279,7 +277,7 @@ impl Tool for BashOutputTool {
         };
         let process = match lookup(&session, id) {
             Ok(p) => p,
-            Err(result) => return result,
+            Err(msg) => return ToolResult::error(msg),
         };
         let filter = match input.get("filter").and_then(|v| v.as_str()) {
             Some(raw) => match regex::Regex::new(raw) {
@@ -344,7 +342,7 @@ impl Tool for BashKillTool {
         };
         let process = match lookup(&session, id) {
             Ok(p) => p,
-            Err(result) => return result,
+            Err(msg) => return ToolResult::error(msg),
         };
         if lock(&process.exit_code).is_some() {
             return ToolResult::success(format!(
