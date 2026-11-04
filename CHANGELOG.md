@@ -31,9 +31,27 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   - `setup`, `doctor`, `check`, `init`, `info`, `sessions` and `trust`
     subcommands; `microclaw code …` forwards to `mccode`.
 
+  - in-run approvals: the TUI answers an approval inside the running turn
+    (the engine waits) instead of starting a new run with "1/2/3";
+  - per-project command allow rules ("always allow `cargo test` in this
+    project"), limited to single simple commands, via the approval dialog,
+    `/allow` and `mccode allow`;
+  - resuming a session (`-c`, `--session`) shows its earlier messages.
+
   The UI-independent core (project discovery, trust, verification, session
   index, turn driver) is `crates/microclaw-code-core`. Proposal:
   `docs/roadmap/microclaw-code-proposal-cn.md`.
+- In-run approval suspension in the Agent Engine: an embedding caller that
+  sets the `interactive_approvals` run metadata (SDK: `INTERACTIVE_APPROVALS`)
+  gets `ApprovalRequired` with a live `approval_id` and answers it with
+  `RuntimeControl::ResolveApproval` / `RunController::resolve_approval_confirmed`
+  (`1`/`approve`, `2`/`always`, `3`/`deny`); the same run then retries the
+  tool, records the standing grant, or returns a denied tool result to the
+  model. The headless executor now reports `approvals: true`. Channels and
+  callers without the opt-in keep the text approval path. Decisions are
+  audited (`in_run_decision`).
+- `microclaw-sdk` (`full`) adds `MicroClaw::session_messages(session, limit)`
+  for showing a session's history.
 - `microclaw-sdk` (`full`) exposes `model_providers()` and
   `validate_config_file()`.
 - `bash` gains `run_in_background`, with new `bash_output` (incremental,

@@ -33,7 +33,7 @@ or memory with a MicroClaw Server on the same machine.
 ```sh
 mccode                                   # full-screen interface
 mccode "fix the failing parser test"     # start with a task
-mccode -c                                # continue the most recent session here
+mccode -c                                # continue the most recent session here (shows its history)
 mccode --session <id>                    # resume a session (see `mccode sessions`)
 mccode -p "add a --verbose flag" --mode auto   # one task, then exit
 mccode -p "explain the build" --json            # JSON Lines runtime events
@@ -54,7 +54,7 @@ In the TUI:
 | Up / Down | input history |
 
 Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
-`/verify [on|off]`, `/trust`, `/diff [full]`, `/new`, `/sessions`, `/status`,
+`/verify [on|off]`, `/trust`, `/allow`, `/diff [full]`, `/new`, `/sessions`, `/status`,
 `/init`, `/clear`, `/exit`.
 
 ## Permission modes
@@ -68,6 +68,17 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 Outside plan mode the agent gets the workspace tool set
 (`ToolPolicy::WorkspaceWrite`): file, search, shell, planning, sub-agent and
 MCP tools, without channel delivery, scheduling, A2A or media tools.
+
+In the TUI an approval pauses the agent in place: the dialog's answer goes
+back into the same run (approve once, always allow the tool in this session,
+deny — the agent sees the denial and continues). For shell commands it also
+offers **always allow `<command prefix>` in this project** (key `p`), for
+example `cargo test`. Such a rule covers only single simple commands that
+start with the prefix (`cargo test -p x`, but never `cargo test && …`, pipes,
+redirections or `$(…)`); interpreters, `sudo`, `rm`, `curl` and the like
+cannot be allowed by prefix, and the destructive list above still asks.
+Rules live in `~/.microclaw/code/allow-rules.json`; manage them with
+`/allow [list | add <prefix> | rm <prefix>]` or `mccode allow [list | add | remove]`.
 
 In `-p` mode an approval that needs a person ends the run with exit code 2;
 resume it with `mccode --session <id> -p 1` (approve once) or `-p 3` (deny).

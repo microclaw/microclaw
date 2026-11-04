@@ -21,6 +21,7 @@ use microclaw_core::llm_types::ContentBlock;
 use opentelemetry_proto::tonic::trace::v1::Status;
 
 use crate::agent_engine::AgentEvent;
+use crate::approval_broker::ApprovalDecision;
 use crate::internal::observability::traces::OtlpTraceExporter;
 use microclaw_core::runtime_event::{RuntimePlanStep, RuntimePlanStepStatus, RuntimeProcessKind};
 use tokio::sync::mpsc::UnboundedSender;
@@ -397,20 +398,57 @@ async fn execute_single_tool(
         );
     }
 
-    // Auto-retry on approval_required
+    // Approval gate: retry with the approval marker when approval is not
+    // required, already given, or granted in-run through a registered
+    // approval broker; otherwise pause the turn for a text reply.
     if result.is_error && result.error_type.as_deref() == Some("approval_required") {
-        let can_retry_with_approval = if state.config.high_risk_tool_user_confirmation_required {
-            explicit_user_approval
-        } else {
+        let confirmation_required = state.config.high_risk_tool_user_confirmation_required;
+        let approved = if !confirmation_required {
+            info!("Auto-retrying tool '{}' after approval gate", name);
             true
-        };
-        if can_retry_with_approval {
-            executed_input = with_high_risk_approval_marker(&effective_input);
-            if state.config.high_risk_tool_user_confirmation_required {
-                info!("Retrying tool '{}' after explicit user approval", name);
-            } else {
-                info!("Auto-retrying tool '{}' after approval gate", name);
+        } else if explicit_user_approval {
+            info!("Retrying tool '{}' after explicit user approval", name);
+            true
+        } else {
+            let preview = approval_preview(name, &executed_input);
+            match await_in_run_approval(
+                state,
+                event_tx,
+                caller_channel,
+                chat_id,
+                name,
+                preview.as_deref(),
+            )
+            .await
+            {
+                Some(ApprovalDecision::ApproveOnce) => {
+                    info!("Retrying tool '{}' after in-run approval", name);
+                    true
+                }
+                Some(ApprovalDecision::ApproveAlways) => {
+                    info!("Retrying tool '{}' after in-run standing approval", name);
+                    record_standing_grant(state, chat_id, name).await;
+                    true
+                }
+                Some(ApprovalDecision::Deny) => {
+                    info!("Tool '{}' denied in-run", name);
+                    result = ToolResult::error(format!(
+                        "The user denied this {name} call; it was not executed. Do not retry it \
+                         unchanged. Continue without it, or explain what you need and why."
+                    ))
+                    .with_error_type("approval_denied");
+                    false
+                }
+                None => {
+                    ctx.waiting_for_user_approval = true;
+                    ctx.waiting_approval_tool = Some(name.clone());
+                    ctx.waiting_approval_preview = preview;
+                    false
+                }
             }
+        };
+        if approved {
+            executed_input = with_high_risk_approval_marker(&effective_input);
             let retry_span_id = new_span_id();
             let retry_start = now_unix_nano();
             metrics.tool_calls += 1;
@@ -433,10 +471,6 @@ async fn execute_single_tool(
                     "tool_execution_retry",
                 );
             }
-        } else if state.config.high_risk_tool_user_confirmation_required {
-            ctx.waiting_for_user_approval = true;
-            ctx.waiting_approval_tool = Some(name.clone());
-            ctx.waiting_approval_preview = approval_preview(name, &executed_input);
         }
     }
 
@@ -957,6 +991,85 @@ fn emit_file_diff_event(
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
     });
+}
+
+/// Ask a registered in-run approval broker (see [`crate::approval_broker`])
+/// to decide on a gated tool call, waiting for the answer. Returns `None`
+/// when no broker is registered for this chat, so the caller falls back to
+/// ending the turn with a text approval prompt. A broker that goes away
+/// while waiting counts as a denial.
+async fn await_in_run_approval(
+    state: &AppState,
+    event_tx: Option<&UnboundedSender<AgentEvent>>,
+    caller_channel: &str,
+    chat_id: i64,
+    tool_name: &str,
+    preview: Option<&str>,
+) -> Option<ApprovalDecision> {
+    let tx = event_tx?;
+    if !crate::approval_broker::is_registered(caller_channel, chat_id) {
+        return None;
+    }
+    let approval_id = uuid::Uuid::new_v4().to_string();
+    let receiver = crate::approval_broker::open(caller_channel, chat_id, &approval_id)?;
+    let advisory = crate::agent_engine::review_high_risk_action(state, tool_name, preview).await;
+    let _ = tx.send(AgentEvent::ApprovalRequired {
+        approval_id: approval_id.clone(),
+        tool: tool_name.to_string(),
+        preview: preview.map(str::to_string),
+        options: crate::agent_engine::approval_options(tool_name),
+        advisory,
+    });
+    // Close the slot if this future is dropped (run cancelled) before an
+    // answer arrives.
+    struct CloseOnDrop<'a>(&'a str, i64, &'a str);
+    impl Drop for CloseOnDrop<'_> {
+        fn drop(&mut self) {
+            crate::approval_broker::close(self.0, self.1, self.2);
+        }
+    }
+    let _close = CloseOnDrop(caller_channel, chat_id, &approval_id);
+    let decision = receiver.await.unwrap_or(ApprovalDecision::Deny);
+    let _ = crate::internal::storage::db::call_blocking(state.db.clone(), {
+        let tool = tool_name.to_string();
+        let outcome = match decision {
+            ApprovalDecision::ApproveOnce => "approved_once",
+            ApprovalDecision::ApproveAlways => "approved_always",
+            ApprovalDecision::Deny => "denied",
+        };
+        move |db| {
+            db.log_audit_event(
+                "approval",
+                &format!("chat:{chat_id}"),
+                "in_run_decision",
+                Some(&tool),
+                outcome,
+                Some("answered through the in-run approval broker"),
+            )
+        }
+    })
+    .await;
+    Some(decision)
+}
+
+/// Record a standing per-chat allowance for `tool_name` (the same grant an
+/// "always allow" text reply records).
+async fn record_standing_grant(state: &AppState, chat_id: i64, tool_name: &str) {
+    let grant_key = format!("approved_tool:{chat_id}:{tool_name}");
+    let tool = tool_name.to_string();
+    let _ = crate::internal::storage::db::call_blocking(state.db.clone(), move |db| {
+        db.set_runtime_meta(&grant_key, &chrono::Utc::now().to_rfc3339())?;
+        db.log_audit_event(
+            "approval",
+            &format!("chat:{chat_id}"),
+            "standing_grant",
+            Some(&tool),
+            "recorded",
+            Some("operator chose 'always allow' on an in-run approval"),
+        )?;
+        Ok::<_, microclaw_core::error::MicroClawError>(())
+    })
+    .await;
 }
 
 /// Build a short, operator-readable preview of the action awaiting approval.

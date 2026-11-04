@@ -196,12 +196,31 @@ impl Printer {
                     let _ = writeln!(err, "{} {error}", style.red("error:"));
                 }
             }
-            Update::AutoApproved { tool } => {
+            Update::AutoApproved { tool, rule } => {
+                self.approval_in_run = false;
+                let why = match rule {
+                    Some(rule) => format!("allowed by rule `{rule}`"),
+                    None => "auto mode".to_string(),
+                };
                 let _ = writeln!(
                     err,
                     "{}",
-                    style.dim(&format!("  auto-approved {tool} (auto mode)"))
+                    style.dim(&format!("  auto-approved {tool} ({why})"))
                 );
+            }
+            Update::ApprovalAnswered {
+                tool,
+                label,
+                denied,
+            } => {
+                self.approval_in_run = false;
+                let text = format!("  {tool}: {label}");
+                let painted = if *denied {
+                    style.yellow(&text)
+                } else {
+                    style.dim(&text)
+                };
+                let _ = writeln!(err, "{painted}");
             }
             Update::ApprovalRequested(approval) => {
                 let _ = writeln!(err, "{}", approval_card(style, approval));

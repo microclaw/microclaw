@@ -1118,6 +1118,35 @@ fn pending_approval_tool(value: &str, now: chrono::DateTime<chrono::Utc>) -> Opt
     }
 }
 
+/// The option card attached to every `ApprovalRequired` event.
+pub(crate) fn approval_options(
+    tool_name: &str,
+) -> Vec<microclaw_core::runtime_event::RuntimeApprovalOption> {
+    use microclaw_core::runtime_event::{
+        RuntimeApprovalDecision, RuntimeApprovalOption, RuntimeApprovalOptionKind,
+    };
+    vec![
+        RuntimeApprovalOption {
+            value: "1".into(),
+            label: "Approve once".into(),
+            kind: RuntimeApprovalOptionKind::Primary,
+            decision: RuntimeApprovalDecision::Approve,
+        },
+        RuntimeApprovalOption {
+            value: "2".into(),
+            label: format!("Always allow '{tool_name}' in this chat"),
+            kind: RuntimeApprovalOptionKind::Secondary,
+            decision: RuntimeApprovalDecision::Approve,
+        },
+        RuntimeApprovalOption {
+            value: "3".into(),
+            label: "Deny".into(),
+            kind: RuntimeApprovalOptionKind::Danger,
+            decision: RuntimeApprovalDecision::Deny,
+        },
+    ]
+}
+
 const APPROVAL_REVIEWER_SYSTEM_PROMPT: &str = "You are a security reviewer annotating a \
 high-risk tool call that is waiting for human approval. Reply with exactly one line, at most \
 140 characters: a verdict word (SAFE, CAUTION, or DANGEROUS) followed by a short reason. You \
@@ -1127,7 +1156,7 @@ cannot approve or deny anything; a human decides.";
 /// `None` unless `aux_models.approval_reviewer` is set (no fallback to the
 /// main model — enabling the reviewer is an explicit operator choice) or
 /// when the review call fails; failures never block the approval prompt.
-async fn review_high_risk_action(
+pub(crate) async fn review_high_risk_action(
     state: &AppState,
     tool_name: &str,
     preview: Option<&str>,
@@ -3224,26 +3253,7 @@ async fn process_with_agent_logic(
                         approval_id: uuid::Uuid::new_v4().to_string(),
                         tool: tool_name.clone(),
                         preview: batch_ctx.waiting_approval_preview.clone(),
-                        options: vec![
-                            microclaw_core::runtime_event::RuntimeApprovalOption {
-                                value: "1".into(),
-                                label: "Approve once".into(),
-                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Primary,
-                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Approve,
-                            },
-                            microclaw_core::runtime_event::RuntimeApprovalOption {
-                                value: "2".into(),
-                                label: format!("Always allow '{tool_name}' in this chat"),
-                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Secondary,
-                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Approve,
-                            },
-                            microclaw_core::runtime_event::RuntimeApprovalOption {
-                                value: "3".into(),
-                                label: "Deny".into(),
-                                kind: microclaw_core::runtime_event::RuntimeApprovalOptionKind::Danger,
-                                decision: microclaw_core::runtime_event::RuntimeApprovalDecision::Deny,
-                            },
-                        ],
+                        options: approval_options(&tool_name),
                         advisory: advisory.clone(),
                     });
                     let _ = tx.send(AgentEvent::FinalResponse { text: text.clone() });

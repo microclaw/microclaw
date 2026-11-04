@@ -8,11 +8,13 @@
 //! and render [`Update`]s.
 
 use microclaw_sdk::{
-    Agent, MicroClaw, RunRequest, RunStatus, RuntimeApprovalOption, RuntimeEvent,
-    RuntimeEventEnvelope, SessionId, ToolPolicy,
+    Agent, INTERACTIVE_APPROVALS, MicroClaw, RunRequest, RunStatus, RuntimeApprovalDecision,
+    RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeEvent, RuntimeEventEnvelope,
+    SessionId, SessionMessageRole, ToolPolicy,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+use crate::allow::AllowRules;
 use crate::project::{Check, Mode, Project};
 use crate::verify::{self, CheckOutcome};
 
@@ -58,18 +60,107 @@ pub fn compile_always_ask(extra: &[String]) -> (Vec<regex::Regex>, Vec<String>) 
     (patterns, warnings)
 }
 
+/// Option value MicroClaw Code adds to shell approvals: approve and add a
+/// project allow rule for the suggested command prefix.
+pub const ALLOW_RULE_OPTION: &str = "p";
+
 /// An approval the agent is waiting for.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingApproval {
+    /// Engine approval id (answers go back to the same run with it).
+    pub approval_id: String,
     pub tool: String,
     pub preview: Option<String>,
     pub options: Vec<RuntimeApprovalOption>,
     pub advisory: Option<String>,
+    /// Command prefix offered as an "always allow in this project" rule.
+    pub suggested_rule: Option<String>,
 }
 
 impl PendingApproval {
+    /// Build from an engine `ApprovalRequired` event, adding the project
+    /// allow-rule option for shell commands that can carry one.
+    pub fn from_event(
+        approval_id: &str,
+        tool: &str,
+        preview: Option<&str>,
+        options: &[RuntimeApprovalOption],
+        advisory: Option<&str>,
+    ) -> Self {
+        let suggested_rule = (tool == "bash")
+            .then(|| preview.and_then(crate::allow::suggest_prefix))
+            .flatten();
+        let mut options = options.to_vec();
+        if let Some(rule) = &suggested_rule {
+            let at = options
+                .iter()
+                .position(|o| o.decision == RuntimeApprovalDecision::Deny)
+                .unwrap_or(options.len());
+            options.insert(
+                at,
+                RuntimeApprovalOption {
+                    value: ALLOW_RULE_OPTION.into(),
+                    label: format!("Always allow `{rule}` in this project"),
+                    kind: RuntimeApprovalOptionKind::Secondary,
+                    decision: RuntimeApprovalDecision::Approve,
+                },
+            );
+        }
+        Self {
+            approval_id: approval_id.to_string(),
+            tool: tool.to_string(),
+            preview: preview.map(str::to_string),
+            options,
+            advisory: advisory.map(str::to_string),
+            suggested_rule,
+        }
+    }
+
     pub fn has_option(&self, value: &str) -> bool {
         self.options.iter().any(|o| o.value == value)
+    }
+
+    /// The engine's own options only (for a card answered by a later
+    /// message, which cannot carry Code-level options).
+    pub fn without_code_options(&self) -> Self {
+        let mut approval = self.clone();
+        approval.options.retain(|o| o.value != ALLOW_RULE_OPTION);
+        approval
+    }
+
+    /// Label of an option value, for transcripts.
+    pub fn option_label(&self, value: &str) -> Option<&str> {
+        self.options
+            .iter()
+            .find(|o| o.value == value)
+            .map(|o| o.label.as_str())
+    }
+}
+
+/// One message of an earlier conversation in this session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryEntry {
+    User(String),
+    Agent(String),
+    /// A verification failure handed back to the agent (summary line).
+    Verification(String),
+}
+
+impl HistoryEntry {
+    fn from_message(role: SessionMessageRole, content: &str) -> Self {
+        match role {
+            SessionMessageRole::Agent => Self::Agent(content.to_string()),
+            SessionMessageRole::User => {
+                match content.strip_prefix("[MicroClaw Code verification, ") {
+                    Some(rest) => {
+                        let first = rest.lines().next().unwrap_or_default();
+                        let (round, detail) = first.split_once("] ").unwrap_or((first, ""));
+                        Self::Verification(format!("{round}: {detail}").trim_end().to_string())
+                    }
+                    None => Self::User(content.to_string()),
+                }
+            }
+        }
     }
 }
 
@@ -91,8 +182,17 @@ pub enum Update {
     SteerAccepted(String),
     SteerRejected(String),
     ApprovalRequested(PendingApproval),
+    /// An in-run approval was answered; the run continues.
+    ApprovalAnswered {
+        tool: String,
+        label: String,
+        denied: bool,
+    },
+    /// Approved without asking: auto mode (`rule: None`) or a project allow
+    /// rule.
     AutoApproved {
         tool: String,
+        rule: Option<String>,
     },
     RunFinished {
         status: RunStatus,
@@ -143,8 +243,8 @@ pub struct SessionSettings {
     /// Run automatic checks after changes (also requires a trusted project).
     pub verify: bool,
     pub max_fix_rounds: u32,
-    /// Ask the front end for approvals; when false, a needed approval ends
-    /// the turn with `approval_pending`.
+    /// Ask the front end for approvals while the run waits; when false, a
+    /// needed approval ends the turn with `approval_pending`.
     pub interactive: bool,
 }
 
@@ -156,7 +256,17 @@ pub struct CodeSession {
     pub settings: SessionSettings,
     git_summary: Option<String>,
     always_ask: Vec<regex::Regex>,
+    allow_rules: AllowRules,
     pending_approval: Option<PendingApproval>,
+}
+
+/// Whether an approval needs a person.
+enum Gate {
+    Ask,
+    /// Auto mode (`rule: None`) or a project allow rule.
+    Auto {
+        rule: Option<String>,
+    },
 }
 
 enum Waited {
@@ -180,8 +290,23 @@ impl CodeSession {
             settings,
             git_summary,
             always_ask,
+            allow_rules: AllowRules::load(AllowRules::default_path()),
             pending_approval: None,
         }
+    }
+
+    /// Use a specific allow-rule store (tests, custom homes).
+    pub fn with_allow_rules(mut self, rules: AllowRules) -> Self {
+        self.allow_rules = rules;
+        self
+    }
+
+    pub fn allow_rules(&self) -> &AllowRules {
+        &self.allow_rules
+    }
+
+    pub fn allow_rules_mut(&mut self) -> &mut AllowRules {
+        &mut self.allow_rules
     }
 
     /// Recompute project-derived state after the project changed (trust,
@@ -196,6 +321,17 @@ impl CodeSession {
         self.session_id = session_id;
         self.pending_approval = None;
         self.git_summary = crate::project::git_summary(&self.project.root);
+    }
+
+    /// The last `limit` messages of this session, for showing history on
+    /// resume. Verification hand-backs are condensed to one line.
+    pub fn history(&self, limit: usize) -> Vec<HistoryEntry> {
+        self.microclaw
+            .session_messages(&self.session_id, limit)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|message| HistoryEntry::from_message(message.role, &message.content))
+            .collect()
     }
 
     pub fn pending_approval(&self) -> Option<&PendingApproval> {
@@ -220,12 +356,72 @@ impl CodeSession {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    fn needs_human(&self, approval: &PendingApproval) -> bool {
-        if self.settings.mode != Mode::Auto {
-            return true;
+    /// Build the approval card; commands on the always-ask list never get
+    /// an "always allow in this project" option.
+    fn approval_from_event(
+        &self,
+        approval_id: &str,
+        tool: &str,
+        preview: Option<&str>,
+        options: &[RuntimeApprovalOption],
+        advisory: Option<&str>,
+    ) -> PendingApproval {
+        let approval = PendingApproval::from_event(approval_id, tool, preview, options, advisory);
+        let destructive = preview.is_some_and(|p| self.always_ask.iter().any(|re| re.is_match(p)));
+        if destructive && approval.suggested_rule.is_some() {
+            let mut approval = approval.without_code_options();
+            approval.suggested_rule = None;
+            approval
+        } else {
+            approval
         }
+    }
+
+    /// Decide whether an approval needs a person.
+    fn gate(&self, approval: &PendingApproval) -> Gate {
         let preview = approval.preview.as_deref().unwrap_or("");
-        self.always_ask.iter().any(|re| re.is_match(preview))
+        if self.always_ask.iter().any(|re| re.is_match(preview)) {
+            return Gate::Ask;
+        }
+        if self.settings.mode == Mode::Auto {
+            return Gate::Auto { rule: None };
+        }
+        if approval.tool == "bash"
+            && let Some(rule) = self.allow_rules.matching(&self.project.root, preview)
+        {
+            return Gate::Auto {
+                rule: Some(rule.to_string()),
+            };
+        }
+        Gate::Ask
+    }
+
+    /// Turn a front-end answer into the engine decision, applying Code-level
+    /// options (the project allow rule) on the way.
+    fn engine_answer(
+        &mut self,
+        approval: &PendingApproval,
+        value: &str,
+        updates: &UnboundedSender<Update>,
+    ) -> String {
+        if value == ALLOW_RULE_OPTION {
+            if let Some(rule) = &approval.suggested_rule {
+                match self.allow_rules.add(&self.project.root, rule) {
+                    Ok(_) => {
+                        let _ = updates.send(Update::Notice(format!(
+                            "`{rule}` now runs without asking in this project (/allow to review)"
+                        )));
+                    }
+                    Err(e) => {
+                        let _ = updates.send(Update::Notice(format!(
+                            "could not save the allow rule: {e}"
+                        )));
+                    }
+                }
+            }
+            return "1".into();
+        }
+        value.to_string()
     }
 
     fn verify_active(&self) -> bool {
@@ -235,52 +431,112 @@ impl CodeSession {
             && !self.project.auto_checks().is_empty()
     }
 
-    /// Run one agent request to completion.
+    /// Run one agent request to completion. Interactive sessions answer
+    /// approvals in-run (the engine waits); otherwise an approval ends the
+    /// run and is left in `pending_approval`.
     async fn run_once(
         &mut self,
         prompt: &str,
         updates: &UnboundedSender<Update>,
         controls: &mut UnboundedReceiver<Control>,
     ) -> anyhow::Result<(RunStatus, String, Option<String>, Vec<String>)> {
+        let in_run = self.settings.interactive;
         let mut request = RunRequest::new(prompt);
         request.session_id = Some(SessionId::new(self.session_id.clone()));
         request.workspace = Some(self.project.root.clone());
+        if in_run {
+            request
+                .metadata
+                .insert(INTERACTIVE_APPROVALS.into(), serde_json::Value::Bool(true));
+        }
         let mut run = self.agent()?.run_request(request);
         let controller = run.controller();
         let mut changed = Vec::new();
         let mut cancelled = false;
         let mut controls_open = true;
+        let mut awaiting: Option<PendingApproval> = None;
         loop {
             tokio::select! {
                 event = run.next_event() => match event {
                     Some(envelope) => {
-                        match &envelope.event {
-                            RuntimeEvent::FileDiff { path, .. } if !changed.contains(path) => {
-                                changed.push(path.clone());
+                        let approval = match &envelope.event {
+                            RuntimeEvent::FileDiff { path, .. } => {
+                                if !changed.contains(path) {
+                                    changed.push(path.clone());
+                                }
+                                None
                             }
-                            RuntimeEvent::ApprovalRequired { tool, preview, options, advisory, .. } => {
-                                self.pending_approval = Some(PendingApproval {
-                                    tool: tool.clone(),
-                                    preview: preview.clone(),
-                                    options: options.clone(),
-                                    advisory: advisory.clone(),
-                                });
+                            RuntimeEvent::ApprovalRequired { approval_id, tool, preview, options, advisory } => {
+                                Some(self.approval_from_event(
+                                    approval_id,
+                                    tool,
+                                    preview.as_deref(),
+                                    options,
+                                    advisory.as_deref(),
+                                ))
                             }
-                            _ => {}
-                        }
+                            _ => None,
+                        };
                         let _ = updates.send(Update::Runtime(envelope));
+                        let Some(approval) = approval else { continue };
+                        if !in_run {
+                            self.pending_approval = Some(approval);
+                        } else if let Gate::Auto { rule } = self.gate(&approval) {
+                            let _ = updates.send(Update::AutoApproved {
+                                tool: approval.tool.clone(),
+                                rule,
+                            });
+                            if let Err(e) = controller
+                                .resolve_approval_confirmed(approval.approval_id.clone(), "1")
+                                .await
+                            {
+                                let _ = updates.send(Update::Notice(format!(
+                                    "could not auto-approve {}: {}", approval.tool, e.message
+                                )));
+                            }
+                        } else {
+                            let _ = updates.send(Update::ApprovalRequested(approval.clone()));
+                            awaiting = Some(approval);
+                        }
                     }
                     None => break,
                 },
                 control = controls.recv(), if controls_open => match control {
                     Some(Control::Cancel) if !cancelled => {
                         cancelled = true;
+                        awaiting = None;
                         let _ = controller.cancel_confirmed().await;
                     }
                     Some(Control::Steer(text)) => {
                         match controller.steer_confirmed(text.clone()).await {
                             Ok(()) => { let _ = updates.send(Update::SteerAccepted(text)); }
                             Err(e) => { let _ = updates.send(Update::SteerRejected(e.to_string())); }
+                        }
+                    }
+                    Some(Control::Approve(value)) => {
+                        let Some(approval) = awaiting.take_if(|a| a.has_option(&value)) else {
+                            continue;
+                        };
+                        let answer = self.engine_answer(&approval, &value, updates);
+                        match controller
+                            .resolve_approval_confirmed(approval.approval_id.clone(), answer.clone())
+                            .await
+                        {
+                            Ok(()) => {
+                                let _ = updates.send(Update::ApprovalAnswered {
+                                    tool: approval.tool.clone(),
+                                    label: approval
+                                        .option_label(&value)
+                                        .unwrap_or(&value)
+                                        .to_string(),
+                                    denied: answer == "3",
+                                });
+                            }
+                            Err(e) => {
+                                let _ = updates.send(Update::Notice(format!(
+                                    "approval not delivered: {}", e.message
+                                )));
+                            }
                         }
                     }
                     Some(_) => {}
@@ -396,10 +652,13 @@ impl CodeSession {
                 _ => {}
             }
 
+            // Text-path approvals (non-interactive runs): the run ended; answer
+            // it with the next message.
             if let Some(approval) = self.pending_approval.take() {
-                let answer = if !self.needs_human(&approval) {
+                let answer = if let Gate::Auto { rule } = self.gate(&approval) {
                     let _ = updates.send(Update::AutoApproved {
                         tool: approval.tool.clone(),
+                        rule,
                     });
                     Waited::Answer("1".into())
                 } else if self.settings.interactive {
@@ -412,7 +671,7 @@ impl CodeSession {
                 };
                 match answer {
                     Waited::Answer(value) => {
-                        next_prompt = value;
+                        next_prompt = self.engine_answer(&approval, &value, updates);
                         continue;
                     }
                     Waited::Cancelled => {
@@ -499,12 +758,7 @@ mod tests {
     fn report_exit_codes() {
         assert_eq!(TurnReport::default().exit_code(), 0);
         let pending = TurnReport {
-            approval_pending: Some(PendingApproval {
-                tool: "bash".into(),
-                preview: None,
-                options: vec![],
-                advisory: None,
-            }),
+            approval_pending: Some(PendingApproval::from_event("a", "bash", None, &[], None)),
             ..Default::default()
         };
         assert_eq!(pending.exit_code(), 2);
@@ -513,5 +767,73 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(failing.exit_code(), 1);
+    }
+
+    #[test]
+    fn shell_approvals_offer_a_project_rule_before_deny() {
+        let options = vec![
+            RuntimeApprovalOption {
+                value: "1".into(),
+                label: "Approve once".into(),
+                kind: RuntimeApprovalOptionKind::Primary,
+                decision: RuntimeApprovalDecision::Approve,
+            },
+            RuntimeApprovalOption {
+                value: "3".into(),
+                label: "Deny".into(),
+                kind: RuntimeApprovalOptionKind::Danger,
+                decision: RuntimeApprovalDecision::Deny,
+            },
+        ];
+        let approval =
+            PendingApproval::from_event("id", "bash", Some("cargo test -q"), &options, None);
+        assert_eq!(approval.suggested_rule.as_deref(), Some("cargo test"));
+        let values: Vec<_> = approval.options.iter().map(|o| o.value.as_str()).collect();
+        assert_eq!(values, ["1", ALLOW_RULE_OPTION, "3"]);
+        let compound = PendingApproval::from_event(
+            "id",
+            "bash",
+            Some("cargo test && git push"),
+            &options,
+            None,
+        );
+        assert!(compound.suggested_rule.is_none());
+        assert_eq!(compound.options.len(), 2);
+        let write = PendingApproval::from_event("id", "write_file", Some("{}"), &options, None);
+        assert!(write.suggested_rule.is_none());
+    }
+
+    #[test]
+    fn history_condenses_verification_handbacks() {
+        assert_eq!(
+            HistoryEntry::from_message(SessionMessageRole::User, "fix it"),
+            HistoryEntry::User("fix it".into())
+        );
+        let prompt = verify::fix_prompt(
+            &CheckOutcome {
+                check: Check {
+                    name: "test".into(),
+                    run: "cargo test".into(),
+                    auto: true,
+                    timeout_secs: None,
+                },
+                success: false,
+                exit_code: Some(1),
+                timed_out: false,
+                duration: std::time::Duration::from_secs(1),
+                output: "boom".into(),
+            },
+            1,
+            2,
+        );
+        match HistoryEntry::from_message(SessionMessageRole::User, &prompt) {
+            HistoryEntry::Verification(line) => {
+                assert!(
+                    line.starts_with("round 1/2: The project check `test`"),
+                    "{line}"
+                );
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 }

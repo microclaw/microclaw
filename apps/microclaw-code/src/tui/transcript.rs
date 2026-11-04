@@ -74,8 +74,8 @@ pub struct Transcript {
     pub items: Vec<Item>,
     /// Assistant text was streamed during the current run.
     streamed: bool,
-    /// The current run stopped for an approval (its final text is the
-    /// approval prompt, shown as a dialog instead).
+    /// The current run stopped for an approval that was not answered in-run
+    /// (its final text is the approval prompt, shown as a dialog instead).
     approval_in_run: bool,
 }
 
@@ -122,8 +122,18 @@ impl Transcript {
                 self.notice(format!("guidance not delivered: {reason}"), Tone::Warning)
             }
             Update::ApprovalRequested(_) => {}
-            Update::AutoApproved { tool } => {
-                self.notice(format!("auto-approved {tool} (auto mode)"), Tone::Info)
+            // The run continues after an in-run answer, so its final text is
+            // a real reply again (the TUI already noted the chosen option).
+            Update::ApprovalAnswered { .. } => self.approval_in_run = false,
+            Update::AutoApproved { tool, rule } => {
+                self.approval_in_run = false;
+                match rule {
+                    Some(rule) => self.notice(
+                        format!("auto-approved {tool}: allowed by rule `{rule}`"),
+                        Tone::Info,
+                    ),
+                    None => self.notice(format!("auto-approved {tool} (auto mode)"), Tone::Info),
+                }
             }
             Update::CheckStarted(check) => self.items.push(Item::Check {
                 name: check.name.clone(),

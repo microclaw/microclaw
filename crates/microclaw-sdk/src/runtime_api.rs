@@ -14,6 +14,29 @@ pub use microclaw_engine::{
 #[cfg(feature = "remote-worker")]
 pub use microclaw_engine::{WebSocketWorkerTransport, WorkerHost};
 
+/// `RunRequest::metadata` key. Set it to `true` and a tool call that needs a
+/// human pauses the run: the Agent Engine emits `ApprovalRequired` and waits
+/// for `RunController::resolve_approval_confirmed(approval_id, "1" | "2" | "3")`
+/// (approve once, always allow the tool in this session, deny) instead of
+/// ending the run with a text prompt that the next message answers.
+pub const INTERACTIVE_APPROVALS: &str = microclaw_engine::headless::INTERACTIVE_APPROVALS_KEY;
+
+/// Who wrote a [`SessionMessage`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionMessageRole {
+    User,
+    Agent,
+}
+
+/// One stored message of a named session (see `MicroClaw::session_messages`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionMessage {
+    pub role: SessionMessageRole,
+    pub content: String,
+    /// RFC 3339.
+    pub timestamp: String,
+}
+
 /// An SDK-level error that does not expose Server or Agent Engine implementation types.
 #[derive(Debug, thiserror::Error)]
 pub enum SdkError {
@@ -365,6 +388,38 @@ impl MicroClaw {
                         started_at: run.started_at,
                         finished_at: run.finished_at,
                         cancel_requested: run.cancel_requested,
+                    })
+                    .collect()
+            })
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// The most recent `limit` messages of a named session, oldest first:
+    /// user prompts (including steering) and the agent's final replies. Use
+    /// it to show history when resuming a session. Empty when the session
+    /// never ran.
+    #[cfg(feature = "full")]
+    pub fn session_messages(
+        &self,
+        session: impl AsRef<str>,
+        limit: usize,
+    ) -> Result<Vec<SessionMessage>, SdkError> {
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            SdkError::Runtime("this Runtime has no configured Agent Engine".into())
+        })?;
+        engine
+            .session_messages(session.as_ref(), limit)
+            .map(|messages| {
+                messages
+                    .into_iter()
+                    .map(|message| SessionMessage {
+                        role: if message.from_agent {
+                            SessionMessageRole::Agent
+                        } else {
+                            SessionMessageRole::User
+                        },
+                        content: message.content,
+                        timestamp: message.timestamp,
                     })
                     .collect()
             })
