@@ -87,6 +87,31 @@ pub struct HeadlessSessionMessage {
     pub timestamp: String,
 }
 
+/// One filesystem checkpoint of a session's working directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadlessCheckpoint {
+    pub commit: String,
+    pub label: String,
+    pub timestamp: String,
+}
+
+/// Token usage of one session.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeadlessUsage {
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    /// `(model, requests, input_tokens, output_tokens)`, largest first.
+    pub by_model: Vec<(String, i64, i64, i64)>,
+}
+
+/// Result of compacting a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeadlessCompaction {
+    pub messages_before: usize,
+    pub messages_after: usize,
+}
+
 /// UI-neutral projection of one durable Subagent run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadlessSubagentRun {
@@ -411,6 +436,237 @@ impl HeadlessRuntime {
                 timestamp: message.timestamp,
             })
             .collect())
+    }
+
+    async fn existing_session_chat_id(&self, session: &str) -> anyhow::Result<Option<i64>> {
+        let external_chat_id = format!("headless:{}", session.trim());
+        let db = self.state.db.clone();
+        Ok(call_blocking(db, move |db| {
+            db.find_chat_id(HEADLESS_CHANNEL, &external_chat_id)
+        })
+        .await?)
+    }
+
+    fn checkpoint_paths(
+        &self,
+        channel: &str,
+        chat_id: i64,
+    ) -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
+        if !self.state.config.checkpoints_enabled {
+            anyhow::bail!("checkpoints are disabled for this runtime");
+        }
+        let working_dir = crate::internal::tool_runtime::runtime::working_dir_for_context(
+            Path::new(&self.state.config.working_dir),
+            self.state.config.working_dir_isolation,
+            channel,
+            chat_id,
+        );
+        let shadow_root = std::path::PathBuf::from(&self.state.config.data_dir).join("checkpoints");
+        let shadow_repo = crate::checkpoint::shadow_repo_path(&shadow_root, &working_dir);
+        Ok((shadow_repo, working_dir))
+    }
+
+    /// Snapshot the session's working directory now and return the checkpoint
+    /// that holds its current state (a new one, or the latest when nothing
+    /// changed since). Requires `checkpoints_enabled`.
+    pub async fn checkpoint_session(
+        &self,
+        channel: &str,
+        session: &str,
+        label: &str,
+    ) -> anyhow::Result<Option<HeadlessCheckpoint>> {
+        let chat_id = self.resolve_session_chat_id(session).await?;
+        let (shadow_repo, working_dir) = self.checkpoint_paths(channel, chat_id)?;
+        crate::checkpoint::snapshot(&shadow_repo, &working_dir, label)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        Ok(crate::checkpoint::list(&shadow_repo, &working_dir, 1)
+            .await
+            .map_err(anyhow::Error::msg)?
+            .into_iter()
+            .next()
+            .map(|c| HeadlessCheckpoint {
+                commit: c.commit,
+                label: c.label,
+                timestamp: c.timestamp,
+            }))
+    }
+
+    /// Recent checkpoints of the session's working directory, newest first.
+    pub async fn session_checkpoints(
+        &self,
+        channel: &str,
+        session: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<HeadlessCheckpoint>> {
+        let chat_id = self.resolve_session_chat_id(session).await?;
+        let (shadow_repo, working_dir) = self.checkpoint_paths(channel, chat_id)?;
+        Ok(
+            crate::checkpoint::list(&shadow_repo, &working_dir, limit.clamp(1, 500))
+                .await
+                .map_err(anyhow::Error::msg)?
+                .into_iter()
+                .map(|c| HeadlessCheckpoint {
+                    commit: c.commit,
+                    label: c.label,
+                    timestamp: c.timestamp,
+                })
+                .collect(),
+        )
+    }
+
+    /// Restore the session's working directory to `commit`. The current
+    /// state is checkpointed first, so a restore can itself be undone.
+    pub async fn restore_session_checkpoint(
+        &self,
+        channel: &str,
+        session: &str,
+        commit: &str,
+    ) -> anyhow::Result<Option<HeadlessCheckpoint>> {
+        let before = self
+            .checkpoint_session(channel, session, &format!("before restoring {commit}"))
+            .await?;
+        let chat_id = self.resolve_session_chat_id(session).await?;
+        let (shadow_repo, working_dir) = self.checkpoint_paths(channel, chat_id)?;
+        crate::checkpoint::restore(&shadow_repo, &working_dir, commit)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        Ok(before)
+    }
+
+    /// Token usage recorded for a session.
+    pub async fn session_usage(&self, session: &str) -> anyhow::Result<HeadlessUsage> {
+        let Some(chat_id) = self.existing_session_chat_id(session).await? else {
+            return Ok(HeadlessUsage::default());
+        };
+        let db = self.state.db.clone();
+        Ok(call_blocking(db, move |db| {
+            let summary = db.get_llm_usage_summary(Some(chat_id))?;
+            let by_model = db
+                .get_llm_usage_by_model(Some(chat_id), None, Some(20))?
+                .into_iter()
+                .map(|m| (m.model, m.requests, m.input_tokens, m.output_tokens))
+                .collect();
+            Ok::<_, microclaw_core::error::MicroClawError>(HeadlessUsage {
+                requests: summary.requests,
+                input_tokens: summary.input_tokens,
+                output_tokens: summary.output_tokens,
+                by_model,
+            })
+        })
+        .await?)
+    }
+
+    /// The model the next run of this session uses.
+    pub async fn session_model(&self, channel: &str, session: &str) -> anyhow::Result<String> {
+        let chat_id = self.resolve_session_chat_id(session).await?;
+        Ok(
+            crate::agent_engine::resolve_effective_provider_and_model(
+                &self.state,
+                channel,
+                chat_id,
+            )
+            .await
+            .1,
+        )
+    }
+
+    /// Override the model for one session (`None` clears the override).
+    /// Runtime-only, like `/model here`. Returns the effective model.
+    pub async fn set_session_model(
+        &self,
+        channel: &str,
+        session: &str,
+        model: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let chat_id = self.resolve_session_chat_id(session).await?;
+        let key = crate::chat_commands::chat_scoped_override_key(channel, chat_id);
+        {
+            let mut overrides = self.state.llm_model_overrides.write().await;
+            match model {
+                Some(model) => {
+                    let model = crate::config::normalize_model_name(model)
+                        .ok_or_else(|| anyhow::anyhow!("invalid model name `{model}`"))?;
+                    overrides.insert(key, model);
+                }
+                None => {
+                    overrides.remove(&key);
+                }
+            }
+        }
+        self.session_model(channel, session).await
+    }
+
+    /// Summarize older messages of a session now, keeping the last
+    /// `keep_recent` verbatim (the same compaction a long session gets
+    /// automatically).
+    pub async fn compact_session(
+        &self,
+        channel: &str,
+        session: &str,
+        keep_recent: usize,
+    ) -> anyhow::Result<HeadlessCompaction> {
+        let Some(chat_id) = self.existing_session_chat_id(session).await? else {
+            anyhow::bail!("session `{session}` has no conversation yet");
+        };
+        let db = self.state.db.clone();
+        let Some((json, _)) = call_blocking(db, move |db| db.load_session(chat_id)).await? else {
+            anyhow::bail!("session `{session}` has no conversation yet");
+        };
+        let messages: Vec<microclaw_core::llm_types::Message> = serde_json::from_str(&json)?;
+        let before = messages.len();
+        let compacted = crate::agent_engine::compact_messages(
+            &self.state,
+            channel,
+            chat_id,
+            &messages,
+            keep_recent.max(2),
+        )
+        .await;
+        let after = compacted.len();
+        if after < before {
+            let json = serde_json::to_string(&compacted)?;
+            let db = self.state.db.clone();
+            call_blocking(db, move |db| db.save_session(chat_id, &json)).await?;
+        }
+        Ok(HeadlessCompaction {
+            messages_before: before,
+            messages_after: after,
+        })
+    }
+
+    /// Copy a session's conversation (agent context and stored messages)
+    /// into a new session. Fails when `to` already has a conversation.
+    pub async fn fork_session(&self, from: &str, to: &str) -> anyhow::Result<()> {
+        let Some(from_id) = self.existing_session_chat_id(from).await? else {
+            anyhow::bail!("session `{from}` has no conversation to fork");
+        };
+        let to_id = self.resolve_session_chat_id(to).await?;
+        let parent_key = format!("headless:{}", from.trim());
+        let db = self.state.db.clone();
+        call_blocking(db, move |db| {
+            if db.load_session(to_id)?.is_some() {
+                return Err(microclaw_core::error::MicroClawError::Config(
+                    "the target session already has a conversation".into(),
+                ));
+            }
+            for message in db.get_all_messages(from_id)? {
+                db.store_message(&StoredMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    chat_id: to_id,
+                    ..message
+                })?;
+            }
+            if let Some((json, _)) = db.load_session(from_id)? {
+                let fork_point = serde_json::from_str::<Vec<serde_json::Value>>(&json)
+                    .map(|m| m.len() as i64)
+                    .ok();
+                db.save_session_with_meta(to_id, &json, Some(&parent_key), fork_point, None)?;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(())
     }
 
     /// Persist and promptly signal cancellation for one Subagent owned by the session.
@@ -1361,5 +1617,113 @@ mod tests {
         assert_eq!(approvals, 1);
         assert!(text.contains("bash"), "{text}");
         assert!(!crate::approval_broker::is_registered(CODE_CHANNEL, 1));
+    }
+
+    #[tokio::test]
+    async fn sessions_fork_switch_models_and_compact() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime_with_fake_llm(directory.path());
+        runtime
+            .run(
+                HeadlessRunRequest::code("first".into(), Some("orig".into()), "r1".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        runtime.fork_session("orig", "copy").await.unwrap();
+        let copied = runtime.session_messages("copy", 10).unwrap();
+        assert_eq!(copied.len(), 2);
+        assert_eq!(copied[0].content, "first");
+        assert!(runtime.fork_session("orig", "copy").await.is_err());
+        assert!(runtime.fork_session("missing", "x").await.is_err());
+
+        let default_model = runtime.session_model(CODE_CHANNEL, "copy").await.unwrap();
+        assert_eq!(
+            runtime
+                .set_session_model(CODE_CHANNEL, "copy", Some("other-model"))
+                .await
+                .unwrap(),
+            "other-model"
+        );
+        assert_eq!(
+            runtime.session_model(CODE_CHANNEL, "orig").await.unwrap(),
+            default_model
+        );
+        assert_eq!(
+            runtime
+                .set_session_model(CODE_CHANNEL, "copy", None)
+                .await
+                .unwrap(),
+            default_model
+        );
+
+        let short = runtime
+            .compact_session(CODE_CHANNEL, "orig", 8)
+            .await
+            .unwrap();
+        assert_eq!(short.messages_before, short.messages_after);
+        assert!(runtime
+            .compact_session(CODE_CHANNEL, "never-ran", 8)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn session_checkpoints_restore_the_workspace() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let mut runtime = runtime_with_fake_llm(directory.path());
+        Arc::get_mut(&mut runtime.state)
+            .unwrap()
+            .config
+            .checkpoints_enabled = true;
+        let workspace = directory.path().join("shared");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("a.txt"), "one").unwrap();
+
+        let first = runtime
+            .checkpoint_session(CODE_CHANNEL, "cp", "start")
+            .await
+            .unwrap()
+            .unwrap();
+        // Nothing changed: the same checkpoint comes back.
+        let again = runtime
+            .checkpoint_session(CODE_CHANNEL, "cp", "again")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.commit, first.commit);
+
+        std::fs::write(workspace.join("a.txt"), "two").unwrap();
+        std::fs::write(workspace.join("b.txt"), "new").unwrap();
+        let before = runtime
+            .restore_session_checkpoint(CODE_CHANNEL, "cp", &first.commit)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "one"
+        );
+        assert!(!workspace.join("b.txt").exists());
+        // The state before the restore was kept and can be restored too.
+        runtime
+            .restore_session_checkpoint(CODE_CHANNEL, "cp", &before.commit)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "two"
+        );
+        assert!(workspace.join("b.txt").exists());
+        assert!(
+            runtime
+                .session_checkpoints(CODE_CHANNEL, "cp", 10)
+                .await
+                .unwrap()
+                .len()
+                >= 3
+        );
     }
 }

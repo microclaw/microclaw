@@ -968,29 +968,35 @@ fn emit_file_diff_event(
     tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
     result: &crate::internal::tool_runtime::runtime::ToolResult,
 ) {
-    let Some(fd) = result
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get(microclaw_core::diff::FILE_DIFF_METADATA_KEY))
-    else {
+    let Some(metadata) = result.metadata.as_ref() else {
         return;
     };
-    let (Some(path), Some(diff)) = (
-        fd.get("path").and_then(|v| v.as_str()),
-        fd.get("diff").and_then(|v| v.as_str()),
-    ) else {
-        return;
-    };
-    let _ = tx.send(AgentEvent::FileDiff {
-        path: path.to_string(),
-        diff: diff.to_string(),
-        added: fd.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-        removed: fd.get("removed").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-        truncated: fd
-            .get("truncated")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-    });
+    let single = metadata
+        .get(microclaw_core::diff::FILE_DIFF_METADATA_KEY)
+        .into_iter();
+    let several = metadata
+        .get(microclaw_core::diff::FILE_DIFFS_METADATA_KEY)
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten();
+    for fd in single.chain(several) {
+        let (Some(path), Some(diff)) = (
+            fd.get("path").and_then(|v| v.as_str()),
+            fd.get("diff").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        let _ = tx.send(AgentEvent::FileDiff {
+            path: path.to_string(),
+            diff: diff.to_string(),
+            added: fd.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            removed: fd.get("removed").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            truncated: fd
+                .get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        });
+    }
 }
 
 /// Ask a registered in-run approval broker (see [`crate::approval_broker`])

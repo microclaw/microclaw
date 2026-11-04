@@ -22,6 +22,7 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
+use crate::format;
 use microclaw_code_core::allow;
 use microclaw_code_core::driver::{
     CodeSession, Control, HistoryEntry, PendingApproval, TurnReport, Update,
@@ -49,6 +50,22 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
         "list, add or remove commands that run without asking",
     ),
     ("/diff", "show git diff --stat (or `full`)"),
+    (
+        "/undo",
+        "restore files to before the last turn that changed them",
+    ),
+    ("/rewind", "list checkpoints, or restore one: /rewind <id>"),
+    (
+        "/review",
+        "review uncommitted changes (read-only), optionally /review <focus>",
+    ),
+    (
+        "/model",
+        "show or switch this session's model: /model <name> | reset",
+    ),
+    ("/cost", "token usage of this session"),
+    ("/compact", "summarize older messages to free context"),
+    ("/fork", "continue in a copy of this conversation"),
     ("/new", "start a new session"),
     ("/sessions", "list this project's sessions"),
     ("/status", "show project, mode and session details"),
@@ -65,6 +82,108 @@ pub enum Dialog {
         changed: bool,
     },
     ExecutePlan,
+}
+
+/// Session commands that need the engine (run like a short turn).
+enum SessionOp {
+    Undo,
+    Rewind(Option<String>),
+    Cost,
+    Model(Option<String>),
+    Compact,
+    Fork(String),
+}
+
+async fn run_session_op(
+    session: &mut CodeSession,
+    op: SessionOp,
+    updates: &UnboundedSender<Update>,
+) {
+    let notice = |text: String| {
+        let _ = updates.send(Update::Notice(text));
+    };
+    match op {
+        SessionOp::Undo => match session.undo().await {
+            Ok(Some((checkpoint, prompt))) => notice(format!(
+                "restored files to checkpoint {} (before “{}”); /rewind lists checkpoints, including the state you just left",
+                checkpoint.commit,
+                format::truncate(&prompt, 60)
+            )),
+            Ok(None) => notice("nothing to undo in this session".into()),
+            Err(e) => notice(format!("undo failed: {e}")),
+        },
+        SessionOp::Rewind(None) => match session.checkpoints(15).await {
+            Ok(list) if list.is_empty() => notice("no checkpoints yet".into()),
+            Ok(list) => {
+                let mut text = String::from("checkpoints (newest first; /rewind <id> restores):");
+                for c in list {
+                    text.push_str(&format!("\n  {}  {}  {}", c.commit, c.timestamp, c.label));
+                }
+                notice(text)
+            }
+            Err(e) => notice(format!("could not list checkpoints: {e}")),
+        },
+        SessionOp::Rewind(Some(commit)) => match session.rewind(&commit).await {
+            Ok(()) => notice(format!("restored files to checkpoint {commit}")),
+            Err(e) => notice(format!("rewind failed: {e}")),
+        },
+        SessionOp::Cost => match session.usage().await {
+            Ok(usage) if usage.requests == 0 => {
+                notice("no model requests in this session yet".into())
+            }
+            Ok(usage) => {
+                let mut text = format!(
+                    "this session: {} requests · {} input + {} output tokens",
+                    usage.requests,
+                    format::tokens(usage.input_tokens),
+                    format::tokens(usage.output_tokens)
+                );
+                if usage.by_model.len() > 1 {
+                    for m in &usage.by_model {
+                        text.push_str(&format!(
+                            "\n  {}: {} requests · {} in · {} out",
+                            m.model,
+                            m.requests,
+                            format::tokens(m.input_tokens),
+                            format::tokens(m.output_tokens)
+                        ));
+                    }
+                }
+                notice(text)
+            }
+            Err(e) => notice(format!("could not read usage: {e}")),
+        },
+        SessionOp::Model(None) => match session.model().await {
+            Ok(model) => notice(format!(
+                "model: {model} (switch with /model <name>, /model reset)"
+            )),
+            Err(e) => notice(format!("could not read the model: {e}")),
+        },
+        SessionOp::Model(Some(name)) => {
+            let target = (name != "reset" && name != "default").then_some(name.as_str());
+            match session.set_model(target).await {
+                Ok(model) => notice(format!("model for this session: {model}")),
+                Err(e) => notice(format!("could not switch the model: {e}")),
+            }
+        }
+        SessionOp::Compact => match session.compact().await {
+            Ok((before, after)) if after < before => notice(format!(
+                "compacted the conversation: {before} → {after} messages"
+            )),
+            Ok(_) => notice("the conversation is already short; nothing to compact".into()),
+            Err(e) => notice(format!("compact failed: {e}")),
+        },
+        SessionOp::Fork(new_id) => {
+            let from = session.session_id.clone();
+            match session.fork(new_id).await {
+                Ok(()) => notice(format!(
+                    "forked {from} → {}; you are now in the copy (the original is unchanged)",
+                    session.session_id
+                )),
+                Err(e) => notice(format!("fork failed: {e}")),
+            }
+        }
+    }
 }
 
 pub struct RunningTurn {
@@ -313,6 +432,7 @@ impl App {
                     }
                     Err(e) => self.transcript.notice(format!("error: {e:#}"), Tone::Error),
                 }
+                self.session_label = session.session_id.clone();
                 self.session = Some(session);
             }
             Err(e) => {
@@ -352,6 +472,53 @@ impl App {
             controls: controls_tx,
             handle,
             plan,
+        });
+        self.scroll = 0;
+    }
+
+    /// Run a session command in the background (the session is busy until
+    /// it finishes, like a turn).
+    fn start_session_op(&mut self, op: SessionOp) {
+        let Some(mut session) = self.session.take() else {
+            self.hint = Some("wait for the current turn to finish".into());
+            return;
+        };
+        let (controls_tx, _controls_rx) = mpsc::unbounded_channel();
+        let updates = self.updates_tx.clone();
+        let handle = tokio::spawn(async move {
+            run_session_op(&mut session, op, &updates).await;
+            (session, Ok(TurnReport::default()))
+        });
+        self.running = Some(RunningTurn {
+            started: Instant::now(),
+            controls: controls_tx,
+            handle,
+            plan: false,
+        });
+    }
+
+    fn start_review(&mut self, focus: Option<String>) {
+        let Some(mut session) = self.session.take() else {
+            self.hint = Some("wait for the current turn to finish".into());
+            return;
+        };
+        self.transcript.push(Item::User(match &focus {
+            Some(f) => format!("/review {f}"),
+            None => "/review".into(),
+        }));
+        let (controls_tx, mut controls_rx) = mpsc::unbounded_channel();
+        let updates = self.updates_tx.clone();
+        let handle = tokio::spawn(async move {
+            let report = session
+                .review(focus.as_deref(), &updates, &mut controls_rx)
+                .await;
+            (session, report)
+        });
+        self.running = Some(RunningTurn {
+            started: Instant::now(),
+            controls: controls_tx,
+            handle,
+            plan: false,
         });
         self.scroll = 0;
     }
@@ -755,6 +922,29 @@ impl App {
                     Err(e) => self
                         .transcript
                         .notice(format!("git diff failed: {e}"), Tone::Error),
+                }
+            }
+            "/undo" | "/rewind" | "/cost" | "/usage" | "/model" | "/compact" | "/fork"
+            | "/review"
+                if busy =>
+            {
+                self.hint = Some("wait for the current turn to finish".into());
+            }
+            "/undo" => self.start_session_op(SessionOp::Undo),
+            "/rewind" => self.start_session_op(SessionOp::Rewind(args.first().cloned())),
+            "/cost" | "/usage" => self.start_session_op(SessionOp::Cost),
+            "/model" => {
+                self.start_session_op(SessionOp::Model((!args.is_empty()).then(|| args.join(" "))))
+            }
+            "/compact" => self.start_session_op(SessionOp::Compact),
+            "/review" => self.start_review((!args.is_empty()).then(|| args.join(" "))),
+            "/fork" => {
+                let Some(root) = self.project().map(|p| p.root.clone()) else {
+                    return;
+                };
+                match self.index.create(&root) {
+                    Ok(record) => self.start_session_op(SessionOp::Fork(record.id)),
+                    Err(e) => self.transcript.notice(e.to_string(), Tone::Error),
                 }
             }
             "/new" => {

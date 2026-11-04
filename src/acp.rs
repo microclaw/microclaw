@@ -539,7 +539,7 @@ impl AcpEventMapper {
 fn acp_tool_kind(name: &str) -> ToolKind {
     match name {
         "read_file" | "read_memory" | "bash_output" => ToolKind::Read,
-        "edit_file" | "write_file" => ToolKind::Edit,
+        "edit_file" | "write_file" | "apply_patch" => ToolKind::Edit,
         "grep" | "glob" | "session_search" | "structured_memory_search" => ToolKind::Search,
         "bash" | "bash_kill" => ToolKind::Execute,
         "web_fetch" | "web_search" | "deep_research" | "fetch_artifact" => ToolKind::Fetch,

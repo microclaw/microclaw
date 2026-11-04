@@ -36,7 +36,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   - per-project command allow rules ("always allow `cargo test` in this
     project"), limited to single simple commands, via the approval dialog,
     `/allow` and `mccode allow`;
-  - resuming a session (`-c`, `--session`) shows its earlier messages.
+  - resuming a session (`-c`, `--session`) shows its earlier messages;
+  - `/undo` and `/rewind` (workspace checkpoints taken at every turn),
+    `/review` and `mccode review` (read-only review of the uncommitted
+    changes), `/model`, `/cost`, `/compact` and `/fork`;
+  - trusted projects load `AGENTS.md` (or `CLAUDE.md` / `AGENT.md`) into the
+    agent's instructions.
 
   The UI-independent core (project discovery, trust, verification, session
   index, turn driver) is `crates/microclaw-code-core`. Proposal:
@@ -51,7 +56,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   callers without the opt-in keep the text approval path. Decisions are
   audited (`in_run_decision`).
 - `microclaw-sdk` (`full`) adds `MicroClaw::session_messages(session, limit)`
-  for showing a session's history.
+  for showing a session's history, plus per-session `checkpoint` /
+  `checkpoints` / `restore_checkpoint`, `session_usage`, `session_model` /
+  `set_session_model`, `compact_session` and `fork_session`.
+- `apply_patch` engine tool: add, delete, move and edit several files in one
+  atomic call (`*** Begin Patch` format); every operation is checked,
+  including the stale-read guard, before anything is written. It is a
+  workspace tool (Medium risk), and each changed file streams a `FileDiff`
+  event (new `file_diffs` result metadata for multi-file diffs).
 - `microclaw-sdk` (`full`) exposes `model_providers()` and
   `validate_config_file()`.
 - `bash` gains `run_in_background`, with new `bash_output` (incremental,

@@ -21,6 +21,45 @@ pub use microclaw_engine::{WebSocketWorkerTransport, WorkerHost};
 /// ending the run with a text prompt that the next message answers.
 pub const INTERACTIVE_APPROVALS: &str = microclaw_engine::headless::INTERACTIVE_APPROVALS_KEY;
 
+/// A workspace checkpoint (see `MicroClaw::checkpoint`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checkpoint {
+    /// Abbreviated commit id; pass it to `restore_checkpoint`.
+    pub commit: String,
+    pub label: String,
+    /// RFC 3339.
+    pub timestamp: String,
+}
+
+#[cfg(feature = "full")]
+impl From<microclaw_engine::headless::HeadlessCheckpoint> for Checkpoint {
+    fn from(c: microclaw_engine::headless::HeadlessCheckpoint) -> Self {
+        Self {
+            commit: c.commit,
+            label: c.label,
+            timestamp: c.timestamp,
+        }
+    }
+}
+
+/// Token usage of one session.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionUsage {
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub by_model: Vec<ModelUsage>,
+}
+
+/// Token usage of one model within a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelUsage {
+    pub model: String,
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+}
+
 /// Who wrote a [`SessionMessage`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionMessageRole {
@@ -236,6 +275,9 @@ pub struct MicroClaw {
     skills: Arc<RwLock<SkillCatalog>>,
     #[cfg(feature = "full")]
     engine: Option<microclaw_engine::headless::HeadlessRuntime>,
+    /// Caller channel of the engine runtime (policy and override scope).
+    #[cfg(feature = "full")]
+    caller_channel: String,
 }
 
 impl MicroClaw {
@@ -247,6 +289,8 @@ impl MicroClaw {
             skills: Arc::new(RwLock::new(SkillCatalog::default())),
             #[cfg(feature = "full")]
             engine: None,
+            #[cfg(feature = "full")]
+            caller_channel: String::new(),
         }
     }
 
@@ -423,6 +467,134 @@ impl MicroClaw {
                     })
                     .collect()
             })
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    #[cfg(feature = "full")]
+    fn engine(&self) -> Result<&microclaw_engine::headless::HeadlessRuntime, SdkError> {
+        self.engine
+            .as_ref()
+            .ok_or_else(|| SdkError::Runtime("this Runtime has no configured Agent Engine".into()))
+    }
+
+    /// Snapshot the session's workspace now (requires a `workspace`) and
+    /// return the checkpoint holding its current state.
+    #[cfg(feature = "full")]
+    pub async fn checkpoint(
+        &self,
+        session: impl AsRef<str>,
+        label: impl AsRef<str>,
+    ) -> Result<Option<Checkpoint>, SdkError> {
+        self.engine()?
+            .checkpoint_session(&self.caller_channel, session.as_ref(), label.as_ref())
+            .await
+            .map(|c| c.map(Checkpoint::from))
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Recent workspace checkpoints of a session, newest first.
+    #[cfg(feature = "full")]
+    pub async fn checkpoints(
+        &self,
+        session: impl AsRef<str>,
+        limit: usize,
+    ) -> Result<Vec<Checkpoint>, SdkError> {
+        self.engine()?
+            .session_checkpoints(&self.caller_channel, session.as_ref(), limit)
+            .await
+            .map(|list| list.into_iter().map(Checkpoint::from).collect())
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Restore the workspace to a checkpoint. The current state is
+    /// checkpointed first and returned, so the restore can be undone.
+    #[cfg(feature = "full")]
+    pub async fn restore_checkpoint(
+        &self,
+        session: impl AsRef<str>,
+        commit: impl AsRef<str>,
+    ) -> Result<Option<Checkpoint>, SdkError> {
+        self.engine()?
+            .restore_session_checkpoint(&self.caller_channel, session.as_ref(), commit.as_ref())
+            .await
+            .map(|c| c.map(Checkpoint::from))
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Token usage recorded for a session.
+    #[cfg(feature = "full")]
+    pub async fn session_usage(&self, session: impl AsRef<str>) -> Result<SessionUsage, SdkError> {
+        self.engine()?
+            .session_usage(session.as_ref())
+            .await
+            .map(|usage| SessionUsage {
+                requests: usage.requests,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                by_model: usage
+                    .by_model
+                    .into_iter()
+                    .map(
+                        |(model, requests, input_tokens, output_tokens)| ModelUsage {
+                            model,
+                            requests,
+                            input_tokens,
+                            output_tokens,
+                        },
+                    )
+                    .collect(),
+            })
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// The model the next run of a session uses.
+    #[cfg(feature = "full")]
+    pub async fn session_model(&self, session: impl AsRef<str>) -> Result<String, SdkError> {
+        self.engine()?
+            .session_model(&self.caller_channel, session.as_ref())
+            .await
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Use another model for one session (`None` returns to the configured
+    /// one). Lives as long as this runtime. Returns the effective model.
+    #[cfg(feature = "full")]
+    pub async fn set_session_model(
+        &self,
+        session: impl AsRef<str>,
+        model: Option<&str>,
+    ) -> Result<String, SdkError> {
+        self.engine()?
+            .set_session_model(&self.caller_channel, session.as_ref(), model)
+            .await
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Summarize a session's older messages now, keeping the last
+    /// `keep_recent` verbatim. Returns `(messages_before, messages_after)`.
+    #[cfg(feature = "full")]
+    pub async fn compact_session(
+        &self,
+        session: impl AsRef<str>,
+        keep_recent: usize,
+    ) -> Result<(usize, usize), SdkError> {
+        self.engine()?
+            .compact_session(&self.caller_channel, session.as_ref(), keep_recent)
+            .await
+            .map(|c| (c.messages_before, c.messages_after))
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Copy a session's conversation into a new session `to`.
+    #[cfg(feature = "full")]
+    pub async fn fork_session(
+        &self,
+        from: impl AsRef<str>,
+        to: impl AsRef<str>,
+    ) -> Result<(), SdkError> {
+        self.engine()?
+            .fork_session(from.as_ref(), to.as_ref())
+            .await
             .map_err(|error| SdkError::Runtime(error.to_string()))
     }
 
@@ -626,11 +798,12 @@ impl MicroClawBuilder {
         let skills = skill_catalog(engine.skill_catalog(true));
         let runtime = engine
             .clone()
-            .into_embedded_runtime(self.caller_channel, self.max_concurrent_runs)?;
+            .into_embedded_runtime(self.caller_channel.clone(), self.max_concurrent_runs)?;
         Ok(MicroClaw {
             runtime,
             skills: Arc::new(RwLock::new(skills)),
             engine: Some(engine),
+            caller_channel: self.caller_channel,
         })
     }
 }

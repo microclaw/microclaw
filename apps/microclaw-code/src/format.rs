@@ -40,6 +40,22 @@ pub fn tool_summary(name: &str, input: &Value) -> String {
             }
         }
         "glob" => field("pattern").to_string(),
+        "apply_patch" => {
+            let files: Vec<&str> = field("patch")
+                .lines()
+                .filter_map(|l| {
+                    ["*** Add File: ", "*** Update File: ", "*** Delete File: "]
+                        .iter()
+                        .find_map(|p| l.strip_prefix(p))
+                })
+                .map(str::trim)
+                .collect();
+            match files.len() {
+                0 => String::new(),
+                1..=3 => files.join(", "),
+                n => format!("{}, … ({n} files)", files[..2].join(", ")),
+            }
+        }
         "bash_output" | "bash_kill" => field("id").to_string(),
         "web_fetch" => field("url").to_string(),
         "web_search" => field("query").to_string(),
@@ -60,6 +76,15 @@ pub fn elapsed(duration: std::time::Duration) -> String {
             duration.as_secs() / 60,
             duration.as_secs() % 60
         )
+    }
+}
+
+/// Compact token count: 950, 12.3k, 4.1M.
+pub fn tokens(n: i64) -> String {
+    match n {
+        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1_000_000.0),
+        n if n >= 1_000 => format!("{:.1}k", n as f64 / 1_000.0),
+        n => n.to_string(),
     }
 }
 

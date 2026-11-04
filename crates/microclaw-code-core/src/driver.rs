@@ -12,6 +12,7 @@ use microclaw_sdk::{
     RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeEvent, RuntimeEventEnvelope,
     SessionId, SessionMessageRole, ToolPolicy,
 };
+pub use microclaw_sdk::{Checkpoint, SessionUsage};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::allow::AllowRules;
@@ -137,6 +138,27 @@ impl PendingApproval {
     }
 }
 
+/// Messages `/compact` keeps verbatim.
+const COMPACT_KEEP_RECENT: usize = 8;
+/// Cap on the diff embedded in a review request.
+const REVIEW_DIFF_LIMIT: usize = 60_000;
+
+/// The request `/review` sends.
+pub fn review_prompt(diff: &str, focus: Option<&str>) -> String {
+    let focus = focus
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(|f| format!(" Focus on: {f}."))
+        .unwrap_or_default();
+    format!(
+        "[MicroClaw Code review] Review the uncommitted changes below as a careful senior reviewer.{focus} \
+         Read the surrounding code where you need context. Look for bugs, unhandled edge cases and errors, \
+         security problems, missing or weakened tests, and code that does not match the project's conventions. \
+         Do not modify any files. Report findings ordered by severity, each with `file:line`, what is wrong and a \
+         concrete fix; skip praise and trivia, and say plainly if you found nothing significant.\n\n```diff\n{diff}\n```"
+    )
+}
+
 /// One message of an earlier conversation in this session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HistoryEntry {
@@ -258,6 +280,20 @@ pub struct CodeSession {
     always_ask: Vec<regex::Regex>,
     allow_rules: AllowRules,
     pending_approval: Option<PendingApproval>,
+    /// Workspace checkpoints taken at the start of each turn, oldest first,
+    /// with the turn's prompt.
+    turn_checkpoints: Vec<(Checkpoint, String)>,
+    /// Tool policy for the next run instead of the mode's (reviews).
+    policy_override: Option<ToolPolicy>,
+}
+
+fn one_line(text: &str, max: usize) -> String {
+    let line = text.lines().next().unwrap_or_default().trim();
+    if line.chars().count() <= max {
+        line.to_string()
+    } else {
+        format!("{}…", line.chars().take(max).collect::<String>())
+    }
 }
 
 /// Whether an approval needs a person.
@@ -292,6 +328,8 @@ impl CodeSession {
             always_ask,
             allow_rules: AllowRules::load(AllowRules::default_path()),
             pending_approval: None,
+            turn_checkpoints: Vec::new(),
+            policy_override: None,
         }
     }
 
@@ -320,6 +358,7 @@ impl CodeSession {
     pub fn reset(&mut self, session_id: String) {
         self.session_id = session_id;
         self.pending_approval = None;
+        self.turn_checkpoints.clear();
         self.git_summary = crate::project::git_summary(&self.project.root);
     }
 
@@ -334,15 +373,144 @@ impl CodeSession {
             .collect()
     }
 
+    /// Undo the most recent turn that changed the workspace: restore the
+    /// files to the checkpoint taken when it started. The current state is
+    /// checkpointed first (`/rewind` can return to it). Returns the restored
+    /// checkpoint and that turn's prompt, or `None` when there is nothing to
+    /// undo in this session.
+    pub async fn undo(&mut self) -> anyhow::Result<Option<(Checkpoint, String)>> {
+        let now = self
+            .microclaw
+            .checkpoint(&self.session_id, "before undo")
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        while let Some((checkpoint, prompt)) = self.turn_checkpoints.pop() {
+            if now.as_ref().is_some_and(|n| n.commit == checkpoint.commit) {
+                continue;
+            }
+            self.microclaw
+                .restore_checkpoint(&self.session_id, &checkpoint.commit)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return Ok(Some((checkpoint, prompt)));
+        }
+        Ok(None)
+    }
+
+    /// Recent workspace checkpoints, newest first.
+    pub async fn checkpoints(&self, limit: usize) -> anyhow::Result<Vec<Checkpoint>> {
+        self.microclaw
+            .checkpoints(&self.session_id, limit)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Restore the workspace to any checkpoint (the current state is
+    /// checkpointed first).
+    pub async fn rewind(&mut self, commit: &str) -> anyhow::Result<()> {
+        self.microclaw
+            .restore_checkpoint(&self.session_id, commit)
+            .await
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Token usage of this session.
+    pub async fn usage(&self) -> anyhow::Result<SessionUsage> {
+        self.microclaw
+            .session_usage(&self.session_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// The model the next turn uses.
+    pub async fn model(&self) -> anyhow::Result<String> {
+        self.microclaw
+            .session_model(&self.session_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Switch this session's model (`None` = back to the configured one).
+    pub async fn set_model(&self, model: Option<&str>) -> anyhow::Result<String> {
+        self.microclaw
+            .set_session_model(&self.session_id, model)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Summarize older messages now, keeping the last few verbatim.
+    pub async fn compact(&self) -> anyhow::Result<(usize, usize)> {
+        self.microclaw
+            .compact_session(&self.session_id, COMPACT_KEEP_RECENT)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Continue in a copy of this conversation under `new_id`; the original
+    /// session stays as it was.
+    pub async fn fork(&mut self, new_id: String) -> anyhow::Result<()> {
+        let model = self.model().await.ok();
+        self.microclaw
+            .fork_session(&self.session_id, &new_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.session_id = new_id;
+        self.pending_approval = None;
+        // A `/model` override is per session; carry it into the fork.
+        if let Some(model) = model
+            && self.model().await.ok().as_deref() != Some(model.as_str())
+        {
+            self.set_model(Some(&model)).await?;
+        }
+        Ok(())
+    }
+
+    /// Review the uncommitted changes with read-only tools. `focus` narrows
+    /// the review ("error handling", a path, …).
+    pub async fn review(
+        &mut self,
+        focus: Option<&str>,
+        updates: &UnboundedSender<Update>,
+        controls: &mut UnboundedReceiver<Control>,
+    ) -> anyhow::Result<TurnReport> {
+        let mut report = TurnReport::default();
+        let Some(diff) = crate::git::review_diff(&self.project.root, REVIEW_DIFF_LIMIT) else {
+            let _ = updates.send(Update::Notice(
+                "nothing to review: the working tree has no uncommitted changes".into(),
+            ));
+            report.status = "completed".into();
+            return Ok(report);
+        };
+        let prompt = review_prompt(&diff, focus);
+        self.policy_override = Some(ToolPolicy::ReadOnly);
+        let outcome = self.run_once(&prompt, updates, controls).await;
+        self.policy_override = None;
+        let (status, final_text, error, _) = outcome?;
+        report.final_text = final_text;
+        report.status = format!("{status:?}").to_lowercase();
+        match status {
+            RunStatus::Cancelled => report.cancelled = true,
+            RunStatus::Failed | RunStatus::TimedOut => {
+                if let Some(error) = error {
+                    let _ = updates.send(Update::Notice(format!("error: {error}")));
+                }
+                report.failed = true;
+            }
+            _ => {}
+        }
+        Ok(report)
+    }
+
     pub fn pending_approval(&self) -> Option<&PendingApproval> {
         self.pending_approval.as_ref()
     }
 
     fn agent(&self) -> anyhow::Result<Agent> {
-        let policy = if self.settings.mode == Mode::Plan {
-            ToolPolicy::ReadOnly
-        } else {
-            ToolPolicy::WorkspaceWrite
+        let policy = match self.policy_override.clone() {
+            Some(policy) => policy,
+            None if self.settings.mode == Mode::Plan => ToolPolicy::ReadOnly,
+            None => ToolPolicy::WorkspaceWrite,
         };
         self.microclaw
             .agent(AGENT_NAME)
@@ -620,6 +788,21 @@ impl CodeSession {
         controls: &mut UnboundedReceiver<Control>,
     ) -> anyhow::Result<TurnReport> {
         let mut report = TurnReport::default();
+        // Checkpoint the workspace so `/undo` can return to this point.
+        match self
+            .microclaw
+            .checkpoint(
+                &self.session_id,
+                &format!("before: {}", one_line(prompt, 60)),
+            )
+            .await
+        {
+            Ok(Some(checkpoint)) => self.turn_checkpoints.push((checkpoint, prompt.to_string())),
+            Ok(None) => {}
+            Err(e) => {
+                let _ = updates.send(Update::Notice(format!("checkpoint skipped: {e}")));
+            }
+        }
         let before = crate::git::worktree_fingerprint(&self.project.root);
         let mut next_prompt = prompt.to_string();
         let mut fix_round = 0u32;

@@ -61,7 +61,20 @@ In the TUI:
 
 Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 `/verify [on|off]`, `/trust`, `/allow`, `/diff [full]`, `/new`, `/sessions`, `/status`,
-`/init`, `/clear`, `/exit`.
+`/init`, `/clear`, `/exit`, and:
+
+| Command | What it does |
+|---|---|
+| `/undo` | Restore the files to how they were before the last turn that changed them. The state you leave is checkpointed too. |
+| `/rewind [id]` | List workspace checkpoints, or restore one. |
+| `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
+| `/model [name\|reset]` | Show or switch the model for this session. |
+| `/cost` | Requests and input/output tokens of this session, per model. |
+| `/compact` | Summarize older messages now to free context (long sessions also compact automatically). |
+| `/fork` | Continue in a copy of the conversation; the original session is kept. |
+
+Checkpoints are taken at the start of every turn in a shadow git repository
+inside the Code home (`data/checkpoints`); they never touch your own `.git`.
 
 ## Permission modes
 
@@ -101,6 +114,10 @@ first use; in `-p` mode pass `--trust`; change the decision with
 `mccode trust [--revoke]` or `/trust`. Untrusted projects ignore the file and
 never run checks automatically (checks execute the repository's own build
 scripts).
+
+Trusted projects also load the repository's `AGENTS.md` (or `CLAUDE.md`,
+`AGENT.md`; the first one found, up to 16 KB) into the agent's instructions.
+In an untrusted project the agent is only told that the file exists.
 
 ## Verification
 
