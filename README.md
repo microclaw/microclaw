@@ -194,7 +194,7 @@ Anthropic has a native provider path. OpenAI, OpenAI Codex, OpenRouter, Ollama, 
 
 The prebuilt Linux binary has glibc and OpenSSL requirements. Read [Getting started](docs/getting-started.md) before installing on an older distribution.
 
-MicroClaw Server is supported on macOS, Linux, and Windows. MicroClaw Code is a preview built from source. MicroClaw Work, the earlier desktop app, has been discontinued.
+MicroClaw Server is supported on macOS, Linux, and Windows. MicroClaw Code is a preview built from source.
 
 ## Documentation
 

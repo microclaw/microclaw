@@ -190,7 +190,7 @@ Anthropic 使用原生 provider 通路。OpenAI、OpenAI Codex、OpenRouter、Ol
 
 预编译 Linux 二进制对 glibc 和 OpenSSL 有版本要求。旧发行版安装前请先阅读[快速上手指南](docs/getting-started.md)。
 
-MicroClaw Server 支持 macOS、Linux 和 Windows。MicroClaw Code 为预览版，从源码构建。早先的桌面应用 MicroClaw Work 已停止维护。
+MicroClaw Server 支持 macOS、Linux 和 Windows。MicroClaw Code 为预览版，从源码构建。
 
 ## 文档
 

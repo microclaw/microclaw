@@ -33,11 +33,12 @@ rustPlatform.buildRustPackage (finalAttrs: {
     hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
   };
 
-  # The workspace lockfile pins Git revisions of GPUI/Zed crates used by the
-  # optional desktop app. fetchCargoVendor vendors them behind this one hash.
+  # fetchCargoVendor vendors the workspace's crates.io dependencies behind
+  # this one hash.
   cargoHash = "sha256-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
 
-  # Only the server binary is packaged; skip the GPUI desktop crates.
+  # Only the Server binary is packaged; MicroClaw Code (mccode) ships as its
+  # own release archive and Homebrew formula.
   cargoBuildFlags = [
     "--package"
     "microclaw"
