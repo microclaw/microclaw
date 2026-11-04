@@ -104,6 +104,25 @@ pub fn file_diff_metadata(path: &str, diff: &UnifiedDiff) -> serde_json::Value {
     })
 }
 
+/// Metadata key for several file diffs from one tool call (`apply_patch`).
+pub const FILE_DIFFS_METADATA_KEY: &str = "file_diffs";
+
+/// Attach several diffs (path, diff) to a tool result.
+pub fn file_diffs_metadata(diffs: &[(String, UnifiedDiff)]) -> serde_json::Value {
+    serde_json::json!({
+        FILE_DIFFS_METADATA_KEY: diffs
+            .iter()
+            .map(|(path, diff)| serde_json::json!({
+                "path": path,
+                "diff": diff.text,
+                "added": diff.added,
+                "removed": diff.removed,
+                "truncated": diff.truncated,
+            }))
+            .collect::<Vec<_>>()
+    })
+}
+
 /// Format a chat-facing message for a file diff: a one-line header with the
 /// path and `+N -M` stats, followed by a fenced ```diff block.
 pub fn format_diff_chat_message(

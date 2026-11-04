@@ -104,6 +104,7 @@ pub fn tool_risk(name: &str) -> ToolRisk {
         "bash" => ToolRisk::High,
         "write_file"
         | "edit_file"
+        | "apply_patch"
         | "bash_kill"
         | "write_memory"
         | "a2a_send"
@@ -149,6 +150,7 @@ pub fn is_workspace_tool(name: &str) -> bool {
             name,
             "write_file"
                 | "edit_file"
+                | "apply_patch"
                 | "bash"
                 | "bash_kill"
                 | "todo_write"
@@ -200,6 +202,7 @@ pub fn tool_concurrency_class(name: &str) -> ToolConcurrencyClass {
         // All other tools with side effects
         "write_file"
         | "edit_file"
+        | "apply_patch"
         | "write_memory"
         | "send_message"
         | "a2a_send"
@@ -236,7 +239,7 @@ pub fn parse_concurrency_class(s: &str) -> Option<ToolConcurrencyClass> {
 pub fn tool_execution_policy(name: &str) -> ToolExecutionPolicy {
     match name {
         "bash" => ToolExecutionPolicy::Dual,
-        "write_file" | "edit_file" => ToolExecutionPolicy::HostOnly,
+        "write_file" | "edit_file" | "apply_patch" => ToolExecutionPolicy::HostOnly,
         _ => ToolExecutionPolicy::HostOnly,
     }
 }
@@ -512,6 +515,7 @@ mod tests {
             "grep",
             "glob",
             "edit_file",
+            "apply_patch",
             "write_file",
             "bash",
             "bash_output",

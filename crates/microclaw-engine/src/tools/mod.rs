@@ -1,5 +1,6 @@
 pub mod a2a;
 pub mod activate_skill;
+pub mod apply_patch;
 pub mod background_process;
 pub mod bash;
 pub mod browser;
@@ -208,6 +209,15 @@ impl ToolRegistry {
             ),
             Box::new(
                 edit_file::EditFileTool::new_with_isolation(
+                    &config.working_dir,
+                    config.working_dir_isolation,
+                )
+                .with_diff_max_lines(config.diff_max_lines)
+                .with_governance_guard(Self::governance_guard(config))
+                .with_file_state(file_state.clone()),
+            ),
+            Box::new(
+                apply_patch::ApplyPatchTool::new_with_isolation(
                     &config.working_dir,
                     config.working_dir_isolation,
                 )
@@ -485,6 +495,15 @@ impl ToolRegistry {
             ),
             Box::new(
                 edit_file::EditFileTool::new_with_isolation(
+                    &config.working_dir,
+                    config.working_dir_isolation,
+                )
+                .with_diff_max_lines(config.diff_max_lines)
+                .with_governance_guard(Self::governance_guard(config))
+                .with_file_state(file_state.clone()),
+            ),
+            Box::new(
+                apply_patch::ApplyPatchTool::new_with_isolation(
                     &config.working_dir,
                     config.working_dir_isolation,
                 )

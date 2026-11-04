@@ -121,6 +121,11 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
+    /// Review the uncommitted changes (read-only) and print the findings.
+    Review {
+        /// What to focus on, e.g. "error handling" or a path.
+        focus: Vec<String>,
+    },
     /// List, add or remove shell commands that run without asking here.
     Allow {
         #[command(subcommand)]
@@ -250,9 +255,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
-        None => {}
+        Some(Command::Review { .. }) | None => {}
     }
 
+    let review_focus = match &cli.command {
+        Some(Command::Review { focus }) => Some(focus.join(" ")),
+        _ => None,
+    };
     let print_prompt = match cli.print.as_deref() {
         Some("-") => {
             let mut text = String::new();
@@ -261,6 +270,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         Some(text) => Some(text.to_string()),
         None => None,
+    };
+    let print_prompt = match &review_focus {
+        Some(_) if print_prompt.is_some() => {
+            anyhow::bail!("`mccode review` takes its focus as arguments, not -p")
+        }
+        Some(focus) => Some(format!("/review {focus}").trim().to_string()),
+        None => print_prompt,
     };
     let interactive = print_prompt.is_none();
     if interactive && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
@@ -333,7 +349,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let session = CodeSession::new(microclaw, project, session_id.clone(), settings);
 
     match print_prompt {
-        Some(prompt) => print_mode(session, &mut index, prompt.trim(), cli.json, style).await,
+        Some(prompt) => {
+            let task = match review_focus {
+                Some(focus) => PrintTask::Review(Some(focus).filter(|f| !f.trim().is_empty())),
+                None => PrintTask::Prompt(prompt.trim().to_string()),
+            };
+            print_mode(session, &mut index, task, cli.json, style).await
+        }
         None => {
             let initial = (!cli.prompt.is_empty()).then(|| cli.prompt.join(" "));
             let resumed = cli.session.is_some() || cli.continue_last;
@@ -345,19 +367,35 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 }
 
 /// `-p`: one turn, printed as lines (or JSON Lines).
+/// What a non-interactive run does.
+enum PrintTask {
+    Prompt(String),
+    Review(Option<String>),
+}
+
 async fn print_mode(
     mut session: CodeSession,
     index: &mut SessionIndex,
-    prompt: &str,
+    task: PrintTask,
     json: bool,
     style: Style,
 ) -> anyhow::Result<ExitCode> {
-    let _ = index.touch(&session.session_id, prompt);
+    let label = match &task {
+        PrintTask::Prompt(prompt) => prompt.clone(),
+        PrintTask::Review(focus) => format!("/review {}", focus.as_deref().unwrap_or("")),
+    };
+    let _ = index.touch(&session.session_id, label.trim());
     let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
     let (controls_tx, mut controls_rx) = mpsc::unbounded_channel();
-    let prompt = prompt.to_string();
     let task = tokio::spawn(async move {
-        let report = session.turn(&prompt, &updates_tx, &mut controls_rx).await;
+        let report = match task {
+            PrintTask::Prompt(prompt) => session.turn(&prompt, &updates_tx, &mut controls_rx).await,
+            PrintTask::Review(focus) => {
+                session
+                    .review(focus.as_deref(), &updates_tx, &mut controls_rx)
+                    .await
+            }
+        };
         (session, report)
     });
     tokio::pin!(task);

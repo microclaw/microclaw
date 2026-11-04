@@ -900,7 +900,7 @@ fn build_provider_runtime_config(
     cfg
 }
 
-async fn resolve_effective_provider_and_model(
+pub(crate) async fn resolve_effective_provider_and_model(
     state: &AppState,
     caller_channel: &str,
     chat_id: i64,
@@ -2828,7 +2828,7 @@ async fn process_with_agent_logic(
         if stop_reason == "tool_use" {
             for block in &response.content {
                 if let ResponseContentBlock::ToolUse { name, .. } = block {
-                    if name == "edit_file" || name == "write_file" {
+                    if matches!(name.as_str(), "edit_file" | "write_file" | "apply_patch") {
                         file_modifying_tool_used = true;
                     }
                     if !tools_used_this_turn.contains(name) {
@@ -4279,7 +4279,7 @@ fn safe_compact_split(messages: &[Message], keep_recent: usize) -> usize {
     0
 }
 
-async fn compact_messages(
+pub(crate) async fn compact_messages(
     state: &AppState,
     caller_channel: &str,
     chat_id: i64,

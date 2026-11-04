@@ -110,7 +110,23 @@ crates/microclaw-engine
 - TUI 端到端（pty + pyte）：`ls -a` 弹出审批，按 `p` 保存规则，接着 `ls -l` 按规则自动批准，`git push` 弹出审批且不提供项目规则，按 `3` 拒绝，模型在同一次运行里继续并给出答复（模拟服务共收到 4 次请求，中间没有新的用户消息）；退出后 `mccode -c` 显示历史。
 - `-p` 回归：审批挂起返回 2，`--session <id> -p 3` 拒绝，命令没有执行。
 
-## 七、后续（按优先级）
+## 七、第三批（已实现）
+
+| 项目 | 说明 |
+|---|---|
+| `apply_patch` 工具 | 引擎新工具，使用 `*** Begin Patch` 格式，一次调用里新增、删除、移动、修改多个文件。所有操作（路径检查、防覆盖检查、定位每个修改块）先全部校验通过才写入，否则一个文件都不改。修改块先按原文匹配，再忽略行尾空白，再忽略首尾空白；`@@ <文本>` 可以先跳到某一行之后再找。属于工作区工具（中风险），每个改动的文件都发出 `FileDiff` 事件 |
+| `/undo`、`/rewind` | 每轮开始时用引擎的影子 git 仓库给工作区打快照（不碰用户自己的 `.git`）。`/undo` 恢复到最近一次改过文件的那一轮之前；恢复前先给当前状态打快照，所以 `/rewind <id>` 还能回去 |
+| `/review`、`mccode review` | 取 `git diff HEAD` 加未跟踪文件（最多 60 KB）交给只读工具集审查，按严重程度列出问题，必须带 `文件:行号` 和修复建议；可加关注点 |
+| `/model`、`/cost`、`/compact`、`/fork` | 按会话切换模型（只在本次运行内有效，分叉时带过去）；本会话的请求数和输入/输出 token，按模型列出；立即压缩旧消息；把对话复制到新会话继续，原会话保留 |
+| AGENTS.md | 信任的项目把 `AGENTS.md`（没有就用 `CLAUDE.md`、`AGENT.md`，最多 16 KB）放进系统提示；未信任的项目只告诉 Agent 这个文件存在，不当作指令 |
+| SDK | `checkpoint` / `checkpoints` / `restore_checkpoint`、`session_usage`、`session_model` / `set_session_model`、`compact_session`、`fork_session` |
+
+验证：
+- 引擎测试：`apply_patch` 6 个（多文件增删改移、某个块不匹配时什么都不改、空白容错和按顺序定位、防覆盖、格式错误、文件末尾）；会话分叉、切换模型、压缩；快照恢复（恢复后还能恢复回来）。
+- TUI 端到端（pty + pyte + 模拟服务）：`apply_patch` 改两个文件并显示两份 Diff；信任后系统提示里有 AGENTS.md；`/review` 只给只读工具；`/undo` 删掉新增文件、还原修改；`/cost`；`/model mock-two` 之后请求确实用了 mock-two；`/fork` 之后继续对话；`/compact`。
+- `mccode review typos`：请求里带有改动的 Diff 和关注点，不提供任何写入工具；工作区干净时提示没有可审查的内容。
+
+## 八、后续（按优先级）
 
 1. **地基**：
    - 统一的工具策略判断，去掉按渠道名的硬编码；
@@ -119,9 +135,8 @@ crates/microclaw-engine
    - 系统级沙箱（Landlock/seccomp、bwrap、Seatbelt）；
    - auto 模式下对命令做模型复核。
 3. **体验**：
-   - `/fork`、`/undo`（接现有快照）、`/compact`、`/model`、`/cost`；
-   - `apply_patch`；可交互的持久终端；
-   - 启动时合并加载 AGENTS.md（受信任约束）；`/review`。
+   - 可交互的持久终端；
+   - 子目录里的 AGENTS.md 按路径就近加载。
 4. **接入**：`mccode acp`（含 `session/request_permission`，可直接接引擎内审批）；`mccode mcp-server`；交给已配对的 Server 远程执行。
 5. **评测与发布**：
    - Minimal 预设跑 Terminal-Bench；用本仓库历史里修 bug 的提交做回放测试集；
