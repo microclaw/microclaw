@@ -185,6 +185,7 @@ impl ToolRegistry {
             ),
             Box::new(background_process::BashOutputTool(processes.clone())),
             Box::new(background_process::BashKillTool(processes.clone())),
+            Box::new(background_process::BashInputTool(processes.clone())),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),
@@ -471,6 +472,7 @@ impl ToolRegistry {
             ),
             Box::new(background_process::BashOutputTool(processes.clone())),
             Box::new(background_process::BashKillTool(processes.clone())),
+            Box::new(background_process::BashInputTool(processes.clone())),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),

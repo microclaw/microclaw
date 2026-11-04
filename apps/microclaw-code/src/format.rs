@@ -57,6 +57,7 @@ pub fn tool_summary(name: &str, input: &Value) -> String {
             }
         }
         "bash_output" | "bash_kill" => field("id").to_string(),
+        "bash_input" => format!("{} ← {}", field("id"), field("input").trim_end()),
         "web_fetch" => field("url").to_string(),
         "web_search" => field("query").to_string(),
         "sub_agent" | "sessions_spawn" => field("task").to_string(),
