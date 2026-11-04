@@ -23,7 +23,6 @@ const sidebars = {
         'overview',
         'quickstart',
         'installation',
-        'code',
         {
           type: 'category',
           label: 'Channel Setup',
@@ -41,6 +40,12 @@ const sidebars = {
         'acp',
         'permissions',
       ],
+    },
+    {
+      type: 'category',
+      label: 'MicroClaw Code',
+      link: {type: 'doc', id: 'code'},
+      items: ['code-usage', 'code-editors', 'code-remote'],
     },
     {
       type: 'category',

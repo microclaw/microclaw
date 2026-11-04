@@ -8,7 +8,7 @@ import {getHomeMessages} from '../home-i18n';
 
 const PATH_COMMANDS = {
   sdk: 'microclaw-sdk = { version = "0.11.1", features = ["full"] }',
-  code: 'cargo install --path apps/microclaw-code && mccode setup',
+  code: 'curl -fsSL https://microclaw.org/install-mccode.sh | bash && mccode setup',
   server: {
     macos: 'curl -fsSL https://microclaw.org/install.sh | bash',
     linux: 'curl -fsSL https://microclaw.org/install.sh | bash',

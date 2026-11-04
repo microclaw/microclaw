@@ -11,9 +11,10 @@ Status: **Preview**.
 ## Install and configure
 
 ```sh
-brew install microclaw/tap/mccode          # macOS (the Server is a separate formula: microclaw)
-# or download mccode-<version>-<target> from the GitHub release, or
-cargo install --path apps/microclaw-code   # build mccode from source
+curl -fsSL https://microclaw.org/install-mccode.sh | bash   # macOS, Linux
+# Windows: iwr https://microclaw.org/install-mccode.ps1 -UseBasicParsing | iex
+# or: brew install microclaw/tap/mccode, or from source:
+#     cargo install --git https://github.com/microclaw/microclaw microclaw-code
 mccode setup                               # choose a provider, model and key
 cd path/to/your/repo
 mccode
@@ -194,6 +195,9 @@ instructions: |
 Flags such as `--mode`, `--sandbox`, `--no-network` and `--no-verify` go
 before the subcommand (`mccode --mode auto acp`). Only projects you already
 trusted (TUI, `mccode trust`) honour `.microclaw/project.yaml` here.
+
+Step-by-step setup for Zed, Claude Code, Codex and Cursor:
+[Editors and other agents](https://microclaw.org/docs/code-editors).
 
 The agent can also drive interactive programs: start a REPL or debugger with
 `bash` `run_in_background`, then send it input with `bash_input` (stdin, no

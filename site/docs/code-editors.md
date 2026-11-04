@@ -1,0 +1,172 @@
+---
+id: code-editors
+title: Editors and other agents
+sidebar_label: Editors (Zed) and agents
+---
+
+# Editors and other agents
+
+`mccode` speaks two protocols on stdio, so other programs can use it without
+the terminal interface:
+
+| Command | Protocol | For |
+|---|---|---|
+| `mccode acp` | [Agent Client Protocol](https://agentclientprotocol.com) | Editors with an agent panel: Zed, and other ACP clients |
+| `mccode mcp-server` | [Model Context Protocol](https://modelcontextprotocol.io) | Other agents: Claude Code, Codex, Cursor, any MCP client |
+
+Both use the same engine, settings, trust decisions and sessions as the
+terminal interface. Install `mccode` and run `mccode setup` first (see
+[Overview and install](./code)); check the result with `mccode doctor`.
+
+## Zed
+
+Zed runs external agents through ACP and shows them in its Agent Panel.
+
+### 1. Add MicroClaw Code as an agent
+
+Open Zed's settings (`zed: open settings`, or `~/.config/zed/settings.json`)
+and add:
+
+```json
+{
+  "agent_servers": {
+    "MicroClaw Code": {
+      "type": "custom",
+      "command": "mccode",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+- Older Zed releases do not know `"type"`; leave that line out there.
+- Zed starts the command without your shell profile. If `mccode` is not on
+  the `PATH` Zed sees, give the full path, for example
+  `"command": "/Users/you/.local/bin/mccode"` (find it with `which mccode`).
+- Global options go **before** `acp`:
+
+  ```json
+  "args": ["--mode", "auto", "--no-network", "acp"]
+  ```
+
+  Useful ones: `--mode plan|ask|auto` (starting mode), `--no-network`,
+  `--sandbox off`, `--no-verify`, `--config <PATH>` (model settings).
+- `env` passes environment variables, for example
+  `"MICROCLAW_CODE_HOME": "/path/to/another/home"` or an API key referenced
+  by your configuration.
+
+### 2. Start a thread
+
+1. Open a folder that is (inside) a git repository.
+2. Open the Agent Panel, click **+** and choose **MicroClaw Code**.
+3. Type a task. Mention files with `@` as in Zed's own agent; their content is
+   sent along with the prompt.
+
+Each Zed thread is a MicroClaw Code session in the project of the folder Zed
+opened. Reopening a thread from the history loads the session and replays its
+messages.
+
+### What you see
+
+- **Tool calls**: reads, searches, edits and commands appear as tool cards
+  with their status; file edits show their diff.
+- **Plan**: the agent's todo list is shown as Zed's plan view and updates as
+  steps complete.
+- **Permission requests**: when a command needs approval, Zed shows the
+  options *Allow once*, *Always allow the tool*, *Always allow this command
+  in this project* (single simple commands such as `cargo test`) and
+  *Reject*. The agent waits for your answer and continues in the same run.
+- **Modes**: the mode selector offers *Plan* (read-only, proposes a plan),
+  *Ask* (edits apply, commands ask) and *Auto* (commands run, destructive
+  ones still ask). It is the same as Shift+Tab in the terminal.
+- **Verification**: in trusted projects the project's checks run after a
+  change and failures go back to the agent, as in the terminal.
+- **Stop**: Zed's stop button cancels the run.
+
+### Trust
+
+Editors cannot show the trust question, so `.microclaw/project.yaml` (mode,
+instructions, checks) and `AGENTS.md` only apply to projects you have
+already trusted. Trust a project once from a terminal:
+
+```sh
+cd path/to/repo
+mccode trust          # or open `mccode` and answer the question
+```
+
+If the file changes later (for example after a pull), trust it again.
+
+### Troubleshooting
+
+- Run `dev: open acp logs` in Zed's command palette to see the messages
+  between Zed and `mccode`.
+- Run `mccode doctor` in the same folder: it validates the model
+  configuration and starts the engine once.
+- "command not found" or the agent never starts: use the absolute path in
+  `command`.
+- No model configured: run `mccode setup`, or pass `--config <PATH>` in
+  `args`.
+
+## Other ACP editors
+
+Any ACP client works the same way: configure an agent that runs `mccode` with
+the argument `acp` (global options before it) in the project's folder. The
+client must send the project directory as the session's `cwd`.
+
+## Claude Code, Codex, Cursor and other MCP clients
+
+`mccode mcp-server` exposes two tools:
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `run` | `prompt`, optional `cwd`, `mode` (`plan`/`ask`/`auto`), `session` | Runs a coding task in the repository of `cwd`, with verification and fix rounds. Returns the answer, the changed files, the check result and the session id. |
+| `review` | optional `focus`, `cwd` | Reviews the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and returns findings by severity with `file:line`. |
+
+Approvals: a command that needs one ends the `run` call and says so. Answer
+by calling `run` again with the same `session` and the prompt `1` (approve
+once), `2` (always allow the tool) or `3` (deny). Use `mode: "auto"` to avoid
+most approvals.
+
+### Claude Code
+
+```sh
+claude mcp add mccode -- mccode mcp-server
+```
+
+Add `--scope project` to share the entry with the repository's
+`.mcp.json`. Then ask, for example, "use mccode to fix the failing parser
+test" or "ask mccode to review my changes".
+
+### Codex
+
+In `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.mccode]
+command = "mccode"
+args = ["mcp-server"]
+```
+
+### Cursor
+
+In `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project):
+
+```json
+{
+  "mcpServers": {
+    "mccode": {
+      "command": "mccode",
+      "args": ["mcp-server"]
+    }
+  }
+}
+```
+
+### Other clients
+
+Any MCP client that starts stdio servers works with command `mccode` and
+argument `mcp-server`. Global options go before the subcommand
+(`mccode --mode auto mcp-server`). Projects you trusted honour their
+`.microclaw/project.yaml` and run their checks; untrusted projects run no
+checks.

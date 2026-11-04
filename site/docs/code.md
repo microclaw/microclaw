@@ -1,225 +1,155 @@
 ---
 id: code
 title: MicroClaw Code
-sidebar_position: 4
+sidebar_label: Overview and install
 ---
 
 # MicroClaw Code (`mccode`)
 
-MicroClaw Code is a terminal coding agent. It opens the repository that
-contains the current directory and runs the MicroClaw Agent Engine in it: a
-full-screen TUI for interactive work, or `-p` for one non-interactive task.
-It reaches the engine only through the public `microclaw-sdk`; turn logic
-(approvals, verification, fix rounds) lives in `crates/microclaw-code-core`.
+MicroClaw Code is a coding agent for your own repository. You describe a
+change; it reads the code, edits files (showing every diff), runs commands
+and your project's checks, and fixes what fails. It runs on your machine,
+with your toolchain, in your terminal or your editor.
+
+- **Full-screen terminal UI** with streamed replies, coloured diffs, plans
+  and approval dialogs, or **`mccode -p`** for scripts and CI.
+- **Three permission modes**: `plan` (read-only, proposes a plan), `ask`
+  (edits apply, shell commands ask first), `auto` (commands run, destructive
+  ones still ask).
+- **Verification built in**: after a change it runs your build, lint and
+  test commands and hands failures back to the agent.
+- **Safety by default**: shell commands run in the operating system's
+  sandbox, edits are checkpointed (`/undo`), and project settings only take
+  effect after you trust the project.
+- **Works with your editor and other agents**: Zed (and any Agent Client
+  Protocol client) through [`mccode acp`](./code-editors), Claude Code,
+  Codex, Cursor and other MCP clients through `mccode mcp-server`.
+- **One engine**: the same Agent Engine as MicroClaw Server and the Rust SDK,
+  so tools, memory, Skills and model providers behave the same everywhere.
 
 Status: **Preview**.
 
-## Install and configure
+## Install
+
+### Install script (macOS, Linux)
 
 ```sh
-brew install microclaw/tap/mccode          # macOS (the Server is a separate formula: microclaw)
-# or download mccode-<version>-<target> from the GitHub release, or
-cargo install --path apps/microclaw-code   # build mccode from source
-mccode setup                               # choose a provider, model and key
+curl -fsSL https://microclaw.org/install-mccode.sh | bash
+```
+
+The script downloads `mccode` for your platform from the latest GitHub
+release, verifies it against the release's `SHA256SUMS.txt`, and installs it
+to `/usr/local/bin` (or `~/.local/bin` when that is not writable). Options:
+
+```sh
+curl -fsSL https://microclaw.org/install-mccode.sh | bash -s -- --version 0.12.0
+curl -fsSL https://microclaw.org/install-mccode.sh | bash -s -- --dir ~/bin
+```
+
+### Install script (Windows)
+
+```powershell
+iwr https://microclaw.org/install-mccode.ps1 -UseBasicParsing | iex
+```
+
+This installs `mccode.exe` to `%USERPROFILE%\.local\bin` and adds that folder
+to your user `PATH`.
+
+### Homebrew (macOS)
+
+```sh
+brew install microclaw/tap/mccode
+```
+
+### From source
+
+Needs the Rust toolchain:
+
+```sh
+cargo install --git https://github.com/microclaw/microclaw microclaw-code
+```
+
+The installers need a release that ships `mccode` archives; when a release
+does not have one yet, they print this command instead.
+
+### Update and uninstall
+
+```sh
+mccode update           # install the latest release (checksum-verified)
+mccode update --check   # only report whether a newer release exists
+```
+
+Homebrew installs update with `brew upgrade mccode`. To uninstall, delete the
+`mccode` binary (and `~/.microclaw/code` to remove settings and sessions).
+
+## Configure a model
+
+```sh
+mccode setup
+```
+
+`setup` asks for a provider (OpenAI, Anthropic, OpenRouter, DeepSeek, Ollama
+and the other providers MicroClaw supports), a model and an API key, and
+writes `~/.microclaw/code/config.yaml` (readable only by you). For scripts:
+
+```sh
+mccode setup --provider anthropic --model claude-sonnet-4-5 --api-key "$ANTHROPIC_API_KEY"
+mccode setup --provider ollama --model qwen3-coder --base-url http://127.0.0.1:11434/v1
+```
+
+Without that file, `mccode` borrows model settings from `--config <PATH>`,
+`MICROCLAW_CODE_CONFIG`, `MICROCLAW_CONFIG` or a MicroClaw Server
+configuration in `~/.microclaw/`. A `microclaw.config.yaml` inside a
+repository is never loaded, so a cloned project cannot choose your model
+endpoint.
+
+Check everything with:
+
+```sh
+mccode doctor
+```
+
+## First session
+
+```sh
 cd path/to/your/repo
 mccode
-mccode update                              # later: install the latest release (checksum-verified)
 ```
 
-`mccode setup` writes `~/.microclaw/code/config.yaml`. Without it, `mccode`
-borrows model credentials from `--config <PATH>`, `MICROCLAW_CODE_CONFIG`,
-`MICROCLAW_CONFIG` or a MicroClaw Server `~/.microclaw/microclaw.config.yaml`.
-A `microclaw.config.yaml` inside the repository is never loaded, so a cloned
-project cannot choose the model endpoint or tool policy.
+1. If the repository has a `.microclaw/project.yaml` or detectable checks,
+   `mccode` asks whether you **trust** it. Trusting lets the project's
+   settings and checks run; you can change it later with `/trust`.
+2. Type a task, for example `add a --verbose flag to the CLI and a test for
+   it`. Mention files with `@path` (Tab completes them).
+3. Watch the agent read, edit (each change is shown as a diff) and run
+   commands. In `ask` mode a shell command opens an approval dialog: `1`
+   approve once, `2` always allow the tool, `p` always allow that command in
+   this project, `3` deny.
+4. After the change, your project's checks run automatically; failures go
+   back to the agent for a bounded number of fix rounds.
+5. Not happy? `/undo` restores the files to before that turn. `/review`
+   asks for a review of everything uncommitted.
 
-All Code state lives in `~/.microclaw/code` (override with
-`MICROCLAW_CODE_HOME`): the engine database, memory and checkpoints
-(`data/`), the session index and trust decisions. It never shares a database
-or memory with a MicroClaw Server on the same machine.
+Start with `/plan <task>` to get a plan first, and Shift+Tab to switch
+between `plan`, `ask` and `auto`.
 
-## Use
+One task without the full-screen interface:
 
 ```sh
-mccode                                   # full-screen interface
-mccode "fix the failing parser test"     # start with a task
-mccode -c                                # continue the most recent session here (shows its history)
-mccode --session <id>                    # resume a session (see `mccode sessions`)
-mccode -p "add a --verbose flag" --mode auto   # one task, then exit
-mccode -p "explain the build" --json            # JSON Lines runtime events
-microclaw code …                         # same, through the Server binary
+mccode -p "fix the failing parser test"
 ```
 
-In the TUI:
+## Where things live
 
-| Key | Action |
-|---|---|
-| Enter | send (while the agent works: guide it) |
-| Alt+Enter, Ctrl+J, trailing `\` | new line |
-| Shift+Tab | cycle mode: plan → ask → auto |
-| Tab | complete `/commands` and `@path` file mentions |
-| Esc / Ctrl+C | stop the running agent |
-| Ctrl+C twice, Ctrl+D, `/exit` | quit |
-| PgUp / PgDn, End | scroll the transcript |
-| Up / Down | input history |
+Everything MicroClaw Code stores is in `~/.microclaw/code` (override with
+`MICROCLAW_CODE_HOME`): the model configuration, the engine database and
+memory, checkpoints, the session index, trust decisions and allow rules. It
+never shares a database with a MicroClaw Server on the same machine.
 
-Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
-`/verify [on|off]`, `/trust`, `/allow`, `/diff [full]`, `/new`, `/sessions`, `/status`,
-`/init`, `/clear`, `/exit`, and:
+## Next
 
-| Command | What it does |
-|---|---|
-| `/undo` | Restore the files to how they were before the last turn that changed them. The state you leave is checkpointed too. |
-| `/rewind [id]` | List workspace checkpoints, or restore one. |
-| `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
-| `/model [name\|reset]` | Show or switch the model for this session. |
-| `/cost` | Requests and input/output tokens of this session, per model. |
-| `/compact` | Summarize older messages now to free context (long sessions also compact automatically). |
-| `/fork` | Continue in a copy of the conversation; the original session is kept. |
-
-Checkpoints are taken at the start of every turn in a shadow git repository
-inside the Code home (`data/checkpoints`); they never touch your own `.git`.
-
-## Shell sandbox
-
-Shell commands (`bash`, including background processes) run in the operating
-system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
-(`sandbox-exec`) on macOS.
-
-- They can read the machine, except credential directories (`~/.ssh`,
-  `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`,
-  `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.microclaw`).
-- They can write only the repository, the temp directory and common tool
-  caches (`~/.cache`, `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.gradle`, `~/go`, …),
-  so builds and tests keep working.
-- Network access is on; `--no-network` turns it off. With network off, a
-  command in the sandbox cannot change anything outside the repository, so in
-  `ask` mode such commands run **without asking** (destructive ones such as
-  `git push` or `rm -rf` still ask).
-- On Linux without a working `bwrap`, **Landlock** is used instead: writes are
-  confined the same way (and outgoing TCP is blocked on kernels with Landlock
-  ABI 4+), but credential directories stay readable, so commands keep asking.
-  `MICROCLAW_LOCAL_SANDBOX=bubblewrap|landlock|none` overrides the choice.
-
-`--review-commands` has the model annotate every approval with a one-line
-verdict; a command it calls `DANGEROUS` asks you even in `auto` mode.
-
-This is defence in depth: the approval rules above still apply. Turn it off
-with `--sandbox off` (or `MICROCLAW_CODE_SANDBOX=off`). If the machine has no
-working OS sandbox (no `bwrap`, or unprivileged user namespaces disabled),
-Code says so at startup and commands run unsandboxed; `mccode doctor` reports
-the state. The MicroClaw Server can use the same mechanism with
-`sandbox: { mode: all, backend: local }`.
-
-## Permission modes
-
-| Mode | Behaviour |
-|---|---|
-| `plan` | Read-only tools; the agent proposes a plan. Approve it to switch to `ask` and execute. |
-| `ask` (default) | File edits apply directly (shown as diffs, with checkpoints); shell commands ask first. |
-| `auto` | Shell commands run without asking, except destructive ones (`rm -rf`, `git push`, `git reset --hard`, `sudo`, `curl … \| sh`, `publish`, plus your `always_ask` patterns). |
-
-Outside plan mode the agent gets the workspace tool set
-(`ToolPolicy::WorkspaceWrite`): file, search, shell, planning, sub-agent and
-MCP tools, without channel delivery, scheduling, A2A or media tools.
-
-In the TUI an approval pauses the agent in place: the dialog's answer goes
-back into the same run (approve once, always allow the tool in this session,
-deny — the agent sees the denial and continues). For shell commands it also
-offers **always allow `<command prefix>` in this project** (key `p`), for
-example `cargo test`. Such a rule covers only single simple commands that
-start with the prefix (`cargo test -p x`, but never `cargo test && …`, pipes,
-redirections or `$(…)`); interpreters, `sudo`, `rm`, `curl` and the like
-cannot be allowed by prefix, and the destructive list above still asks.
-Rules live in `~/.microclaw/code/allow-rules.json`; manage them with
-`/allow [list | add <prefix> | rm <prefix>]` or `mccode allow [list | add | remove]`.
-
-In `-p` mode an approval that needs a person ends the run with exit code 2;
-resume it with `mccode --session <id> -p 1` (approve once) or `-p 3` (deny).
-Exit codes: `0` done, `1` failed / cancelled / checks still failing, `2`
-approval pending.
-
-## Project trust
-
-`.microclaw/project.yaml` lives in the repository and can set the mode, add
-instructions and define check commands, so it only takes effect once you
-trust the project — for the exact file content you trusted. If the file
-changes later (for example after a pull), Code asks again. The TUI asks on
-first use; in `-p` mode pass `--trust`; change the decision with
-`mccode trust [--revoke]` or `/trust`. Untrusted projects ignore the file and
-never run checks automatically (checks execute the repository's own build
-scripts).
-
-Trusted projects also load the repository's `AGENTS.md` (or `CLAUDE.md`,
-`AGENT.md`; the first one found, up to 16 KB) into the agent's instructions.
-In an untrusted project the agent is only told that the file exists.
-
-## Verification
-
-Checks are detected for Rust, Node (npm/pnpm/yarn/bun scripts), Python
-(ruff/pytest/mypy), Go and Makefiles, or configured in
-`.microclaw/project.yaml`. In trusted projects, when a turn changed the
-working tree — through the file tools or through shell commands — the `auto`
-checks run; a failure goes back to the agent (up to `max_fix_rounds`,
-default 2) with an explicit instruction not to weaken tests.
-
-```sh
-mccode info          # detected project, trust, checks, config sources
-mccode check         # run all checks
-mccode check build   # run one
-mccode init          # write .microclaw/project.yaml
-mccode doctor        # validate the configuration and start the engine once
-```
-
-`.microclaw/project.yaml`:
-
-```yaml
-mode: ask
-verify: true
-max_fix_rounds: 2
-checks:
-  - name: build
-    run: cargo check --all-targets
-    auto: true
-  - name: test
-    run: cargo test
-always_ask:
-  - terraform apply
-instructions: |
-  Use pnpm, not npm.
-```
-
-## Editors, other agents and remote Servers
-
-| Command | What it does |
-|---|---|
-| `mccode acp` | Agent Client Protocol on stdio, for editors such as Zed (add a custom agent with command `mccode` and argument `acp`). Sessions map to MicroClaw Code sessions in the project of their `cwd`; approvals become permission requests; modes are plan / ask / auto; `session/load` replays history. |
-| `mccode mcp-server` | Model Context Protocol server on stdio with tools `run` (a task, with verification and fix rounds; approvals end the call and are answered by calling `run` again with the session and `1`/`2`/`3`) and `review`. |
-| `mccode remote pair <url> <code>` | Pair with a MicroClaw Server using a code from its web console (Access tab); `remote status`, `remote forget`. |
-| `mccode -p "…" --remote` | Run the task on the paired Server (its working directory, tools and approval policy), streaming the result here. Approvals: exit 2, then `--remote --session <key> -p 1\|3`. |
-
-Flags such as `--mode`, `--sandbox`, `--no-network` and `--no-verify` go
-before the subcommand (`mccode --mode auto acp`). Only projects you already
-trusted (TUI, `mccode trust`) honour `.microclaw/project.yaml` here.
-
-The agent can also drive interactive programs: start a REPL or debugger with
-`bash` `run_in_background`, then send it input with `bash_input` (stdin, no
-terminal: use line-oriented modes such as `python3 -u -i`).
-
-## Evaluation
-
-```sh
-mccode eval apps/microclaw-code/eval/cases            # PASS/FAIL per case
-mccode --json eval my-cases --filter parser            # JSON Lines
-mccode eval replay v0.10.0..HEAD --check "cargo test" --out eval/replay
-```
-
-A case is a directory with `case.yaml` (`prompt`, `check`, optional `setup`,
-`mode`, `timeout_secs`) and a `repo/` snapshot. Each case runs in a fresh git
-repository in `auto` mode with verification; the case passes when `check`
-exits 0 afterwards. `eval replay` turns bug-fix commits into cases (parent
-commit = snapshot, commit message = prompt), a regression set built from real
-history. Results include duration, requests and tokens.
-
-## Design
-
-See [the MicroClaw Code proposal](https://github.com/microclaw/microclaw/blob/main/docs/roadmap/microclaw-code-proposal-cn.md).
+- [Using MicroClaw Code](./code-usage): modes, approvals, the sandbox,
+  verification, sessions, scripting and evaluation.
+- [Editors and other agents](./code-editors): Zed and other ACP editors, and
+  MCP clients such as Claude Code, Codex and Cursor.
+- [Run tasks on a MicroClaw Server](./code-remote).

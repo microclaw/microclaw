@@ -8,7 +8,7 @@ const en = {
   start: 'Start in 5 Minutes', sdkCta: 'Embed the SDK', github: 'View GitHub', meta: ['Server + Code', 'Embeddable SDK', 'SQLite Persistence'],
   quickstart: 'Quickstart', copy: 'Copy', copied: 'Copied',
   installLabels: {code: 'MicroClaw Code', script: 'Server Script', brew: 'Server Homebrew', cargo: 'Cargo', powershell: 'PowerShell Script'},
-  installHints: {code: 'Preview: build mccode from a source checkout, then run `mccode setup`', macScript: 'Install MicroClaw Server on macOS', brew: 'Install MicroClaw Server with Homebrew', source: 'Build Server from source with the Rust toolchain', windowsScript: 'Install MicroClaw Server on Windows', linuxScript: 'Install MicroClaw Server on Linux'},
+  installHints: {code: 'Install the mccode coding agent (macOS, Linux; Windows: install-mccode.ps1), then choose a model', macScript: 'Install MicroClaw Server on macOS', brew: 'Install MicroClaw Server with Homebrew', source: 'Build Server from source with the Rust toolchain', windowsScript: 'Install MicroClaw Server on Windows', linuxScript: 'Install MicroClaw Server on Linux'},
   systemLabels: {macos: 'macOS', windows: 'Windows', linux: 'Linux'},
   paths: {
     sdk: {
@@ -93,7 +93,7 @@ const translations = {
   en,
   'zh-CN': {
     tagline: '一套可嵌入的 Rust 智能体内核，同时驱动 Server、MicroClaw Code 和你的应用。', description: 'MicroClaw 以同一套 Agent Engine 连接常驻 Server、终端编码 Agent MicroClaw Code 与可复用 Rust SDK。', eyebrow: 'RUST 智能体运行时', release: 'v0.11.1 已发布', heroTitle: '一套 Rust Agent Engine：直接运行，也可以嵌入。', heroText: '把 MicroClaw 用作常驻 Server、终端里的编码 Agent，或者自己 Rust 产品里的 SDK；三条路径共享工具、记忆、Skills、安全策略和执行生命周期。', start: '5 分钟开始', sdkCta: '嵌入 SDK', github: '查看 GitHub', meta: ['Server + Code', '可嵌入 SDK', 'SQLite 持久化'], quickstart: '快速开始', copy: '复制', copied: '已复制',
-    installLabels: {code: 'MicroClaw Code', script: 'Server 安装脚本', brew: 'Server Homebrew', cargo: 'Cargo', powershell: 'PowerShell 脚本'}, installHints: {code: '预览版：从源码构建 mccode，然后运行 `mccode setup`', macScript: '在 macOS 上安装 MicroClaw Server', brew: '通过 Homebrew 安装 MicroClaw Server', source: '使用 Rust 工具链从源码构建 Server', windowsScript: '在 Windows 上安装 MicroClaw Server', linuxScript: '在 Linux 上安装 MicroClaw Server'},
+    installLabels: {code: 'MicroClaw Code', script: 'Server 安装脚本', brew: 'Server Homebrew', cargo: 'Cargo', powershell: 'PowerShell 脚本'}, installHints: {code: '安装 mccode 编程智能体（macOS、Linux；Windows 用 install-mccode.ps1），然后选择模型', macScript: '在 macOS 上安装 MicroClaw Server', brew: '通过 Homebrew 安装 MicroClaw Server', source: '使用 Rust 工具链从源码构建 Server', windowsScript: '在 Windows 上安装 MicroClaw Server', linuxScript: '在 Linux 上安装 MicroClaw Server'},
     systemLabels: {macos: 'macOS', windows: 'Windows', linux: 'Linux'},
     paths: {
       sdk: {badge: '集成开发', title: 'Rust SDK', audience: '适合 Rust 产品与平台团队', description: '把完整 Agent Engine，或仅稳定的执行生命周期契约，嵌入自己的应用。', benefits: ['Agent、Skills、事件与控制', '本地与认证远程 Worker', '不依赖 Server、渠道或桌面 UI'], commandLabel: '加入 Cargo.toml', action: '开始集成'},
