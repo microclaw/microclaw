@@ -8,6 +8,7 @@
 
 mod acp;
 mod format;
+mod mcp_server;
 mod print;
 mod setup;
 mod tui;
@@ -141,6 +142,9 @@ enum Command {
     /// Serve the Agent Client Protocol on stdin/stdout (for editors such as
     /// Zed: configure `mccode acp` as a custom agent).
     Acp,
+    /// Serve the Model Context Protocol on stdin/stdout: tools `run` and
+    /// `review` let other agents delegate coding tasks to MicroClaw Code.
+    McpServer,
     /// Review the uncommitted changes (read-only) and print the findings.
     Review {
         /// What to focus on, e.g. "error handling" or a path.
@@ -275,7 +279,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
-        Some(Command::Review { .. }) | Some(Command::Acp) | None => {}
+        Some(Command::Review { .. }) | Some(Command::Acp) | Some(Command::McpServer) | None => {}
     }
 
     let review_focus = match &cli.command {
@@ -298,7 +302,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(focus) => Some(format!("/review {focus}").trim().to_string()),
         None => print_prompt,
     };
-    let acp = matches!(cli.command, Some(Command::Acp));
+    let acp = matches!(cli.command, Some(Command::Acp | Command::McpServer));
     let interactive = print_prompt.is_none();
     if interactive && !acp && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
         anyhow::bail!(
@@ -377,7 +381,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 })
             })
             .transpose()?;
-        acp::serve(acp::AcpOptions {
+        let options = acp::AcpOptions {
             config_path,
             sandbox: sandbox_choice,
             sandbox_info: sandbox,
@@ -385,8 +389,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             verify: !cli.no_verify,
             max_fix_rounds: cli.max_fix_rounds,
             default_mode: mode,
-        })
-        .await?;
+        };
+        if matches!(cli.command, Some(Command::McpServer)) {
+            mcp_server::serve(options).await?;
+        } else {
+            acp::serve(options).await?;
+        }
         return Ok(ExitCode::SUCCESS);
     }
     if !cli.json {
