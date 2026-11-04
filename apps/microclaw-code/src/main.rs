@@ -100,6 +100,11 @@ struct Cli {
     #[arg(long)]
     review_commands: bool,
 
+    /// With -p: run the task on the paired MicroClaw Server (see
+    /// `mccode remote pair`) instead of this machine.
+    #[arg(long, requires = "print")]
+    remote: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -139,6 +144,11 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
+    /// Pair with a MicroClaw Server, show or forget the pairing.
+    Remote {
+        #[command(subcommand)]
+        action: RemoteAction,
+    },
     /// Serve the Agent Client Protocol on stdin/stdout (for editors such as
     /// Zed: configure `mccode acp` as a custom agent).
     Acp,
@@ -155,6 +165,24 @@ enum Command {
         #[command(subcommand)]
         action: Option<AllowAction>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum RemoteAction {
+    /// Claim a pairing code from the Server's web console (Access tab).
+    Pair {
+        /// Server URL, e.g. http://my-server:10961
+        url: String,
+        /// The 8-character pairing code.
+        code: String,
+        /// Name shown in the Server's device list (default: host name).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Show the pairing and check that the Server accepts it.
+    Status,
+    /// Remove the stored pairing (revoke the device in the Server too).
+    Forget,
 }
 
 #[derive(Debug, Subcommand)]
@@ -205,6 +233,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             path.display()
         );
         return Ok(ExitCode::SUCCESS);
+    }
+
+    if let Some(Command::Remote { action }) = &cli.command {
+        return remote_command(action, style).await;
+    }
+    if cli.remote {
+        return remote_print(&cli, style).await;
     }
 
     let start = match &cli.cwd {
@@ -279,7 +314,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
-        Some(Command::Review { .. }) | Some(Command::Acp) | Some(Command::McpServer) | None => {}
+        Some(Command::Review { .. })
+        | Some(Command::Remote { .. })
+        | Some(Command::Acp)
+        | Some(Command::McpServer)
+        | None => {}
     }
 
     let review_focus = match &cli.command {
@@ -695,6 +734,145 @@ async fn check_command(
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+async fn remote_command(action: &RemoteAction, style: Style) -> anyhow::Result<ExitCode> {
+    use microclaw_code_core::remote::{self, RemoteConfig};
+    match action {
+        RemoteAction::Pair { url, code, name } => {
+            let name = name.clone().unwrap_or_else(|| {
+                std::env::var("HOSTNAME")
+                    .ok()
+                    .filter(|h| !h.trim().is_empty())
+                    .map(|h| format!("mccode on {h}"))
+                    .unwrap_or_else(|| "mccode".into())
+            });
+            let config = remote::pair(url, code, &name).await?;
+            config.save()?;
+            println!(
+                "{} Paired with {} as \"{}\". Run a task there with `mccode -p \"…\" --remote`.",
+                style.green("✓"),
+                config.url,
+                config.label
+            );
+        }
+        RemoteAction::Status => match RemoteConfig::load() {
+            None => println!("Not paired. Use `mccode remote pair <url> <code>`."),
+            Some(config) => match remote::whoami(&config).await {
+                Ok(info) => println!(
+                    "{} Paired with {} as \"{}\" ({})",
+                    style.green("✓"),
+                    config.url,
+                    config.label,
+                    info.get("actor")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("device")
+                ),
+                Err(e) => {
+                    println!(
+                        "{} {} rejected the pairing: {e}",
+                        style.red("✗"),
+                        config.url
+                    );
+                    return Ok(ExitCode::from(1));
+                }
+            },
+        },
+        RemoteAction::Forget => {
+            if RemoteConfig::forget()? {
+                println!("Forgot the pairing. Revoke the device in the Server's Access tab too.");
+            } else {
+                println!("Not paired.");
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mccode -p "…" --remote`: run the task on the paired Server.
+async fn remote_print(cli: &Cli, style: Style) -> anyhow::Result<ExitCode> {
+    use microclaw_code_core::remote::{self, RemoteConfig};
+    let config = RemoteConfig::load().ok_or_else(|| {
+        anyhow::anyhow!("not paired with a Server; run `mccode remote pair <url> <code>` first")
+    })?;
+    let prompt = match cli.print.as_deref() {
+        Some("-") => {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+            text
+        }
+        Some(text) => text.to_string(),
+        None => anyhow::bail!("--remote needs -p"),
+    };
+    let start = match &cli.cwd {
+        Some(dir) => dir.clone(),
+        None => std::env::current_dir()?,
+    };
+    let session_key = cli.session.clone().unwrap_or_else(|| {
+        let name = start
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "default".into());
+        format!("mccode-{name}")
+    });
+    if !cli.json {
+        eprintln!(
+            "{}",
+            style.dim(&format!(
+                "Running on {} (session {session_key})…",
+                config.url
+            ))
+        );
+    }
+    let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
+    let (controls_tx, mut controls_rx) = mpsc::unbounded_channel();
+    let prompt = prompt.trim().to_string();
+    let key = session_key.clone();
+    let task = tokio::spawn(async move {
+        remote::run(&config, &key, &prompt, &updates_tx, &mut controls_rx).await
+    });
+    tokio::pin!(task);
+    let mut printer = Printer::new(style, cli.json);
+    let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
+    let report = loop {
+        tokio::select! {
+            Some(update) = updates_rx.recv() => printer.update(&update, &mut out, &mut err),
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\n{}", style.yellow("Stopping the remote run…"));
+                let _ = controls_tx.send(Control::Cancel);
+            }
+            result = &mut task => break result??,
+        }
+    };
+    while let Ok(update) = updates_rx.try_recv() {
+        printer.update(&update, &mut out, &mut err);
+    }
+    if let Some(approval) = &report.approval_pending
+        && !cli.json
+    {
+        eprintln!("{}", approval_card(style, approval));
+        eprintln!(
+            "{}",
+            style.yellow(&format!(
+                "Approval needed on the Server. Answer with `mccode --remote --session {session_key} -p 1` (approve once) or `-p 3` (deny)."
+            ))
+        );
+    }
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "type": "result",
+                "remote": true,
+                "session": session_key,
+                "status": report.status,
+                "final_text": report.final_text,
+                "changed_files": report.changed_files,
+                "approval_pending": report.approval_pending.as_ref().map(|a| a.tool.clone()),
+            })
+        );
+    }
+    Ok(ExitCode::from(report.exit_code()))
 }
 
 const NO_SANDBOX_NOTICE: &str = "No OS sandbox on this machine: shell commands run unsandboxed (install bubblewrap on Linux; pass --sandbox off to hide this notice).";
