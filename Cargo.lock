@@ -3710,7 +3710,9 @@ dependencies = [
 name = "microclaw-code"
 version = "0.11.1"
 dependencies = [
+ "agent-client-protocol",
  "anyhow",
+ "async-trait",
  "clap",
  "crossterm",
  "futures-util",
@@ -3720,6 +3722,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "unicode-width",
 ]
 

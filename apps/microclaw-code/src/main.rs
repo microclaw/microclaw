@@ -6,6 +6,7 @@
 //! (approvals, verification, fix loop) lives in `microclaw-code-core`; this
 //! binary only handles the command line and presentation.
 
+mod acp;
 mod format;
 mod print;
 mod setup;
@@ -137,6 +138,9 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
+    /// Serve the Agent Client Protocol on stdin/stdout (for editors such as
+    /// Zed: configure `mccode acp` as a custom agent).
+    Acp,
     /// Review the uncommitted changes (read-only) and print the findings.
     Review {
         /// What to focus on, e.g. "error handling" or a path.
@@ -271,7 +275,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
-        Some(Command::Review { .. }) | None => {}
+        Some(Command::Review { .. }) | Some(Command::Acp) | None => {}
     }
 
     let review_focus = match &cli.command {
@@ -294,8 +298,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(focus) => Some(format!("/review {focus}").trim().to_string()),
         None => print_prompt,
     };
+    let acp = matches!(cli.command, Some(Command::Acp));
     let interactive = print_prompt.is_none();
-    if interactive && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
+    if interactive && !acp && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
         anyhow::bail!(
             "the interactive interface needs a terminal; pass a task with -p \"...\" (or -p - to read it from stdin)"
         );
@@ -338,6 +343,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .first()
             .map(|r| r.id.clone())
             .ok_or_else(|| anyhow::anyhow!("no previous session for this project"))?
+    } else if acp {
+        // ACP clients create their own sessions.
+        String::new()
     } else {
         index.create(&project.root)?.id
     };
@@ -359,6 +367,28 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
     };
 
+    if acp {
+        let mode = cli
+            .mode
+            .as_deref()
+            .map(|raw| {
+                Mode::parse(raw).ok_or_else(|| {
+                    anyhow::anyhow!("unknown mode '{raw}' (expected plan, ask or auto)")
+                })
+            })
+            .transpose()?;
+        acp::serve(acp::AcpOptions {
+            config_path,
+            sandbox: sandbox_choice,
+            sandbox_info: sandbox,
+            review_commands: cli.review_commands,
+            verify: !cli.no_verify,
+            max_fix_rounds: cli.max_fix_rounds,
+            default_mode: mode,
+        })
+        .await?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if !cli.json {
         eprintln!("{}", style.dim("Starting the Agent Engine…"));
     }
