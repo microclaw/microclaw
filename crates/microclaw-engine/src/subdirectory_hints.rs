@@ -84,6 +84,23 @@ impl SubdirectoryHintTracker {
                 self.add_path_candidate(s, &mut candidates);
             }
         }
+        // apply_patch names its files in the patch headers.
+        if tool_name == "apply_patch" {
+            if let Some(patch) = args.get("patch").and_then(|v| v.as_str()) {
+                for line in patch.lines() {
+                    for prefix in [
+                        "*** Add File: ",
+                        "*** Update File: ",
+                        "*** Delete File: ",
+                        "*** Move to: ",
+                    ] {
+                        if let Some(path) = line.strip_prefix(prefix) {
+                            self.add_path_candidate(path.trim(), &mut candidates);
+                        }
+                    }
+                }
+            }
+        }
         if COMMAND_TOOLS.contains(&tool_name) {
             if let Some(cmd) = obj.get("command").and_then(|v| v.as_str()) {
                 self.extract_paths_from_command(cmd, &mut candidates);
@@ -240,6 +257,21 @@ mod tests {
             .check_tool_call("read_file", &json!({"path": "a/b/c/file.txt"}))
             .expect("should walk up to a/AGENTS.md");
         assert!(hint.contains("ancestor hint"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extracts_paths_from_apply_patch_headers() {
+        let root = tmp_root();
+        let sub = root.join("crates").join("engine");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("AGENTS.md"), "engine rules").unwrap();
+        let mut tracker = SubdirectoryHintTracker::new(root.clone());
+        let hint = tracker.check_tool_call(
+            "apply_patch",
+            &serde_json::json!({"patch": "*** Begin Patch\n*** Update File: crates/engine/lib.rs\n-a\n+b\n*** End Patch"}),
+        );
+        assert!(hint.unwrap_or_default().contains("engine rules"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

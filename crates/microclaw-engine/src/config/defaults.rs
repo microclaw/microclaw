@@ -192,6 +192,14 @@ pub(crate) fn default_high_risk_tool_user_confirmation_required() -> bool {
     true
 }
 
+pub(crate) fn default_approval_channels() -> Vec<String> {
+    vec!["web".into(), "code".into()]
+}
+
+pub(crate) fn default_read_only_subagent_channels() -> Vec<String> {
+    vec!["code".into()]
+}
+
 pub(crate) fn default_sandbox_image() -> String {
     "ubuntu:25.10".into()
 }

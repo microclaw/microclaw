@@ -778,8 +778,12 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
-        if auth.caller_channel == "code"
-            && auth.principal.starts_with("subagent:")
+        if auth.principal.starts_with("subagent:")
+            && self
+                .config
+                .read_only_subagent_channels
+                .iter()
+                .any(|c| *c == auth.caller_channel)
             && !matches!(
                 name,
                 "web_search"
@@ -805,7 +809,7 @@ impl ToolRegistry {
             )
         {
             return ToolResult::error(format!(
-                "Tool `{name}` is not available to MicroClaw Code Subagents; Workspace writes are owned by the Main Agent"
+                "Tool `{name}` is not available to sub-agents on this channel; workspace writes are owned by the main agent"
             ))
             .with_error_type("work_subagent_read_only");
         }
@@ -984,7 +988,15 @@ impl ToolRegistry {
                         );
                     }
                 } else if let Some(blocked) =
-                    require_high_risk_approval_with_risk(name, effective_risk, auth, &input)
+                    crate::internal::tool_runtime::runtime::require_high_risk_approval_with_policy(
+                        &crate::internal::tool_runtime::runtime::ApprovalPolicy::new(
+                            self.config.approval_channels.iter().cloned(),
+                        ),
+                        name,
+                        effective_risk,
+                        auth,
+                        &input,
+                    )
                 {
                     return blocked;
                 }
