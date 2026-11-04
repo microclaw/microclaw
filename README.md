@@ -57,15 +57,16 @@ Choose the path that matches what you are building:
 
 | I want to… | Start here |
 |---|---|
-| Code in a local repository from the terminal | Build MicroClaw Code below |
+| Code in a local repository from the terminal or Zed | Install MicroClaw Code below |
 | Run an always-on agent service | Install MicroClaw Server below |
 | Add agents to an existing Rust application | Follow the [SDK quickstart](site/docs/sdk-quickstart.md) |
 
-Build MicroClaw Code (preview) from a checkout, configure a model once, and
-run it in any repository:
+Install MicroClaw Code (preview), configure a model once, and run it in any
+repository:
 
 ```sh
-cargo install --path apps/microclaw-code   # installs `mccode`
+curl -fsSL https://microclaw.org/install-mccode.sh | bash   # macOS, Linux
+# Windows: iwr https://microclaw.org/install-mccode.ps1 -UseBasicParsing | iex
 mccode setup
 cd path/to/your/repo && mccode
 ```
@@ -194,7 +195,7 @@ Anthropic has a native provider path. OpenAI, OpenAI Codex, OpenRouter, Ollama, 
 
 The prebuilt Linux binary has glibc and OpenSSL requirements. Read [Getting started](docs/getting-started.md) before installing on an older distribution.
 
-MicroClaw Server is supported on macOS, Linux, and Windows. MicroClaw Code is a preview built from source. MicroClaw Work, the earlier desktop app, has been discontinued.
+MicroClaw Server is supported on macOS, Linux, and Windows. MicroClaw Code is a preview built from source.
 
 ## Documentation
 

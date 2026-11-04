@@ -50,10 +50,10 @@ for `by-name` packages). Points that differ from a plain `buildRustPackage`:
   network, so the expression pre-fetches the npm cache with `fetchNpmDeps`
   (`npmDepsHash`), runs `npm --prefix web run build` in `preBuild`, and sets
   `MICROCLAW_SKIP_WEB_BUILD=1` so `build.rs` only verifies the bundle.
-- **Git dependencies.** `Cargo.lock` pins Git revisions of GPUI/Zed crates for
-  the desktop app. `cargoHash` (fetchCargoVendor) vendors them behind one hash;
-  `cargoBuildFlags = [ "--package" "microclaw" ]` keeps the desktop crates out
-  of the actual build. Expect the vendor step to be large the first time.
+- **Dependencies.** `Cargo.lock` has only crates.io dependencies;
+  `cargoHash` (fetchCargoVendor) vendors them behind one hash.
+  `cargoBuildFlags = [ "--package" "microclaw" ]` builds only the Server
+  binary; MicroClaw Code (`mccode`) is packaged separately.
 - **Three hashes** to resolve on every bump: `src.hash`, `cargoHash`,
   `npmDeps.hash`. The script does this by looping on `specified:`/`got:` pairs.
 - Linux-only features `journald` and `sqlite-vec` stay behind

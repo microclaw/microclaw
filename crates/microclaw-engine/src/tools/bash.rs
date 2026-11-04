@@ -366,7 +366,7 @@ impl Tool for BashTool {
             .unwrap_or(self.default_timeout_secs);
         let base_dir =
             super::resolve_tool_working_dir(&self.working_dir, self.working_dir_isolation, &input);
-        // A direct workspace (MicroClaw Code / Work project folder) runs
+        // A direct workspace (a MicroClaw Code project folder) runs
         // commands from the project root so build and test tools find their
         // manifests; isolated chat workspaces keep the scratch `tmp/` subdir.
         let working_dir = if self.working_dir_isolation == WorkingDirIsolation::Direct {

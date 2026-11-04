@@ -1,6 +1,6 @@
 # MicroClaw Code：三产物架构与编码 Agent 提案
 
-状态：**已批准，首版实现中** · 日期：**2026-11-03**
+状态：**已交付** · 日期：**2026-11-03**
 
 ## 一、产品线
 
@@ -12,18 +12,13 @@ MicroClaw 收敛为三个产物，共享同一个 Agent Engine：
 | **MicroClaw Code**（`mccode`） | 全屏 TUI + `-p` 脚本模式 | 开发者 | 在本地仓库里写代码，改完自动验证 |
 | **MicroClaw SDK**（`microclaw-sdk`） | Rust 库 | 集成方 | 把引擎嵌进自己的应用 |
 
-**MicroClaw Work（GPUI 桌面端）停止维护并从仓库删除**，不做兼容迁移：
-- 删除 `apps/microclaw-work`、`apps/microclaw-work-headless`、`crates/microclaw-work-app`、`crates/microclaw-work-runtime`；
-- 删除对应的打包文件、构建/冒烟/发布脚本、CI 任务和发布产物；
-- 发布脚本会从 Homebrew tap 里删除 `microclaw-work` cask。
-
-Server 的设备配对接口保留，不再提 Work，留给 Code 以后做"交给 Server 远程执行"。
+Server 的设备配对接口供 Code 的"交给 Server 远程执行"使用。
 
 ## 二、为什么这样分
 
 - 按界面形态和场景划分，三者定位互不重叠：常驻服务、本地开发工具、嵌入库。
-- 去掉 GPUI 后依赖少了约 300 个包，macOS 签名和公证、DMG、Windows 安装包、便携包这些发布链路全部消失。
-- 上次架构审视里与 Desktop 相关的问题随之消失：两个入口能力不对等、两份会话记录并发写、按 `"work"/"desktop"` 渠道名做的特殊处理。
+- 发布产物都是命令行程序和库：没有图形界面，就没有 macOS 签名公证、DMG、Windows 安装包这些发布链路。
+- 每个入口只有一份会话记录，渠道策略由配置决定，没有按渠道名写死的特殊处理。
 
 ## 三、MicroClaw Code 的结构
 

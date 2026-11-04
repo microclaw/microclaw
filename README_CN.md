@@ -56,14 +56,15 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，三个�
 
 | 我希望…… | 从这里开始 |
 |---|---|
-| 在终端里对本地仓库写代码 | 按下方步骤构建 MicroClaw Code |
+| 在终端或 Zed 里对本地仓库写代码 | 按下方步骤安装 MicroClaw Code |
 | 运行一个长期在线的智能体服务 | 安装下方的 MicroClaw Server |
 | 为现有 Rust 应用加入智能体能力 | 阅读 [SDK 快速接入](site/docs/sdk-quickstart.md) |
 
-从源码构建 MicroClaw Code（预览版），配置一次模型，然后在任意仓库里运行：
+安装 MicroClaw Code（预览版），配置一次模型，然后在任意仓库里运行：
 
 ```sh
-cargo install --path apps/microclaw-code   # 安装 `mccode`
+curl -fsSL https://microclaw.org/install-mccode.sh | bash   # macOS、Linux
+# Windows：iwr https://microclaw.org/install-mccode.ps1 -UseBasicParsing | iex
 mccode setup
 cd path/to/your/repo && mccode
 ```
@@ -190,7 +191,7 @@ Anthropic 使用原生 provider 通路。OpenAI、OpenAI Codex、OpenRouter、Ol
 
 预编译 Linux 二进制对 glibc 和 OpenSSL 有版本要求。旧发行版安装前请先阅读[快速上手指南](docs/getting-started.md)。
 
-MicroClaw Server 支持 macOS、Linux 和 Windows。MicroClaw Code 为预览版，从源码构建。早先的桌面应用 MicroClaw Work 已停止维护。
+MicroClaw Server 支持 macOS、Linux 和 Windows。MicroClaw Code 为预览版，从源码构建。
 
 ## 文档
 

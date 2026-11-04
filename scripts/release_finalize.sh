@@ -496,9 +496,9 @@ end
 RUBY
 
 git add -- "$FORMULA_PATH" "$FORMULA_FULL_PATH" "$FORMULA_MCCODE_PATH"
-# MicroClaw Work has been discontinued; retire its cask from the tap.
-if [ -f Casks/microclaw-work.rb ]; then
-  git rm -q -- Casks/microclaw-work.rb
+# The tap publishes formulas only.
+if [ -d Casks ] && [ -n "$(ls -A Casks 2>/dev/null)" ]; then
+  git rm -q -r -- Casks
 fi
 git commit -m "microclaw homebrew release $NEW_VERSION"
 sync_rebase_and_push origin
