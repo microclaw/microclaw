@@ -136,7 +136,10 @@ jobs:
         flavor: [default, full]
         target:
           - label: linux-x86_64
-            os: ubuntu-latest
+            # Pinned: the binaries link against the runner's glibc, and the
+            # documented floor is glibc 2.39 (Ubuntu 24.04). ubuntu-latest
+            # moved to a newer image and raised it to 2.43.
+            os: ubuntu-24.04
             bin: microclaw
             target_triple: x86_64-unknown-linux-gnu
             asset_triple: x86_64-linux-gnu
@@ -210,6 +213,22 @@ jobs:
           if [ "${{ matrix.flavor }}" = "full" ]; then
             cp "target/release/${{ matrix.target.bin }}" "target/release/microclaw-full"
           fi
+
+      - name: Check glibc floor (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # Release binaries must run on glibc 2.39 (Ubuntu 24.04, Debian 13).
+          floor="2.39"
+          for bin in target/release/microclaw target/release/microclaw-full target/release/mccode; do
+            [ -f "$bin" ] || continue
+            needed="$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n1)"
+            echo "$bin needs glibc ${needed}"
+            if [ "$(printf '%s\n%s\n' "$floor" "$needed" | sort -V | tail -n1)" != "$floor" ]; then
+              echo "::error::$bin needs glibc ${needed}, above the supported floor ${floor}" >&2
+              exit 1
+            fi
+          done
 
       - name: Package archive (Unix)
         if: matrix.target.archive_ext == 'tar.gz'
