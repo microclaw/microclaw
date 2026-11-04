@@ -334,6 +334,15 @@ pub struct Config {
     pub working_dir_isolation: WorkingDirIsolation,
     #[serde(default = "default_high_risk_tool_user_confirmation_required")]
     pub high_risk_tool_user_confirmation_required: bool,
+    /// Caller channels whose high-risk tool calls (shell commands) need an
+    /// explicit human approval. Control chats always do. Default:
+    /// `["web", "code"]` — the interactive operator surfaces.
+    #[serde(default = "default_approval_channels")]
+    pub approval_channels: Vec<String>,
+    /// Caller channels whose sub-agents may only use read-only tools, so
+    /// workspace writes stay with the main agent. Default: `["code"]`.
+    #[serde(default = "default_read_only_subagent_channels")]
+    pub read_only_subagent_channels: Vec<String>,
     /// Regex patterns that always require operator approval before bash will
     /// run, even in non-control chats. Extends the per-chat risk policy with
     /// command-content inspection so destructive shell snippets cannot slip
@@ -1000,6 +1009,8 @@ impl Config {
             working_dir: default_working_dir(),
             working_dir_isolation: WorkingDirIsolation::Chat,
             high_risk_tool_user_confirmation_required: true,
+            approval_channels: default_approval_channels(),
+            read_only_subagent_channels: default_read_only_subagent_channels(),
             bash_dangerous_patterns: default_bash_dangerous_patterns(),
             rtk: RtkConfig::default(),
             sandbox: SandboxConfig::default(),

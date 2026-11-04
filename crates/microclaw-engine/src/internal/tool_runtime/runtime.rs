@@ -106,6 +106,7 @@ pub fn tool_risk(name: &str) -> ToolRisk {
         | "edit_file"
         | "apply_patch"
         | "bash_kill"
+        | "bash_input"
         | "write_memory"
         | "a2a_send"
         | "send_message"
@@ -153,6 +154,7 @@ pub fn is_workspace_tool(name: &str) -> bool {
                 | "apply_patch"
                 | "bash"
                 | "bash_kill"
+                | "bash_input"
                 | "todo_write"
                 | "clarify"
                 | "activate_skill"
@@ -203,6 +205,7 @@ pub fn tool_concurrency_class(name: &str) -> ToolConcurrencyClass {
         "write_file"
         | "edit_file"
         | "apply_patch"
+        | "bash_input"
         | "write_memory"
         | "send_message"
         | "a2a_send"
@@ -441,9 +444,39 @@ pub fn resolve_tool_working_dir(
     resolved
 }
 
+/// Which callers must get a human's approval before a high-risk tool runs.
+/// Built from `approval_channels` in the configuration; control chats always
+/// need approval. This is the only place that decides it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalPolicy {
+    channels: Vec<String>,
+}
+
+impl Default for ApprovalPolicy {
+    fn default() -> Self {
+        Self::new(["web", "code"])
+    }
+}
+
+impl ApprovalPolicy {
+    pub fn new<I, S>(channels: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            channels: channels.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub fn requires_approval(&self, risk: ToolRisk, auth: &ToolAuthContext) -> bool {
+        risk == ToolRisk::High
+            && (auth.is_control_chat() || self.channels.contains(&auth.caller_channel))
+    }
+}
+
 fn requires_high_risk_approval(risk: ToolRisk, auth: &ToolAuthContext) -> bool {
-    risk == ToolRisk::High
-        && (auth.caller_channel == "web" || auth.caller_channel == "code" || auth.is_control_chat())
+    ApprovalPolicy::default().requires_approval(risk, auth)
 }
 
 /// Input marker injected after explicit operator approval so a high-risk
@@ -472,7 +505,29 @@ pub fn require_high_risk_approval_with_risk(
     if !requires_high_risk_approval(risk, auth) {
         return None;
     }
+    approval_gate(name, risk, auth, input)
+}
 
+/// Like [`require_high_risk_approval_with_risk`] with an explicit policy.
+pub fn require_high_risk_approval_with_policy(
+    policy: &ApprovalPolicy,
+    name: &str,
+    risk: ToolRisk,
+    auth: &ToolAuthContext,
+    input: &serde_json::Value,
+) -> Option<ToolResult> {
+    if !policy.requires_approval(risk, auth) {
+        return None;
+    }
+    approval_gate(name, risk, auth, input)
+}
+
+fn approval_gate(
+    name: &str,
+    risk: ToolRisk,
+    auth: &ToolAuthContext,
+    input: &serde_json::Value,
+) -> Option<ToolResult> {
     let approved = input
         .get(HIGH_RISK_APPROVED_KEY)
         .and_then(|v| v.as_bool())
@@ -559,6 +614,25 @@ mod tests {
     fn test_validate_execution_policy_dual_allows_fallback() {
         let ok = validate_execution_policy("bash", SandboxMode::All, false);
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn approval_policy_follows_configured_channels() {
+        let auth = |channel: &str| ToolAuthContext {
+            caller_channel: channel.into(),
+            caller_chat_id: 42,
+            principal: "main".into(),
+            control_chat_ids: Vec::new(),
+            env_files: Vec::new(),
+        };
+        let policy = ApprovalPolicy::new(["discord"]);
+        assert!(policy.requires_approval(ToolRisk::High, &auth("discord")));
+        assert!(!policy.requires_approval(ToolRisk::High, &auth("code")));
+        assert!(!policy.requires_approval(ToolRisk::Medium, &auth("discord")));
+        let mut control = auth("telegram");
+        control.control_chat_ids = vec![control.caller_chat_id];
+        assert!(policy.requires_approval(ToolRisk::High, &control));
+        assert!(ApprovalPolicy::default().requires_approval(ToolRisk::High, &auth("web")));
     }
 
     #[test]

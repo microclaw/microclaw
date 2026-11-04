@@ -199,6 +199,9 @@ impl Printer {
             Update::AutoApproved { tool, rule } => {
                 self.approval_in_run = false;
                 let why = match rule {
+                    Some(rule) if rule == microclaw_code_core::driver::SANDBOX_RULE => {
+                        "runs in the sandbox without network".to_string()
+                    }
                     Some(rule) => format!("allowed by rule `{rule}`"),
                     None => "auto mode".to_string(),
                 };

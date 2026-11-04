@@ -657,6 +657,28 @@ pub fn validate_config_file(path: impl AsRef<Path>) -> Result<(), SdkError> {
         .map_err(|error| SdkError::Configuration(error.to_string()))
 }
 
+/// How shell commands are confined (see `MicroClawBuilder::shell_sandbox`).
+#[cfg(feature = "full")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellSandbox {
+    /// Run commands directly on the host.
+    Off,
+    /// Commands may read the machine (except credential directories such as
+    /// `~/.ssh`, `~/.aws`, `~/.microclaw`) but write only the workspace, the
+    /// temp directory, common tool caches and `writable_roots`.
+    WorkspaceWrite {
+        network: bool,
+        writable_roots: Vec<PathBuf>,
+    },
+}
+
+/// The OS sandbox available on this machine: `"bubblewrap"` (Linux) or
+/// `"seatbelt"` (macOS), or `None`.
+#[cfg(feature = "full")]
+pub fn local_sandbox() -> Option<&'static str> {
+    microclaw_engine::tool_runtime::local_sandbox::detect().map(|kind| kind.name())
+}
+
 /// Minimal provider configuration for a full embedded Agent Engine.
 #[cfg(feature = "full")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -698,6 +720,8 @@ pub struct MicroClawBuilder {
     workspace: Option<PathBuf>,
     caller_channel: String,
     max_concurrent_runs: usize,
+    shell_sandbox: Option<ShellSandbox>,
+    command_reviewer: Option<Option<String>>,
 }
 
 #[cfg(feature = "full")]
@@ -711,6 +735,8 @@ impl MicroClawBuilder {
             workspace: None,
             caller_channel: "embedded-app".into(),
             max_concurrent_runs: 4,
+            shell_sandbox: None,
+            command_reviewer: None,
         }
     }
 
@@ -723,6 +749,8 @@ impl MicroClawBuilder {
             workspace: None,
             caller_channel: "embedded-app".into(),
             max_concurrent_runs: 4,
+            shell_sandbox: None,
+            command_reviewer: None,
         }
     }
 
@@ -735,6 +763,8 @@ impl MicroClawBuilder {
             workspace: None,
             caller_channel: "embedded-app".into(),
             max_concurrent_runs: 4,
+            shell_sandbox: None,
+            command_reviewer: None,
         }
     }
 
@@ -766,6 +796,22 @@ impl MicroClawBuilder {
         self
     }
 
+    /// Run shell commands under the operating system's sandbox (overrides
+    /// the configuration's `sandbox` section). When this machine has no
+    /// working OS sandbox (see [`local_sandbox`]) commands run unsandboxed.
+    pub fn shell_sandbox(mut self, sandbox: ShellSandbox) -> Self {
+        self.shell_sandbox = Some(sandbox);
+        self
+    }
+
+    /// Have a model annotate every approval request with a one-line verdict
+    /// (`SAFE` / `CAUTION` / `DANGEROUS …`, the `advisory` of
+    /// `ApprovalRequired`). `None` uses the configured main model.
+    pub fn command_reviewer(mut self, model: Option<String>) -> Self {
+        self.command_reviewer = Some(model);
+        self
+    }
+
     pub async fn build(self) -> Result<MicroClaw, SdkError> {
         use microclaw_engine::config::Config;
         use microclaw_engine::headless::HeadlessRuntime;
@@ -791,6 +837,35 @@ impl MicroClawBuilder {
             config.working_dir = path.to_string_lossy().into_owned();
             config.working_dir_isolation = microclaw_engine::config::WorkingDirIsolation::Direct;
             config.checkpoints_enabled = true;
+        }
+        if let Some(model) = self.command_reviewer {
+            config.aux_models.approval_reviewer = Some(
+                model
+                    .filter(|m| !m.trim().is_empty())
+                    .unwrap_or_else(|| config.model.clone()),
+            );
+        }
+        match self.shell_sandbox {
+            Some(ShellSandbox::Off) => {
+                config.sandbox.mode = microclaw_engine::config::SandboxMode::Off;
+            }
+            Some(ShellSandbox::WorkspaceWrite {
+                network,
+                writable_roots,
+            }) if local_sandbox().is_some() => {
+                config.sandbox.mode = microclaw_engine::config::SandboxMode::All;
+                config.sandbox.backend = microclaw_engine::config::SandboxBackend::Local;
+                config.sandbox.no_network = !network;
+                config.sandbox.require_runtime = false;
+                config.sandbox.writable_roots = writable_roots
+                    .into_iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+            }
+            Some(ShellSandbox::WorkspaceWrite { .. }) => {
+                config.sandbox.mode = microclaw_engine::config::SandboxMode::Off;
+            }
+            None => {}
         }
         let engine = HeadlessRuntime::load(config)
             .await

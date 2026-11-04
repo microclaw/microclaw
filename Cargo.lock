@@ -3710,16 +3710,23 @@ dependencies = [
 name = "microclaw-code"
 version = "0.11.1"
 dependencies = [
+ "agent-client-protocol",
  "anyhow",
+ "async-trait",
  "clap",
  "crossterm",
  "futures-util",
  "microclaw-code-core",
  "microclaw-sdk",
  "ratatui",
+ "reqwest 0.12.28",
+ "serde",
  "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-util",
  "unicode-width",
 ]
 
@@ -3728,10 +3735,13 @@ name = "microclaw-code-core"
 version = "0.11.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dirs",
+ "futures-util",
  "microclaw-sdk",
  "regex",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3772,6 +3782,7 @@ dependencies = [
  "iana-time-zone",
  "ignore",
  "include_dir",
+ "libc",
  "md5",
  "microclaw-core",
  "native-tls",

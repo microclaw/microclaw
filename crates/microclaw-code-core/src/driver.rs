@@ -268,7 +268,23 @@ pub struct SessionSettings {
     /// Ask the front end for approvals while the run waits; when false, a
     /// needed approval ends the turn with `approval_pending`.
     pub interactive: bool,
+    /// The OS sandbox shell commands run in, when active.
+    pub sandbox: Option<SandboxInfo>,
 }
+
+/// An active shell sandbox (shown to the user and the agent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxInfo {
+    /// `bubblewrap`, `seatbelt` or `landlock`.
+    pub mechanism: String,
+    pub network: bool,
+    /// Credential directories are hidden (not with `landlock`).
+    pub confines_reads: bool,
+}
+
+/// `AutoApproved.rule` for commands auto-approved because they run in the
+/// sandbox without network access.
+pub const SANDBOX_RULE: &str = "sandbox";
 
 /// One MicroClaw Code session in one project.
 pub struct CodeSession {
@@ -514,10 +530,11 @@ impl CodeSession {
         };
         self.microclaw
             .agent(AGENT_NAME)
-            .system_prompt(crate::prompt::system_prompt(
+            .system_prompt(crate::prompt::system_prompt_with_sandbox(
                 &self.project,
                 self.settings.mode,
                 self.git_summary.as_deref(),
+                self.settings.sandbox.as_ref(),
             ))
             .tool_policy(policy)
             .build()
@@ -551,8 +568,31 @@ impl CodeSession {
         if self.always_ask.iter().any(|re| re.is_match(preview)) {
             return Gate::Ask;
         }
+        // A command reviewer that calls the command dangerous always gets a
+        // person, even in auto mode.
+        if approval
+            .advisory
+            .as_deref()
+            .is_some_and(|a| a.trim_start().to_ascii_uppercase().starts_with("DANGEROUS"))
+        {
+            return Gate::Ask;
+        }
         if self.settings.mode == Mode::Auto {
             return Gate::Auto { rule: None };
+        }
+        // Ask mode: a shell command that runs in the OS sandbox without
+        // network access cannot change anything outside the repository, so
+        // it runs without asking (like Codex's on-request policy).
+        if approval.tool == "bash"
+            && self
+                .settings
+                .sandbox
+                .as_ref()
+                .is_some_and(|s| !s.network && s.confines_reads)
+        {
+            return Gate::Auto {
+                rule: Some(SANDBOX_RULE.into()),
+            };
         }
         if approval.tool == "bash"
             && let Some(rule) = self.allow_rules.matching(&self.project.root, preview)
@@ -608,15 +648,17 @@ impl CodeSession {
         updates: &UnboundedSender<Update>,
         controls: &mut UnboundedReceiver<Control>,
     ) -> anyhow::Result<(RunStatus, String, Option<String>, Vec<String>)> {
-        let in_run = self.settings.interactive;
+        // Approvals are always answered in-run: automatically (auto mode,
+        // allow rules, the sandbox), by the front end, or — when no person
+        // can answer (`-p`) — deferred, which ends the run with the text
+        // approval prompt so `--session <id> -p 1|3` resumes it.
         let mut request = RunRequest::new(prompt);
         request.session_id = Some(SessionId::new(self.session_id.clone()));
         request.workspace = Some(self.project.root.clone());
-        if in_run {
-            request
-                .metadata
-                .insert(INTERACTIVE_APPROVALS.into(), serde_json::Value::Bool(true));
-        }
+        request
+            .metadata
+            .insert(INTERACTIVE_APPROVALS.into(), serde_json::Value::Bool(true));
+        let mut deferred = false;
         let mut run = self.agent()?.run_request(request);
         let controller = run.controller();
         let mut changed = Vec::new();
@@ -647,7 +689,8 @@ impl CodeSession {
                         };
                         let _ = updates.send(Update::Runtime(envelope));
                         let Some(approval) = approval else { continue };
-                        if !in_run {
+                        if deferred {
+                            // The text-path prompt that follows a deferral.
                             self.pending_approval = Some(approval);
                         } else if let Gate::Auto { rule } = self.gate(&approval) {
                             let _ = updates.send(Update::AutoApproved {
@@ -662,9 +705,20 @@ impl CodeSession {
                                     "could not auto-approve {}: {}", approval.tool, e.message
                                 )));
                             }
-                        } else {
+                        } else if self.settings.interactive {
                             let _ = updates.send(Update::ApprovalRequested(approval.clone()));
                             awaiting = Some(approval);
+                        } else {
+                            deferred = true;
+                            self.pending_approval = Some(approval.clone());
+                            if let Err(e) = controller
+                                .resolve_approval_confirmed(approval.approval_id.clone(), "defer")
+                                .await
+                            {
+                                let _ = updates.send(Update::Notice(format!(
+                                    "could not pause for approval: {}", e.message
+                                )));
+                            }
                         }
                     }
                     None => break,
@@ -1018,5 +1072,95 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    struct Idle;
+
+    #[async_trait::async_trait]
+    impl microclaw_sdk::RunExecutor for Idle {
+        async fn execute(
+            &self,
+            _profile: microclaw_sdk::AgentProfile,
+            request: RunRequest,
+            _context: microclaw_sdk::ExecutionContext,
+        ) -> Result<microclaw_sdk::ExecutionResult, microclaw_sdk::RuntimeError> {
+            Ok(microclaw_sdk::ExecutionResult::new("t", request.prompt))
+        }
+    }
+
+    fn session(mode: Mode, sandbox: Option<SandboxInfo>) -> (CodeSession, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::discover(dir.path(), |_, _| false).unwrap();
+        let microclaw = MicroClaw::from_runtime(
+            microclaw_sdk::Runtime::builder()
+                .executor(Idle)
+                .build()
+                .unwrap(),
+        );
+        let settings = SessionSettings {
+            mode,
+            verify: false,
+            max_fix_rounds: 0,
+            interactive: true,
+            sandbox,
+        };
+        let session = CodeSession::new(microclaw, project, "s".into(), settings)
+            .with_allow_rules(AllowRules::load(dir.path().join("allow.json")));
+        (session, dir)
+    }
+
+    fn bash(command: &str, advisory: Option<&str>) -> PendingApproval {
+        PendingApproval::from_event("id", "bash", Some(command), &[], advisory)
+    }
+
+    #[test]
+    fn gate_follows_mode_sandbox_rules_and_reviews() {
+        let no_net = SandboxInfo {
+            mechanism: "bubblewrap".into(),
+            network: false,
+            confines_reads: true,
+        };
+        let (ask, _d1) = session(Mode::Ask, None);
+        assert!(matches!(ask.gate(&bash("cargo test", None)), Gate::Ask));
+
+        let (sandboxed, _d2) = session(Mode::Ask, Some(no_net.clone()));
+        assert!(matches!(
+            sandboxed.gate(&bash("cargo test", None)),
+            Gate::Auto { rule: Some(ref r) } if r == SANDBOX_RULE
+        ));
+        // Destructive commands still ask inside the sandbox.
+        assert!(matches!(sandboxed.gate(&bash("git push", None)), Gate::Ask));
+
+        let with_net = SandboxInfo {
+            network: true,
+            ..no_net.clone()
+        };
+        let (networked, _d3) = session(Mode::Ask, Some(with_net));
+        assert!(matches!(
+            networked.gate(&bash("cargo test", None)),
+            Gate::Ask
+        ));
+
+        let landlock = SandboxInfo {
+            mechanism: "landlock".into(),
+            confines_reads: false,
+            ..no_net
+        };
+        let (weak, _d4) = session(Mode::Ask, Some(landlock));
+        assert!(matches!(weak.gate(&bash("cargo test", None)), Gate::Ask));
+
+        let (auto, _d5) = session(Mode::Auto, None);
+        assert!(matches!(
+            auto.gate(&bash("make", None)),
+            Gate::Auto { rule: None }
+        ));
+        assert!(matches!(
+            auto.gate(&bash("make clean-db", Some("DANGEROUS drops the database"))),
+            Gate::Ask
+        ));
+        assert!(matches!(
+            auto.gate(&bash("make", Some("CAUTION writes files"))),
+            Gate::Auto { .. }
+        ));
     }
 }

@@ -29,6 +29,9 @@ pub enum ApprovalDecision {
     /// Approve and record a standing per-chat allowance for the tool.
     ApproveAlways,
     Deny,
+    /// Not now: end the run with the text approval prompt, to be answered by
+    /// the next message (non-interactive callers).
+    Defer,
 }
 
 impl ApprovalDecision {
@@ -40,6 +43,7 @@ impl ApprovalDecision {
             "1" | "approve" | "approve_once" | "once" | "yes" => Some(Self::ApproveOnce),
             "2" | "always" | "approve_always" | "always_allow" => Some(Self::ApproveAlways),
             "3" | "deny" | "reject" | "no" => Some(Self::Deny),
+            "defer" | "later" => Some(Self::Defer),
             _ => None,
         }
     }

@@ -361,138 +361,92 @@ async fn enqueue_runtime_steering(
     Ok(true)
 }
 
-pub async fn process_with_agent(
-    state: &AppState,
-    context: AgentRequestContext<'_>,
-    override_prompt: Option<&str>,
-    image_data: Option<(String, String)>,
-) -> anyhow::Result<String> {
-    process_with_agent_with_events(state, context, override_prompt, image_data, None).await
+/// Everything one agent turn needs. Build it with [`AgentTurn::new`] and the
+/// setters, then run it with [`run_agent_turn`] — the single entry point of
+/// the agent loop for every channel, the scheduler, recovery and embedded
+/// runtimes.
+pub struct AgentTurn<'a> {
+    pub context: AgentRequestContext<'a>,
+    /// Prompt that replaces the stored user messages (scheduler, recovery).
+    pub override_prompt: Option<&'a str>,
+    /// `(base64, media type)` image attached to the user message.
+    pub image_data: Option<(String, String)>,
+    /// Receives the turn's events as they happen.
+    pub event_tx: Option<&'a UnboundedSender<AgentEvent>>,
+    /// An already-held per-chat turn lock (otherwise one is acquired).
+    pub turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
+    /// Continue an interrupted turn from its durable checkpoint.
+    pub resume_interrupted: bool,
+    /// Caller-owned durable experience id.
+    pub experience_run_id: Option<String>,
+    /// Agent identity, prompt, Skills and tool policy.
+    pub profile: AgentProfile,
 }
 
-/// Run the shared loop with a caller-owned durable experience id. This lets
-/// supervisors close the record even if they time out and drop the future.
-pub async fn process_with_agent_with_experience_id(
-    state: &AppState,
-    context: AgentRequestContext<'_>,
-    override_prompt: Option<&str>,
-    image_data: Option<(String, String)>,
-    experience_run_id: String,
-) -> anyhow::Result<String> {
-    process_with_agent_with_events_guarded_mode(
-        state,
-        context,
-        override_prompt,
-        image_data,
-        None,
-        None,
-        false,
-        Some(experience_run_id),
-    )
-    .await
+impl<'a> AgentTurn<'a> {
+    pub fn new(context: AgentRequestContext<'a>) -> Self {
+        Self {
+            context,
+            override_prompt: None,
+            image_data: None,
+            event_tx: None,
+            turn_guard: None,
+            resume_interrupted: false,
+            experience_run_id: None,
+            profile: AgentProfile::default(),
+        }
+    }
+
+    pub fn override_prompt(mut self, prompt: Option<&'a str>) -> Self {
+        self.override_prompt = prompt;
+        self
+    }
+
+    pub fn image(mut self, image_data: Option<(String, String)>) -> Self {
+        self.image_data = image_data;
+        self
+    }
+
+    pub fn events(mut self, event_tx: Option<&'a UnboundedSender<AgentEvent>>) -> Self {
+        self.event_tx = event_tx;
+        self
+    }
+
+    pub fn turn_guard(mut self, guard: Option<crate::chat_turn_queue::TurnGuard>) -> Self {
+        self.turn_guard = guard;
+        self
+    }
+
+    pub fn resume_interrupted(mut self, resume: bool) -> Self {
+        self.resume_interrupted = resume;
+        self
+    }
+
+    pub fn experience_run_id(mut self, id: Option<String>) -> Self {
+        self.experience_run_id = id;
+        self
+    }
+
+    pub fn profile(mut self, profile: AgentProfile) -> Self {
+        self.profile = profile;
+        self
+    }
 }
 
-pub async fn process_with_agent_with_events(
-    state: &AppState,
-    context: AgentRequestContext<'_>,
-    override_prompt: Option<&str>,
-    image_data: Option<(String, String)>,
-    event_tx: Option<&UnboundedSender<AgentEvent>>,
-) -> anyhow::Result<String> {
-    process_with_agent_with_events_guarded(
-        state,
-        context,
-        override_prompt,
-        image_data,
-        event_tx,
-        None,
-    )
-    .await
-}
-
-pub async fn process_with_agent_with_events_guarded(
-    state: &AppState,
-    context: AgentRequestContext<'_>,
-    override_prompt: Option<&str>,
-    image_data: Option<(String, String)>,
-    event_tx: Option<&UnboundedSender<AgentEvent>>,
-    turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
-) -> anyhow::Result<String> {
-    process_with_agent_with_events_guarded_mode(
-        state,
-        context,
-        override_prompt,
-        image_data,
-        event_tx,
-        turn_guard,
-        false,
-        None,
-    )
-    .await
-}
-
-/// Continue an interactive turn from a durable, provider-neutral checkpoint.
-///
-/// Startup recovery restores the checkpoint into `sessions` first. The
-/// runtime prompt is deliberately an override so explicit-memory fast paths
-/// cannot re-handle the original user message, while `track_turn=true` keeps
-/// the resumed run itself crash recoverable.
-pub async fn resume_interrupted_turn(
-    state: &AppState,
-    context: AgentRequestContext<'_>,
-) -> anyhow::Result<String> {
-    process_with_agent_with_events_guarded_mode(
-        state,
-        context,
-        Some(RUNTIME_RESUME_PROMPT),
-        None,
-        None,
-        None,
-        true,
-        None,
-    )
-    .await
-}
-
-// The private choke point keeps channel context, event delivery, turn
-// ownership, recovery mode, and durable experience identity explicit.
-#[allow(clippy::too_many_arguments)]
-async fn process_with_agent_with_events_guarded_mode(
-    state: &AppState,
-    context: AgentRequestContext<'_>,
-    override_prompt: Option<&str>,
-    image_data: Option<(String, String)>,
-    event_tx: Option<&UnboundedSender<AgentEvent>>,
-    turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
-    resume_interrupted: bool,
-    experience_run_id_override: Option<String>,
-) -> anyhow::Result<String> {
-    process_with_agent_profile_guarded_mode(
-        state,
+/// Run one agent turn. This is the single entry point of the agent loop;
+/// the `process_with_agent*` functions are shorthands for common shapes of
+/// [`AgentTurn`].
+pub async fn run_agent_turn(state: &AppState, turn: AgentTurn<'_>) -> anyhow::Result<String> {
+    let AgentTurn {
         context,
         override_prompt,
         image_data,
         event_tx,
         turn_guard,
         resume_interrupted,
-        experience_run_id_override,
-        AgentProfile::default(),
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn process_with_agent_profile_guarded_mode(
-    state: &AppState,
-    context: AgentRequestContext<'_>,
-    override_prompt: Option<&str>,
-    image_data: Option<(String, String)>,
-    event_tx: Option<&UnboundedSender<AgentEvent>>,
-    turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
-    resume_interrupted: bool,
-    experience_run_id_override: Option<String>,
-    profile: AgentProfile,
-) -> anyhow::Result<String> {
+        experience_run_id: experience_run_id_override,
+        profile,
+    } = turn;
     let executor = AgentTurnExecutor {
         state: state.clone(),
         override_prompt: override_prompt.map(str::to_string),
@@ -541,6 +495,95 @@ pub(crate) async fn process_with_agent_profile_guarded_mode(
                 .unwrap_or_else(|| format!("agent run ended with status {:?}", result.status))
         )),
     }
+}
+
+pub async fn process_with_agent(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+    override_prompt: Option<&str>,
+    image_data: Option<(String, String)>,
+) -> anyhow::Result<String> {
+    run_agent_turn(
+        state,
+        AgentTurn::new(context)
+            .override_prompt(override_prompt)
+            .image(image_data),
+    )
+    .await
+}
+
+/// Run the shared loop with a caller-owned durable experience id. This lets
+/// supervisors close the record even if they time out and drop the future.
+pub async fn process_with_agent_with_experience_id(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+    override_prompt: Option<&str>,
+    image_data: Option<(String, String)>,
+    experience_run_id: String,
+) -> anyhow::Result<String> {
+    run_agent_turn(
+        state,
+        AgentTurn::new(context)
+            .override_prompt(override_prompt)
+            .image(image_data)
+            .experience_run_id(Some(experience_run_id)),
+    )
+    .await
+}
+
+pub async fn process_with_agent_with_events(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+    override_prompt: Option<&str>,
+    image_data: Option<(String, String)>,
+    event_tx: Option<&UnboundedSender<AgentEvent>>,
+) -> anyhow::Result<String> {
+    run_agent_turn(
+        state,
+        AgentTurn::new(context)
+            .override_prompt(override_prompt)
+            .image(image_data)
+            .events(event_tx),
+    )
+    .await
+}
+
+pub async fn process_with_agent_with_events_guarded(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+    override_prompt: Option<&str>,
+    image_data: Option<(String, String)>,
+    event_tx: Option<&UnboundedSender<AgentEvent>>,
+    turn_guard: Option<crate::chat_turn_queue::TurnGuard>,
+) -> anyhow::Result<String> {
+    run_agent_turn(
+        state,
+        AgentTurn::new(context)
+            .override_prompt(override_prompt)
+            .image(image_data)
+            .events(event_tx)
+            .turn_guard(turn_guard),
+    )
+    .await
+}
+
+/// Continue an interactive turn from a durable, provider-neutral checkpoint.
+///
+/// Startup recovery restores the checkpoint into `sessions` first. The
+/// runtime prompt is deliberately an override so explicit-memory fast paths
+/// cannot re-handle the original user message, while `track_turn=true` keeps
+/// the resumed run itself crash recoverable.
+pub async fn resume_interrupted_turn(
+    state: &AppState,
+    context: AgentRequestContext<'_>,
+) -> anyhow::Result<String> {
+    run_agent_turn(
+        state,
+        AgentTurn::new(context)
+            .override_prompt(Some(RUNTIME_RESUME_PROMPT))
+            .resume_interrupted(true),
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]

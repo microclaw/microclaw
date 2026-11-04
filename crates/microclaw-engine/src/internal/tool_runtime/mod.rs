@@ -3,6 +3,8 @@
 pub mod command_runner;
 pub mod egress;
 pub mod env_file;
+pub mod landlock;
+pub mod local_sandbox;
 pub mod media_client;
 pub mod path_guard;
 pub mod runtime;

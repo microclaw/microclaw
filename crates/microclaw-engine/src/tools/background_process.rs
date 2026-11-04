@@ -76,6 +76,8 @@ struct BackgroundProcess {
     output: Arc<Mutex<OutputBuffer>>,
     exit_code: Arc<Mutex<Option<i32>>>,
     kill_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// The process's stdin, for `bash_input` (`None` once closed).
+    stdin: tokio::sync::Mutex<Option<tokio::process::ChildStdin>>,
 }
 
 /// Background processes started through one tool registry.
@@ -120,6 +122,20 @@ impl ProcessRegistry {
         working_dir: &Path,
         envs: &HashMap<String, String>,
     ) -> Result<String, String> {
+        let spec = crate::internal::tool_runtime::command_runner::shell_command(command);
+        self.spawn_spec(session, command, &spec, working_dir, envs)
+    }
+
+    /// Spawn an already-built command line (e.g. wrapped by the local OS
+    /// sandbox) and register it.
+    pub fn spawn_spec(
+        &self,
+        session: &str,
+        command: &str,
+        spec: &crate::internal::tool_runtime::command_runner::CommandSpec,
+        working_dir: &Path,
+        envs: &HashMap<String, String>,
+    ) -> Result<String, String> {
         let running = lock(&self.processes)
             .values()
             .filter(|p| p.session == session && lock(&p.exit_code).is_none())
@@ -129,20 +145,19 @@ impl ProcessRegistry {
             "Too many background processes are running ({running}). Stop one with bash_kill first."
         ));
         }
-
-        let spec = crate::internal::tool_runtime::command_runner::shell_command(command);
         let mut cmd =
-            crate::internal::tool_runtime::command_runner::build_command(&spec, Some(working_dir));
+            crate::internal::tool_runtime::command_runner::build_command(spec, Some(working_dir));
         for (k, v) in envs {
             cmd.env(k, v);
         }
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::null())
+            .stdin(std::process::Stdio::piped())
             .kill_on_drop(true);
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start background command: {e}"))?;
+        let stdin = child.stdin.take();
 
         let id = next_id();
         let output = Arc::new(Mutex::new(OutputBuffer::default()));
@@ -201,6 +216,7 @@ impl ProcessRegistry {
                 output,
                 exit_code,
                 kill_tx: Mutex::new(Some(kill_tx)),
+                stdin: tokio::sync::Mutex::new(stdin),
             }),
         );
         Ok(id)
@@ -234,6 +250,100 @@ fn status_line(process: &BackgroundProcess) -> String {
     match *lock(&process.exit_code) {
         Some(code) => format!("status: exited with code {code} (after {elapsed}s)"),
         None => format!("status: running ({elapsed}s)"),
+    }
+}
+
+/// Write to a background process's stdin: answer prompts, drive a REPL or an
+/// interactive CLI started with `run_in_background`.
+pub struct BashInputTool(pub Arc<ProcessRegistry>);
+
+/// How long `bash_input` waits for the process to answer.
+const INPUT_SETTLE_MS: u64 = 400;
+
+#[async_trait]
+impl Tool for BashInputTool {
+    fn name(&self) -> &str {
+        "bash_input"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "bash_input".into(),
+            description: "Send text to the stdin of a background process started with bash run_in_background (a REPL, a debugger, a command waiting for an answer), then return the output it produced. Include a trailing newline to submit a line. Set close to true to send end-of-input. The process has no terminal, so start REPLs in a line-oriented, unbuffered mode (e.g. `python3 -u -i`, `node -i`).".into(),
+            input_schema: schema_object(
+                json!({
+                    "id": {
+                        "type": "string",
+                        "description": "Background process id returned by bash (e.g. bg_1a2b3c4d)"
+                    },
+                    "input": {
+                        "type": "string",
+                        "description": "Text to write; usually ends with \\n"
+                    },
+                    "close": {
+                        "type": "boolean",
+                        "description": "Close stdin after writing (end of input)"
+                    },
+                    "wait_ms": {
+                        "type": "integer",
+                        "description": "How long to wait for output before returning (default 400, max 10000)"
+                    }
+                }),
+                &["id"],
+            ),
+        }
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> ToolResult {
+        let session = session_key(&input);
+        let Some(id) = input.get("id").and_then(|v| v.as_str()) else {
+            return ToolResult::error("Missing 'id' parameter".into());
+        };
+        let process = match self.0.lookup(&session, id) {
+            Ok(process) => process,
+            Err(msg) => return ToolResult::error(msg),
+        };
+        let text = input.get("input").and_then(|v| v.as_str()).unwrap_or("");
+        let close = input
+            .get("close")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        {
+            let mut stdin = process.stdin.lock().await;
+            let Some(pipe) = stdin.as_mut() else {
+                return ToolResult::error(format!("{id}: stdin is already closed"));
+            };
+            if !text.is_empty() {
+                use tokio::io::AsyncWriteExt;
+                if let Err(e) = pipe.write_all(text.as_bytes()).await {
+                    return ToolResult::error(format!(
+                        "{id}: could not write to stdin ({e}); {}",
+                        status_line(&process)
+                    ));
+                }
+                let _ = pipe.flush().await;
+            }
+            if close {
+                *stdin = None;
+            }
+        }
+        let wait = input
+            .get("wait_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(INPUT_SETTLE_MS)
+            .min(10_000);
+        tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+        let (output, dropped) = lock(&process.output).take_unread();
+        let mut text = format!("{}\n", status_line(&process));
+        if dropped {
+            text.push_str("[earlier output was dropped]\n");
+        }
+        if output.is_empty() {
+            text.push_str("(no new output yet; read it later with bash_output)");
+        } else {
+            text.push_str(&output);
+        }
+        ToolResult::success(text)
     }
 }
 
@@ -395,6 +505,39 @@ mod tests {
         assert!(dropped);
         assert_eq!(text.len(), MAX_RETURNED_BYTES);
         assert!(buf.has_unread());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_input_drives_an_interactive_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = json!({"caller_channel": "test", "caller_chat_id": 7, "control_chat_ids": []});
+        let session = session_key(&json!({"__microclaw_auth": auth.clone()}));
+        let registry = Arc::new(ProcessRegistry::default());
+        let input_tool = BashInputTool(registry.clone());
+        // A line-oriented "REPL": echoes each line upper-cased until EOF.
+        let id = registry
+            .spawn(
+                &session,
+                "while read line; do echo \"got:$line\" | tr a-z A-Z; done; echo bye",
+                dir.path(),
+                &HashMap::new(),
+            )
+            .unwrap();
+        let first = input_tool
+            .execute(json!({"id": id, "input": "hello\n", "wait_ms": 1000, "__microclaw_auth": auth.clone()}))
+            .await;
+        assert!(!first.is_error, "{}", first.content);
+        assert!(first.content.contains("GOT:HELLO"), "{}", first.content);
+        let last = input_tool
+            .execute(json!({"id": id, "input": "again\n", "close": true, "wait_ms": 1000, "__microclaw_auth": auth.clone()}))
+            .await;
+        assert!(last.content.contains("GOT:AGAIN"), "{}", last.content);
+        assert!(last.content.contains("bye"), "{}", last.content);
+        let closed = input_tool
+            .execute(json!({"id": id, "input": "x\n", "__microclaw_auth": auth}))
+            .await;
+        assert!(closed.is_error);
     }
 
     #[cfg(unix)]

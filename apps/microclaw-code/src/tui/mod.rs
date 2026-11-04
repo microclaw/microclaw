@@ -241,6 +241,23 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) {
 }
 
 /// Run the TUI until the user quits. Returns the session id.
+fn sandbox_label(sandbox: &microclaw_code_core::driver::SandboxInfo) -> String {
+    format!(
+        "shell sandbox: {} — commands write only the repository, temp and tool caches{}; network {}",
+        sandbox.mechanism,
+        if sandbox.confines_reads {
+            ""
+        } else {
+            " (credential directories stay readable)"
+        },
+        if sandbox.network {
+            "on"
+        } else {
+            "off, so commands run without asking in ask mode"
+        }
+    )
+}
+
 /// Messages of a resumed session shown before the prompt.
 const HISTORY_LIMIT: usize = 60;
 
@@ -324,6 +341,9 @@ pub async fn run(
     );
     if resumed {
         replay_history(&mut app.transcript, &session);
+    }
+    if let Some(sandbox) = &session.settings.sandbox {
+        app.transcript.notice(sandbox_label(sandbox), Tone::Info);
     }
     for notice in notices {
         app.transcript.notice(notice, Tone::Warning);
@@ -994,7 +1014,7 @@ impl App {
             "/status" => {
                 let text = match &self.session {
                     Some(s) => format!(
-                        "project: {}\nmode: {}  ·  trusted: {}  ·  auto-verify: {}  ·  fix rounds: {}\nsession: {}\nchecks: {}",
+                        "project: {}\nmode: {}  ·  trusted: {}  ·  auto-verify: {}  ·  fix rounds: {}\nsession: {}\nchecks: {}\n{}",
                         s.project.root.display(),
                         self.mode.as_str(),
                         if s.project.trusted { "yes" } else { "no" },
@@ -1010,7 +1030,11 @@ impl App {
                             .iter()
                             .map(|c| format!("{}{}", c.name, if c.auto { "*" } else { "" }))
                             .collect::<Vec<_>>()
-                            .join(", ")
+                            .join(", "),
+                        match &s.settings.sandbox {
+                            Some(sandbox) => sandbox_label(sandbox),
+                            None => "shell sandbox: off".into(),
+                        }
                     ),
                     None => "a turn is running".into(),
                 };

@@ -41,7 +41,24 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
     `/review` and `mccode review` (read-only review of the uncommitted
     changes), `/model`, `/cost`, `/compact` and `/fork`;
   - trusted projects load `AGENTS.md` (or `CLAUDE.md` / `AGENT.md`) into the
-    agent's instructions.
+    agent's instructions;
+  - shell commands run in the OS sandbox by default (bubblewrap / Seatbelt):
+    writes are limited to the repository, temp and tool caches, and
+    credential directories are hidden. Use `--sandbox off` and
+    `--no-network`; `mccode doctor` and `/status` show the state. With
+    network off, ask mode runs sandboxed commands without asking;
+    `--review-commands` lets a model flag dangerous commands (asked even in
+    auto mode);
+  - `mccode acp` (Agent Client Protocol for editors such as Zed, with
+    permission requests, modes and session loading) and `mccode mcp-server`
+    (tools `run` and `review`);
+  - `mccode remote pair|status|forget` and `mccode -p … --remote`: hand a task
+    to a paired MicroClaw Server and stream the result;
+  - `mccode eval` (cases with a snapshot, a prompt and a check) and
+    `mccode eval replay` (cases from bug-fix commits);
+  - releases ship `mccode` in every `microclaw` archive, the Homebrew formulas
+    install it, and `mccode update` installs the latest release after
+    checking `SHA256SUMS.txt`.
 
   The UI-independent core (project discovery, trust, verification, session
   index, turn driver) is `crates/microclaw-code-core`. Proposal:
@@ -59,6 +76,24 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   for showing a session's history, plus per-session `checkpoint` /
   `checkpoints` / `restore_checkpoint`, `session_usage`, `session_model` /
   `set_session_model`, `compact_session` and `fork_session`.
+- `approval_channels` (default `[web, code]`) and
+  `read_only_subagent_channels` (default `[code]`) replace hard-coded channel
+  names in the approval gate and the sub-agent restriction.
+- `run_agent_turn(state, AgentTurn)` is the single entry point of the agent
+  loop; the `process_with_agent*` functions are shorthands for it.
+- `bash_input`: write to a background process's stdin (REPLs, debuggers,
+  prompts) and read what it answers.
+- In-run approvals accept `defer`, which ends the run with the text approval
+  prompt (non-interactive callers).
+- Landlock fallback for `sandbox.backend: local` on Linux without
+  bubblewrap.
+- `sandbox.backend: local`: the operating system's sandbox (bubblewrap on
+  Linux, Seatbelt on macOS) as a container-free alternative to
+  Docker/Podman. It allows writes to the working directory, temp, tool caches
+  and `sandbox.writable_roots`, hides credential directories, and unshares
+  the network when `no_network` is set. Unlike container backends it also
+  confines `run_in_background` processes. `microclaw doctor` checks it. SDK:
+  `MicroClawBuilder::shell_sandbox(ShellSandbox::…)` and `local_sandbox()`.
 - `apply_patch` engine tool: add, delete, move and edit several files in one
   atomic call (`*** Begin Patch` format); every operation is checked,
   including the stale-read guard, before anything is written. It is a

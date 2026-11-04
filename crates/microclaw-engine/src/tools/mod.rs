@@ -73,13 +73,11 @@ use crate::config::Config;
 use crate::internal::channels::channel_adapter::ChannelRegistry;
 use crate::internal::storage::db::Database;
 use crate::internal::tool_runtime::path_guard::{self, GovernanceGuard};
+use crate::internal::tool_runtime::runtime::inject_auth_context;
 pub use crate::internal::tool_runtime::runtime::{
     auth_context_from_input, authorize_chat_access, resolve_tool_path, resolve_tool_working_dir,
     schema_object, tool_execution_policy, tool_risk, validate_execution_policy, Tool,
     ToolAuthContext, ToolResult, ToolRisk,
-};
-use crate::internal::tool_runtime::runtime::{
-    inject_auth_context, require_high_risk_approval_with_risk,
 };
 use crate::internal::tool_runtime::sandbox::{ExtraMount, SandboxMode, SandboxRouter};
 use crate::memory_backend::MemoryBackend;
@@ -187,6 +185,7 @@ impl ToolRegistry {
             ),
             Box::new(background_process::BashOutputTool(processes.clone())),
             Box::new(background_process::BashKillTool(processes.clone())),
+            Box::new(background_process::BashInputTool(processes.clone())),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),
@@ -473,6 +472,7 @@ impl ToolRegistry {
             ),
             Box::new(background_process::BashOutputTool(processes.clone())),
             Box::new(background_process::BashKillTool(processes.clone())),
+            Box::new(background_process::BashInputTool(processes.clone())),
             Box::new(
                 browser::BrowserTool::new(&config.data_dir)
                     .with_default_timeout_secs(config.tool_timeout_secs("browser", 30)),
@@ -778,8 +778,11 @@ impl ToolRegistry {
         input: serde_json::Value,
         auth: &ToolAuthContext,
     ) -> ToolResult {
-        if auth.caller_channel == "code"
-            && auth.principal.starts_with("subagent:")
+        if auth.principal.starts_with("subagent:")
+            && self
+                .config
+                .read_only_subagent_channels
+                .contains(&auth.caller_channel)
             && !matches!(
                 name,
                 "web_search"
@@ -805,7 +808,7 @@ impl ToolRegistry {
             )
         {
             return ToolResult::error(format!(
-                "Tool `{name}` is not available to MicroClaw Code Subagents; Workspace writes are owned by the Main Agent"
+                "Tool `{name}` is not available to sub-agents on this channel; workspace writes are owned by the main agent"
             ))
             .with_error_type("work_subagent_read_only");
         }
@@ -984,7 +987,15 @@ impl ToolRegistry {
                         );
                     }
                 } else if let Some(blocked) =
-                    require_high_risk_approval_with_risk(name, effective_risk, auth, &input)
+                    crate::internal::tool_runtime::runtime::require_high_risk_approval_with_policy(
+                        &crate::internal::tool_runtime::runtime::ApprovalPolicy::new(
+                            self.config.approval_channels.iter().cloned(),
+                        ),
+                        name,
+                        effective_risk,
+                        auth,
+                        &input,
+                    )
                 {
                     return blocked;
                 }

@@ -30,6 +30,8 @@ fn minimal_config() -> Config {
         working_dir: "./tmp".into(),
         working_dir_isolation: WorkingDirIsolation::Chat,
         high_risk_tool_user_confirmation_required: true,
+        approval_channels: vec!["web".into(), "code".into()],
+        read_only_subagent_channels: vec!["code".into()],
         bash_dangerous_patterns: vec![],
         rtk: microclaw::config::RtkConfig::default(),
         sandbox: microclaw::config::SandboxConfig::default(),

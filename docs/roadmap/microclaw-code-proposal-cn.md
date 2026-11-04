@@ -126,18 +126,41 @@ crates/microclaw-engine
 - TUI 端到端（pty + pyte + 模拟服务）：`apply_patch` 改两个文件并显示两份 Diff；信任后系统提示里有 AGENTS.md；`/review` 只给只读工具；`/undo` 删掉新增文件、还原修改；`/cost`；`/model mock-two` 之后请求确实用了 mock-two；`/fork` 之后继续对话；`/compact`。
 - `mccode review typos`：请求里带有改动的 Diff 和关注点，不提供任何写入工具；工作区干净时提示没有可审查的内容。
 
-## 八、后续（按优先级）
+## 八、第四批（已实现）：系统级沙箱
 
-1. **地基**：
-   - 统一的工具策略判断，去掉按渠道名的硬编码；
-   - Agent 主循环收敛为单一入口。
-2. **安全**：
-   - 系统级沙箱（Landlock/seccomp、bwrap、Seatbelt）；
-   - auto 模式下对命令做模型复核。
-3. **体验**：
-   - 可交互的持久终端；
-   - 子目录里的 AGENTS.md 按路径就近加载。
-4. **接入**：`mccode acp`（含 `session/request_permission`，可直接接引擎内审批）；`mccode mcp-server`；交给已配对的 Server 远程执行。
-5. **评测与发布**：
-   - Minimal 预设跑 Terminal-Bench；用本仓库历史里修 bug 的提交做回放测试集；
-   - release 包含 `mccode`，提供 Homebrew 和自更新。
+| 项目 | 说明 |
+|---|---|
+| 引擎 `sandbox.backend: local` | 不依赖容器，直接用操作系统的沙箱执行 shell 命令：Linux 用 bubblewrap（根目录只读挂载；工作区、临时目录、工具缓存和 `writable_roots` 可写；凭据目录换成空的 tmpfs；`no_network` 时隔离网络命名空间）；macOS 用 Seatbelt 生成的规则（默认拒绝，允许读，写入只限上述目录，拒绝读写凭据目录，可禁网）。启动时实际跑一次 `bwrap` 探测，容器里没开用户命名空间时视为不可用。和容器后端不同，后台进程（`run_in_background`）也会放进沙箱。`microclaw doctor` 会检查 |
+| 隐藏的目录 | `~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker`、`~/.netrc`、`~/.git-credentials`、`~/.microclaw`（如果工作区就在其中则不隐藏） |
+| 默认可写的缓存 | `~/.cache`、`~/.cargo`、`~/.rustup`、`~/.npm`、`~/.pnpm-store`、`~/.yarn`、`~/.bun`、`~/.gradle`、`~/.m2`、`~/go`、`~/Library/Caches`，保证构建和测试照常 |
+| SDK | `MicroClawBuilder::shell_sandbox(ShellSandbox::{Off, WorkspaceWrite { network, writable_roots }})`、`local_sandbox()` |
+| mccode | 默认开启（`--sandbox off` 或 `MICROCLAW_CODE_SANDBOX=off` 关闭，`--no-network` 禁网）；系统提示告诉 Agent 沙箱的限制、遇到权限错误不要绕过；启动提示、`/status`、`mccode doctor` 显示状态；机器上没有可用沙箱时明确提示并照常运行 |
+
+沙箱是纵深防御，审批规则不变。
+
+验证：
+- 单元测试：bubblewrap 参数（绑定工作区、tmpfs 隐藏、禁网）、Seatbelt 规则（写入范围、隐藏、禁网、路径转义）、包含工作区的隐藏目录不隐藏；以及一个真正执行的测试：工作区内可写，工作区外写入失败，隐藏目录读不到（在 Linux 上用 bwrap 实际跑过；macOS 由 CI 运行）。
+- 端到端（真实 `mccode` + 模拟服务，auto 模式）：仓库内写文件成功；写 `/home/user/…` 得到 "Read-only file system"；`~/.ssh/id_test` 读不到；后台进程在沙箱里运行并写入仓库；`mccode doctor` 显示 bubblewrap。对照组 `MICROCLAW_CODE_SANDBOX=off` 时同样的越界写入成功。
+
+## 九、第五批（已实现）：剩余事项一次完成
+
+| 方向 | 内容 |
+|---|---|
+| 地基 | 审批策略由配置决定：`approval_channels`（默认 web、code，控制群始终需要审批）和 `read_only_subagent_channels`（默认 code）取代代码里写死的渠道名，统一由 `ApprovalPolicy` 判断、`ToolRegistry::execute_with_auth` 执行。Agent 主循环收敛为单一入口 `run_agent_turn(state, AgentTurn)`，原来的 `process_with_agent*` 只是它的简写 |
+| 安全 | Linux 上没有可用 bwrap 时用 **Landlock** 兜底（父进程建好规则集，子进程在 `pre_exec` 里只调用 `prctl` 和 `landlock_restrict_self`）：写入同样受限，ABI 4 以上还能禁止向外的 TCP 连接，但读不能隐藏凭据目录，所以这时命令照常询问。沙箱开启且禁网时，ask 模式下的命令不再询问（破坏性命令仍然询问）。`--review-commands` 让模型给每个审批写一句判断，判为 `DANGEROUS` 的命令即使在 auto 模式也要人确认。没人能回答审批时（`-p`、MCP）引擎内审批回答 `defer`，退回文字审批，`--session <id> -p 1|3` 照常可用 |
+| 体验 | 新工具 `bash_input`：向后台进程的标准输入写内容并返回输出，可以驱动 REPL、调试器和交互式提示。子目录 `AGENTS.md` 原本就按路径就近加载（`SubdirectoryHintTracker`），现在也识别 `apply_patch` 涉及的文件 |
+| 接入 | `mccode acp`：Agent Client Protocol，Zed 等编辑器可直接接入；审批走 `session/request_permission`，模式 plan/ask/auto，`session/load` 回放历史，回复前保证通知已发出。`mccode mcp-server`：MCP 工具 `run`、`review`，需要审批时返回会话 id 和回答方式。`mccode remote pair` 用 Server 网页控制台发的配对码换设备令牌，`mccode -p … --remote` 把任务交给已配对的 Server 执行并流式显示结果 |
+| 评测 | `mccode eval`：用例是 `case.yaml`（提示、检查命令、可选准备命令）加 `repo/` 快照，每个用例在新的临时 git 仓库里以 auto 模式运行，跑完检查命令决定通过与否，输出耗时、请求数和 token；`mccode eval replay` 把仓库里修 bug 的提交转成用例（父提交为快照，提交说明为提示，去掉 Co-Authored-By 之类的尾注）。仓库自带两个示例用例 |
+| 发布 | 每个 `microclaw` 发布包都带上 `mccode`（包名和数量不变），Homebrew 公式一起安装；`mccode update` 从 GitHub 最新发布下载对应平台的包，用 `SHA256SUMS.txt` 校验后替换自身，Homebrew 安装的提示用 `brew upgrade`。crates.io 上的 `mccode` 名字已用占位版本 0.0.1 占住 |
+
+验证：
+- 引擎：审批策略按配置判断；Landlock 实际限制写入（本机内核 ABI 7）；`bash_input` 驱动一个逐行回显的进程；`defer` 结束运行并给出文字审批卡；原有的引擎内审批测试连续 5 次稳定通过。
+- code-core：用真实的 `CodeSession` 测审批判断（沙箱禁网自动通过、`git push` 仍问、有网时询问、Landlock 时询问、auto 模式、`DANGEROUS` 判断）；SSE 解析和远程事件映射；配对文件权限 0600。
+- 端到端（真实二进制 + 模拟模型）：ask + `--no-network` 时命令不询问直接运行且越界写入被挡；强制 Landlock 时越界写入得到 "Permission denied"；`-p` 拒绝流程回归；ACP 客户端完成初始化、新会话、带权限请求的对话、切换模式、加载历史；MCP 客户端完成 `run`（auto）、`run`（ask，返回审批说明）、回答 `1` 后执行、`review`；对**真实的 MicroClaw Server** 完成配对、`remote status`、远程对话、远程审批（退出码 2）、批准后在 Server 上写文件、`remote forget`；`mccode eval` 跑示例用例并正确区分通过与失败；`eval replay` 在本仓库历史上生成用例；`mccode update --check` 访问真实的 GitHub 接口。
+
+## 十、仍可继续的方向
+
+- 在 Terminal-Bench 上用 `mccode eval` 的方式跑分（需要真实模型和费用预算）；
+- 真正的伪终端（PTY），供需要 TTY 的全屏程序使用；
+- seccomp 进一步限制系统调用；
+- 远程执行时把本地仓库同步到 Server（目前在 Server 自己的工作目录执行）。

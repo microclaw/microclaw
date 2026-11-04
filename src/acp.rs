@@ -541,7 +541,7 @@ fn acp_tool_kind(name: &str) -> ToolKind {
         "read_file" | "read_memory" | "bash_output" => ToolKind::Read,
         "edit_file" | "write_file" | "apply_patch" => ToolKind::Edit,
         "grep" | "glob" | "session_search" | "structured_memory_search" => ToolKind::Search,
-        "bash" | "bash_kill" => ToolKind::Execute,
+        "bash" | "bash_kill" | "bash_input" => ToolKind::Execute,
         "web_fetch" | "web_search" | "deep_research" | "fetch_artifact" => ToolKind::Fetch,
         "todo_write" | "todo_read" => ToolKind::Think,
         _ => ToolKind::Other,

@@ -6,6 +6,7 @@
 //! - [`allow`]: per-project command allow rules (`always allow cargo test`);
 //! - [`verify`] / [`git`]: running project checks and detecting changes;
 //! - [`sessions`]: the per-project session index;
+//! - [`remote`]: handing a task to a paired MicroClaw Server;
 //! - [`driver`]: one user turn — agent run, approvals, verification and the
 //!   fix loop — exchanged with front ends as [`driver::Control`] /
 //!   [`driver::Update`] messages.
@@ -18,6 +19,7 @@ pub mod git;
 pub mod home;
 pub mod project;
 pub mod prompt;
+pub mod remote;
 pub mod sessions;
 pub mod trust;
 pub mod verify;

@@ -12,9 +12,7 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, RwLock};
 
-use crate::agent_engine::{
-    process_with_agent_profile_guarded_mode, AgentEvent, AgentRequestContext,
-};
+use crate::agent_engine::{run_agent_turn, AgentEvent, AgentRequestContext, AgentTurn};
 use crate::chat_turn_queue::PendingMessage;
 use crate::config::Config;
 use crate::hooks::HookManager;
@@ -265,7 +263,7 @@ impl RunExecutor for HeadlessRunExecutor {
                                 control.reject(RuntimeError {
                                     code: RuntimeErrorCode::InvalidRequest,
                                     message: format!(
-                                        "unknown approval decision `{decision}` (use 1/approve, 2/always or 3/deny)"
+                                        "unknown approval decision `{decision}` (use 1/approve, 2/always, 3/deny or defer)"
                                     ),
                                     retryable: false,
                                 });
@@ -820,20 +818,15 @@ impl HeadlessRuntime {
             }
             None => (None, None),
         };
-        let response = process_with_agent_profile_guarded_mode(
+        let response = run_agent_turn(
             &self.state,
-            AgentRequestContext {
+            AgentTurn::new(AgentRequestContext {
                 caller_channel: &caller_channel,
                 chat_id,
                 chat_type: "private",
-            },
-            None,
-            None,
-            raw_event_tx.as_ref(),
-            None,
-            false,
-            None,
-            profile,
+            })
+            .events(raw_event_tx.as_ref())
+            .profile(profile),
         )
         .await;
         drop(raw_event_tx);
@@ -1579,7 +1572,9 @@ mod tests {
             while let Some(envelope) = run.next_event().await {
                 if let RuntimeEvent::ApprovalRequired { approval_id, .. } = envelope.event {
                     approvals += 1;
-                    if let Some(answer) = answer {
+                    // Only the in-run request has a waiter; a deferral is
+                    // followed by the text-path card.
+                    if let Some(answer) = answer.filter(|_| approvals == 1) {
                         controller
                             .resolve_approval_confirmed(approval_id, answer)
                             .await
@@ -1608,6 +1603,15 @@ mod tests {
         let (text, approvals) = run_with_in_run_answer("in-run-deny", Some("deny")).await;
         assert_eq!(approvals, 1);
         assert_eq!(text, "saw denial");
+    }
+
+    #[tokio::test]
+    async fn a_deferred_approval_ends_the_run_with_the_text_prompt() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let (text, approvals) = run_with_in_run_answer("in-run-defer", Some("defer")).await;
+        // The in-run request, then the text-path card that ends the run.
+        assert_eq!(approvals, 2);
+        assert!(text.contains("bash"), "{text}");
     }
 
     #[tokio::test]

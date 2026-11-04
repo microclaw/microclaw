@@ -200,6 +200,9 @@ jobs:
           else
             cargo build --release
           fi
+          # MicroClaw Code ships in every archive, next to the Server binary
+          # (`microclaw code …` forwards to it).
+          cargo build --release -p microclaw-code
 
       - name: Prepare packaged binary name (Unix)
         if: matrix.target.archive_ext == 'tar.gz'
@@ -222,7 +225,7 @@ jobs:
             PACKAGED_BIN="${{ matrix.target.bin }}"
           fi
           ASSET_NAME="${ASSET_PREFIX}-${RELEASE_VERSION}-${{ matrix.target.asset_triple }}.tar.gz"
-          tar -czf "$ASSET_NAME" -C target/release "${PACKAGED_BIN}"
+          tar -czf "$ASSET_NAME" -C target/release "${PACKAGED_BIN}" mccode
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
 
       - name: Prepare packaged binary name (Windows)
@@ -246,7 +249,7 @@ jobs:
             $packagedBin = "${{ matrix.target.bin }}"
           }
           $assetName = "${assetPrefix}-${releaseVersion}-${{ matrix.target.asset_triple }}.zip"
-          Compress-Archive -Path "target/release/${packagedBin}" -DestinationPath $assetName -Force
+          Compress-Archive -Path "target/release/${packagedBin}", "target/release/mccode.exe" -DestinationPath $assetName -Force
           "ASSET_NAME=$assetName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upload build artifact

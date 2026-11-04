@@ -11,10 +11,13 @@ Status: **Preview**.
 ## Install and configure
 
 ```sh
-cargo install --path apps/microclaw-code   # installs `mccode`
+brew install microclaw/tap/microclaw       # macOS: microclaw + mccode
+# or download a release archive (it contains both binaries), or
+cargo install --path apps/microclaw-code   # build mccode from source
 mccode setup                               # choose a provider, model and key
 cd path/to/your/repo
 mccode
+mccode update                              # later: install the latest release (checksum-verified)
 ```
 
 `mccode setup` writes `~/.microclaw/code/config.yaml`. Without it, `mccode`
@@ -69,6 +72,37 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 
 Checkpoints are taken at the start of every turn in a shadow git repository
 inside the Code home (`data/checkpoints`); they never touch your own `.git`.
+
+## Shell sandbox
+
+Shell commands (`bash`, including background processes) run in the operating
+system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
+(`sandbox-exec`) on macOS.
+
+- They can read the machine, except credential directories (`~/.ssh`,
+  `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`,
+  `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.microclaw`).
+- They can write only the repository, the temp directory and common tool
+  caches (`~/.cache`, `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.gradle`, `~/go`, …),
+  so builds and tests keep working.
+- Network access is on; `--no-network` turns it off. With network off, a
+  command in the sandbox cannot change anything outside the repository, so in
+  `ask` mode such commands run **without asking** (destructive ones such as
+  `git push` or `rm -rf` still ask).
+- On Linux without a working `bwrap`, **Landlock** is used instead: writes are
+  confined the same way (and outgoing TCP is blocked on kernels with Landlock
+  ABI 4+), but credential directories stay readable, so commands keep asking.
+  `MICROCLAW_LOCAL_SANDBOX=bubblewrap|landlock|none` overrides the choice.
+
+`--review-commands` has the model annotate every approval with a one-line
+verdict; a command it calls `DANGEROUS` asks you even in `auto` mode.
+
+This is defence in depth: the approval rules above still apply. Turn it off
+with `--sandbox off` (or `MICROCLAW_CODE_SANDBOX=off`). If the machine has no
+working OS sandbox (no `bwrap`, or unprivileged user namespaces disabled),
+Code says so at startup and commands run unsandboxed; `mccode doctor` reports
+the state. The MicroClaw Server can use the same mechanism with
+`sandbox: { mode: all, backend: local }`.
 
 ## Permission modes
 
@@ -147,6 +181,38 @@ always_ask:
 instructions: |
   Use pnpm, not npm.
 ```
+
+## Editors, other agents and remote Servers
+
+| Command | What it does |
+|---|---|
+| `mccode acp` | Agent Client Protocol on stdio, for editors such as Zed (add a custom agent with command `mccode` and argument `acp`). Sessions map to MicroClaw Code sessions in the project of their `cwd`; approvals become permission requests; modes are plan / ask / auto; `session/load` replays history. |
+| `mccode mcp-server` | Model Context Protocol server on stdio with tools `run` (a task, with verification and fix rounds; approvals end the call and are answered by calling `run` again with the session and `1`/`2`/`3`) and `review`. |
+| `mccode remote pair <url> <code>` | Pair with a MicroClaw Server using a code from its web console (Access tab); `remote status`, `remote forget`. |
+| `mccode -p "…" --remote` | Run the task on the paired Server (its working directory, tools and approval policy), streaming the result here. Approvals: exit 2, then `--remote --session <key> -p 1\|3`. |
+
+Flags such as `--mode`, `--sandbox`, `--no-network` and `--no-verify` go
+before the subcommand (`mccode --mode auto acp`). Only projects you already
+trusted (TUI, `mccode trust`) honour `.microclaw/project.yaml` here.
+
+The agent can also drive interactive programs: start a REPL or debugger with
+`bash` `run_in_background`, then send it input with `bash_input` (stdin, no
+terminal: use line-oriented modes such as `python3 -u -i`).
+
+## Evaluation
+
+```sh
+mccode eval apps/microclaw-code/eval/cases            # PASS/FAIL per case
+mccode --json eval my-cases --filter parser            # JSON Lines
+mccode eval replay v0.10.0..HEAD --check "cargo test" --out eval/replay
+```
+
+A case is a directory with `case.yaml` (`prompt`, `check`, optional `setup`,
+`mode`, `timeout_secs`) and a `repo/` snapshot. Each case runs in a fresh git
+repository in `auto` mode with verification; the case passes when `check`
+exits 0 afterwards. `eval replay` turns bug-fix commits into cases (parent
+commit = snapshot, commit message = prompt), a regression set built from real
+history. Results include duration, requests and tokens.
 
 ## Design
 

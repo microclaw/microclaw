@@ -439,7 +439,7 @@ async fn execute_single_tool(
                     .with_error_type("approval_denied");
                     false
                 }
-                None => {
+                Some(ApprovalDecision::Defer) | None => {
                     ctx.waiting_for_user_approval = true;
                     ctx.waiting_approval_tool = Some(name.clone());
                     ctx.waiting_approval_preview = preview;
@@ -1042,6 +1042,7 @@ async fn await_in_run_approval(
             ApprovalDecision::ApproveOnce => "approved_once",
             ApprovalDecision::ApproveAlways => "approved_always",
             ApprovalDecision::Deny => "denied",
+            ApprovalDecision::Defer => "deferred",
         };
         move |db| {
             db.log_audit_event(

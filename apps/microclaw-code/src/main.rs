@@ -6,10 +6,14 @@
 //! (approvals, verification, fix loop) lives in `microclaw-code-core`; this
 //! binary only handles the command line and presentation.
 
+mod acp;
+mod eval;
 mod format;
+mod mcp_server;
 mod print;
 mod setup;
 mod tui;
+mod update;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -18,14 +22,14 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use microclaw_code_core::allow::{self, AllowRules};
 use microclaw_code_core::driver::{
-    CALLER_CHANNEL, CodeSession, Control, SessionSettings, compile_always_ask,
+    CALLER_CHANNEL, CodeSession, Control, SandboxInfo, SessionSettings, compile_always_ask,
 };
 use microclaw_code_core::home;
 use microclaw_code_core::project::{self, Mode, Project};
 use microclaw_code_core::sessions::SessionIndex;
 use microclaw_code_core::trust::{TrustDecision, TrustStore};
 use microclaw_code_core::verify;
-use microclaw_sdk::MicroClaw;
+use microclaw_sdk::{MicroClaw, ShellSandbox};
 use tokio::sync::mpsc;
 
 use print::{Printer, Style, approval_card};
@@ -82,6 +86,27 @@ struct Cli {
     #[arg(long, value_name = "N")]
     max_fix_rounds: Option<u32>,
 
+    /// Shell sandbox: `workspace-write` (default: commands write only the
+    /// repository, temp and tool caches) or `off`. Also MICROCLAW_CODE_SANDBOX.
+    #[arg(long, value_name = "MODE")]
+    sandbox: Option<String>,
+
+    /// Deny network access to sandboxed shell commands. In ask mode such
+    /// commands then run without asking (they cannot change anything outside
+    /// the repository).
+    #[arg(long)]
+    no_network: bool,
+
+    /// Have the model review each command that needs approval; a command it
+    /// calls DANGEROUS asks you even in auto mode.
+    #[arg(long)]
+    review_commands: bool,
+
+    /// With -p: run the task on the paired MicroClaw Server (see
+    /// `mccode remote pair`) instead of this machine.
+    #[arg(long, requires = "print")]
+    remote: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -121,6 +146,38 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
+    /// Run evaluation cases (directories with case.yaml + repo/), or create
+    /// cases from a repository's bug-fix commits with `eval replay`.
+    Eval {
+        #[command(subcommand)]
+        action: Option<EvalAction>,
+        /// Directory of cases (or one case).
+        #[arg(default_value = "eval")]
+        dir: PathBuf,
+        /// Only cases whose path contains this text.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Keep each case's workspace for inspection.
+        #[arg(long)]
+        keep: bool,
+    },
+    /// Install the latest release of mccode (checksum-verified).
+    Update {
+        /// Only report whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Pair with a MicroClaw Server, show or forget the pairing.
+    Remote {
+        #[command(subcommand)]
+        action: RemoteAction,
+    },
+    /// Serve the Agent Client Protocol on stdin/stdout (for editors such as
+    /// Zed: configure `mccode acp` as a custom agent).
+    Acp,
+    /// Serve the Model Context Protocol on stdin/stdout: tools `run` and
+    /// `review` let other agents delegate coding tasks to MicroClaw Code.
+    McpServer,
     /// Review the uncommitted changes (read-only) and print the findings.
     Review {
         /// What to focus on, e.g. "error handling" or a path.
@@ -131,6 +188,42 @@ enum Command {
         #[command(subcommand)]
         action: Option<AllowAction>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum EvalAction {
+    /// Write one case per bug-fix commit (parent = snapshot, message = prompt).
+    Replay {
+        /// Commit range, e.g. v0.10.0..HEAD
+        range: String,
+        /// Check command that must pass after the fix, e.g. "cargo test".
+        #[arg(long)]
+        check: String,
+        /// Output directory.
+        #[arg(long, default_value = "eval/replay")]
+        out: PathBuf,
+        /// Include every commit, not only those that mention a fix.
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RemoteAction {
+    /// Claim a pairing code from the Server's web console (Access tab).
+    Pair {
+        /// Server URL, e.g. http://my-server:10961
+        url: String,
+        /// The 8-character pairing code.
+        code: String,
+        /// Name shown in the Server's device list (default: host name).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Show the pairing and check that the Server accepts it.
+    Status,
+    /// Remove the stored pairing (revoke the device in the Server too).
+    Forget,
 }
 
 #[derive(Debug, Subcommand)]
@@ -181,6 +274,17 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             path.display()
         );
         return Ok(ExitCode::SUCCESS);
+    }
+
+    if let Some(Command::Update { check }) = &cli.command {
+        update::run(*check).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(Command::Remote { action }) = &cli.command {
+        return remote_command(action, style).await;
+    }
+    if cli.remote {
+        return remote_print(&cli, style).await;
     }
 
     let start = match &cli.cwd {
@@ -255,7 +359,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
-        Some(Command::Review { .. }) | None => {}
+        Some(Command::Review { .. })
+        | Some(Command::Remote { .. })
+        | Some(Command::Update { .. })
+        | Some(Command::Eval { .. })
+        | Some(Command::Acp)
+        | Some(Command::McpServer)
+        | None => {}
     }
 
     let review_focus = match &cli.command {
@@ -278,8 +388,27 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(focus) => Some(format!("/review {focus}").trim().to_string()),
         None => print_prompt,
     };
+    if let Some(Command::Eval {
+        action:
+            Some(EvalAction::Replay {
+                range,
+                check,
+                out,
+                all,
+            }),
+        ..
+    }) = &cli.command
+    {
+        let written = eval::replay(&project.root, range, out, check, *all)?;
+        println!("Wrote {written} case(s) to {}.", out.display());
+        return Ok(ExitCode::SUCCESS);
+    }
+    let acp = matches!(
+        cli.command,
+        Some(Command::Acp | Command::McpServer | Command::Eval { .. })
+    );
     let interactive = print_prompt.is_none();
-    if interactive && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
+    if interactive && !acp && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
         anyhow::bail!(
             "the interactive interface needs a terminal; pass a task with -p \"...\" (or -p - to read it from stdin)"
         );
@@ -322,21 +451,92 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .first()
             .map(|r| r.id.clone())
             .ok_or_else(|| anyhow::anyhow!("no previous session for this project"))?
+    } else if acp {
+        // ACP clients create their own sessions.
+        String::new()
     } else {
         index.create(&project.root)?.id
     };
 
+    let sandbox_choice = sandbox_choice(&cli)?;
+    let sandbox = match (&sandbox_choice, microclaw_sdk::local_sandbox()) {
+        (ShellSandbox::Off, _) => None,
+        (ShellSandbox::WorkspaceWrite { network, .. }, Some(mechanism)) => Some(SandboxInfo {
+            mechanism: mechanism.to_string(),
+            network: *network,
+            confines_reads: mechanism != "landlock",
+        }),
+        (ShellSandbox::WorkspaceWrite { .. }, None) => {
+            notices.push(NO_SANDBOX_NOTICE.into());
+            if !interactive && !cli.json {
+                eprintln!("{}", style.yellow(NO_SANDBOX_NOTICE));
+            }
+            None
+        }
+    };
+
+    if acp {
+        let mode = cli
+            .mode
+            .as_deref()
+            .map(|raw| {
+                Mode::parse(raw).ok_or_else(|| {
+                    anyhow::anyhow!("unknown mode '{raw}' (expected plan, ask or auto)")
+                })
+            })
+            .transpose()?;
+        let options = acp::AcpOptions {
+            config_path,
+            sandbox: sandbox_choice,
+            sandbox_info: sandbox,
+            review_commands: cli.review_commands,
+            verify: !cli.no_verify,
+            max_fix_rounds: cli.max_fix_rounds,
+            default_mode: mode,
+        };
+        if let Some(Command::Eval {
+            dir, filter, keep, ..
+        }) = &cli.command
+        {
+            let results = eval::run(
+                &eval::EvalOptions {
+                    config_path: options.config_path.clone(),
+                    sandbox: options.sandbox.clone(),
+                    sandbox_info: options.sandbox_info.clone(),
+                    max_fix_rounds: options.max_fix_rounds,
+                    keep: *keep,
+                    filter: filter.clone(),
+                },
+                dir,
+                cli.json,
+            )
+            .await?;
+            return Ok(if results.iter().all(|r| r.passed) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            });
+        }
+        if matches!(cli.command, Some(Command::McpServer)) {
+            mcp_server::serve(options).await?;
+        } else {
+            acp::serve(options).await?;
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     if !cli.json {
         eprintln!("{}", style.dim("Starting the Agent Engine…"));
     }
-    let microclaw = MicroClaw::builder(&config_path)
+    let mut builder = MicroClaw::builder(&config_path)
         .caller_channel(CALLER_CHANNEL)
         .workspace(&project.root)
         .data_dir(home::data_dir())
         .max_concurrent_runs(1)
-        .build()
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .shell_sandbox(sandbox_choice);
+    if cli.review_commands {
+        builder = builder.command_reviewer(None);
+    }
+    let microclaw = builder.build().await.map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let settings = SessionSettings {
         mode,
@@ -345,6 +545,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .max_fix_rounds
             .unwrap_or_else(|| project.max_fix_rounds()),
         interactive,
+        sandbox,
     };
     let session = CodeSession::new(microclaw, project, session_id.clone(), settings);
 
@@ -623,6 +824,164 @@ async fn check_command(
     Ok(ExitCode::SUCCESS)
 }
 
+async fn remote_command(action: &RemoteAction, style: Style) -> anyhow::Result<ExitCode> {
+    use microclaw_code_core::remote::{self, RemoteConfig};
+    match action {
+        RemoteAction::Pair { url, code, name } => {
+            let name = name.clone().unwrap_or_else(|| {
+                std::env::var("HOSTNAME")
+                    .ok()
+                    .filter(|h| !h.trim().is_empty())
+                    .map(|h| format!("mccode on {h}"))
+                    .unwrap_or_else(|| "mccode".into())
+            });
+            let config = remote::pair(url, code, &name).await?;
+            config.save()?;
+            println!(
+                "{} Paired with {} as \"{}\". Run a task there with `mccode -p \"…\" --remote`.",
+                style.green("✓"),
+                config.url,
+                config.label
+            );
+        }
+        RemoteAction::Status => match RemoteConfig::load() {
+            None => println!("Not paired. Use `mccode remote pair <url> <code>`."),
+            Some(config) => match remote::whoami(&config).await {
+                Ok(info) => println!(
+                    "{} Paired with {} as \"{}\" ({})",
+                    style.green("✓"),
+                    config.url,
+                    config.label,
+                    info.get("actor")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("device")
+                ),
+                Err(e) => {
+                    println!(
+                        "{} {} rejected the pairing: {e}",
+                        style.red("✗"),
+                        config.url
+                    );
+                    return Ok(ExitCode::from(1));
+                }
+            },
+        },
+        RemoteAction::Forget => {
+            if RemoteConfig::forget()? {
+                println!("Forgot the pairing. Revoke the device in the Server's Access tab too.");
+            } else {
+                println!("Not paired.");
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mccode -p "…" --remote`: run the task on the paired Server.
+async fn remote_print(cli: &Cli, style: Style) -> anyhow::Result<ExitCode> {
+    use microclaw_code_core::remote::{self, RemoteConfig};
+    let config = RemoteConfig::load().ok_or_else(|| {
+        anyhow::anyhow!("not paired with a Server; run `mccode remote pair <url> <code>` first")
+    })?;
+    let prompt = match cli.print.as_deref() {
+        Some("-") => {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+            text
+        }
+        Some(text) => text.to_string(),
+        None => anyhow::bail!("--remote needs -p"),
+    };
+    let start = match &cli.cwd {
+        Some(dir) => dir.clone(),
+        None => std::env::current_dir()?,
+    };
+    let session_key = cli.session.clone().unwrap_or_else(|| {
+        let name = start
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "default".into());
+        format!("mccode-{name}")
+    });
+    if !cli.json {
+        eprintln!(
+            "{}",
+            style.dim(&format!(
+                "Running on {} (session {session_key})…",
+                config.url
+            ))
+        );
+    }
+    let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
+    let (controls_tx, mut controls_rx) = mpsc::unbounded_channel();
+    let prompt = prompt.trim().to_string();
+    let key = session_key.clone();
+    let task = tokio::spawn(async move {
+        remote::run(&config, &key, &prompt, &updates_tx, &mut controls_rx).await
+    });
+    tokio::pin!(task);
+    let mut printer = Printer::new(style, cli.json);
+    let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
+    let report = loop {
+        tokio::select! {
+            Some(update) = updates_rx.recv() => printer.update(&update, &mut out, &mut err),
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\n{}", style.yellow("Stopping the remote run…"));
+                let _ = controls_tx.send(Control::Cancel);
+            }
+            result = &mut task => break result??,
+        }
+    };
+    while let Ok(update) = updates_rx.try_recv() {
+        printer.update(&update, &mut out, &mut err);
+    }
+    if let Some(approval) = &report.approval_pending
+        && !cli.json
+    {
+        eprintln!("{}", approval_card(style, approval));
+        eprintln!(
+            "{}",
+            style.yellow(&format!(
+                "Approval needed on the Server. Answer with `mccode --remote --session {session_key} -p 1` (approve once) or `-p 3` (deny)."
+            ))
+        );
+    }
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "type": "result",
+                "remote": true,
+                "session": session_key,
+                "status": report.status,
+                "final_text": report.final_text,
+                "changed_files": report.changed_files,
+                "approval_pending": report.approval_pending.as_ref().map(|a| a.tool.clone()),
+            })
+        );
+    }
+    Ok(ExitCode::from(report.exit_code()))
+}
+
+const NO_SANDBOX_NOTICE: &str = "No OS sandbox on this machine: shell commands run unsandboxed (install bubblewrap on Linux; pass --sandbox off to hide this notice).";
+
+/// The shell sandbox chosen by `--sandbox` / `MICROCLAW_CODE_SANDBOX`.
+fn sandbox_choice(cli: &Cli) -> anyhow::Result<ShellSandbox> {
+    let raw = cli
+        .sandbox
+        .clone()
+        .or_else(|| std::env::var("MICROCLAW_CODE_SANDBOX").ok())
+        .unwrap_or_else(|| "workspace-write".into());
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "none" | "danger-full-access" => Ok(ShellSandbox::Off),
+        "workspace-write" | "workspace" | "on" => Ok(ShellSandbox::WorkspaceWrite {
+            network: !cli.no_network,
+            writable_roots: Vec::new(),
+        }),
+        other => anyhow::bail!("unknown sandbox mode '{other}' (expected workspace-write or off)"),
+    }
+}
+
 async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<ExitCode> {
     let ok = |label: &str, detail: String| println!("{} {label}: {detail}", style.green("✓"));
     let bad = |label: &str, detail: String| println!("{} {label}: {detail}", style.red("✗"));
@@ -660,6 +1019,25 @@ async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<Ex
             }
         ),
     );
+    match (sandbox_choice(cli)?, microclaw_sdk::local_sandbox()) {
+        (ShellSandbox::Off, _) => ok("shell sandbox", "off (--sandbox off)".into()),
+        (ShellSandbox::WorkspaceWrite { network, .. }, Some(mechanism)) => ok(
+            "shell sandbox",
+            format!(
+                "{mechanism}: writes limited to the repository, temp and tool caches; {}network {}",
+                if mechanism == "landlock" {
+                    "credential directories stay readable (install bubblewrap to hide them); "
+                } else {
+                    ""
+                },
+                if network { "on" } else { "off" }
+            ),
+        ),
+        (ShellSandbox::WorkspaceWrite { .. }, None) => bad(
+            "shell sandbox",
+            "unavailable: install bubblewrap (`bwrap`) and allow unprivileged user namespaces; commands run unsandboxed".into(),
+        ),
+    }
     match MicroClaw::builder(&path)
         .caller_channel(CALLER_CHANNEL)
         .workspace(&project.root)
@@ -686,6 +1064,24 @@ async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<Ex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_choice_defaults_to_workspace_write() {
+        let cli = Cli::try_parse_from(["mccode", "--no-network"]).unwrap();
+        if std::env::var_os("MICROCLAW_CODE_SANDBOX").is_none() {
+            assert_eq!(
+                sandbox_choice(&cli).unwrap(),
+                ShellSandbox::WorkspaceWrite {
+                    network: false,
+                    writable_roots: Vec::new()
+                }
+            );
+        }
+        let cli = Cli::try_parse_from(["mccode", "--sandbox", "off"]).unwrap();
+        assert_eq!(sandbox_choice(&cli).unwrap(), ShellSandbox::Off);
+        let cli = Cli::try_parse_from(["mccode", "--sandbox", "nope"]).unwrap();
+        assert!(sandbox_choice(&cli).is_err());
+    }
 
     #[test]
     fn cli_parses_print_mode_and_subcommands() {
