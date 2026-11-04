@@ -37,6 +37,9 @@ pub enum SearchBackend {
     Brave,
     /// Tavily research API (`POST /search`).
     Tavily,
+    /// Keenable web search (`POST /v1/search`). Works without an API key on
+    /// the rate-limited public endpoint; `keenable_api_key` raises limits.
+    Keenable,
 }
 
 fn default_search_max_results() -> usize {
@@ -57,6 +60,9 @@ pub struct SearchProviderConfig {
     pub brave_api_key: String,
     #[serde(default)]
     pub tavily_api_key: String,
+    /// Optional: Keenable works key-free; a key switches to the keyed endpoint.
+    #[serde(default)]
+    pub keenable_api_key: String,
     #[serde(default = "default_search_max_results")]
     pub max_results: usize,
 }
@@ -68,6 +74,7 @@ impl Default for SearchProviderConfig {
             searxng_base_url: String::new(),
             brave_api_key: String::new(),
             tavily_api_key: String::new(),
+            keenable_api_key: String::new(),
             max_results: default_search_max_results(),
         }
     }
@@ -82,6 +89,7 @@ impl SearchProviderConfig {
             .to_string();
         self.brave_api_key = self.brave_api_key.trim().to_string();
         self.tavily_api_key = self.tavily_api_key.trim().to_string();
+        self.keenable_api_key = self.keenable_api_key.trim().to_string();
         if self.max_results == 0 {
             self.max_results = default_search_max_results();
         }
@@ -136,6 +144,7 @@ pub async fn search_with_provider(
         SearchBackend::Searxng => searxng_hits(query, &config.searxng_base_url, t, max).await,
         SearchBackend::Brave => brave_hits(query, &config.brave_api_key, t, max).await,
         SearchBackend::Tavily => tavily_hits(query, &config.tavily_api_key, t, max).await,
+        SearchBackend::Keenable => keenable_hits(query, &config.keenable_api_key, t, max).await,
     }
 }
 
@@ -308,6 +317,84 @@ async fn tavily_hits(
         .collect())
 }
 
+#[derive(Serialize)]
+struct KeenableRequest<'a> {
+    query: &'a str,
+    max_results: usize,
+}
+
+#[derive(Deserialize)]
+struct KeenableResponse {
+    #[serde(default)]
+    results: Vec<KeenableResult>,
+}
+
+#[derive(Deserialize)]
+struct KeenableResult {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    snippet: String,
+    #[serde(default)]
+    description: String,
+}
+
+fn keenable_request(
+    client: &reqwest::Client,
+    query: &str,
+    api_key: &str,
+    max: usize,
+) -> reqwest::RequestBuilder {
+    let api_key = api_key.trim();
+    let builder = if api_key.is_empty() {
+        client
+            .post("https://api.keenable.ai/v1/search/public")
+            .header("X-Keenable-Title", "MicroClaw")
+    } else {
+        client
+            .post("https://api.keenable.ai/v1/search")
+            .header("X-API-Key", api_key)
+    };
+    builder.json(&KeenableRequest {
+        query,
+        max_results: max,
+    })
+}
+
+async fn keenable_hits(
+    query: &str,
+    api_key: &str,
+    timeout_secs: u64,
+    max: usize,
+) -> Result<Vec<SearchItem>, String> {
+    let client = http_client(timeout_secs);
+    let resp = keenable_request(&client, query, api_key, max)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let parsed: KeenableResponse = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed
+        .results
+        .into_iter()
+        .filter(|r| !r.url.is_empty())
+        .take(max)
+        .map(|r| SearchItem {
+            title: r.title,
+            url: r.url,
+            snippet: if r.snippet.trim().is_empty() {
+                r.description
+            } else {
+                r.snippet
+            },
+        })
+        .collect())
+}
+
 pub async fn search_ddg_with_timeout(query: &str, timeout_secs: u64) -> Result<String, String> {
     let hits = ddg_hits(query, timeout_secs.max(1), 8).await?;
     Ok(format_search_hits(&hits))
@@ -349,6 +436,29 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(cfg.effective_backend(), SearchBackend::Tavily);
+    }
+
+    #[test]
+    fn keenable_works_without_a_key() {
+        let cfg = SearchProviderConfig {
+            backend: SearchBackend::Keenable,
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_backend(), SearchBackend::Keenable);
+
+        let client = reqwest::Client::new();
+        let req = keenable_request(&client, "rust", "", 5).build().unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.keenable.ai/v1/search/public"
+        );
+        assert_eq!(req.headers().get("X-Keenable-Title").unwrap(), "MicroClaw");
+
+        let req = keenable_request(&client, "rust", " kn-test ", 5)
+            .build()
+            .unwrap();
+        assert_eq!(req.url().as_str(), "https://api.keenable.ai/v1/search");
+        assert_eq!(req.headers().get("X-API-Key").unwrap(), "kn-test");
     }
 
     #[test]
