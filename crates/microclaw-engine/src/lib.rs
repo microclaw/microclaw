@@ -37,6 +37,7 @@ pub mod a2a;
 pub mod acp_subagent;
 pub mod agent_engine;
 pub mod alerts;
+pub mod approval_broker;
 pub mod chat_commands;
 pub mod chat_turn_queue;
 pub mod checkpoint;

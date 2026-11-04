@@ -221,7 +221,7 @@ fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
             }
             lines.push(Line::default());
             lines.push(Line::from(Span::styled(
-                "Press a number · Esc denies",
+                "Press an option key · Esc denies",
                 Style::default().fg(Color::DarkGray),
             )));
             (" Approval needed ", lines)

@@ -36,6 +36,9 @@ use microclaw_core::runtime_event::RuntimeEventEnvelope;
 
 pub const HEADLESS_CHANNEL: &str = "headless";
 pub const CODE_CHANNEL: &str = "code";
+/// `RunRequest::metadata` key: `true` makes gated tool calls wait in-run for
+/// `RuntimeControl::ResolveApproval` (see [`crate::approval_broker`]).
+pub const INTERACTIVE_APPROVALS_KEY: &str = "interactive_approvals";
 
 #[derive(Debug, Clone)]
 pub struct HeadlessRunRequest {
@@ -73,6 +76,15 @@ pub struct HeadlessRunResult {
     pub run_id: String,
     pub chat_id: i64,
     pub response: String,
+}
+
+/// One stored message of an embedded session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadlessSessionMessage {
+    /// `true` for the agent's replies, `false` for user prompts.
+    pub from_agent: bool,
+    pub content: String,
+    pub timestamp: String,
 }
 
 /// UI-neutral projection of one durable Subagent run.
@@ -134,6 +146,26 @@ impl RunExecutor for HeadlessRunExecutor {
             .session_id
             .clone()
             .unwrap_or_else(|| SessionId::new("default"));
+        // Opt-in in-run approvals: while this guard lives, gated tool calls
+        // wait for `RuntimeControl::ResolveApproval` instead of ending the
+        // run with a text prompt.
+        let interactive_approvals = request
+            .metadata
+            .get(INTERACTIVE_APPROVALS_KEY)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let approval_chat_id = if interactive_approvals {
+            Some(
+                self.runtime
+                    .resolve_session_chat_id(session.as_str())
+                    .await
+                    .map_err(runtime_internal_error)?,
+            )
+        } else {
+            None
+        };
+        let _approval_broker = approval_chat_id
+            .map(|chat_id| crate::approval_broker::register(&self.caller_channel, chat_id));
         let (legacy_event_tx, mut legacy_event_rx) = mpsc::unbounded_channel();
         let run = self.runtime.run_with_profile(
             HeadlessRunRequest {
@@ -193,13 +225,41 @@ impl RunExecutor for HeadlessRunExecutor {
                                 });
                             }
                         }
-                        RuntimeControl::ResolveApproval { .. } => {
-                            control.reject(RuntimeError {
-                                code: RuntimeErrorCode::Unavailable,
-                                message: "the current Agent Engine approval bridge is unavailable"
-                                    .into(),
-                                retryable: false,
-                            });
+                        RuntimeControl::ResolveApproval { approval_id, decision, .. } => {
+                            let Some(chat_id) = approval_chat_id else {
+                                control.reject(RuntimeError {
+                                    code: RuntimeErrorCode::Unavailable,
+                                    message: format!(
+                                        "in-run approvals are off for this run; set request metadata `{INTERACTIVE_APPROVALS_KEY}: true`"
+                                    ),
+                                    retryable: false,
+                                });
+                                continue;
+                            };
+                            let Some(decision) = crate::approval_broker::ApprovalDecision::parse(&decision) else {
+                                control.reject(RuntimeError {
+                                    code: RuntimeErrorCode::InvalidRequest,
+                                    message: format!(
+                                        "unknown approval decision `{decision}` (use 1/approve, 2/always or 3/deny)"
+                                    ),
+                                    retryable: false,
+                                });
+                                continue;
+                            };
+                            if crate::approval_broker::resolve(
+                                &self.caller_channel,
+                                chat_id,
+                                &approval_id,
+                                decision,
+                            ) {
+                                control.accept();
+                            } else {
+                                control.reject(RuntimeError {
+                                    code: RuntimeErrorCode::Unavailable,
+                                    message: format!("no pending approval `{approval_id}`"),
+                                    retryable: false,
+                                });
+                            }
                         }
                         }
                     }
@@ -225,7 +285,7 @@ impl RunExecutor for HeadlessRunExecutor {
             streaming: true,
             cancellation: true,
             steering: true,
-            approvals: false,
+            approvals: true,
             skills: true,
             subagents: true,
             remote_workers: false,
@@ -320,6 +380,35 @@ impl HeadlessRuntime {
                 started_at: run.started_at,
                 finished_at: run.finished_at,
                 cancel_requested: run.cancel_requested,
+            })
+            .collect())
+    }
+
+    /// The most recent `limit` stored messages of a named embedded session,
+    /// oldest first: user prompts (including steering) and final replies.
+    /// Empty for a session that never ran.
+    pub fn session_messages(
+        &self,
+        session: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<HeadlessSessionMessage>> {
+        let external_chat_id = format!("headless:{}", session.trim());
+        let Some(chat_id) = self
+            .state
+            .db
+            .find_chat_id(HEADLESS_CHANNEL, &external_chat_id)?
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .state
+            .db
+            .get_recent_messages(chat_id, limit.clamp(1, 10_000))?
+            .into_iter()
+            .map(|message| HeadlessSessionMessage {
+                from_agent: message.is_from_bot,
+                content: message.content,
+                timestamp: message.timestamp,
             })
             .collect())
     }
@@ -1165,5 +1254,112 @@ mod tests {
         assert_eq!(result.response, "steering applied");
         assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
         assert!(saw_update.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// Calls `bash` once, then reports what the tool result said.
+    struct ApprovalLlm {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ApprovalLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                return Ok(MessagesResponse {
+                    content: vec![ResponseContentBlock::ToolUse {
+                        id: "bash-1".into(),
+                        name: "bash".into(),
+                        input: serde_json::json!({"command": "echo in-run-ok"}),
+                        thought_signature: None,
+                    }],
+                    stop_reason: Some("tool_use".into()),
+                    usage: None,
+                });
+            }
+            let rendered = format!("{messages:?}");
+            let text = if rendered.contains("denied this bash call") {
+                "saw denial"
+            } else if rendered.contains("in-run-ok") {
+                "saw output"
+            } else {
+                "saw nothing"
+            };
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text { text: text.into() }],
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            })
+        }
+    }
+
+    async fn run_with_in_run_answer(session: &str, answer: Option<&str>) -> (String, usize) {
+        let directory = tempfile::tempdir().unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let engine = runtime_with_llm(
+            directory.path(),
+            Box::new(ApprovalLlm {
+                calls: calls.clone(),
+            }),
+        );
+        let runtime = engine.into_embedded_runtime(CODE_CHANNEL, 1).unwrap();
+        let mut request = RunRequest::new("run the command");
+        request.session_id = Some(SessionId::new(session));
+        if answer.is_some() {
+            request.metadata.insert(
+                INTERACTIVE_APPROVALS_KEY.into(),
+                serde_json::Value::Bool(true),
+            );
+        }
+        let mut run = runtime.agent(AgentProfile::default()).run(request);
+        let controller = run.controller();
+        let mut approvals = 0;
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            while let Some(envelope) = run.next_event().await {
+                if let RuntimeEvent::ApprovalRequired { approval_id, .. } = envelope.event {
+                    approvals += 1;
+                    if let Some(answer) = answer {
+                        controller
+                            .resolve_approval_confirmed(approval_id, answer)
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
+        })
+        .await
+        .expect("run should finish");
+        let result = run.result().await.unwrap();
+        (result.final_text, approvals)
+    }
+
+    #[tokio::test]
+    async fn in_run_approval_continues_the_same_run() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let (text, approvals) = run_with_in_run_answer("in-run-approve", Some("1")).await;
+        assert_eq!(approvals, 1);
+        assert_eq!(text, "saw output");
+    }
+
+    #[tokio::test]
+    async fn in_run_denial_reaches_the_model_without_running_the_tool() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let (text, approvals) = run_with_in_run_answer("in-run-deny", Some("deny")).await;
+        assert_eq!(approvals, 1);
+        assert_eq!(text, "saw denial");
+    }
+
+    #[tokio::test]
+    async fn without_the_opt_in_an_approval_still_ends_the_run() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let (text, approvals) = run_with_in_run_answer("text-approval", None).await;
+        assert_eq!(approvals, 1);
+        assert!(text.contains("bash"), "{text}");
+        assert!(!crate::approval_broker::is_registered(CODE_CHANNEL, 1));
     }
 }

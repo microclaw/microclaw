@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use microclaw_code_core::allow::{self, AllowRules};
 use microclaw_code_core::driver::{
     CALLER_CHANNEL, CodeSession, Control, SessionSettings, compile_always_ask,
 };
@@ -120,6 +121,27 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
+    /// List, add or remove shell commands that run without asking here.
+    Allow {
+        #[command(subcommand)]
+        action: Option<AllowAction>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AllowAction {
+    /// List this project's rules (default).
+    List,
+    /// Allow commands starting with PREFIX (e.g. `mccode allow add cargo test`).
+    Add {
+        #[arg(required = true, num_args = 1.., value_name = "PREFIX")]
+        prefix: Vec<String>,
+    },
+    /// Remove a rule.
+    Remove {
+        #[arg(required = true, num_args = 1.., value_name = "PREFIX")]
+        prefix: Vec<String>,
+    },
 }
 
 #[tokio::main]
@@ -190,6 +212,41 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 },
                 project.root.display()
             );
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Command::Allow { action }) => {
+            let mut rules = AllowRules::load(AllowRules::default_path());
+            match action.as_ref().unwrap_or(&AllowAction::List) {
+                AllowAction::List => {
+                    let list = rules.for_project(&project.root);
+                    if list.is_empty() {
+                        println!("No allow rules for {}.", project.root.display());
+                    } else {
+                        for rule in list {
+                            println!("{rule}");
+                        }
+                    }
+                }
+                AllowAction::Add { prefix } => {
+                    let prefix = prefix.join(" ");
+                    if rules.add(&project.root, &prefix)? {
+                        println!(
+                            "`{}` now runs without asking in this project.",
+                            allow::normalize(&prefix)
+                        );
+                    } else {
+                        println!("`{}` was already allowed.", allow::normalize(&prefix));
+                    }
+                }
+                AllowAction::Remove { prefix } => {
+                    let prefix = prefix.join(" ");
+                    if rules.remove(&project.root, &prefix)? {
+                        println!("Removed `{}`.", allow::normalize(&prefix));
+                    } else {
+                        anyhow::bail!("no rule `{}` for this project", allow::normalize(&prefix));
+                    }
+                }
+            }
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
@@ -279,7 +336,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(prompt) => print_mode(session, &mut index, prompt.trim(), cli.json, style).await,
         None => {
             let initial = (!cli.prompt.is_empty()).then(|| cli.prompt.join(" "));
-            let id = tui::run(session, index, trust_store, initial, notices).await?;
+            let resumed = cli.session.is_some() || cli.continue_last;
+            let id = tui::run(session, index, trust_store, initial, notices, resumed).await?;
             eprintln!("Session {id} saved. Resume with `mccode -c`.");
             Ok(ExitCode::SUCCESS)
         }
@@ -326,11 +384,13 @@ async fn print_mode(
     let report = report?;
     if let Some(approval) = &report.approval_pending {
         if !json {
-            eprintln!("{}", approval_card(style, approval));
+            eprintln!("{}", approval_card(style, &approval.without_code_options()));
             let hint = if session.settings.mode == Mode::Auto {
-                " This command always asks, even in auto mode."
+                " This command always asks, even in auto mode.".to_string()
+            } else if let Some(rule) = &approval.suggested_rule {
+                format!(" Or allow it from now on with `mccode allow add {rule}`.")
             } else {
-                " Or rerun with --mode auto."
+                " Or rerun with --mode auto.".to_string()
             };
             eprintln!(
                 "{}",

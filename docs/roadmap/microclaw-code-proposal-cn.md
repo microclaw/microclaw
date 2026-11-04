@@ -97,22 +97,32 @@ crates/microclaw-engine
   - 数据只写入 Code 自己的目录。
 - **TUI 端到端**：用 pty 加终端模拟器（pyte）验证屏幕内容：信任对话框 → `/plan` → 执行计划对话框 → 执行并通过检查 → bash 审批对话框 → 批准 → Shift+Tab 切模式 → `/exit`。
 
-## 六、后续（按优先级）
+## 六、第二批（已实现）
+
+| 项目 | 说明 |
+|---|---|
+| 审批在引擎内挂起 | 调用方在 `RunRequest.metadata` 里设 `interactive_approvals: true`（SDK 常量 `INTERACTIVE_APPROVALS`），引擎为这次运行登记审批代理（`approval_broker`，按渠道和会话区分，随运行结束注销）。需要审批时，引擎发出带 `approval_id` 的 `ApprovalRequired`，在原地等待 `RuntimeControl::ResolveApproval`：批准则重试工具，"始终允许"则记录授权后重试，拒绝则把"用户拒绝"作为工具结果交给模型，同一次运行继续。没有登记代理的渠道（Telegram 等）和 `-p` 非交互模式仍走原来的文字审批。每次决定写入审计日志（`in_run_decision`）。headless 执行器的能力声明改为 `approvals: true` |
+| 按命令前缀放行 | Shell 审批多一个选项"在本项目始终允许 `cargo test`"（按键 `p`）。规则存在 `~/.microclaw/code/allow-rules.json`，按项目区分。只匹配单条简单命令：带 `;`、`&&`、管道、重定向、`$(…)`、换行的命令一律不匹配；解释器、`sudo`、`rm`、`curl` 等不能按前缀放行；破坏性命令清单（`always_ask`）优先，这类命令也不提供该选项。管理方式：`/allow`、`mccode allow list/add/remove` |
+| 续接会话回显历史 | SDK 新增 `MicroClaw::session_messages(session, limit)`；`mccode -c` / `--session` 在 TUI 里显示最近 60 条消息，验证回合压缩成一行 |
+
+验证：
+- 引擎测试用真实 Agent 循环覆盖批准（同一次运行看到命令输出）、拒绝（模型收到拒绝结果）、未开启时仍走文字审批；审批代理有单元测试。
+- TUI 端到端（pty + pyte）：`ls -a` 弹出审批，按 `p` 保存规则，接着 `ls -l` 按规则自动批准，`git push` 弹出审批且不提供项目规则，按 `3` 拒绝，模型在同一次运行里继续并给出答复（模拟服务共收到 4 次请求，中间没有新的用户消息）；退出后 `mccode -c` 显示历史。
+- `-p` 回归：审批挂起返回 2，`--session <id> -p 3` 拒绝，命令没有执行。
+
+## 七、后续（按优先级）
 
 1. **地基**：
-   - 审批改为引擎内挂起，实现 `RuntimeControl::ResolveApproval`，不再用"下一条消息发 1/2/3"；
    - 统一的工具策略判断，去掉按渠道名的硬编码；
    - Agent 主循环收敛为单一入口。
 2. **安全**：
    - 系统级沙箱（Landlock/seccomp、bwrap、Seatbelt）；
-   - 按命令前缀的放行规则，取代"整个 bash 始终允许"；
    - auto 模式下对命令做模型复核。
 3. **体验**：
    - `/fork`、`/undo`（接现有快照）、`/compact`、`/model`、`/cost`；
    - `apply_patch`；可交互的持久终端；
-   - 启动时合并加载 AGENTS.md（受信任约束）；`/review`；
-   - 续接会话时回显历史。
-4. **接入**：`mccode acp`（含 `session/request_permission`）；`mccode mcp-server`；交给已配对的 Server 远程执行。
+   - 启动时合并加载 AGENTS.md（受信任约束）；`/review`。
+4. **接入**：`mccode acp`（含 `session/request_permission`，可直接接引擎内审批）；`mccode mcp-server`；交给已配对的 Server 远程执行。
 5. **评测与发布**：
    - Minimal 预设跑 Terminal-Bench；用本仓库历史里修 bug 的提交做回放测试集；
    - release 包含 `mccode`，提供 Homebrew 和自更新。

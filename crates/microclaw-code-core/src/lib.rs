@@ -3,6 +3,7 @@
 //! - [`home`]: Code's own home directory and model configuration;
 //! - [`project`] / [`trust`]: repository discovery, `.microclaw/project.yaml`
 //!   and the per-user trust decisions that gate it;
+//! - [`allow`]: per-project command allow rules (`always allow cargo test`);
 //! - [`verify`] / [`git`]: running project checks and detecting changes;
 //! - [`sessions`]: the per-project session index;
 //! - [`driver`]: one user turn — agent run, approvals, verification and the
@@ -11,6 +12,7 @@
 //!
 //! The Agent Engine is reached only through `microclaw-sdk`.
 
+pub mod allow;
 pub mod driver;
 pub mod git;
 pub mod home;

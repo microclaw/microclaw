@@ -22,7 +22,10 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
-use microclaw_code_core::driver::{CodeSession, Control, PendingApproval, TurnReport, Update};
+use microclaw_code_core::allow;
+use microclaw_code_core::driver::{
+    CodeSession, Control, HistoryEntry, PendingApproval, TurnReport, Update,
+};
 use microclaw_code_core::project::{self, Mode, Project};
 use microclaw_code_core::sessions::SessionIndex;
 use microclaw_code_core::trust::{TrustDecision, TrustStore};
@@ -40,6 +43,10 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     (
         "/trust",
         "trust this project (honour .microclaw/project.yaml)",
+    ),
+    (
+        "/allow",
+        "list, add or remove commands that run without asking",
     ),
     ("/diff", "show git diff --stat (or `full`)"),
     ("/new", "start a new session"),
@@ -115,12 +122,45 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) {
 }
 
 /// Run the TUI until the user quits. Returns the session id.
+/// Messages of a resumed session shown before the prompt.
+const HISTORY_LIMIT: usize = 60;
+
+fn replay_history(transcript: &mut Transcript, session: &CodeSession) {
+    let history = session.history(HISTORY_LIMIT);
+    if history.is_empty() {
+        transcript.notice(
+            format!("session {} has no earlier messages", session.session_id),
+            Tone::Info,
+        );
+        return;
+    }
+    transcript.notice(
+        format!(
+            "resumed session {} · last {} messages",
+            session.session_id,
+            history.len()
+        ),
+        Tone::Info,
+    );
+    for entry in history {
+        match entry {
+            HistoryEntry::User(text) => transcript.push(Item::User(text)),
+            HistoryEntry::Agent(text) => transcript.push(Item::Assistant(text)),
+            HistoryEntry::Verification(line) => {
+                transcript.notice(format!("verification {line}"), Tone::Warning)
+            }
+        }
+    }
+    transcript.notice("— end of history —", Tone::Info);
+}
+
 pub async fn run(
     session: CodeSession,
     index: SessionIndex,
     trust_store: TrustStore,
     initial_prompt: Option<String>,
     notices: Vec<String>,
+    resumed: bool,
 ) -> anyhow::Result<String> {
     let (updates_tx, updates_rx) = mpsc::unbounded_channel();
     let project = &session.project;
@@ -163,6 +203,9 @@ pub async fn run(
         ),
         Tone::Info,
     );
+    if resumed {
+        replay_history(&mut app.transcript, &session);
+    }
     for notice in notices {
         app.transcript.notice(notice, Tone::Warning);
     }
@@ -445,6 +488,7 @@ impl App {
                 let value = match answer {
                     Some(ch @ '1'..='9') => Some(ch.to_string()),
                     Some('y') => Some("1".to_string()),
+                    Some('p') => Some(microclaw_code_core::driver::ALLOW_RULE_OPTION.to_string()),
                     Some('n') | Some('\u{1b}') => Some(
                         approval
                             .options
@@ -635,6 +679,57 @@ impl App {
                 (_, None) => self.hint = Some("wait for the current turn to finish".into()),
             },
             "/trust" => self.set_trust(args.first().map(String::as_str) != Some("off")),
+            "/allow" => {
+                let Some(session) = self.session.as_mut() else {
+                    self.hint = Some("wait for the current turn to finish".into());
+                    return;
+                };
+                let root = session.project.root.clone();
+                let rest = args.get(1..).unwrap_or_default().join(" ");
+                let (text, tone) = match args.first().map(String::as_str) {
+                    Some("add") if !rest.is_empty() => {
+                        match session.allow_rules_mut().add(&root, &rest) {
+                            Ok(true) => (
+                                format!("`{}` now runs without asking", allow::normalize(&rest)),
+                                Tone::Success,
+                            ),
+                            Ok(false) => ("already allowed".into(), Tone::Info),
+                            Err(e) => (e.to_string(), Tone::Error),
+                        }
+                    }
+                    Some("rm" | "remove") if !rest.is_empty() => {
+                        match session.allow_rules_mut().remove(&root, &rest) {
+                            Ok(true) => {
+                                (format!("removed `{}`", allow::normalize(&rest)), Tone::Info)
+                            }
+                            Ok(false) => ("no such rule".into(), Tone::Warning),
+                            Err(e) => (e.to_string(), Tone::Error),
+                        }
+                    }
+                    None | Some("list") => {
+                        let rules = session.allow_rules().for_project(&root);
+                        if rules.is_empty() {
+                            (
+                                "no allow rules; choose \"always allow … in this project\" on a shell approval, or /allow add <command prefix>".into(),
+                                Tone::Info,
+                            )
+                        } else {
+                            (
+                                format!(
+                                    "commands that run without asking (destructive ones still ask):\n  {}",
+                                    rules.join("\n  ")
+                                ),
+                                Tone::Info,
+                            )
+                        }
+                    }
+                    _ => (
+                        "usage: /allow [list | add <prefix> | rm <prefix>]".into(),
+                        Tone::Warning,
+                    ),
+                };
+                self.transcript.notice(text, tone);
+            }
             "/diff" => {
                 let Some(root) = self.project().map(|p| p.root.clone()) else {
                     return;
