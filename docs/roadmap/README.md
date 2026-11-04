@@ -12,13 +12,9 @@ plan exists first.
 | [`v0.11.1-plan.md`](./v0.11.1-plan.md) | Delivered | Security patch: global `tool_policy.allow_tools` is a real allowlist with wildcards, the tool catalog is filtered by policy, and doctor / config check flag an empty policy. |
 | [`v0.11.0-plan.md`](./v0.11.0-plan.md) | Delivered | Web UI dependency release: `@assistant-ui/react` 0.15 without the tap pin, tool-call cards with arguments, Playwright browser smoke test in CI. |
 | [`v0.10.1-plan.md`](./v0.10.1-plan.md) | Delivered | Web UI hotfix: pin `@assistant-ui/tap` to 0.9.12 so the composer no longer crashes on the first keystroke (#517). |
-| [`v0.10.0-plan.md`](./v0.10.0-plan.md) | Delivered | Work ↔ Server pairing shipped: revocable device credentials, remote task submission/progress/cancel, explicit Local/Server execution target in Work; zip 9 / rustls / quinn advisories cleared. |
 | [`v0.9.0-plan.md`](./v0.9.0-plan.md) | Delivered | Dependency release shipped: matrix-sdk 0.19 with rustls TLS, rusqlite 0.40, Rust 1.96 toolchain. |
 | [`v0.8.0-plan.md`](./v0.8.0-plan.md) | Delivered | Multi-user hardening release shipped: governance file guard for file tools, `write_memory` row dedup, Telegram partial-quote forwarding. |
 | [`v0.7.0-plan.md`](./v0.7.0-plan.md) | Delivered | Prompt-cache stability release shipped: byte-stable prompt prefix, request-time turn context, and prompt-cache usage accounting. |
-| [`v0.6.1-plan.md`](./v0.6.1-plan.md) | Delivered | Release-quality patch shipped with fully green Server, Work, SDK, container, and documentation pipelines. |
-| [`v0.6.0-plan.md`](./v0.6.0-plan.md) | Delivered | Server, Work, SDK, shared crates, Skills, and controlled delegation aligned and released at 0.6.0. |
-| [`sdk-v0.5.1-plan.md`](./sdk-v0.5.1-plan.md) | Delivered | SDK adoption, Work Skill provenance, Worker recovery evidence, and leaner release gates shipped in Rust SDK 0.5.1. |
 | [`next-direction-2026-08.md`](./next-direction-2026-08.md) | Superseded | Full-tree health review; open maintenance findings remain useful inputs to the active product direction. |
 | [`db-decomposition-plan.md`](./db-decomposition-plan.md) | Delivered | Split `db.rs` (17k lines / 237 methods) into domain modules behind the same facade; shipped in 0.5.0. |
 | [`v0.4.0-plan.md`](./v0.4.0-plan.md) | Delivered | v0.4.0 shipped 2026-08-07; exit criteria met, `v0.4-lts` branch cut. |

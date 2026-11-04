@@ -7,10 +7,10 @@
 ## Context
 
 Before this extraction, MicroClaw already had one provider-neutral Agent Loop and separate crates
-for foundational types, storage, tools, channels, ClawHub, observability, and Work projections.
+for foundational types, storage, tools, channels, ClawHub, and observability.
 However, the reusable Agent Loop, provider assembly, prompt construction, recovery, skills, hooks,
-and tool registry lived inside the root product package. `microclaw-work-runtime` consequently
-depended on the whole root `microclaw` package through `HeadlessRuntime`.
+and tool registry lived inside the root product package, so any embedding host depended on the
+whole root `microclaw` package through `HeadlessRuntime`.
 
 That made embedding possible but expensive and unstable: an application had to accept the Server's
 concrete `Config`, `AppState`, SQLite setup, channel registry, and product defaults instead of
@@ -25,7 +25,7 @@ Create four explicit public layers:
 3. `microclaw-engine`: the concrete provider-neutral Agent Loop and default services.
 4. `microclaw-sdk`: an ergonomic facade with supported defaults and feature presets.
 
-Server, Work, headless clients, local workers, and future remote workers consume the same
+Server, headless clients, local workers, and future remote workers consume the same
 `RunRequest`, `RunHandle`, `RuntimeEventEnvelope`, and `RunResult` contracts. No product surface may
 implement or copy its own Agent Loop.
 
@@ -38,11 +38,10 @@ product apps -> microclaw-sdk -> microclaw-engine -> microclaw-runtime
                               capability crates -> microclaw-core
 ```
 
-The Runtime must not depend on Axum, GPUI, Teloxide, Serenity, or channel adapters. The Engine may
+The Runtime must not depend on Axum, Teloxide, Serenity, or channel adapters. The Engine may
 depend on the channel-neutral `microclaw-channels` delivery contract, but never on concrete channel
 adapters.
-Channel adapters translate ingress and delivery at the Server boundary. Work owns its GUI/runtime
-thread bridge. A Worker is an execution host for runs; it is not an Agent identity or a Subagent.
+Channel adapters translate ingress and delivery at the Server boundary. A Worker is an execution host for runs; it is not an Agent identity or a Subagent.
 
 ## Public Runtime Contract
 
@@ -92,7 +91,7 @@ features.
    into `microclaw-engine`, keeping lifecycle and serializable contracts in Runtime/Core.
 4. Introduce `RuntimeBuilder`, `Runtime`, `AgentHandle`, and `RunHandle` and preserve temporary root
    re-exports.
-5. Migrate headless, Work, and Server in that order.
+5. Migrate headless and Server in that order.
 6. Add `microclaw-sdk`, supported feature presets, and compiling embedding examples.
 7. Add `LocalWorker`; add a remote worker transport only after the local contract is proven.
 8. Keep documented root compatibility re-exports for the current release; remove them only in a
@@ -118,8 +117,8 @@ boundaries.
 
 The extraction is complete only when:
 
-1. Server, Work, and headless execution all consume the same Runtime API.
-2. `microclaw-work-runtime` no longer depends on the root `microclaw` package.
+1. Server and headless execution consume the same Runtime API.
+2. Embedding hosts no longer depend on the root `microclaw` package.
 3. `microclaw-runtime` has no Web, channel, Engine, or GUI dependencies, and `microclaw-engine`
    has no Server, Web, concrete channel, or GUI dependencies.
 4. A third-party example starts a skilled Agent and receives events in no more than roughly 50
@@ -139,8 +138,8 @@ The contract coverage is intentionally layered:
 | Recovery | `microclaw-engine::turn_recovery::checkpoint_validation_rejects_dangling_tool_use`; workspace recovery tests |
 | Cancellation and steering | Runtime control tests plus real Engine cancellation and post-tool steering tests in `headless` |
 | Approval | acknowledged Runtime control tests plus Agent Engine high-risk approval/deny tests |
-| Parent/child runs and Worker placement | `parent_child_identity_survives_local_worker_submission`; subagent persistence/cancellation tests in Work Runtime |
-| Skills and tool policy | `embedded_agent_profile_applies_prompt_and_selected_skills`; `embedded_read_only_profile_hides_mutating_tools`; Work Skill import/toggle tests |
+| Parent/child runs and Worker placement | `parent_child_identity_survives_local_worker_submission`; subagent persistence/cancellation tests in the Engine |
+| Skills and tool policy | `embedded_agent_profile_applies_prompt_and_selected_skills`; `embedded_read_only_profile_hides_mutating_tools`; Skill import/toggle tests |
 
 ## Rollback
 

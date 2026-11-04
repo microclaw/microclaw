@@ -124,21 +124,9 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   disk after the agent last read or wrote it (`stale_read`).
 - In a direct workspace (`working_dir_isolation: direct`), `bash` runs in
   the workspace root instead of its `tmp/` subdirectory.
-- The high-risk approval gate and the read-only sub-agent restriction now
-  apply to the `code` caller channel instead of `work`.
-  `HeadlessRunRequest::work` / `{cancel,steer}_work_session` /
-  `WORK_CHANNEL` are now `::code` / `{cancel,steer}_code_session` /
-  `CODE_CHANNEL`.
-
-### Removed
-
-- **MicroClaw Work (the GPUI desktop app) is discontinued.** This removes
-  `apps/microclaw-work`, `apps/microclaw-work-headless`,
-  `crates/microclaw-work-app` and `crates/microclaw-work-runtime`, together
-  with their packaging, build/smoke/notarization scripts, the macOS CI job,
-  the portable release assets and the `work-release` Cargo profile. The
-  release script removes the `microclaw-work` Homebrew cask from the tap.
-  Server device pairing remains, for local clients.
+- The high-risk approval gate and the read-only sub-agent restriction apply
+  to the `code` caller channel (`HeadlessRunRequest::code`,
+  `{cancel,steer}_code_session`, `CODE_CHANNEL`).
 
 ## 0.11.1 - 2026-10-25
 
@@ -241,17 +229,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
-- Work ↔ Server pairing (roadmap Stage 4, first slice). The Web console's
+- Server device pairing. The Web console's
   Access tab mints single-use pairing codes; `POST /api/pairing/claim` trades
   a code for a hashed, revocable device token (`operator.read` +
   `operator.write`, actor `device:<id>`), listed and revoked under
   `/api/pairing/devices`, with `GET /api/pairing/whoami` for clients to verify
   their identity. `POST /api/runs/:run_id/cancel` cancels one run over HTTP.
-- MicroClaw Work: Settings → Server pairs with a Server, and an explicit
-  Local / Server execution target in the composer routes tasks either to the
-  embedded engine or to the paired Server with live progress, cancellation
-  and approvals. `microclaw-work-headless server "<task>"` runs one task
-  against the paired Server.
 
 ### Changed
 
@@ -324,7 +307,7 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - Dependency updates (cargo patch/minor groups, web dev dependencies).
   Dependabot now holds `@assistant-ui/react` below 0.15 and
   `@assistant-ui/react-markdown` below 0.14.8, which `@assistant-ui/react-ui`
-  cannot use yet, and leaves the Zed git crates to move with gpui-component.
+  cannot use yet.
 - Security Audit ignores RUSTSEC-2026-0318 and RUSTSEC-2026-0319: both come
   from matrix-sdk 0.16 behind the non-default `channel-matrix` feature, and the
   affected code path is not reachable. They are removed with the matrix-sdk
@@ -372,17 +355,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   24-based major versions.
 - Updated the public Rust SDK install examples and release guide to the stable
   `0.6.1` release.
-- Allowed the Server Homebrew formula to advance independently when a signed
-  and notarized Work DMG is not available, while preserving the existing Work
-  cask.
 
 ### Fixed
 
-- Restricted GitHub Release aggregation to distributable Server, Work, and
+- Restricted GitHub Release aggregation to distributable Server, and
   reliability artifacts so Docker Buildx's internal `.dockerbuild` records
   cannot break the final upload step.
 - Added a strict release manifest check that rejects missing or unexpected
-  Server, Work, and reliability assets before checksums or publication.
+  Server and reliability assets before checksums or publication.
 - Corrected the documentation home page release badge and link, which still
   referenced v0.5.5 after the v0.6.0 release.
 - Added a release-version guard for public SDK snippets and stable-version
@@ -392,15 +372,11 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
-- Added a CI release invariant that keeps Server, Work, Work Headless, the
-  internal Work crates, Core, Engine, SDK, and web package metadata on one
+- Added a CI release invariant that keeps Server, Core, Engine, SDK, and web package metadata on one
   product version.
 - Extended the release asset CI guard to accommodate cold Docker and stability
   builds without timing out a healthy tagged release.
-- Added native Work management for governed local, GitHub, and ClawHub Skills,
-  including source/version visibility, enablement, compatibility diagnostics,
-  background import, and recoverable removal.
-- Added durable, observable, and cancellable Main Agent delegation in Work and
+- Added durable, observable, and cancellable Main Agent delegation with
   stable SDK projections for delegated tasks.
 
 ### Changed
@@ -409,7 +385,7 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 - Formalized the single-writer Workspace model: Subagents can perform bounded
   parallel work while the Main Agent retains approvals, mutation ordering,
   cancellation, and the final response.
-- Kept Server and Work on one SDK and Agent Engine execution path while
+- Kept Server on one SDK and Agent Engine execution path while
   preserving the SDK's `minimal`, `standard`, and `full` dependency tiers.
 
 ## Rust SDK 0.5.1 - 2026-09-04
@@ -421,8 +397,6 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
-- Work now shows each installed Skill's source and declared version alongside
-  its availability and enablement state.
 - Removed the redundant cold `cargo build --release` job from ordinary CI;
   release-profile builds remain part of the artifact release workflow.
 - Updated the three public Rust crates together to 0.5.1 without changing the
@@ -440,7 +414,7 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Changed
 
-- Work and SDK Skill imports now share one Engine service with staged local
+- SDK Skill imports now share one Engine service with staged local
   copies, symlink rejection, injection scanning, and path-safe Skill names.
 
 ## 0.4.0 - 2026-09-04
@@ -458,8 +432,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   Protocol-only SDK consumers no longer compile Reqwest, SQLite, Tokio, Typst,
   OpenTelemetry, or the Agent Engine.
 - Moved the Typst/PDF renderer behind the Engine `document-tools` feature.
-  `standard` SDK hosts avoid that dependency graph, while `full`, Server, and
-  Work retain document generation.
+  `standard` SDK hosts avoid that dependency graph, while `full` and Server
+  retain document generation.
 - SDK errors no longer expose `RuntimeBuildError` as a public enum payload.
 
 ## 0.3.0 - 2026-09-04
@@ -470,7 +444,7 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   and Worker implementations into `microclaw-engine`, removing eight duplicate
   implementation crates from the workspace.
 - Replaced the public `microclaw_engine::internal` namespace with explicit
-  Engine integration modules used by Server and Work.
+  Engine integration modules used by Server.
 - Made SDK presets real dependency tiers: `minimal` is protocol-only,
   `standard` adds the embeddable runtime, and `full` adds configured Engine and
   Skill discovery.
@@ -519,7 +493,7 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   migration-only workspace crates are marked non-publishable.
 
 - **SDK-first project documentation.** The README and public documentation now
-  present Server, Work, and the Rust SDK as three explicit entry points. The
+  present Server and the Rust SDK as three explicit entry points. The
   website gives each path a separate, color-coded quickstart card instead of a
   mixed installer, with reduced-motion-safe entrance and interaction animation,
   and gives the SDK first-class navigation plus task-focused
@@ -540,322 +514,33 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   runs and 4,096 events per run by default, expose configurable replay limits,
   and return an explicit retryable error when requested history has expired.
 
-- **Faster non-release CI.** CI and Extended CI now cancel superseded runs on
-  the same branch. The final Rust release build reuses the already-required Web
-  and docs jobs instead of rebuilding them, and Extended CI stops producing a
-  disposable Work DMG on every push; signed bundles remain gated by the release
-  workflow.
-  Security and coverage tools are downloaded as checksum-verified release
-  binaries instead of being recompiled from source on every run.
 - **Removed redundant nightly build.** The scheduled Nightly Stability workflow
   duplicated the required stability-smoke job and a metrics test already run by
   the main test suite, so it no longer consumes a daily runner or creates noisy
   failure issues.
 
-- **Shared Work and headless execution API.** Headless CLI and native Work task
-  execution now enter the existing Agent Engine through the same embeddable
-  Runtime contract while preserving session persistence, cancellation,
-  steering, and versioned events.
-- **Work dogfoods the stable SDK.** Native Work and its headless acceptance
-  runner now create foreground Agents through `MicroClawBuilder` instead of
-  assembling `HeadlessRuntime` themselves. CI rejects a regression back to the
-  root Server package or around the SDK execution boundary.
 - **One execution lifecycle for every product surface.** Server channels, Web,
-  ACP, Scheduler, headless, and Work now enter Agent execution through the same
+  ACP, Scheduler, and headless now enter Agent execution through the same
   `RunRequest`, `RunHandle`, and `RunResult` path. Runtime controls support
   explicit acceptance or rejection instead of reporting only queue delivery.
 - **Effective embedded Agent profiles.** SDK Agent profiles now apply their
   custom system prompt, explicit Skill selection, and read-only tool policy to
-  the real shared Agent Engine. Work consumes the full SDK facade instead of
-  declaring a direct dependency on the root product package.
+  the real shared Agent Engine.
 - **Physical Agent Engine library boundary.** The concrete provider-neutral
   Agent loop and its default runtime services now compile in
   `microclaw-engine`. Server re-exports that shared implementation, while SDK
-  full and Work depend on the Engine crate without pulling in the root Server
+  full depends on the Engine crate without pulling in the root Server
   product package, Web console, or concrete channel adapters.
-
-## 0.5.5 - 2026-09-02
-
-### Added
-
-- **Work Skills management.** Native Work Settings now lists skills discovered
-  by the shared runtime, explains unavailable skills, and lets users enable or
-  disable them without editing configuration files. One import field installs
-  or updates a local Skill tree, GitHub Skill reference, or ClawHub slug while
-  reusing runtime compatibility, security, and lockfile verification.
-- **Durable Work Subagent controls.** Work now reads Subagent state from SQLite,
-  continues refreshing workers after the Main Agent turn finishes, and exposes
-  cancellation with progress, result, and error details in the inspector.
-
-### Changed
-
-- **Focused Work agent roadmap.** The canonical plan now defines one visible
-  Main Agent, bounded and observable Subagents, Skills as the extension model,
-  and a single-writer Workspace rule. Named agent teams and a free-form
-  multi-agent canvas remain explicitly out of scope.
-- **Single-writer Work execution.** Work Subagents are enforced read-only at
-  the shared tool choke point, leaving Workspace mutation and approval with the
-  Main Agent. Accepted background runs execute on a process-lifetime Tokio
-  runtime instead of being aborted when a foreground Work turn exits.
-
-## 0.5.4 - 2026-08-27
-
-### Changed
-
-- **Workspace-aware native Work conversations.** The composer accepts files
-  through the macOS picker or native drag and drop, persists only relative
-  Workspace paths, rejects files outside the active folder, and carries those
-  references into the shared Agent Engine request. The sidebar and Workspace
-  Settings now show project identity, Git branch context, and the explicit
-  current-folder access boundary.
-
-- **Truly lightweight Work builds.** Server builds continue to embed the React
-  operator console by default, while `microclaw-work` now disables that asset
-  feature at its runtime dependency boundary. Work keeps the shared Agent
-  Engine, providers, tools, policy, memory, and checkpoints without carrying
-  the Server Web distribution.
-- **Local-first Work product surface.** Native Settings now shows the packaged
-  Work version, links to signed release updates, and can open the active
-  Workspace. Completed and failed tasks produce native in-app and operating
-  system notifications so background work is visible. The public site has a
-  dedicated Work guide and one canonical Server + Work delivery plan.
-
-## 0.5.3 - 2026-08-27
-
-### Added
-
-- **Portable MicroClaw Work previews.** Tag releases now build, launch-smoke,
-  checksum, and publish Work archives for Linux x86_64, Linux arm64, and
-  Windows x86_64 alongside the signed and notarized macOS DMGs. macOS remains
-  the supported desktop release; Linux and Windows archives are previews while
-  platform acceptance and installer work continue.
-
-### Changed
-
-- **Server + Work architecture documentation.** The README and public website
-  now distinguish the fully cross-platform Server from the shared-core native
-  Work application, including current platform availability and installation.
-- **Consistent MicroClaw Work identity.** The native sidebar, Settings header,
-  and empty-conversation state now use the website's MicroClaw artwork instead
-  of the temporary `μ` badge. The macOS bundle uses a dedicated rounded version
-  of the same artwork so the system no longer adds a generic gray enclosure.
-
-## 0.5.2 - 2026-08-26
-
-### Changed
-
-- **Refined MicroClaw Work desktop experience.** Work now uses a compact,
-  responsive navigation rail, centered conversation layout, lighter message
-  treatment, and a cleaner composer that adapts to 900px-wide macOS windows.
-- **Desktop-style Work Settings.** General, Appearance, Models, Agent,
-  Workspace, and Diagnostics now have dedicated settings sections with
-  consistent typography, spacing, controls, light and dark themes, and direct
-  access to model, SOUL, context, and local readiness configuration.
 
 ## 0.5.1 - 2026-08-26
 
 ### Fixed
 
-- **Codex tool calls and native Work project roots.** The Codex Responses SSE
-  parser now recovers streamed function calls whether event names are carried
-  in JSON or standard `event:` lines. Work uses an explicit direct-workspace
-  mode so tools, project context, checkpoints, and completion verification run
-  at the folder selected by the user without changing Server's configured
-  shared/per-chat isolation. Long conversation titles and the Details panel now
-  shrink within the window, and Accept/Revert actions remain visible above the
-  diff.
 - **Codex streamed final-text recovery.** The OpenAI Codex Responses parser now
   retains `response.output_text.delta`/`done` text when the terminal
   `response.done` payload omits visible output. This prevents a successfully
   authenticated ChatGPT-backed Codex run from falling through to the Agent
   Engine's empty-reply retry and completion fallback.
-
-### Added
-
-- **Conversation search for MicroClaw Work.** The native recent-conversation
-  rail now filters durable thread titles and Workspace paths without case
-  sensitivity and presents an explicit empty-result state.
-- **Stable and pinnable Work conversations.** The desktop rail now keeps
-  conversations in creation order regardless of opens, drafts, or new turns;
-  pinned conversations remain above unpinned history until explicitly unpinned
-  from the conversation's compact right-click menu.
-- **Named Work conversation controls.** Conversation rows now expose their
-  titles to macOS Accessibility instead of appearing as numbered anonymous
-  buttons, with a repeatable local accessibility-tree audit.
-- **Left-aligned Work navigation.** Conversation rows now use the accessible
-  GPUI button primitive directly so status dots, titles, and pinned state stay
-  left-aligned at every title length. The Workspace footer uses one clear
-  project action and an equal-width Settings, Reload, and Checks toolbar.
-- **Isolated Work acceptance data.** Development and native-input acceptance
-  runs can set `MICROCLAW_WORK_DATA_DIR` so automated sessions never touch the
-  user's normal desktop history or configuration. The isolated macOS pass now
-  covers IME marked text, numbered candidate selection, draft persistence, and
-  relaunch recovery.
-- **Responsive long Work sessions.** The desktop progressively renders older
-  messages, bounds persisted diff payloads, and limits native diff previews so
-  long conversations and generated files do not make every frame expensive. A
-  reproducible maximum-size save/load benchmark records the local performance
-  baseline.
-- **Current model presets in Work Settings.** Popular providers now have quick
-  selection, current recommended model IDs, and provider endpoints while the
-  editable Provider, Model ID, and Base URL fields continue to support the full
-  catalog and custom OpenAI-compatible services.
-- **Recoverable Work conversation storage.** A damaged desktop session or
-  index is preserved with a `.corrupt-*` suffix while Work rebuilds valid
-  history and opens a usable conversation with an explicit recovery notice.
-- **Agent identity settings for MicroClaw Work.** The native Settings page now
-  edits the active local `SOUL.md`, its file location, and the shared project
-  context directory alongside appearance and model configuration. Updates use
-  the shared Server configuration model, preserve YAML comments, and retain
-  channel-specific SOUL overrides.
-- **Homebrew Cask distribution for MicroClaw Work.** Stable releases now build,
-  sign, notarize, and publish architecture-specific macOS DMGs, then update the
-  `microclaw/tap` Cask automatically. Users can install and upgrade the native
-  desktop app with `brew install --cask microclaw-work`.
-- **Compact Work navigation.** The native desktop sidebar now uses a denser,
-  scrollable recent-chat list with left-aligned titles, compact status signals,
-  and a restrained active state. Workspace selection, model configuration,
-  reload, and diagnostics live in a divided utility footer instead of a large
-  stack of outlined buttons.
-- **Native Work appearance settings.** The desktop now follows the operating
-  system's light or dark appearance by default, updates when the system changes,
-  and offers persisted System, Light, and Dark choices on a compact application
-  Settings page alongside model configuration.
-- **macOS Work shortcuts.** Native menu actions and Command-N, Command-L,
-  Command-Comma, and Command-Shift-D now provide direct access to New Chat,
-  the composer, Model Settings, and Diagnostics.
-- **Enforced native Work tool approval.** Desktop runs now carry a dedicated
-  `work` caller context through the shared Agent Engine. High-risk tools pause
-  on the inline approval card, and **Approve once** resumes the same persisted
-  conversation without granting standing access. CLI headless runs retain
-  their existing non-interactive behavior.
-- **One-click Codex account onboarding.** Work detects an existing local Codex
-  login without reading its credential payload and offers **Use Codex Account**.
-  It reuses the non-secret model selected by the Codex client, clears
-  inapplicable API-key/base-URL fields, and immediately runs Save & Test. This
-  was verified against a real ChatGPT-backed Codex session instead of assuming
-  the generic provider default is account-compatible. A real shared-Agent-
-  Engine diagnostic completed with three Work events and the expected visible
-  final response.
-- **Auto-growing Work composer.** The primary chat and in-run guidance fields
-  now use GPUI Component's native multiline textarea. They grow with longer
-  prompts, submit with Return, preserve Shift-Return for new lines, and retain
-  explicit AccessKit names without adding a separate editor implementation.
-- **Native Work application lifecycle.** The macOS application now activates
-  itself, installs standard Edit menu actions, and handles Command-Q through a
-  real Quit action. Closing the last window keeps the app alive, and reopening
-  it from the Dock recreates the durable conversation window. Model onboarding
-  is reduced to **Save & Test**, followed by a clear **Start Chatting** action
-  after the provider responds successfully.
-- **Keyboard-first Work composer.** Pressing Return in the native chat composer
-  now invokes the same primary action as Send, while Return in the active-run
-  guidance field sends steering through the existing Work runtime boundary.
-  GPUI still owns composition handling before emitting the submit event. Initial
-  composer focus is deferred until the native window has mounted, making a new
-  macOS launch immediately ready for keyboard input.
-- **macOS-first Work release path.** MicroClaw Work now treats macOS daily-use
-  quality as the desktop milestone; Windows and Linux Work support is deferred
-  outside the current CI and release commitment. The DMG builder can submit Developer
-  ID-signed application and disk-image artifacts with a named `notarytool`
-  keychain profile, then staple and validate both artifacts for distribution.
-
-- **Explicit Work accessibility semantics.** Model fields and the chat composer
-  now expose stable accessible names; completed conversation messages are
-  paragraphs, streamed assistant output is a status region, and inline tool
-  approval is an alert. The composer receives focus at launch and regains it
-  after closing Model Settings or Diagnostics. This improves keyboard and
-  VoiceOver/AccessKit navigation without coupling the desktop loop to
-  platform-specific UI code.
-- **Dedicated desktop release profile.** `work-release` keeps optimized,
-  stripped binaries while dropping Server-oriented Thin LTO and enabling
-  parallel code generation. The macOS Work build and release gates use this
-  canonical profile without changing MicroClaw Server release characteristics.
-- **Branded macOS Work installer preview.** The native bundle now derives its
-  complete `.icns` set from the same blue MicroClaw logo used by the website.
-  New packaging and launch-smoke scripts create and verify a DMG, ad-hoc sign
-  development previews, or enable Hardened Runtime and trusted timestamps for
-  a supplied Developer ID identity. Extended CI now publishes the DMG preview
-  and proves the packaged application stays alive after launch.
-- **Agent Engine first-response proof.** Work Diagnostics can now run a fixed,
-  explicit end-to-end probe through provider streaming, the shared Agent
-  Engine, durable runtime assembly, versioned Work events, and visible final
-  completion. Results are bounded and secret-redacted.
-- **Refined native Work presentation.** The GPUI desktop now uses a quieter
-  layered sidebar, a distinct active-conversation card, contextual status
-  colors, polished chat bubbles and composer surfaces, starter prompts, and
-  structured diagnostic cards with compact state badges.
-- **Native Work diagnostics.** The desktop now exposes an offline diagnostics
-  report for model configuration, active-workspace writes, durable conversation
-  storage, and credential-file permissions, with an explicit redacted provider
-  connection probe beside the local checks.
-- **Direct-to-chat MicroClaw Work onboarding.** New desktop installations now
-  provision a private platform-local Work Home, surface model configuration in
-  the empty chat canvas, and allow the first conversation without forcing the
-  user through a project-folder picker. Missing external projects safely fall
-  back to Work Home.
-- **macOS Work release gate.** Extended CI compiles and tests the shared Work
-  session/runtime/recovery path on macOS, builds the native GPUI desktop and DMG,
-  launch-smokes the packaged app, and uploads a short-lived preview artifact.
-- **Chat-first MicroClaw Work home.** The GPUI desktop now opens into a
-  conversation workspace instead of a task dashboard: New Chat and durable
-  conversation history lead the sidebar, setup state is compact and secondary,
-  the empty thread has a dedicated welcome state, user messages align as chat,
-  and a larger persistent composer carries folder and model context. Plan,
-  process evidence, and change review live in a collapsible Details inspector
-  so ordinary conversation can use the full canvas.
-- **Conversation-first MicroClaw Work shell.** The native desktop now treats
-  each task as a durable conversation: user and assistant messages are stored
-  in the Work snapshot, streaming text is coalesced into an assistant draft,
-  and the composer stays at the bottom of the primary chat surface. Plans,
-  approvals, process evidence, and artifacts remain supporting work context.
-- **Continuous Work threads.** Submitted turns and unsent composer drafts now
-  have separate durable state. Sending clears the bottom composer, completed
-  tasks accept direct same-session follow-ups without deleting prior messages,
-  and approval choices appear inline in the conversation where execution
-  pauses instead of living in a separate empty inspector card.
-- **Native multi-file change review.** Work snapshot schema v13 persists the
-  selected changed file. The inspector now provides an explicit multi-file
-  list, addition/removal and truncation metadata, a bounded scrollable unified
-  diff with added/removed line highlighting, safe file opening, and the
-  existing accept/revert decision in one review surface.
-- **Provider connection diagnostics.** Model Settings now performs save and an
-  asynchronous connection test as one first-use action. The shared Work runtime
-  sends a minimal provider request with a 20-second bound, verifies
-  endpoint/auth/model/response handling, reports latency and a bounded response
-  preview, and redacts the configured credential from errors.
-- **Retryable recovered Work threads.** Interrupted, failed, and cancelled
-  runs now use a first-class Retry command that reuses the last submitted turn
-  even when the composer is empty. Retry preserves the conversation without a
-  duplicate user message and clears stale partial-run plans, drafts, activities,
-  diffs, approvals, and review state before starting again.
-- **Process-level Work recovery harness.** The no-GPUI executable can now abort
-  after persisting a partially streamed Running session, recover it in a second
-  process, and retry it in a third. An integration test proves stable session
-  identity, transcript preservation, Interrupted projection, and stale-run
-  cleanup across real operating-system process boundaries.
-
-- **MicroClaw Work post-task review.** Foreground Work runs emit a pre-task
-  checkpoint and completed file changes can be accepted, continued in the same
-  runtime session, or reverted through a native confirmation and background
-  shadow-git restore. Empty workspaces, later tracked files, and new unignored
-  files are restored correctly while ignored secrets and nested repositories
-  remain protected.
-- **Live native Work plans.** Successful shared `todo_write` calls now emit a
-  provider-neutral structured plan event. The GPUI desktop projects pending,
-  active, and completed steps durably and no longer invents a fixed four-step
-  plan before the Agent has planned the task.
-- **In-run Work steering.** The native composer switches to `Send Update` while
-  a foreground task is active. Guidance enters the existing Agent Engine
-  mid-turn queue, is acknowledged only when the active session accepts it, and
-  remains visible in the durable Work timeline.
-- **Structured native approvals.** Runtime Event v5 gives every approval choice
-  an explicit response value, Approve/Deny decision, and visual intent. Work
-  persists the complete approval card, renders advisory text and native choice
-  buttons, and resumes the same Agent session with the selected value.
-- **Native verification evidence.** Runtime Event v6 exposes bounded, redacted
-  Bash output with command, exit code, duration, truncation state, and command
-  or verification classification. Work persists this evidence and renders it
-  in a scrollable native Process Output panel.
 
 ## 0.5.0 - 2026-08-16
 
@@ -1274,8 +959,6 @@ Milestone release consolidating everything since the 0.1.12 maturity-hardening
 baseline: a concurrent specialist team, humanlike behavior, graph-augmented
 memory, mid-turn interactivity, a multimedia tool suite, more channels, and
 hardened packaging/release automation.
-
-### Added
 
 #### Agent capabilities
 

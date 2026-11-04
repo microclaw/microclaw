@@ -46,7 +46,7 @@ for consumer in microclaw-code-core microclaw-code; do
 done
 
 engine_direct_tree="$(cargo tree -p microclaw-engine -e normal --depth 1 --prefix none)"
-for forbidden in microclaw axum gpui teloxide serenity; do
+for forbidden in microclaw axum teloxide serenity; do
   if printf '%s\n' "$engine_direct_tree" | cut -d' ' -f1 | grep -Fxq "$forbidden"; then
     printf 'microclaw-engine must not directly depend on product/UI package %s\n' "$forbidden" >&2
     exit 1

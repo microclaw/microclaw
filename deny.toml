@@ -38,7 +38,7 @@ yanked = "deny"
 #   moves to quick-xml 0.41+.
 #
 # RUSTSEC-2024-0449: `unsafe-libyaml` is unmaintained — transitive via
-#   serde_yaml 0.9 (itself archived upstream), which the config, Work runtime
+#   serde_yaml 0.9 (itself archived upstream), which the config
 #   and engine still parse with. Moving to a maintained YAML crate is a
 #   separate migration; the advisory is informational (no vulnerability).
 #
