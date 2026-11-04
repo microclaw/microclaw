@@ -128,6 +128,10 @@ impl Transcript {
             Update::AutoApproved { tool, rule } => {
                 self.approval_in_run = false;
                 match rule {
+                    Some(rule) if rule == microclaw_code_core::driver::SANDBOX_RULE => self.notice(
+                        format!("auto-approved {tool}: runs in the sandbox without network"),
+                        Tone::Info,
+                    ),
                     Some(rule) => self.notice(
                         format!("auto-approved {tool}: allowed by rule `{rule}`"),
                         Tone::Info,

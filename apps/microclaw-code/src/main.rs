@@ -87,9 +87,16 @@ struct Cli {
     #[arg(long, value_name = "MODE")]
     sandbox: Option<String>,
 
-    /// Deny network access to sandboxed shell commands.
+    /// Deny network access to sandboxed shell commands. In ask mode such
+    /// commands then run without asking (they cannot change anything outside
+    /// the repository).
     #[arg(long)]
     no_network: bool,
+
+    /// Have the model review each command that needs approval; a command it
+    /// calls DANGEROUS asks you even in auto mode.
+    #[arg(long)]
+    review_commands: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -341,6 +348,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         (ShellSandbox::WorkspaceWrite { network, .. }, Some(mechanism)) => Some(SandboxInfo {
             mechanism: mechanism.to_string(),
             network: *network,
+            confines_reads: mechanism != "landlock",
         }),
         (ShellSandbox::WorkspaceWrite { .. }, None) => {
             notices.push(NO_SANDBOX_NOTICE.into());
@@ -354,15 +362,16 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if !cli.json {
         eprintln!("{}", style.dim("Starting the Agent Engine…"));
     }
-    let microclaw = MicroClaw::builder(&config_path)
+    let mut builder = MicroClaw::builder(&config_path)
         .caller_channel(CALLER_CHANNEL)
         .workspace(&project.root)
         .data_dir(home::data_dir())
         .max_concurrent_runs(1)
-        .shell_sandbox(sandbox_choice)
-        .build()
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .shell_sandbox(sandbox_choice);
+    if cli.review_commands {
+        builder = builder.command_reviewer(None);
+    }
+    let microclaw = builder.build().await.map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let settings = SessionSettings {
         mode,
@@ -711,7 +720,12 @@ async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<Ex
         (ShellSandbox::WorkspaceWrite { network, .. }, Some(mechanism)) => ok(
             "shell sandbox",
             format!(
-                "{mechanism}: writes limited to the repository, temp and tool caches; network {}",
+                "{mechanism}: writes limited to the repository, temp and tool caches; {}network {}",
+                if mechanism == "landlock" {
+                    "credential directories stay readable (install bubblewrap to hide them); "
+                } else {
+                    ""
+                },
                 if network { "on" } else { "off" }
             ),
         ),

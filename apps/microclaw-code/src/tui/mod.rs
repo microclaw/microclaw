@@ -243,9 +243,18 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) {
 /// Run the TUI until the user quits. Returns the session id.
 fn sandbox_label(sandbox: &microclaw_code_core::driver::SandboxInfo) -> String {
     format!(
-        "shell sandbox: {} — commands write only the repository, temp and tool caches; network {}",
+        "shell sandbox: {} — commands write only the repository, temp and tool caches{}; network {}",
         sandbox.mechanism,
-        if sandbox.network { "on" } else { "off" }
+        if sandbox.confines_reads {
+            ""
+        } else {
+            " (credential directories stay readable)"
+        },
+        if sandbox.network {
+            "on"
+        } else {
+            "off, so commands run without asking in ask mode"
+        }
     )
 }
 

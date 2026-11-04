@@ -721,6 +721,7 @@ pub struct MicroClawBuilder {
     caller_channel: String,
     max_concurrent_runs: usize,
     shell_sandbox: Option<ShellSandbox>,
+    command_reviewer: Option<Option<String>>,
 }
 
 #[cfg(feature = "full")]
@@ -735,6 +736,7 @@ impl MicroClawBuilder {
             caller_channel: "embedded-app".into(),
             max_concurrent_runs: 4,
             shell_sandbox: None,
+            command_reviewer: None,
         }
     }
 
@@ -748,6 +750,7 @@ impl MicroClawBuilder {
             caller_channel: "embedded-app".into(),
             max_concurrent_runs: 4,
             shell_sandbox: None,
+            command_reviewer: None,
         }
     }
 
@@ -761,6 +764,7 @@ impl MicroClawBuilder {
             caller_channel: "embedded-app".into(),
             max_concurrent_runs: 4,
             shell_sandbox: None,
+            command_reviewer: None,
         }
     }
 
@@ -800,6 +804,14 @@ impl MicroClawBuilder {
         self
     }
 
+    /// Have a model annotate every approval request with a one-line verdict
+    /// (`SAFE` / `CAUTION` / `DANGEROUS …`, the `advisory` of
+    /// `ApprovalRequired`). `None` uses the configured main model.
+    pub fn command_reviewer(mut self, model: Option<String>) -> Self {
+        self.command_reviewer = Some(model);
+        self
+    }
+
     pub async fn build(self) -> Result<MicroClaw, SdkError> {
         use microclaw_engine::config::Config;
         use microclaw_engine::headless::HeadlessRuntime;
@@ -825,6 +837,13 @@ impl MicroClawBuilder {
             config.working_dir = path.to_string_lossy().into_owned();
             config.working_dir_isolation = microclaw_engine::config::WorkingDirIsolation::Direct;
             config.checkpoints_enabled = true;
+        }
+        if let Some(model) = self.command_reviewer {
+            config.aux_models.approval_reviewer = Some(
+                model
+                    .filter(|m| !m.trim().is_empty())
+                    .unwrap_or_else(|| config.model.clone()),
+            );
         }
         match self.shell_sandbox {
             Some(ShellSandbox::Off) => {

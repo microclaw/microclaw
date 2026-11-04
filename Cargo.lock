@@ -3728,6 +3728,7 @@ name = "microclaw-code-core"
 version = "0.11.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dirs",
  "microclaw-sdk",
@@ -3772,6 +3773,7 @@ dependencies = [
  "iana-time-zone",
  "ignore",
  "include_dir",
+ "libc",
  "md5",
  "microclaw-core",
  "native-tls",

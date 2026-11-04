@@ -28,6 +28,9 @@ use crate::internal::tool_runtime::command_runner::CommandSpec;
 pub enum LocalSandboxKind {
     Bubblewrap,
     Seatbelt,
+    /// Linux fallback without bubblewrap: write confinement (and TCP
+    /// blocking on newer kernels) through Landlock; cannot hide directories.
+    Landlock,
 }
 
 impl LocalSandboxKind {
@@ -35,7 +38,13 @@ impl LocalSandboxKind {
         match self {
             Self::Bubblewrap => "bubblewrap",
             Self::Seatbelt => "seatbelt",
+            Self::Landlock => "landlock",
         }
+    }
+
+    /// Whether this mechanism hides the credential directories.
+    pub fn hides_credentials(self) -> bool {
+        !matches!(self, Self::Landlock)
     }
 }
 
@@ -73,10 +82,21 @@ const DEFAULT_WRITABLE_HOME_DIRS: &[&str] = &[
 
 /// Which mechanism is available on this machine, probed once. On Linux the
 /// probe runs `bwrap` for real, because user namespaces can be disabled
-/// (some containers, hardened kernels).
+/// (some containers, hardened kernels); without it, Landlock is used when the
+/// kernel supports it. `MICROCLAW_LOCAL_SANDBOX=bubblewrap|landlock|none`
+/// overrides the choice.
 pub fn detect() -> Option<LocalSandboxKind> {
     static DETECTED: OnceLock<Option<LocalSandboxKind>> = OnceLock::new();
     *DETECTED.get_or_init(|| {
+        let forced = std::env::var("MICROCLAW_LOCAL_SANDBOX").ok();
+        match forced.as_deref().map(str::trim) {
+            Some("none") | Some("off") => return None,
+            Some("landlock") => {
+                return crate::internal::tool_runtime::landlock::abi()
+                    .map(|_| LocalSandboxKind::Landlock)
+            }
+            _ => {}
+        }
         if cfg!(target_os = "macos") {
             Path::new(SEATBELT)
                 .exists()
@@ -99,7 +119,11 @@ pub fn detect() -> Option<LocalSandboxKind> {
                 .stderr(std::process::Stdio::null())
                 .status()
                 .is_ok_and(|s| s.success());
-            works.then_some(LocalSandboxKind::Bubblewrap)
+            if works {
+                Some(LocalSandboxKind::Bubblewrap)
+            } else {
+                crate::internal::tool_runtime::landlock::abi().map(|_| LocalSandboxKind::Landlock)
+            }
         } else {
             None
         }
@@ -194,6 +218,31 @@ pub fn wrap(
     match kind {
         LocalSandboxKind::Bubblewrap => bubblewrap(policy, spec, cwd),
         LocalSandboxKind::Seatbelt => seatbelt(policy, spec),
+        LocalSandboxKind::Landlock => landlock(policy, spec),
+    }
+}
+
+fn landlock(policy: &LocalPolicy, spec: &CommandSpec) -> CommandSpec {
+    let (workspace, writable, _) = policy.resolved();
+    let mut roots = writable;
+    roots.push(workspace);
+    match crate::internal::tool_runtime::landlock::Ruleset::new(&roots, policy.network) {
+        Ok(rules) => CommandSpec {
+            program: spec.program.clone(),
+            args: spec.args.clone(),
+            landlock: Some(std::sync::Arc::new(rules)),
+        },
+        // Never run unconfined when the sandbox was requested.
+        Err(e) => CommandSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                format!(
+                    "echo 'microclaw: could not set up the Landlock sandbox: {e}' >&2; exit 126"
+                ),
+            ],
+            landlock: None,
+        },
     }
 }
 
@@ -234,6 +283,7 @@ fn bubblewrap(policy: &LocalPolicy, spec: &CommandSpec, cwd: &Path) -> CommandSp
     CommandSpec {
         program: "bwrap".into(),
         args,
+        landlock: None,
     }
 }
 
@@ -305,6 +355,7 @@ fn seatbelt(policy: &LocalPolicy, spec: &CommandSpec) -> CommandSpec {
     CommandSpec {
         program: SEATBELT.into(),
         args,
+        landlock: None,
     }
 }
 
@@ -373,6 +424,35 @@ mod tests {
         p.hidden = vec![dir.path().join("a")];
         let (_, _, hidden) = p.resolved();
         assert!(hidden.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn landlock_wrapping_confines_writes() {
+        if crate::internal::tool_runtime::landlock::abi().is_none() {
+            eprintln!("Landlock unavailable; skipping");
+            return;
+        }
+        let base = tempfile::tempdir().unwrap();
+        let ws = base.path().join("ws");
+        let outside = base.path().join("outside");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let p = LocalPolicy {
+            workspace: ws.clone(),
+            writable_roots: Vec::new(),
+            network: true,
+            hidden: Vec::new(),
+        };
+        let script = format!(
+            "echo in > inside.txt; echo out > '{}/x.txt'; echo done",
+            outside.display()
+        );
+        let spec = wrap(LocalSandboxKind::Landlock, &p, &shell_command(&script), &ws);
+        let output = build_command(&spec, Some(&ws)).output().await.unwrap();
+        assert!(ws.join("inside.txt").exists());
+        assert!(!outside.join("x.txt").exists());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("done"));
     }
 
     /// Runs only where the OS sandbox actually works (bwrap with user

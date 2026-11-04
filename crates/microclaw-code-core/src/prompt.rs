@@ -104,8 +104,9 @@ pub fn system_prompt_with_sandbox(
     }
     if let Some(sandbox) = sandbox {
         prompt.push_str(&format!(
-            "\n# Shell sandbox\n\nShell commands run in an OS sandbox ({}): they can write only inside the repository, the temp directory and tool caches (cargo, npm, …), cannot read credential directories such as ~/.ssh, and {}. If a command fails because of the sandbox (\"Read-only file system\", \"Operation not permitted\", network errors), do not try to work around it; tell the user which command needs more access.\n",
+            "\n# Shell sandbox\n\nShell commands run in an OS sandbox ({}): they can write only inside the repository, the temp directory and tool caches (cargo, npm, …){}, and {}. If a command fails because of the sandbox (\"Read-only file system\", \"Operation not permitted\", network errors), do not try to work around it; tell the user which command needs more access.\n",
             sandbox.mechanism,
+            if sandbox.confines_reads { ", cannot read credential directories such as ~/.ssh" } else { "" },
             if sandbox.network { "have network access" } else { "have no network access" }
         ));
     }
@@ -173,6 +174,7 @@ mod tests {
         let info = crate::driver::SandboxInfo {
             mechanism: "bubblewrap".into(),
             network: false,
+            confines_reads: true,
         };
         let prompt = system_prompt_with_sandbox(&project, Mode::Ask, None, Some(&info));
         assert!(prompt.contains("OS sandbox (bubblewrap)"));
