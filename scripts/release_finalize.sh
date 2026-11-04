@@ -418,10 +418,12 @@ class Microclaw < Formula
 
   def install
     bin.install "microclaw"
+    bin.install "mccode"
   end
 
   test do
     assert_match "MicroClaw", shell_output("#{bin}/microclaw help")
+    assert_match "mccode", shell_output("#{bin}/mccode --version")
   end
 end
 RUBY
@@ -445,6 +447,7 @@ class MicroclawFull < Formula
 
   def install
     bin.install "microclaw-full" => "microclaw"
+    bin.install "mccode"
   end
 
   test do

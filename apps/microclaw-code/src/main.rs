@@ -12,6 +12,7 @@ mod mcp_server;
 mod print;
 mod setup;
 mod tui;
+mod update;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -144,6 +145,12 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
+    /// Install the latest release of mccode (checksum-verified).
+    Update {
+        /// Only report whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+    },
     /// Pair with a MicroClaw Server, show or forget the pairing.
     Remote {
         #[command(subcommand)]
@@ -235,6 +242,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    if let Some(Command::Update { check }) = &cli.command {
+        update::run(*check).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if let Some(Command::Remote { action }) = &cli.command {
         return remote_command(action, style).await;
     }
@@ -316,6 +327,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
         Some(Command::Review { .. })
         | Some(Command::Remote { .. })
+        | Some(Command::Update { .. })
         | Some(Command::Acp)
         | Some(Command::McpServer)
         | None => {}
