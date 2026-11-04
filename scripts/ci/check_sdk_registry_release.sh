@@ -77,6 +77,22 @@ fn main() {
 }
 EOF
 
+# A freshly published version can take a few minutes to appear in the
+# crates.io index that cargo reads, so wait for it before building.
+attempts="${SDK_REGISTRY_WAIT_ATTEMPTS:-30}"
+for attempt in $(seq 1 "$attempts"); do
+  if cargo generate-lockfile --quiet --manifest-path "$consumer_dir/Cargo.toml" 2>/dev/null; then
+    break
+  fi
+  if [[ "$attempt" -eq "$attempts" ]]; then
+    echo "microclaw-sdk ${version} is still not resolvable from crates.io" >&2
+    cargo generate-lockfile --manifest-path "$consumer_dir/Cargo.toml"
+    exit 1
+  fi
+  echo "Waiting for microclaw-sdk ${version} in the crates.io index (${attempt}/${attempts})"
+  sleep 20
+done
+
 cargo run --quiet --manifest-path "$consumer_dir/Cargo.toml" --features minimal
 cargo run --quiet --manifest-path "$consumer_dir/Cargo.toml" --features standard
 cargo check --quiet --manifest-path "$consumer_dir/Cargo.toml" --features full
