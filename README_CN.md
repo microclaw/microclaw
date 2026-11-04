@@ -91,7 +91,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.11.1**，是一个安全补丁：全局 `tool_policy.allow_tools` 现在是真正的白名单（此前只是豁免名单，单独配置时不会限制任何工具），全局工具列表支持 `*` 通配，发给模型的工具目录会按策略过滤，`microclaw doctor` 会提示没有规则的空策略。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.11.1)。
+最新版本为 **v0.20.0**，是 **MicroClaw Code**（`mccode`，预览版）的首个版本：面向你自己仓库的编码智能体，提供全屏终端界面、`plan` / `ask` / `auto` 三种模式、shell 命令的系统沙箱、按项目检查自动验证、`/undo` 检查点、通过 ACP 接入 Zed，以及供其他智能体调用的 MCP 服务。它有独立的下载包和安装脚本。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.20.0)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -140,7 +140,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.11.1", features = ["full"] }
+microclaw-sdk = { version = "0.20.0", features = ["full"] }
 ```
 
 ```rust

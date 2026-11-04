@@ -6,6 +6,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.20.0 - 2026-11-04
+
 ### Added
 
 - **MicroClaw Code** (`mccode`, `apps/microclaw-code`, Preview): a terminal
