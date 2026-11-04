@@ -11,8 +11,8 @@ Status: **Preview**.
 ## Install and configure
 
 ```sh
-brew install microclaw/tap/microclaw       # macOS: microclaw + mccode
-# or download a release archive (it contains both binaries), or
+brew install microclaw/tap/mccode          # macOS (the Server is a separate formula: microclaw)
+# or download mccode-<version>-<target> from the GitHub release, or
 cargo install --path apps/microclaw-code   # build mccode from source
 mccode setup                               # choose a provider, model and key
 cd path/to/your/repo

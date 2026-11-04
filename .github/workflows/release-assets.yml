@@ -199,10 +199,9 @@ jobs:
             cargo build --release --features full
           else
             cargo build --release
+            # MicroClaw Code ships as its own archive (mccode-<version>-<target>).
+            cargo build --release -p microclaw-code
           fi
-          # MicroClaw Code ships in every archive, next to the Server binary
-          # (`microclaw code …` forwards to it).
-          cargo build --release -p microclaw-code
 
       - name: Prepare packaged binary name (Unix)
         if: matrix.target.archive_ext == 'tar.gz'
@@ -225,8 +224,13 @@ jobs:
             PACKAGED_BIN="${{ matrix.target.bin }}"
           fi
           ASSET_NAME="${ASSET_PREFIX}-${RELEASE_VERSION}-${{ matrix.target.asset_triple }}.tar.gz"
-          tar -czf "$ASSET_NAME" -C target/release "${PACKAGED_BIN}" mccode
+          tar -czf "$ASSET_NAME" -C target/release "${PACKAGED_BIN}"
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+          if [ "${{ matrix.flavor }}" = "default" ]; then
+            MCCODE_ASSET="mccode-${RELEASE_VERSION}-${{ matrix.target.asset_triple }}.tar.gz"
+            tar -czf "$MCCODE_ASSET" -C target/release mccode
+            echo "MCCODE_ASSET=$MCCODE_ASSET" >> "$GITHUB_ENV"
+          fi
 
       - name: Prepare packaged binary name (Windows)
         if: matrix.target.archive_ext == 'zip'
@@ -249,14 +253,27 @@ jobs:
             $packagedBin = "${{ matrix.target.bin }}"
           }
           $assetName = "${assetPrefix}-${releaseVersion}-${{ matrix.target.asset_triple }}.zip"
-          Compress-Archive -Path "target/release/${packagedBin}", "target/release/mccode.exe" -DestinationPath $assetName -Force
+          Compress-Archive -Path "target/release/${packagedBin}" -DestinationPath $assetName -Force
           "ASSET_NAME=$assetName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ("${{ matrix.flavor }}" -eq "default") {
+            $mccodeAsset = "mccode-${releaseVersion}-${{ matrix.target.asset_triple }}.zip"
+            Compress-Archive -Path "target/release/mccode.exe" -DestinationPath $mccodeAsset -Force
+            "MCCODE_ASSET=$mccodeAsset" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target.label }}-${{ matrix.flavor }}
           path: ${{ env.ASSET_NAME }}
+          if-no-files-found: error
+
+      - name: Upload MicroClaw Code artifact
+        if: matrix.flavor == 'default'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target.label }}-mccode
+          path: ${{ env.MCCODE_ASSET }}
           if-no-files-found: error
 
   build-container:

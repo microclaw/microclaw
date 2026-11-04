@@ -151,7 +151,7 @@ crates/microclaw-engine
 | 体验 | 新工具 `bash_input`：向后台进程的标准输入写内容并返回输出，可以驱动 REPL、调试器和交互式提示。子目录 `AGENTS.md` 原本就按路径就近加载（`SubdirectoryHintTracker`），现在也识别 `apply_patch` 涉及的文件 |
 | 接入 | `mccode acp`：Agent Client Protocol，Zed 等编辑器可直接接入；审批走 `session/request_permission`，模式 plan/ask/auto，`session/load` 回放历史，回复前保证通知已发出。`mccode mcp-server`：MCP 工具 `run`、`review`，需要审批时返回会话 id 和回答方式。`mccode remote pair` 用 Server 网页控制台发的配对码换设备令牌，`mccode -p … --remote` 把任务交给已配对的 Server 执行并流式显示结果 |
 | 评测 | `mccode eval`：用例是 `case.yaml`（提示、检查命令、可选准备命令）加 `repo/` 快照，每个用例在新的临时 git 仓库里以 auto 模式运行，跑完检查命令决定通过与否，输出耗时、请求数和 token；`mccode eval replay` 把仓库里修 bug 的提交转成用例（父提交为快照，提交说明为提示，去掉 Co-Authored-By 之类的尾注）。仓库自带两个示例用例 |
-| 发布 | 每个 `microclaw` 发布包都带上 `mccode`（包名和数量不变），Homebrew 公式一起安装；`mccode update` 从 GitHub 最新发布下载对应平台的包，用 `SHA256SUMS.txt` 校验后替换自身，Homebrew 安装的提示用 `brew upgrade`。crates.io 上的 `mccode` 名字已用占位版本 0.0.1 占住 |
+| 发布 | `mccode` 单独打包（`mccode-<版本>-<平台>`，5 个平台），Homebrew 也分开：`brew install microclaw/tap/mccode` 只装 MicroClaw Code，`microclaw` 公式只装 Server；`mccode update` 从 GitHub 最新发布下载对应平台的包，用 `SHA256SUMS.txt` 校验后替换自身，Homebrew 安装的提示用 `brew upgrade mccode`。crates.io 上的 `mccode` 名字已用占位版本 0.0.1 占住 |
 
 验证：
 - 引擎：审批策略按配置判断；Landlock 实际限制写入（本机内核 ABI 7）；`bash_input` 驱动一个逐行回显的进程；`defer` 结束运行并给出文字审批卡；原有的引擎内审批测试连续 5 次稳定通过。

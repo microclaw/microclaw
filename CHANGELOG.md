@@ -56,8 +56,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
     to a paired MicroClaw Server and stream the result;
   - `mccode eval` (cases with a snapshot, a prompt and a check) and
     `mccode eval replay` (cases from bug-fix commits);
-  - releases ship `mccode` in every `microclaw` archive, the Homebrew formulas
-    install it, and `mccode update` installs the latest release after
+  - releases ship `mccode` as its own archive (`mccode-<version>-<target>`)
+    with its own Homebrew formula (`brew install microclaw/tap/mccode`;
+    `microclaw` installs only the Server), and `mccode update` installs the
+    latest release after
     checking `SHA256SUMS.txt`.
 
   The UI-independent core (project discovery, trust, verification, session

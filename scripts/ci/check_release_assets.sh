@@ -21,6 +21,11 @@ fi
 
 release_version="${release_tag#v}"
 expected=(
+  "mccode-${release_version}-aarch64-apple-darwin.tar.gz"
+  "mccode-${release_version}-aarch64-linux-gnu.tar.gz"
+  "mccode-${release_version}-x86_64-apple-darwin.tar.gz"
+  "mccode-${release_version}-x86_64-linux-gnu.tar.gz"
+  "mccode-${release_version}-x86_64-windows-msvc.zip"
   "microclaw-${release_version}-aarch64-apple-darwin.tar.gz"
   "microclaw-${release_version}-aarch64-linux-gnu.tar.gz"
   "microclaw-${release_version}-x86_64-apple-darwin.tar.gz"

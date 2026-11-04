@@ -8,6 +8,11 @@ trap 'rm -rf "$fixture_dir"' EXIT
 tag="v9.8.7"
 version="${tag#v}"
 assets=(
+  "mccode-${version}-aarch64-apple-darwin.tar.gz"
+  "mccode-${version}-aarch64-linux-gnu.tar.gz"
+  "mccode-${version}-x86_64-apple-darwin.tar.gz"
+  "mccode-${version}-x86_64-linux-gnu.tar.gz"
+  "mccode-${version}-x86_64-windows-msvc.zip"
   "microclaw-${version}-aarch64-apple-darwin.tar.gz"
   "microclaw-${version}-aarch64-linux-gnu.tar.gz"
   "microclaw-${version}-x86_64-apple-darwin.tar.gz"
