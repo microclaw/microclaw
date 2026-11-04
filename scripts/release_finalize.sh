@@ -241,6 +241,8 @@ homebrew_macos_asset_name() {
   local variant="${3:-default}"
   if [ "$variant" = "full" ]; then
     echo "microclaw-full-${version}-${arch}-apple-darwin.tar.gz"
+  elif [ "$variant" = "mccode" ]; then
+    echo "mccode-${version}-${arch}-apple-darwin.tar.gz"
   else
     echo "microclaw-${version}-${arch}-apple-darwin.tar.gz"
   fi
@@ -365,6 +367,8 @@ HOMEBREW_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64
 HOMEBREW_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64")"
 HOMEBREW_FULL_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64" "full")"
 HOMEBREW_FULL_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64" "full")"
+HOMEBREW_MCCODE_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64" "mccode")"
+HOMEBREW_MCCODE_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64" "mccode")"
 
 if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME"; then
   exit 1
@@ -382,6 +386,13 @@ if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_X86_64_T
   exit 1
 fi
 
+for mccode_asset in "$HOMEBREW_MCCODE_ARM64_TARBALL_NAME" "$HOMEBREW_MCCODE_X86_64_TARBALL_NAME"; do
+  if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$mccode_asset"; then
+    echo "Release asset is not ready: $mccode_asset" >&2
+    exit 1
+  fi
+done
+
 HOMEBREW_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME")"
 HOMEBREW_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBALL_NAME")"
 HOMEBREW_FULL_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_ARM64_TARBALL_NAME")"
@@ -390,6 +401,10 @@ echo "Official Homebrew arm64 SHA256: $HOMEBREW_ARM64_SHA256"
 echo "Official Homebrew x86_64 SHA256: $HOMEBREW_X86_64_SHA256"
 echo "Official Homebrew full arm64 SHA256: $HOMEBREW_FULL_ARM64_SHA256"
 echo "Official Homebrew full x86_64 SHA256: $HOMEBREW_FULL_X86_64_SHA256"
+HOMEBREW_MCCODE_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_MCCODE_ARM64_TARBALL_NAME")"
+HOMEBREW_MCCODE_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_MCCODE_X86_64_TARBALL_NAME")"
+echo "Official Homebrew mccode arm64 SHA256: $HOMEBREW_MCCODE_ARM64_SHA256"
+echo "Official Homebrew mccode x86_64 SHA256: $HOMEBREW_MCCODE_X86_64_SHA256"
 
 echo "Resetting tap workspace: $TAP_DIR"
 rm -rf "$TAP_DIR"
@@ -418,12 +433,10 @@ class Microclaw < Formula
 
   def install
     bin.install "microclaw"
-    bin.install "mccode"
   end
 
   test do
     assert_match "MicroClaw", shell_output("#{bin}/microclaw help")
-    assert_match "mccode", shell_output("#{bin}/mccode --version")
   end
 end
 RUBY
@@ -447,7 +460,6 @@ class MicroclawFull < Formula
 
   def install
     bin.install "microclaw-full" => "microclaw"
-    bin.install "mccode"
   end
 
   test do
@@ -456,7 +468,34 @@ class MicroclawFull < Formula
 end
 RUBY
 
-git add -- "$FORMULA_PATH" "$FORMULA_FULL_PATH"
+FORMULA_MCCODE_PATH="$(dirname "$FORMULA_PATH")/mccode.rb"
+cat > "$FORMULA_MCCODE_PATH" << RUBY
+class Mccode < Formula
+  desc "MicroClaw Code: a terminal coding agent for your repository"
+  homepage "https://github.com/$GITHUB_REPO"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$HOMEBREW_MCCODE_ARM64_TARBALL_NAME"
+      sha256 "$HOMEBREW_MCCODE_ARM64_SHA256"
+    else
+      url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$HOMEBREW_MCCODE_X86_64_TARBALL_NAME"
+      sha256 "$HOMEBREW_MCCODE_X86_64_SHA256"
+    end
+  end
+
+  def install
+    bin.install "mccode"
+  end
+
+  test do
+    assert_match "mccode", shell_output("#{bin}/mccode --version")
+  end
+end
+RUBY
+
+git add -- "$FORMULA_PATH" "$FORMULA_FULL_PATH" "$FORMULA_MCCODE_PATH"
 # MicroClaw Work has been discontinued; retire its cask from the tap.
 if [ -f Casks/microclaw-work.rb ]; then
   git rm -q -- Casks/microclaw-work.rb

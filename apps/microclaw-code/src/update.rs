@@ -1,6 +1,6 @@
 //! `mccode update`: replace this binary with the latest GitHub release.
 //!
-//! Releases ship `mccode` inside the `microclaw-<version>-<target>` archive.
+//! Releases ship `mccode` as its own `mccode-<version>-<target>` archive.
 //! The archive is checked against the release's `SHA256SUMS.txt` before it is
 //! unpacked (with the system `tar`, which also reads zip files on Windows),
 //! and the running executable is swapped atomically (the old one is kept as
@@ -53,7 +53,7 @@ pub fn asset_name(version: &str, triple: &str) -> String {
     } else {
         "tar.gz"
     };
-    format!("microclaw-{version}-{triple}.{ext}")
+    format!("mccode-{version}-{triple}.{ext}")
 }
 
 /// Look `name` up in a `shasum -a 256` listing.
@@ -133,7 +133,7 @@ pub async fn run(check_only: bool) -> anyhow::Result<()> {
     }
     let exe = std::env::current_exe()?;
     if installed_by_homebrew(&exe) {
-        println!("Installed with Homebrew: run `brew upgrade microclaw`.");
+        println!("Installed with Homebrew: run `brew upgrade mccode`.");
         return Ok(());
     }
     let triple = asset_triple()
@@ -217,15 +217,15 @@ mod tests {
     fn asset_names_and_checksums() {
         assert_eq!(
             asset_name("0.12.0", "aarch64-apple-darwin"),
-            "microclaw-0.12.0-aarch64-apple-darwin.tar.gz"
+            "mccode-0.12.0-aarch64-apple-darwin.tar.gz"
         );
         assert_eq!(
             asset_name("0.12.0", "x86_64-windows-msvc"),
-            "microclaw-0.12.0-x86_64-windows-msvc.zip"
+            "mccode-0.12.0-x86_64-windows-msvc.zip"
         );
-        let sums = "abc123  microclaw-0.12.0-x86_64-linux-gnu.tar.gz\nfff  microclaw-full-0.12.0-x86_64-linux-gnu.tar.gz\n";
+        let sums = "abc123  mccode-0.12.0-x86_64-linux-gnu.tar.gz\nfff  microclaw-0.12.0-x86_64-linux-gnu.tar.gz\n";
         assert_eq!(
-            expected_sha256(sums, "microclaw-0.12.0-x86_64-linux-gnu.tar.gz"),
+            expected_sha256(sums, "mccode-0.12.0-x86_64-linux-gnu.tar.gz"),
             Some("abc123")
         );
         assert_eq!(expected_sha256(sums, "missing.tar.gz"), None);
