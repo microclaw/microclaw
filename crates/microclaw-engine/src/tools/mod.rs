@@ -73,13 +73,11 @@ use crate::config::Config;
 use crate::internal::channels::channel_adapter::ChannelRegistry;
 use crate::internal::storage::db::Database;
 use crate::internal::tool_runtime::path_guard::{self, GovernanceGuard};
+use crate::internal::tool_runtime::runtime::inject_auth_context;
 pub use crate::internal::tool_runtime::runtime::{
     auth_context_from_input, authorize_chat_access, resolve_tool_path, resolve_tool_working_dir,
     schema_object, tool_execution_policy, tool_risk, validate_execution_policy, Tool,
     ToolAuthContext, ToolResult, ToolRisk,
-};
-use crate::internal::tool_runtime::runtime::{
-    inject_auth_context, require_high_risk_approval_with_risk,
 };
 use crate::internal::tool_runtime::sandbox::{ExtraMount, SandboxMode, SandboxRouter};
 use crate::memory_backend::MemoryBackend;
@@ -782,8 +780,7 @@ impl ToolRegistry {
             && self
                 .config
                 .read_only_subagent_channels
-                .iter()
-                .any(|c| *c == auth.caller_channel)
+                .contains(&auth.caller_channel)
             && !matches!(
                 name,
                 "web_search"

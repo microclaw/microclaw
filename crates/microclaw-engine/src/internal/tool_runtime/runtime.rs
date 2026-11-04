@@ -468,7 +468,7 @@ impl ApprovalPolicy {
 
     pub fn requires_approval(&self, risk: ToolRisk, auth: &ToolAuthContext) -> bool {
         risk == ToolRisk::High
-            && (auth.is_control_chat() || self.channels.iter().any(|c| *c == auth.caller_channel))
+            && (auth.is_control_chat() || self.channels.contains(&auth.caller_channel))
     }
 }
 
