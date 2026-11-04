@@ -76,6 +76,27 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 Checkpoints are taken at the start of every turn in a shadow git repository
 inside the Code home (`data/checkpoints`); they never touch your own `.git`.
 
+## Shell sandbox
+
+Shell commands (`bash`, including background processes) run in the operating
+system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
+(`sandbox-exec`) on macOS.
+
+- They can read the machine, except credential directories (`~/.ssh`,
+  `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`,
+  `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.microclaw`).
+- They can write only the repository, the temp directory and common tool
+  caches (`~/.cache`, `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.gradle`, `~/go`, …),
+  so builds and tests keep working.
+- Network access is on; `--no-network` turns it off.
+
+This is defence in depth: the approval rules above still apply. Turn it off
+with `--sandbox off` (or `MICROCLAW_CODE_SANDBOX=off`). If the machine has no
+working OS sandbox (no `bwrap`, or unprivileged user namespaces disabled),
+Code says so at startup and commands run unsandboxed; `mccode doctor` reports
+the state. The MicroClaw Server can use the same mechanism with
+`sandbox: { mode: all, backend: local }`.
+
 ## Permission modes
 
 | Mode | Behaviour |

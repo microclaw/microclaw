@@ -18,14 +18,14 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use microclaw_code_core::allow::{self, AllowRules};
 use microclaw_code_core::driver::{
-    CALLER_CHANNEL, CodeSession, Control, SessionSettings, compile_always_ask,
+    CALLER_CHANNEL, CodeSession, Control, SandboxInfo, SessionSettings, compile_always_ask,
 };
 use microclaw_code_core::home;
 use microclaw_code_core::project::{self, Mode, Project};
 use microclaw_code_core::sessions::SessionIndex;
 use microclaw_code_core::trust::{TrustDecision, TrustStore};
 use microclaw_code_core::verify;
-use microclaw_sdk::MicroClaw;
+use microclaw_sdk::{MicroClaw, ShellSandbox};
 use tokio::sync::mpsc;
 
 use print::{Printer, Style, approval_card};
@@ -81,6 +81,15 @@ struct Cli {
     /// Maximum verification fix-up rounds.
     #[arg(long, value_name = "N")]
     max_fix_rounds: Option<u32>,
+
+    /// Shell sandbox: `workspace-write` (default: commands write only the
+    /// repository, temp and tool caches) or `off`. Also MICROCLAW_CODE_SANDBOX.
+    #[arg(long, value_name = "MODE")]
+    sandbox: Option<String>,
+
+    /// Deny network access to sandboxed shell commands.
+    #[arg(long)]
+    no_network: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -326,6 +335,22 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         index.create(&project.root)?.id
     };
 
+    let sandbox_choice = sandbox_choice(&cli)?;
+    let sandbox = match (&sandbox_choice, microclaw_sdk::local_sandbox()) {
+        (ShellSandbox::Off, _) => None,
+        (ShellSandbox::WorkspaceWrite { network, .. }, Some(mechanism)) => Some(SandboxInfo {
+            mechanism: mechanism.to_string(),
+            network: *network,
+        }),
+        (ShellSandbox::WorkspaceWrite { .. }, None) => {
+            notices.push(NO_SANDBOX_NOTICE.into());
+            if !interactive && !cli.json {
+                eprintln!("{}", style.yellow(NO_SANDBOX_NOTICE));
+            }
+            None
+        }
+    };
+
     if !cli.json {
         eprintln!("{}", style.dim("Starting the Agent Engine…"));
     }
@@ -334,6 +359,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         .workspace(&project.root)
         .data_dir(home::data_dir())
         .max_concurrent_runs(1)
+        .shell_sandbox(sandbox_choice)
         .build()
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -345,6 +371,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .max_fix_rounds
             .unwrap_or_else(|| project.max_fix_rounds()),
         interactive,
+        sandbox,
     };
     let session = CodeSession::new(microclaw, project, session_id.clone(), settings);
 
@@ -623,6 +650,25 @@ async fn check_command(
     Ok(ExitCode::SUCCESS)
 }
 
+const NO_SANDBOX_NOTICE: &str = "No OS sandbox on this machine: shell commands run unsandboxed (install bubblewrap on Linux; pass --sandbox off to hide this notice).";
+
+/// The shell sandbox chosen by `--sandbox` / `MICROCLAW_CODE_SANDBOX`.
+fn sandbox_choice(cli: &Cli) -> anyhow::Result<ShellSandbox> {
+    let raw = cli
+        .sandbox
+        .clone()
+        .or_else(|| std::env::var("MICROCLAW_CODE_SANDBOX").ok())
+        .unwrap_or_else(|| "workspace-write".into());
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "none" | "danger-full-access" => Ok(ShellSandbox::Off),
+        "workspace-write" | "workspace" | "on" => Ok(ShellSandbox::WorkspaceWrite {
+            network: !cli.no_network,
+            writable_roots: Vec::new(),
+        }),
+        other => anyhow::bail!("unknown sandbox mode '{other}' (expected workspace-write or off)"),
+    }
+}
+
 async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<ExitCode> {
     let ok = |label: &str, detail: String| println!("{} {label}: {detail}", style.green("✓"));
     let bad = |label: &str, detail: String| println!("{} {label}: {detail}", style.red("✗"));
@@ -660,6 +706,20 @@ async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<Ex
             }
         ),
     );
+    match (sandbox_choice(cli)?, microclaw_sdk::local_sandbox()) {
+        (ShellSandbox::Off, _) => ok("shell sandbox", "off (--sandbox off)".into()),
+        (ShellSandbox::WorkspaceWrite { network, .. }, Some(mechanism)) => ok(
+            "shell sandbox",
+            format!(
+                "{mechanism}: writes limited to the repository, temp and tool caches; network {}",
+                if network { "on" } else { "off" }
+            ),
+        ),
+        (ShellSandbox::WorkspaceWrite { .. }, None) => bad(
+            "shell sandbox",
+            "unavailable: install bubblewrap (`bwrap`) and allow unprivileged user namespaces; commands run unsandboxed".into(),
+        ),
+    }
     match MicroClaw::builder(&path)
         .caller_channel(CALLER_CHANNEL)
         .workspace(&project.root)
@@ -686,6 +746,24 @@ async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<Ex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_choice_defaults_to_workspace_write() {
+        let cli = Cli::try_parse_from(["mccode", "--no-network"]).unwrap();
+        if std::env::var_os("MICROCLAW_CODE_SANDBOX").is_none() {
+            assert_eq!(
+                sandbox_choice(&cli).unwrap(),
+                ShellSandbox::WorkspaceWrite {
+                    network: false,
+                    writable_roots: Vec::new()
+                }
+            );
+        }
+        let cli = Cli::try_parse_from(["mccode", "--sandbox", "off"]).unwrap();
+        assert_eq!(sandbox_choice(&cli).unwrap(), ShellSandbox::Off);
+        let cli = Cli::try_parse_from(["mccode", "--sandbox", "nope"]).unwrap();
+        assert!(sandbox_choice(&cli).is_err());
+    }
 
     #[test]
     fn cli_parses_print_mode_and_subcommands() {

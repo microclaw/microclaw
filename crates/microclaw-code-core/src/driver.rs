@@ -268,6 +268,16 @@ pub struct SessionSettings {
     /// Ask the front end for approvals while the run waits; when false, a
     /// needed approval ends the turn with `approval_pending`.
     pub interactive: bool,
+    /// The OS sandbox shell commands run in, when active.
+    pub sandbox: Option<SandboxInfo>,
+}
+
+/// An active shell sandbox (shown to the user and the agent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxInfo {
+    /// `bubblewrap` or `seatbelt`.
+    pub mechanism: String,
+    pub network: bool,
 }
 
 /// One MicroClaw Code session in one project.
@@ -514,10 +524,11 @@ impl CodeSession {
         };
         self.microclaw
             .agent(AGENT_NAME)
-            .system_prompt(crate::prompt::system_prompt(
+            .system_prompt(crate::prompt::system_prompt_with_sandbox(
                 &self.project,
                 self.settings.mode,
                 self.git_summary.as_deref(),
+                self.settings.sandbox.as_ref(),
             ))
             .tool_policy(policy)
             .build()

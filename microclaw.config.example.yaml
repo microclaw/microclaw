@@ -407,6 +407,17 @@ web_session_idle_ttl_seconds: 300
 #   # List only exact variable names a reviewed sandboxed workload requires.
 #   credential_env_allowlist: []
 #   # mount_allowlist_path: "~/.microclaw/sandbox-mount-allowlist.txt"
+#
+# Lighter alternative without containers: the OS sandbox (bubblewrap on Linux,
+# Seatbelt on macOS). Commands keep the host toolchain but write only the
+# working directory, the temp directory and common tool caches, and cannot
+# read ~/.ssh, ~/.aws, ~/.microclaw and similar credential directories.
+# sandbox:
+#   mode: "all"
+#   backend: "local"
+#   no_network: false
+#   require_runtime: false
+#   writable_roots: []             # extra writable directories, e.g. ["~/.m2"]
 
 # Concurrent sub-agents (the "specialist team" that runs tasks in the background).
 # All fields are optional and shown with their defaults.

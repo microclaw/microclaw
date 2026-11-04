@@ -1613,6 +1613,27 @@ fn check_docker_runtime(report: &mut DoctorReport) {
         SandboxBackend::Auto => &["docker"],
         SandboxBackend::Docker => &["docker"],
         SandboxBackend::Podman => &["podman"],
+        SandboxBackend::Local => {
+            let detected = microclaw_engine::tool_runtime::local_sandbox::detect();
+            report.push(
+                "sandbox.local",
+                "Local OS sandbox",
+                if detected.is_some() {
+                    CheckStatus::Pass
+                } else {
+                    CheckStatus::Fail
+                },
+                match detected {
+                    Some(kind) => format!("available: {}", kind.name()),
+                    None => "no working OS sandbox (bubblewrap on Linux, sandbox-exec on macOS)"
+                        .to_string(),
+                },
+                detected
+                    .is_none()
+                    .then(|| "Install bubblewrap (`bwrap`) and allow unprivileged user namespaces, or use backend: docker.".to_string()),
+            );
+            return;
+        }
     };
     let found_clis = expected_clis
         .iter()

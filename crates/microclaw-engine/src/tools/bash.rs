@@ -100,10 +100,19 @@ impl BashTool {
         working_dir: &Path,
         env_files: &[PathBuf],
     ) -> ToolResult {
-        if self
+        // The local OS sandbox can confine long-running processes too; a
+        // container sandbox cannot.
+        let local_spec = self
             .sandbox_router
             .as_ref()
-            .is_some_and(|router| router.mode() != SandboxMode::Off)
+            .filter(|router| router.mode() != SandboxMode::Off)
+            .and_then(|router| router.local())
+            .map(|local| local.command_spec(exec_command, working_dir));
+        if local_spec.is_none()
+            && self
+                .sandbox_router
+                .as_ref()
+                .is_some_and(|router| router.mode() != SandboxMode::Off)
         {
             return ToolResult::error(
                 "run_in_background is only available when the sandbox is off; run the command in the foreground with a longer timeout_secs instead.".into(),
@@ -124,7 +133,11 @@ impl BashTool {
             )
             .with_error_type("execution_policy_blocked");
         };
-        match processes.spawn(session_key, exec_command, working_dir, &envs) {
+        let spawned = match &local_spec {
+            Some(spec) => processes.spawn_spec(session_key, command, spec, working_dir, &envs),
+            None => processes.spawn(session_key, exec_command, working_dir, &envs),
+        };
+        match spawned {
             Ok(id) => {
                 info!(
                     "Started background bash {id} in {}: {command}",

@@ -63,6 +63,9 @@ pub enum SandboxBackend {
     Auto,
     Docker,
     Podman,
+    /// The operating system's own sandbox: bubblewrap on Linux, Seatbelt on
+    /// macOS (see [`crate::internal::tool_runtime::local_sandbox`]).
+    Local,
 }
 
 /// Container security profile controlling Linux capabilities and privilege escalation.
@@ -119,6 +122,10 @@ pub struct SandboxConfig {
     /// on the host and are never mounted or passed wholesale to the container.
     #[serde(default = "default_sandbox_credential_env_allowlist")]
     pub credential_env_allowlist: Vec<String>,
+    /// `local` backend: extra directories commands may write, besides the
+    /// working directory, the temp directory and common tool caches.
+    #[serde(default)]
+    pub writable_roots: Vec<String>,
 }
 
 impl Default for SandboxConfig {
@@ -137,6 +144,7 @@ impl Default for SandboxConfig {
             cpu_quota: None,
             pids_limit: None,
             credential_env_allowlist: default_sandbox_credential_env_allowlist(),
+            writable_roots: Vec::new(),
         }
     }
 }
@@ -173,6 +181,67 @@ pub trait Sandbox: Send + Sync {
 }
 
 pub struct NoSandbox;
+
+/// Runs commands on the host under the OS sandbox (`backend: local`).
+pub struct LocalSandbox {
+    kind: crate::internal::tool_runtime::local_sandbox::LocalSandboxKind,
+    policy: crate::internal::tool_runtime::local_sandbox::LocalPolicy,
+}
+
+impl LocalSandbox {
+    /// `None` when this machine has no working OS sandbox.
+    pub fn detect(config: &SandboxConfig, working_dir: &Path) -> Option<Self> {
+        use crate::internal::tool_runtime::local_sandbox::{detect, LocalPolicy};
+        let kind = detect()?;
+        let extra: Vec<PathBuf> = config
+            .writable_roots
+            .iter()
+            .map(|p| PathBuf::from(shellexpand::tilde(p).into_owned()))
+            .collect();
+        Some(Self {
+            kind,
+            policy: LocalPolicy::for_workspace(working_dir, &extra, !config.no_network),
+        })
+    }
+
+    /// The command line that runs `command` in `cwd` under this sandbox.
+    pub fn command_spec(
+        &self,
+        command: &str,
+        cwd: &Path,
+    ) -> crate::internal::tool_runtime::command_runner::CommandSpec {
+        crate::internal::tool_runtime::local_sandbox::wrap(
+            self.kind,
+            &self.policy,
+            &shell_command(command),
+            cwd,
+        )
+    }
+}
+
+#[async_trait]
+impl Sandbox for LocalSandbox {
+    fn backend_name(&self) -> &'static str {
+        self.kind.name()
+    }
+
+    async fn ensure_ready(&self, _session_key: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn exec(
+        &self,
+        _session_key: &str,
+        command: &str,
+        opts: &SandboxExecOptions,
+    ) -> Result<SandboxExecResult> {
+        let cwd = opts
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| self.policy.workspace.clone());
+        exec_host_spec(&self.command_spec(command, &cwd), opts).await
+    }
+}
 
 #[async_trait]
 impl Sandbox for NoSandbox {
@@ -236,6 +305,7 @@ fn pick_runtime(
         SandboxBackend::Auto => docker_available.then_some(ContainerRuntime::Docker),
         SandboxBackend::Docker => docker_available.then_some(ContainerRuntime::Docker),
         SandboxBackend::Podman => podman_available.then_some(ContainerRuntime::Podman),
+        SandboxBackend::Local => None,
     }
 }
 
@@ -248,6 +318,9 @@ fn resolve_runtime(backend: SandboxBackend) -> Option<ContainerRuntime> {
 }
 
 pub fn runtime_available_for_backend(backend: SandboxBackend) -> bool {
+    if backend == SandboxBackend::Local {
+        return crate::internal::tool_runtime::local_sandbox::detect().is_some();
+    }
     resolve_runtime(backend).is_some()
 }
 
@@ -421,11 +494,31 @@ impl Sandbox for DockerSandbox {
 pub struct SandboxRouter {
     config: SandboxConfig,
     backend: Arc<dyn Sandbox>,
+    /// Set when the backend is the local OS sandbox (also wraps background
+    /// processes).
+    local: Option<Arc<LocalSandbox>>,
     warned_missing_runtime: AtomicBool,
 }
 
 impl SandboxRouter {
     pub fn new(config: SandboxConfig, working_dir: &Path, extra_mounts: Vec<ExtraMount>) -> Self {
+        if config.backend == SandboxBackend::Local {
+            let local = if config.mode == SandboxMode::Off {
+                None
+            } else {
+                LocalSandbox::detect(&config, working_dir).map(Arc::new)
+            };
+            let backend: Arc<dyn Sandbox> = match &local {
+                Some(local) => local.clone(),
+                None => Arc::new(NoSandbox),
+            };
+            return Self {
+                config,
+                backend,
+                local,
+                warned_missing_runtime: AtomicBool::new(false),
+            };
+        }
         let mount_dir = resolve_mount_dir(working_dir, &config);
         let backend: Arc<dyn Sandbox> = match resolve_runtime(config.backend) {
             Some(runtime) => Arc::new(DockerSandbox::new(
@@ -439,6 +532,7 @@ impl SandboxRouter {
         Self {
             config,
             backend,
+            local: None,
             warned_missing_runtime: AtomicBool::new(false),
         }
     }
@@ -448,8 +542,15 @@ impl SandboxRouter {
         Self {
             config,
             backend,
+            local: None,
             warned_missing_runtime: AtomicBool::new(false),
         }
+    }
+
+    /// The local OS sandbox, when that is the active backend. Background
+    /// processes are spawned through it.
+    pub fn local(&self) -> Option<&LocalSandbox> {
+        self.local.as_deref()
     }
 
     pub fn mode(&self) -> SandboxMode {
@@ -542,8 +643,14 @@ pub async fn exec_host_command(
     command: &str,
     opts: &SandboxExecOptions,
 ) -> Result<SandboxExecResult> {
-    let spec = shell_command(command);
-    let mut cmd = build_command(&spec, opts.working_dir.as_deref());
+    exec_host_spec(&shell_command(command), opts).await
+}
+
+async fn exec_host_spec(
+    spec: &crate::internal::tool_runtime::command_runner::CommandSpec,
+    opts: &SandboxExecOptions,
+) -> Result<SandboxExecResult> {
+    let mut cmd = build_command(spec, opts.working_dir.as_deref());
     for env_file in &opts.env_files {
         if let Ok(content) = std::fs::read_to_string(env_file) {
             for (k, v) in crate::internal::tool_runtime::env_file::parse_dotenv(&content) {

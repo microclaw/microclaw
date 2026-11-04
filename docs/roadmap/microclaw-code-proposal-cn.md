@@ -126,13 +126,29 @@ crates/microclaw-engine
 - TUI 端到端（pty + pyte + 模拟服务）：`apply_patch` 改两个文件并显示两份 Diff；信任后系统提示里有 AGENTS.md；`/review` 只给只读工具；`/undo` 删掉新增文件、还原修改；`/cost`；`/model mock-two` 之后请求确实用了 mock-two；`/fork` 之后继续对话；`/compact`。
 - `mccode review typos`：请求里带有改动的 Diff 和关注点，不提供任何写入工具；工作区干净时提示没有可审查的内容。
 
-## 八、后续（按优先级）
+## 八、第四批（已实现）：系统级沙箱
+
+| 项目 | 说明 |
+|---|---|
+| 引擎 `sandbox.backend: local` | 不依赖容器，直接用操作系统的沙箱执行 shell 命令：Linux 用 bubblewrap（根目录只读挂载；工作区、临时目录、工具缓存和 `writable_roots` 可写；凭据目录换成空的 tmpfs；`no_network` 时隔离网络命名空间）；macOS 用 Seatbelt 生成的规则（默认拒绝，允许读，写入只限上述目录，拒绝读写凭据目录，可禁网）。启动时实际跑一次 `bwrap` 探测，容器里没开用户命名空间时视为不可用。和容器后端不同，后台进程（`run_in_background`）也会放进沙箱。`microclaw doctor` 会检查 |
+| 隐藏的目录 | `~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker`、`~/.netrc`、`~/.git-credentials`、`~/.microclaw`（如果工作区就在其中则不隐藏） |
+| 默认可写的缓存 | `~/.cache`、`~/.cargo`、`~/.rustup`、`~/.npm`、`~/.pnpm-store`、`~/.yarn`、`~/.bun`、`~/.gradle`、`~/.m2`、`~/go`、`~/Library/Caches`，保证构建和测试照常 |
+| SDK | `MicroClawBuilder::shell_sandbox(ShellSandbox::{Off, WorkspaceWrite { network, writable_roots }})`、`local_sandbox()` |
+| mccode | 默认开启（`--sandbox off` 或 `MICROCLAW_CODE_SANDBOX=off` 关闭，`--no-network` 禁网）；系统提示告诉 Agent 沙箱的限制、遇到权限错误不要绕过；启动提示、`/status`、`mccode doctor` 显示状态；机器上没有可用沙箱时明确提示并照常运行 |
+
+沙箱是纵深防御，审批规则不变。
+
+验证：
+- 单元测试：bubblewrap 参数（绑定工作区、tmpfs 隐藏、禁网）、Seatbelt 规则（写入范围、隐藏、禁网、路径转义）、包含工作区的隐藏目录不隐藏；以及一个真正执行的测试：工作区内可写，工作区外写入失败，隐藏目录读不到（在 Linux 上用 bwrap 实际跑过；macOS 由 CI 运行）。
+- 端到端（真实 `mccode` + 模拟服务，auto 模式）：仓库内写文件成功；写 `/home/user/…` 得到 "Read-only file system"；`~/.ssh/id_test` 读不到；后台进程在沙箱里运行并写入仓库；`mccode doctor` 显示 bubblewrap。对照组 `MICROCLAW_CODE_SANDBOX=off` 时同样的越界写入成功。
+
+## 九、后续（按优先级）
 
 1. **地基**：
    - 统一的工具策略判断，去掉按渠道名的硬编码；
    - Agent 主循环收敛为单一入口。
 2. **安全**：
-   - 系统级沙箱（Landlock/seccomp、bwrap、Seatbelt）；
+   - 沙箱内的命令可以少问一些（类似 Codex 的 on-request）；Landlock/seccomp 作为没有 bwrap 时的后备；
    - auto 模式下对命令做模型复核。
 3. **体验**：
    - 可交互的持久终端；

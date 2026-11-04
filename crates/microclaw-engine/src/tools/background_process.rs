@@ -120,6 +120,20 @@ impl ProcessRegistry {
         working_dir: &Path,
         envs: &HashMap<String, String>,
     ) -> Result<String, String> {
+        let spec = crate::internal::tool_runtime::command_runner::shell_command(command);
+        self.spawn_spec(session, command, &spec, working_dir, envs)
+    }
+
+    /// Spawn an already-built command line (e.g. wrapped by the local OS
+    /// sandbox) and register it.
+    pub fn spawn_spec(
+        &self,
+        session: &str,
+        command: &str,
+        spec: &crate::internal::tool_runtime::command_runner::CommandSpec,
+        working_dir: &Path,
+        envs: &HashMap<String, String>,
+    ) -> Result<String, String> {
         let running = lock(&self.processes)
             .values()
             .filter(|p| p.session == session && lock(&p.exit_code).is_none())
@@ -129,10 +143,8 @@ impl ProcessRegistry {
             "Too many background processes are running ({running}). Stop one with bash_kill first."
         ));
         }
-
-        let spec = crate::internal::tool_runtime::command_runner::shell_command(command);
         let mut cmd =
-            crate::internal::tool_runtime::command_runner::build_command(&spec, Some(working_dir));
+            crate::internal::tool_runtime::command_runner::build_command(spec, Some(working_dir));
         for (k, v) in envs {
             cmd.env(k, v);
         }
