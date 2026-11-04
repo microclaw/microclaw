@@ -7,6 +7,7 @@
 //! binary only handles the command line and presentation.
 
 mod acp;
+mod eval;
 mod format;
 mod mcp_server;
 mod print;
@@ -145,6 +146,21 @@ enum Command {
         #[arg(long)]
         revoke: bool,
     },
+    /// Run evaluation cases (directories with case.yaml + repo/), or create
+    /// cases from a repository's bug-fix commits with `eval replay`.
+    Eval {
+        #[command(subcommand)]
+        action: Option<EvalAction>,
+        /// Directory of cases (or one case).
+        #[arg(default_value = "eval")]
+        dir: PathBuf,
+        /// Only cases whose path contains this text.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Keep each case's workspace for inspection.
+        #[arg(long)]
+        keep: bool,
+    },
     /// Install the latest release of mccode (checksum-verified).
     Update {
         /// Only report whether a newer release exists.
@@ -171,6 +187,24 @@ enum Command {
     Allow {
         #[command(subcommand)]
         action: Option<AllowAction>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum EvalAction {
+    /// Write one case per bug-fix commit (parent = snapshot, message = prompt).
+    Replay {
+        /// Commit range, e.g. v0.10.0..HEAD
+        range: String,
+        /// Check command that must pass after the fix, e.g. "cargo test".
+        #[arg(long)]
+        check: String,
+        /// Output directory.
+        #[arg(long, default_value = "eval/replay")]
+        out: PathBuf,
+        /// Include every commit, not only those that mention a fix.
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -328,6 +362,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Review { .. })
         | Some(Command::Remote { .. })
         | Some(Command::Update { .. })
+        | Some(Command::Eval { .. })
         | Some(Command::Acp)
         | Some(Command::McpServer)
         | None => {}
@@ -353,7 +388,25 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(focus) => Some(format!("/review {focus}").trim().to_string()),
         None => print_prompt,
     };
-    let acp = matches!(cli.command, Some(Command::Acp | Command::McpServer));
+    if let Some(Command::Eval {
+        action:
+            Some(EvalAction::Replay {
+                range,
+                check,
+                out,
+                all,
+            }),
+        ..
+    }) = &cli.command
+    {
+        let written = eval::replay(&project.root, range, out, check, *all)?;
+        println!("Wrote {written} case(s) to {}.", out.display());
+        return Ok(ExitCode::SUCCESS);
+    }
+    let acp = matches!(
+        cli.command,
+        Some(Command::Acp | Command::McpServer | Command::Eval { .. })
+    );
     let interactive = print_prompt.is_none();
     if interactive && !acp && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
         anyhow::bail!(
@@ -441,6 +494,29 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             max_fix_rounds: cli.max_fix_rounds,
             default_mode: mode,
         };
+        if let Some(Command::Eval {
+            dir, filter, keep, ..
+        }) = &cli.command
+        {
+            let results = eval::run(
+                &eval::EvalOptions {
+                    config_path: options.config_path.clone(),
+                    sandbox: options.sandbox.clone(),
+                    sandbox_info: options.sandbox_info.clone(),
+                    max_fix_rounds: options.max_fix_rounds,
+                    keep: *keep,
+                    filter: filter.clone(),
+                },
+                dir,
+                cli.json,
+            )
+            .await?;
+            return Ok(if results.iter().all(|r| r.passed) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            });
+        }
         if matches!(cli.command, Some(Command::McpServer)) {
             mcp_server::serve(options).await?;
         } else {

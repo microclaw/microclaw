@@ -329,7 +329,7 @@ fn permission_options(approval: &PendingApproval) -> Vec<PermissionOption> {
         .options
         .iter()
         .map(|option| {
-            let kind = match (option.decision.clone(), option.value.as_str()) {
+            let kind = match (option.decision, option.value.as_str()) {
                 (RuntimeApprovalDecision::Deny, _) => PermissionOptionKind::RejectOnce,
                 (_, "1") => PermissionOptionKind::AllowOnce,
                 _ => PermissionOptionKind::AllowAlways,

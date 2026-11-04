@@ -1,0 +1,4 @@
+prompt: |
+  Add a --shout flag to count.sh that prints the count as "COUNT: N" instead
+  of "count: N". Keep the default output unchanged.
+check: sh test.sh

@@ -1,0 +1,2 @@
+prompt: The greeting printed by greet.sh is misspelled; fix it so test.sh passes. Do not change test.sh.
+check: sh test.sh
