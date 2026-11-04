@@ -9,7 +9,7 @@ plan exists first.
 | Document | Status | Notes |
 |---|---|---|
 | [`microclaw-code-proposal-cn.md`](./microclaw-code-proposal-cn.md) | Delivered | MicroClaw Code (`mccode`) product line and its five batches (#527–#531); section 10 lists open ideas. |
-| [`v0.20.0-plan.md`](./v0.20.0-plan.md) | Release prepared | First MicroClaw Code (`mccode`) release: terminal coding agent, OS sandbox, verification, ACP/MCP, separate packages and install scripts. |
+| [`v0.20.0-plan.md`](./v0.20.0-plan.md) | Delivered | First MicroClaw Code (`mccode`) release: terminal coding agent, OS sandbox, verification, ACP/MCP, separate packages and install scripts. |
 | [`v0.11.1-plan.md`](./v0.11.1-plan.md) | Delivered | Security patch: global `tool_policy.allow_tools` is a real allowlist with wildcards, the tool catalog is filtered by policy, and doctor / config check flag an empty policy. |
 | [`v0.11.0-plan.md`](./v0.11.0-plan.md) | Delivered | Web UI dependency release: `@assistant-ui/react` 0.15 without the tap pin, tool-call cards with arguments, Playwright browser smoke test in CI. |
 | [`v0.10.1-plan.md`](./v0.10.1-plan.md) | Delivered | Web UI hotfix: pin `@assistant-ui/tap` to 0.9.12 so the composer no longer crashes on the first keystroke (#517). |
