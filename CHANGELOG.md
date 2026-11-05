@@ -6,6 +6,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.23.0 - 2026-11-05
+
 ### Added
 
 - **Images**:
