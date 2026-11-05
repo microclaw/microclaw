@@ -146,6 +146,7 @@ impl Server {
                 .unwrap_or_default(),
         };
         let settings = SessionSettings {
+            max_session_tokens: project.config.max_session_tokens,
             mode,
             verify: self.options.verify,
             max_fix_rounds: self

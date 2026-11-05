@@ -197,6 +197,10 @@ pub struct Config {
     /// no effect on OpenAI-compatible providers. Default: true.
     #[serde(default = "default_anthropic_prompt_cache_enabled")]
     pub anthropic_prompt_cache_enabled: bool,
+    /// Let Anthropic clear old tool results on the server (context editing,
+    /// beta) in addition to MicroClaw's own compaction. Default: false.
+    #[serde(default)]
+    pub anthropic_context_editing: bool,
     /// Cache TTL for Anthropic prompt cache. "5m" (default) or "1h".
     /// "1h" requires extended-cache opt-in on the API key.
     #[serde(default = "default_anthropic_prompt_cache_ttl")]
@@ -1041,6 +1045,7 @@ impl Config {
             tool_repeat_window: 10,
             tool_repeat_limit: 3,
             anthropic_prompt_cache_enabled: true,
+            anthropic_context_editing: false,
             anthropic_prompt_cache_ttl: "5m".into(),
             checkpoints_enabled: false,
             skill_archive_after_days: 30,

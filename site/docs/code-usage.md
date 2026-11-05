@@ -50,6 +50,7 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/compact [focus]` | Summarize older messages now; the optional focus says what the summary must keep. |
 | `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
 | `/handoff <next task>` | Start a new session from a summary of this one focused on the next task; this session stays as it is. |
+| `/export [file]` | Write this session as Markdown (also `mccode export --session <id> [--out file]`). |
 | `/fork` | Continue in a copy of the conversation; the original session is kept. |
 
 Checkpoints are taken at the start of every turn in a shadow git repository
@@ -164,6 +165,7 @@ instructions: |
   Use pnpm, not npm.
 compact_instructions: Keep the names of public APIs and any open TODOs.
 lsp: true
+max_session_tokens: 3000000
 hooks:
   after_edit:
     - cargo fmt
@@ -259,6 +261,53 @@ hooks:
 ```
 
 A failing hook is reported but does not stop the turn.
+
+## Images
+
+Mention an image file with `@` (`@docs/screenshot.png`, an absolute path or
+`~/…`; PNG, JPEG, GIF or WebP up to 5 MB) and it is sent to the model with
+the prompt, for example a screenshot of a broken layout or an error dialog.
+Drag a file into the terminal to paste its path. In Zed, images pasted into
+the agent panel are attached the same way. The model must support images.
+
+## Parallel tasks in worktrees
+
+```sh
+mccode -p "add retries to the HTTP client" --mode auto --worktree retries
+mccode -p "update the README examples" --mode auto --worktree docs &
+mccode worktree list
+mccode worktree remove retries
+```
+
+`--worktree [name]` runs the session in a new git worktree on branch
+`mccode/<name>` (under `~/.microclaw/code/worktrees`), so several tasks can
+run at once without touching your checkout or each other. When it ends,
+Code prints the branch, its commits and how to review, merge or remove it.
+Trust carries over from the main checkout.
+
+## Pull request review
+
+```sh
+mccode review --pr 123                 # review the PR's diff, print findings
+mccode review --pr 123 "error handling" --post   # …and post them as a PR comment
+```
+
+The diff comes from the GitHub CLI (`gh pr diff`) or, without it, from
+`origin`'s `refs/pull/123/head`. The review runs with read-only tools.
+`--post` uses `gh pr comment` and is the only step that writes to GitHub.
+
+## Token budget
+
+`--max-session-tokens 2000000` (or `max_session_tokens` in the project file)
+stops a session before the next request once it has used that many tokens
+(input + output, all models), with a notice; `-p` exits with status 1.
+
+## Windows
+
+Windows has no OS sandbox for shell commands yet. Commands run with your
+permissions, `ask` mode asks before every command, and Code warns when you
+use `auto` mode without a sandbox. Prefer `ask` mode in repositories you do
+not trust, or use WSL, where the Linux sandbox applies.
 
 ## Interactive programs
 

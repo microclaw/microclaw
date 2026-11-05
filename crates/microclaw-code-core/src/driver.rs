@@ -8,9 +8,9 @@
 //! and render [`Update`]s.
 
 use microclaw_sdk::{
-    Agent, INTERACTIVE_APPROVALS, MicroClaw, RunRequest, RunStatus, RuntimeApprovalDecision,
-    RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeEvent, RuntimeEventEnvelope,
-    SessionId, SessionMessageRole, ToolPolicy,
+    Agent, IMAGE_METADATA, INTERACTIVE_APPROVALS, MicroClaw, RunRequest, RunStatus,
+    RuntimeApprovalDecision, RuntimeApprovalOption, RuntimeApprovalOptionKind, RuntimeEvent,
+    RuntimeEventEnvelope, SessionId, SessionMessageRole, ToolPolicy,
 };
 pub use microclaw_sdk::{Checkpoint, SessionUsage};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -144,6 +144,31 @@ const COMPACT_KEEP_RECENT: usize = 8;
 const REVIEW_DIFF_LIMIT: usize = 60_000;
 
 /// The request `/review` sends.
+/// Markdown transcript of a session.
+pub fn export_markdown(
+    root: &std::path::Path,
+    session_id: &str,
+    messages: &[microclaw_sdk::SessionMessage],
+) -> String {
+    let mut out = format!(
+        "# MicroClaw Code session {session_id}\n\nProject: `{}`  \nMessages: {}\n",
+        root.display(),
+        messages.len()
+    );
+    for message in messages {
+        let who = match message.role {
+            microclaw_sdk::SessionMessageRole::User => "You",
+            microclaw_sdk::SessionMessageRole::Agent => "MicroClaw Code",
+        };
+        out.push_str(&format!(
+            "\n## {who} · {}\n\n{}\n",
+            message.timestamp,
+            message.content.trim()
+        ));
+    }
+    out
+}
+
 pub fn review_prompt(diff: &str, focus: Option<&str>) -> String {
     let focus = focus
         .map(str::trim)
@@ -240,6 +265,8 @@ pub struct TurnReport {
     pub status: String,
     pub final_text: String,
     pub changed_files: Vec<String>,
+    /// The session's token budget was used up; nothing more was sent.
+    pub budget_exhausted: bool,
     pub checks_passed: Option<bool>,
     /// The turn stopped waiting for a human (non-interactive front ends).
     pub approval_pending: Option<PendingApproval>,
@@ -272,6 +299,9 @@ pub struct SessionSettings {
     pub interactive: bool,
     /// The OS sandbox shell commands run in, when active.
     pub sandbox: Option<SandboxInfo>,
+    /// Stop before a request once the session used this many tokens
+    /// (input + output, all models).
+    pub max_session_tokens: Option<u64>,
 }
 
 /// An active shell sandbox (shown to the user and the agent).
@@ -510,6 +540,20 @@ impl CodeSession {
         Ok(())
     }
 
+    /// This session as Markdown: every stored user message and reply, oldest
+    /// first.
+    pub fn export_markdown(&self) -> anyhow::Result<String> {
+        let messages = self
+            .microclaw
+            .session_messages(&self.session_id, 100_000)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(export_markdown(
+            &self.project.root,
+            &self.session_id,
+            &messages,
+        ))
+    }
+
     /// Continue in a new session `new_id` that starts from a summary of
     /// this one focused on `goal`; this session stays as it was.
     pub async fn handoff(&mut self, new_id: String, goal: &str) -> anyhow::Result<usize> {
@@ -538,13 +582,35 @@ impl CodeSession {
         updates: &UnboundedSender<Update>,
         controls: &mut UnboundedReceiver<Control>,
     ) -> anyhow::Result<TurnReport> {
-        let mut report = TurnReport::default();
         let Some(diff) = crate::git::review_diff(&self.project.root, REVIEW_DIFF_LIMIT) else {
             let _ = updates.send(Update::Notice(
                 "nothing to review: the working tree has no uncommitted changes".into(),
             ));
-            report.status = "completed".into();
-            return Ok(report);
+            return Ok(TurnReport {
+                status: "completed".into(),
+                ..Default::default()
+            });
+        };
+        self.review_diff(&diff, focus, updates, controls).await
+    }
+
+    /// Review a given diff (for example a pull request) with read-only tools.
+    pub async fn review_diff(
+        &mut self,
+        diff: &str,
+        focus: Option<&str>,
+        updates: &UnboundedSender<Update>,
+        controls: &mut UnboundedReceiver<Control>,
+    ) -> anyhow::Result<TurnReport> {
+        let mut report = TurnReport::default();
+        let diff = if diff.len() > REVIEW_DIFF_LIMIT {
+            let mut end = REVIEW_DIFF_LIMIT;
+            while !diff.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}\n… (diff truncated)", &diff[..end])
+        } else {
+            diff.to_string()
         };
         let prompt = review_prompt(&diff, focus);
         self.policy_override = Some(ToolPolicy::ReadOnly);
@@ -706,6 +772,22 @@ impl CodeSession {
         request
             .metadata
             .insert(INTERACTIVE_APPROVALS.into(), serde_json::Value::Bool(true));
+        match crate::images::first_image(&self.project.root, prompt) {
+            Ok(Some(image)) => {
+                let _ = updates.send(Update::Notice(format!(
+                    "attached image {}",
+                    image.path.display()
+                )));
+                request.metadata.insert(
+                    IMAGE_METADATA.into(),
+                    serde_json::json!({"media_type": image.media_type, "data": image.base64}),
+                );
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = updates.send(Update::Notice(e));
+            }
+        }
         let mut deferred = false;
         let mut run = self.agent()?.run_request(request);
         let controller = run.controller();
@@ -992,6 +1074,20 @@ impl CodeSession {
         // pending marker; the engine resolves the approval from the text.
         self.pending_approval = None;
         loop {
+            if let Some(limit) = self.settings.max_session_tokens
+                && let Ok(usage) = self.usage().await
+            {
+                let used = (usage.input_tokens + usage.output_tokens).max(0) as u64;
+                if used >= limit {
+                    let _ = updates.send(Update::Notice(format!(
+                        "token budget reached: this session used {used} of {limit} tokens; raise it with --max-session-tokens or start a new session"
+                    )));
+                    report.budget_exhausted = true;
+                    report.failed = true;
+                    report.status = "budget_exhausted".into();
+                    return Ok(report);
+                }
+            }
             let (status, final_text, error, changed) =
                 self.run_once(&next_prompt, updates, controls).await?;
             for path in changed {
@@ -1245,6 +1341,7 @@ mod tests {
                 .unwrap(),
         );
         let settings = SessionSettings {
+            max_session_tokens: None,
             mode,
             verify: false,
             max_fix_rounds: 0,

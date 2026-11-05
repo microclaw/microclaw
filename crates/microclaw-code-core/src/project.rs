@@ -106,6 +106,10 @@ pub struct ProjectConfig {
     /// `rewind_context`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tools: Option<bool>,
+    /// Token budget per session (input + output); requests stop once it is
+    /// used up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_session_tokens: Option<u64>,
 }
 
 /// Project hooks: shell commands run in the project root.

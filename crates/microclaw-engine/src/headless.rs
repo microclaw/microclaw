@@ -45,6 +45,8 @@ pub struct HeadlessRunRequest {
     pub sender_name: String,
     pub run_id: Option<String>,
     pub caller_channel: String,
+    /// `(base64, media type)` image attached to the prompt.
+    pub image: Option<(String, String)>,
 }
 
 impl HeadlessRunRequest {
@@ -55,6 +57,7 @@ impl HeadlessRunRequest {
             sender_name: "cli".into(),
             run_id: None,
             caller_channel: HEADLESS_CHANNEL.into(),
+            image: None,
         }
     }
 
@@ -65,8 +68,22 @@ impl HeadlessRunRequest {
             sender_name: "code".into(),
             run_id: Some(run_id),
             caller_channel: CODE_CHANNEL.into(),
+            image: None,
         }
     }
+}
+
+/// `RunRequest::metadata` key carrying an image for the prompt:
+/// `{"media_type": "image/png", "data": "<base64>"}`.
+pub const IMAGE_KEY: &str = "image";
+
+fn image_from_metadata(
+    metadata: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Option<(String, String)> {
+    let image = metadata.get(IMAGE_KEY)?;
+    let data = image.get("data")?.as_str()?.to_string();
+    let media_type = image.get("media_type")?.as_str()?.to_string();
+    (!data.is_empty() && media_type.starts_with("image/")).then_some((data, media_type))
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +238,7 @@ impl RunExecutor for HeadlessRunExecutor {
         let (legacy_event_tx, mut legacy_event_rx) = mpsc::unbounded_channel();
         let run = self.runtime.run_with_profile(
             HeadlessRunRequest {
+                image: image_from_metadata(&request.metadata),
                 prompt: request.prompt,
                 session: Some(session.to_string()),
                 sender_name: self.caller_channel.clone(),
@@ -988,7 +1006,8 @@ impl HeadlessRuntime {
                 chat_type: "private",
             })
             .events(raw_event_tx.as_ref())
-            .profile(profile),
+            .profile(profile)
+            .image(request.image.clone()),
         )
         .await;
         drop(raw_event_tx);
@@ -2077,6 +2096,40 @@ mod tests {
             "{joined}"
         );
         assert!(joined.contains("Checkpoint cp-1 saved"));
+    }
+
+    #[tokio::test]
+    async fn an_attached_image_reaches_the_model() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let last_seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runtime = runtime_with_llm(
+            directory.path(),
+            Box::new(RewindingLlm {
+                // Starting past the scripted tool calls: answer directly.
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(3)),
+                last_seen: last_seen.clone(),
+            }),
+        );
+        let mut request =
+            HeadlessRunRequest::code("what is this?".into(), Some("img".into()), "img-1".into());
+        request.image = Some(("iVBORw==".into(), "image/png".into()));
+        runtime.run(request, None).await.unwrap();
+        let seen = last_seen.lock().unwrap().clone();
+        let has_image = seen.iter().any(|m| match &m.content {
+            microclaw_core::llm_types::MessageContent::Blocks(blocks) => blocks.iter().any(|b| {
+                matches!(b, microclaw_core::llm_types::ContentBlock::Image { source } if source.media_type == "image/png")
+            }),
+            microclaw_core::llm_types::MessageContent::Text(_) => false,
+        });
+        assert!(has_image, "{seen:?}");
+        assert_eq!(
+            image_from_metadata(&std::collections::BTreeMap::from([(
+                IMAGE_KEY.to_string(),
+                serde_json::json!({"media_type": "image/png", "data": "x"})
+            )])),
+            Some(("x".to_string(), "image/png".to_string()))
+        );
     }
 
     #[tokio::test]

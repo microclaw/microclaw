@@ -8,6 +8,33 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Images**:
+  - `@path/to/image.png` in a MicroClaw Code prompt attaches the image
+    (PNG, JPEG, GIF, WebP, up to 5 MB); Zed and other ACP clients can paste
+    images (image prompt capability);
+  - SDK: run metadata `image` (`IMAGE_METADATA`) and
+    `HeadlessRunRequest::image`.
+- **Worktree tasks**: `mccode --worktree [name]` runs a session in a new git
+  worktree on branch `mccode/<name>` and prints how to review, merge or
+  remove it; `mccode worktree list|remove`.
+- **Pull request review**: `mccode review --pr N [focus] [--post]` reviews a
+  PR's diff (`gh pr diff` or `origin` `refs/pull/N/head`) and can post the
+  findings with `gh pr comment`.
+- **Export**: `/export [file]` and `mccode export [--out file]` write a session
+  as Markdown.
+- **Token budget**: `--max-session-tokens` / `max_session_tokens` stop a
+  session before the next request once the budget is used.
+- **Anthropic context editing** (`anthropic_context_editing`, beta):
+  server-side clearing of old tool results (`clear_tool_uses_20250919`) on
+  top of local compaction.
+
+### Changed
+
+- MicroClaw Code states the sandbox situation per platform. On Windows there
+  is no OS sandbox: commands ask first in `ask` mode, and `auto` mode without
+  a sandbox shows a warning.
+
+
 - **Model-managed context**:
   - with `context_budget_hint` (on in coding workspaces), the model sees how
     full its context is on every request; the note rides on the newest
