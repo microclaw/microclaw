@@ -10,6 +10,11 @@ on:
         description: 'Existing release tag to build/upload assets for (e.g. v0.0.36)'
         required: true
         type: string
+      dry_run:
+        description: 'Only build and check the binaries; publish nothing'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -151,7 +156,10 @@ jobs:
             asset_triple: aarch64-linux-gnu
             archive_ext: tar.gz
           - label: macos-x86_64
-            os: macos-15-intel
+            # Cross-compiled on Apple Silicon: the Intel runners are the
+            # slowest and most queued, and doubled the release time.
+            os: macos-14
+            cross: true
             bin: microclaw
             target_triple: x86_64-apple-darwin
             asset_triple: x86_64-apple-darwin
@@ -189,6 +197,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.cross && matrix.target.target_triple || '' }}
 
       - name: Restore Rust release cache
         uses: Swatinem/rust-cache@v2
@@ -198,13 +208,46 @@ jobs:
       - name: Build release binary
         shell: bash
         run: |
-          if [ "${{ matrix.flavor }}" = "full" ]; then
-            cargo build --release --features full
-          else
-            cargo build --release
-            # MicroClaw Code ships as its own archive (mccode-<version>-<target>).
-            cargo build --release -p microclaw-code
+          TARGET_ARGS=()
+          if [ "${{ matrix.target.cross }}" = "true" ]; then
+            TARGET_ARGS=(--target "${{ matrix.target.target_triple }}")
           fi
+          if [ "${{ matrix.flavor }}" = "full" ]; then
+            cargo build --release --features full "${TARGET_ARGS[@]}"
+          else
+            cargo build --release "${TARGET_ARGS[@]}"
+            # MicroClaw Code ships as its own archive (mccode-<version>-<target>).
+            cargo build --release -p microclaw-code "${TARGET_ARGS[@]}"
+          fi
+          if [ "${{ matrix.target.cross }}" = "true" ]; then
+            # Packaging reads target/release.
+            mkdir -p target/release
+            for bin in microclaw mccode; do
+              if [ -f "target/${{ matrix.target.target_triple }}/release/$bin" ]; then
+                cp "target/${{ matrix.target.target_triple }}/release/$bin" target/release/
+              fi
+            done
+          fi
+
+      - name: Check cross-compiled architecture (macOS)
+        if: matrix.target.cross
+        shell: bash
+        run: |
+          for bin in target/release/microclaw target/release/mccode; do
+            [ -f "$bin" ] || continue
+            archs="$(lipo -archs "$bin")"
+            echo "$bin: $archs"
+            if [ "$archs" != "x86_64" ]; then
+              echo "::error::$bin is $archs, expected x86_64" >&2
+              exit 1
+            fi
+            # Smoke-run under Rosetta when it is installed.
+            if arch -x86_64 /usr/bin/true 2>/dev/null; then
+              arch -x86_64 "$bin" --version
+            else
+              echo "Rosetta unavailable; skipped running $bin"
+            fi
+          done
 
       - name: Prepare packaged binary name (Unix)
         if: matrix.target.archive_ext == 'tar.gz'
@@ -297,6 +340,7 @@ jobs:
 
   build-container:
     name: Build Container (${{ matrix.arch }})
+    if: ${{ !inputs.dry_run }}
     runs-on: ${{ matrix.runner }}
     needs: verify-ci
     timeout-minutes: 60
@@ -463,6 +507,7 @@ jobs:
 
   reliability-scorecard:
     name: Reliability Scorecard
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     needs: verify-ci
     env:
@@ -505,6 +550,7 @@ jobs:
 
   publish-assets:
     name: Upload to GitHub Release
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     needs:
       [build-assets, publish-container, reliability-scorecard]
