@@ -18,12 +18,15 @@
 | 本文作为 Active 计划，替换已交付的 `mccode-next-plan-cn.md` | 完成 |
 | 吊销旧的 crates.io token | 维护者手动 |
 | 回复 nilo（GHSA-xww5-ccxc-48jj 的报告者） | 维护者手动 |
-| 清理长期未合并的远程分支（约 100 个） | 可选，逐个确认后再删 |
+| 清理长期未合并的远程分支（约 100 个） | 完成（2026-11-05）：删除 111 个远程分支，只留 `main`；删除前全部打包备份到维护者本地 |
 
 ## 阶段 1：真实模型测试 → 0.23.1
 
 用 DeepSeek（`deepseek-flash`、`deepseek-v4-pro`）跑评测和逐项手测，
 结果与修复记录在 [`v0.23.1-plan.md`](./v0.23.1-plan.md)。
+
+状态：完成，[v0.23.1](https://github.com/microclaw/microclaw/releases/tag/v0.23.1)
+已于 2026-11-05 发布（crates.io、Homebrew 同步）。
 
 遗留：
 - 评测用例太小，还不能衡量 0.21 定的“每个任务 token 降 25%”；需要更大的长会话用例，

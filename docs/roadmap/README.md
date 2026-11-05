@@ -9,7 +9,7 @@ plan exists first.
 | Document | Status | Notes |
 |---|---|---|
 | [`next-plan-2026-11-cn.md`](./next-plan-2026-11-cn.md) | Active | Plan after 0.23.0: finish the 0.23.0 release, test with real models and ship 0.23.1, then model presets, VS Code and Windows ARM (0.24) and a Windows sandbox (0.25). |
-| [`v0.23.1-plan.md`](./v0.23.1-plan.md) | In progress | First real-model (DeepSeek) test pass over MicroClaw Code: approval resume, compaction on small windows, LSP, images, export, worktree hints. |
+| [`v0.23.1-plan.md`](./v0.23.1-plan.md) | Delivered | First real-model (DeepSeek) test pass over MicroClaw Code: approval resume, compaction on small windows, LSP, images, export, worktree hints. |
 | [`mccode-next-plan-cn.md`](./mccode-next-plan-cn.md) | Delivered (0.21–0.23) | Next MicroClaw Code plan after 0.20.0: comparison with Claude Code, Codex CLI, OpenCode and Kimi CLI; token-based context engine (pruning, structured incremental compaction, `/context`), model-driven context tools, LSP, hooks, Windows sandbox. |
 | [`microclaw-code-proposal-cn.md`](./microclaw-code-proposal-cn.md) | Delivered | MicroClaw Code (`mccode`) product line and its five batches (#527–#531); section 10 lists open ideas. |
 | [`v0.23.0-plan.md`](./v0.23.0-plan.md) | Delivered | Context engine, model-managed context and the 0.21–0.23 MicroClaw Code features in one release. |
