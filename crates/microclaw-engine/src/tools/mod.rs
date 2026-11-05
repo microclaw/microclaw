@@ -9,6 +9,7 @@ pub mod consult_specialist;
 pub mod deep_research;
 pub mod describe_image;
 pub mod edit_file;
+pub mod explore;
 pub mod export_chat;
 pub mod fetch_artifact;
 pub mod file_state;
@@ -403,6 +404,9 @@ impl ToolRegistry {
             Box::new(insights::InsightsTool::new(db.clone())),
             Box::new(fetch_artifact::FetchArtifactTool::new(db.clone())),
         ];
+        if config.explore_tool {
+            tools.push(Box::new(explore::ExploreTool::new(config, db.clone())));
+        }
 
         #[cfg(feature = "document-tools")]
         tools.push(Box::new(render_pdf::RenderPdfTool::new(

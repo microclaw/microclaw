@@ -102,6 +102,11 @@ struct Cli {
     #[arg(long)]
     review_commands: bool,
 
+    /// Let the agent save checkpoints and rewind its own context
+    /// (`context_note` / `rewind_context`; experimental).
+    #[arg(long)]
+    context_tools: bool,
+
     /// With -p: run the task on the paired MicroClaw Server (see
     /// `mccode remote pair`) instead of this machine.
     #[arg(long, requires = "print")]
@@ -533,7 +538,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         .data_dir(home::data_dir())
         .max_concurrent_runs(1)
         .shell_sandbox(sandbox_choice)
-        .compact_instructions(project.config.compact_instructions.clone());
+        .compact_instructions(project.config.compact_instructions.clone())
+        .context_tools(cli.context_tools || project.config.context_tools == Some(true))
+        .project_agents_dir(project.agents_dir());
     if cli.review_commands {
         builder = builder.command_reviewer(None);
     }
@@ -554,7 +561,15 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(prompt) => {
             let task = match review_focus {
                 Some(focus) => PrintTask::Review(Some(focus).filter(|f| !f.trim().is_empty())),
-                None => PrintTask::Prompt(prompt.trim().to_string()),
+                None => {
+                    let commands = microclaw_code_core::commands::load(
+                        &session.project,
+                        &microclaw_code_core::commands::personal_dir(),
+                    );
+                    let prompt =
+                        microclaw_code_core::commands::expand(&commands, &prompt).unwrap_or(prompt);
+                    PrintTask::Prompt(prompt.trim().to_string())
+                }
             };
             print_mode(session, &mut index, task, cli.json, style).await
         }

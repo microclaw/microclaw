@@ -49,6 +49,7 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/cost` | Requests and input/output tokens of this session, per model. |
 | `/compact [focus]` | Summarize older messages now; the optional focus says what the summary must keep. |
 | `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
+| `/handoff <next task>` | Start a new session from a summary of this one focused on the next task; this session stays as it is. |
 | `/fork` | Continue in a copy of the conversation; the original session is kept. |
 
 Checkpoints are taken at the start of every turn in a shadow git repository
@@ -162,6 +163,10 @@ always_ask:
 instructions: |
   Use pnpm, not npm.
 compact_instructions: Keep the names of public APIs and any open TODOs.
+lsp: true
+hooks:
+  after_edit:
+    - cargo fmt
 ```
 
 ## Context and compaction
@@ -185,6 +190,75 @@ notice in the transcript (and on stderr with `-p`) says when it happened.
 `/compact <focus>` compacts now and tells the summary what matters;
 `compact_instructions` in `.microclaw/project.yaml` does the same for every
 compaction in the project.
+
+## Exploring with helpers
+
+The agent can hand wide investigations ("where is the retry policy set and who
+calls it?") to `explore`, a read-only helper with its own context. Only the
+helper's short report, with file paths and line numbers, enters the main
+conversation, and several `explore` calls run in parallel. Trusted projects
+can add focused helpers in `.microclaw/agents/<name>.md`:
+
+```markdown
+---
+description: Knows the storage layer and its migrations
+model: claude-haiku-4-5   # optional
+---
+You explain how the database code in crates/storage works. …
+```
+
+The model also sees how full its context is on every request, so it can
+delegate or wrap up before compaction is needed. With `--context-tools` (or
+`context_tools: true` in the project file) it can additionally save
+checkpoints (`context_note`) and rewind its own context to one with a note to
+itself (`rewind_context`), dropping failed attempts. Files are not reverted.
+
+## Project memory
+
+In trusted projects the agent keeps durable lessons about the repository in
+`.microclaw/memory.md` (how to build and test it, slow tests, pitfalls),
+edits it with the normal file tools (so you see every change as a diff), and
+reads it at the start of every session. Edit or delete it like any file.
+
+## Custom commands
+
+A Markdown file defines a slash command; its body is the prompt and
+`$ARGUMENTS` is replaced by what follows the command:
+
+```markdown
+---
+description: Fix a GitHub issue
+---
+Fix issue #$ARGUMENTS: read it with `gh issue view`, write a failing test
+first, then fix it.
+```
+
+Put personal commands in `~/.microclaw/code/commands/` and project commands in
+`.microclaw/commands/` (trusted projects only; they win on a name clash).
+`/help` lists them, Tab completes them, and `mccode -p "/fix-issue 42"` runs
+one non-interactively.
+
+## Language servers and hooks
+
+When the agent changed files, MicroClaw Code asks the language server of each
+file's language for errors before running the checks: `rust-analyzer`,
+`typescript-language-server`, `pyright-langserver` or `gopls`, whichever is
+installed. Errors are handed back like a failed check (`lsp`), usually
+faster and more precisely than a full build. Language servers run project code
+(build scripts), so this needs a trusted project; `lsp: false` turns it off.
+
+Hooks run shell commands in the project root at fixed points (trusted
+projects only):
+
+```yaml
+hooks:
+  after_edit:            # after the agent changed files, before the checks
+    - cargo fmt
+  after_turn:            # when a turn that changed files ends
+    - ./scripts/notify.sh
+```
+
+A failing hook is reported but does not stop the turn.
 
 ## Interactive programs
 

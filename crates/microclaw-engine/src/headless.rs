@@ -750,6 +750,85 @@ impl HeadlessRuntime {
         Ok(())
     }
 
+    /// Start session `to` from a summary of session `from` focused on
+    /// `goal` (the original session is unchanged). Returns the estimated
+    /// tokens of the seeded context.
+    pub async fn handoff_session(
+        &self,
+        channel: &str,
+        from: &str,
+        to: &str,
+        goal: &str,
+    ) -> anyhow::Result<usize> {
+        let Some(from_id) = self.existing_session_chat_id(from).await? else {
+            anyhow::bail!("session `{from}` has no conversation to hand off");
+        };
+        let db = self.state.db.clone();
+        let Some((json, _)) = call_blocking(db, move |db| db.load_session(from_id)).await? else {
+            anyhow::bail!("session `{from}` has no conversation to hand off");
+        };
+        let messages: Vec<microclaw_core::llm_types::Message> = serde_json::from_str(&json)?;
+        let to_id = self.resolve_session_chat_id(to).await?;
+        let previous = crate::context_window::previous_summary(&messages);
+        let focus = format!(
+            "Only what matters for the next task: {}. Leave out finished work that does not affect it.",
+            goal.trim()
+        );
+        let mut summary = previous.clone();
+        for chunk in crate::context_window::chunk_text(
+            &crate::context_window::render_for_summary(&messages),
+            60_000,
+        ) {
+            let request = crate::context_window::summary_request(
+                summary.as_deref(),
+                &chunk,
+                Some(&focus),
+                self.state.config.compact_instructions.as_deref(),
+            );
+            match crate::agent_engine::summarize_once(&self.state, channel, from_id, request).await
+            {
+                Ok(text) if !text.trim().is_empty() => summary = Some(text),
+                _ => {
+                    summary = Some(crate::context_window::fallback_summary(&messages));
+                    break;
+                }
+            }
+        }
+        let summary = summary.unwrap_or_else(|| crate::context_window::fallback_summary(&messages));
+        let mut text = crate::context_window::summary_message_text(&summary, &messages);
+        text.push_str(&format!(
+            "\n## Next task\n{}\n(This session was started from a handoff of session `{}`.)\n",
+            goal.trim(),
+            from.trim()
+        ));
+        let seeded = vec![
+            microclaw_core::llm_types::Message {
+                role: "user".into(),
+                content: microclaw_core::llm_types::MessageContent::Text(text),
+            },
+            microclaw_core::llm_types::Message {
+                role: "assistant".into(),
+                content: microclaw_core::llm_types::MessageContent::Text(
+                    "Understood. I have the handoff summary and the next task.".into(),
+                ),
+            },
+        ];
+        let tokens = crate::context_window::estimate_messages_tokens(&seeded);
+        let json = serde_json::to_string(&seeded)?;
+        let parent_key = format!("headless:{}", from.trim());
+        let db = self.state.db.clone();
+        call_blocking(db, move |db| {
+            if db.load_session(to_id)?.is_some() {
+                return Err(microclaw_core::error::MicroClawError::Config(
+                    "the target session already has a conversation".into(),
+                ));
+            }
+            db.save_session_with_meta(to_id, &json, Some(&parent_key), None, None)
+        })
+        .await?;
+        Ok(tokens)
+    }
+
     /// Persist and promptly signal cancellation for one Subagent owned by the session.
     pub fn cancel_subagent(&self, session: &str, run_id: &str) -> anyhow::Result<bool> {
         let external_chat_id = format!("headless:{}", session.trim());
@@ -1871,6 +1950,133 @@ mod tests {
         let request = requests.lock().unwrap().last().cloned().unwrap();
         assert!(request.contains("The summary so far"), "{request}");
         assert!(request.contains("SUMMARY-OK"));
+    }
+
+    #[tokio::test]
+    async fn handoff_seeds_a_new_session_from_a_focused_summary() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runtime = runtime_with_llm(
+            directory.path(),
+            Box::new(SummarizingLlm {
+                summary_requests: requests.clone(),
+                fail_summaries: false,
+            }),
+        );
+        run_turns(
+            &runtime,
+            "src",
+            &["Use tabs in the Makefile.".to_string(), "step".to_string()],
+        )
+        .await;
+        runtime
+            .handoff_session(CODE_CHANNEL, "src", "next", "add a release target")
+            .await
+            .unwrap();
+        let request = requests.lock().unwrap().last().cloned().unwrap();
+        assert!(request.contains("add a release target"));
+        let seeded = stored_session(&runtime, "next");
+        assert_eq!(seeded.len(), 2);
+        let text = crate::agent_engine::message_to_text(&seeded[0]);
+        assert!(
+            text.contains("## Next task\nadd a release target"),
+            "{text}"
+        );
+        assert!(text.contains("Use tabs in the Makefile."));
+        // The source session is unchanged and the target cannot be reused.
+        assert_eq!(stored_session(&runtime, "src").len(), 4);
+        assert!(runtime
+            .handoff_session(CODE_CHANNEL, "src", "next", "again")
+            .await
+            .is_err());
+    }
+
+    /// Saves a checkpoint, takes a useless step, rewinds with a note, then
+    /// answers; records the messages it was shown on its last call.
+    struct RewindingLlm {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        last_seen: Arc<std::sync::Mutex<Vec<Message>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RewindingLlm {
+        async fn send_message(
+            &self,
+            _system: &str,
+            messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.last_seen.lock().unwrap() = messages;
+            let tool = |id: &str, name: &str, input: serde_json::Value| MessagesResponse {
+                content: vec![ResponseContentBlock::ToolUse {
+                    id: id.into(),
+                    name: name.into(),
+                    input,
+                    thought_signature: None,
+                }],
+                stop_reason: Some("tool_use".into()),
+                usage: None,
+            };
+            Ok(match call {
+                0 => tool("n1", "context_note", serde_json::json!({"note": "start"})),
+                1 => tool("g1", "glob", serde_json::json!({"pattern": "**/*.nothing"})),
+                2 => tool(
+                    "r1",
+                    "rewind_context",
+                    serde_json::json!({"checkpoint": "cp-1", "note": "glob found nothing"}),
+                ),
+                _ => MessagesResponse {
+                    content: vec![ResponseContentBlock::Text {
+                        text: "done".into(),
+                    }],
+                    stop_reason: Some("end_turn".into()),
+                    usage: None,
+                },
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn rewind_context_drops_steps_after_the_checkpoint() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let last_seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut runtime = runtime_with_llm(
+            directory.path(),
+            Box::new(RewindingLlm {
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                last_seen: last_seen.clone(),
+            }),
+        );
+        Arc::get_mut(&mut runtime.state)
+            .unwrap()
+            .config
+            .context_tools = true;
+        let result = runtime
+            .run(
+                HeadlessRunRequest::code("find it".into(), Some("rw".into()), "rw-1".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(result.response.contains("done"), "{}", result.response);
+        let seen = last_seen.lock().unwrap().clone();
+        let text: Vec<String> = seen
+            .iter()
+            .map(crate::agent_engine::message_to_text)
+            .collect();
+        let joined = text.join("\n");
+        assert!(
+            !joined.contains("[tool_use: glob("),
+            "the glob step should be gone: {joined}"
+        );
+        assert!(
+            joined.contains("Note from your later self: glob found nothing"),
+            "{joined}"
+        );
+        assert!(joined.contains("Checkpoint cp-1 saved"));
     }
 
     #[tokio::test]

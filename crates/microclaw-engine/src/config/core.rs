@@ -279,6 +279,22 @@ pub struct Config {
     /// Extra instructions for compaction summaries (what to preserve).
     #[serde(default)]
     pub compact_instructions: Option<String>,
+    /// Directory of project agent definitions (`<name>.md`) offered to the
+    /// `explore` tool. Set by embedders for trusted workspaces.
+    #[serde(default)]
+    pub project_agents_dir: Option<String>,
+    /// Offer the model the context tools `context_note` and
+    /// `rewind_context`. Default: false.
+    #[serde(default)]
+    pub context_tools: bool,
+    /// Tell the model how full its context is on every request. Default:
+    /// false (on in coding workspaces).
+    #[serde(default)]
+    pub context_budget_hint: bool,
+    /// Offer the read-only `explore` helper. Default: false (on in coding
+    /// workspaces).
+    #[serde(default)]
+    pub explore_tool: bool,
     /// Opt-in post-edit quality pass: after a turn that ran edit_file /
     /// write_file, one extra review iteration runs before the reply is
     /// finalized.
@@ -1057,6 +1073,10 @@ impl Config {
             prune_minimum_tokens: default_prune_minimum_tokens(),
             compact_keep_recent_tokens: 0,
             compact_instructions: None,
+            project_agents_dir: None,
+            context_tools: false,
+            context_budget_hint: false,
+            explore_tool: false,
             self_recheck: SelfRecheckConfig::default(),
             compact_keep_recent: 20,
             default_tool_timeout_secs: default_tool_timeout_secs(),

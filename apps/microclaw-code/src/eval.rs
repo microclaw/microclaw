@@ -204,6 +204,8 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
             .shell_sandbox(options.sandbox.clone())
             .compact_instructions(project.config.compact_instructions.clone())
             .context_window(spec.context_window)
+            .context_tools(project.config.context_tools == Some(true))
+            .project_agents_dir(project.agents_dir())
             .build()
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;

@@ -647,6 +647,22 @@ impl MicroClaw {
             .map_err(|error| SdkError::Runtime(error.to_string()))
     }
 
+    /// Start session `to` from a summary of session `from` focused on the
+    /// next `goal`; `from` is unchanged. Returns the seeded context's
+    /// estimated tokens.
+    #[cfg(feature = "full")]
+    pub async fn handoff_session(
+        &self,
+        from: impl AsRef<str>,
+        to: impl AsRef<str>,
+        goal: &str,
+    ) -> Result<usize, SdkError> {
+        self.engine()?
+            .handoff_session(&self.caller_channel, from.as_ref(), to.as_ref(), goal)
+            .await
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
     /// How full a session's context is.
     #[cfg(feature = "full")]
     pub async fn context_usage(&self, session: impl AsRef<str>) -> Result<ContextUsage, SdkError> {
@@ -777,6 +793,8 @@ fn apply_workspace_context_defaults(config: &mut microclaw_engine::config::Confi
     if config.compact_keep_recent_tokens == 0 {
         config.compact_keep_recent_tokens = 24_000;
     }
+    config.explore_tool = true;
+    config.context_budget_hint = true;
     if config.tool_result_truncation_threshold_chars == 4_000 {
         config.tool_result_truncation_threshold_chars = 60_000;
         config.tool_result_truncation_head_chars = 40_000;
@@ -829,6 +847,8 @@ pub struct MicroClawBuilder {
     command_reviewer: Option<Option<String>>,
     compact_instructions: Option<String>,
     context_window: Option<usize>,
+    context_tools: bool,
+    project_agents_dir: Option<PathBuf>,
 }
 
 #[cfg(feature = "full")]
@@ -846,6 +866,8 @@ impl MicroClawBuilder {
             command_reviewer: None,
             compact_instructions: None,
             context_window: None,
+            context_tools: false,
+            project_agents_dir: None,
         }
     }
 
@@ -862,6 +884,8 @@ impl MicroClawBuilder {
             command_reviewer: None,
             compact_instructions: None,
             context_window: None,
+            context_tools: false,
+            project_agents_dir: None,
         }
     }
 
@@ -878,6 +902,8 @@ impl MicroClawBuilder {
             command_reviewer: None,
             compact_instructions: None,
             context_window: None,
+            context_tools: false,
+            project_agents_dir: None,
         }
     }
 
@@ -939,6 +965,19 @@ impl MicroClawBuilder {
         self
     }
 
+    /// Offer the model `context_note` / `rewind_context` (experimental).
+    pub fn context_tools(mut self, enabled: bool) -> Self {
+        self.context_tools = enabled;
+        self
+    }
+
+    /// Directory of project agent definitions (`<name>.md`) for the
+    /// `explore` tool. Only pass directories you trust.
+    pub fn project_agents_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.project_agents_dir = dir;
+        self
+    }
+
     pub async fn build(self) -> Result<MicroClaw, SdkError> {
         use microclaw_engine::config::Config;
         use microclaw_engine::headless::HeadlessRuntime;
@@ -968,6 +1007,12 @@ impl MicroClawBuilder {
         }
         if self.compact_instructions.is_some() {
             config.compact_instructions = self.compact_instructions;
+        }
+        if self.context_tools {
+            config.context_tools = true;
+        }
+        if let Some(dir) = self.project_agents_dir {
+            config.project_agents_dir = Some(dir.to_string_lossy().into_owned());
         }
         if let Some(window) = self.context_window {
             config.model_context_window = window;

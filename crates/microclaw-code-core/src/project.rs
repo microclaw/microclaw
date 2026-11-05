@@ -95,6 +95,35 @@ pub struct ProjectConfig {
     /// What compaction summaries of this project's sessions must keep.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compact_instructions: Option<String>,
+    /// Ask installed language servers for errors in changed files
+    /// (default: true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lsp: Option<bool>,
+    /// Commands run at points of a turn.
+    #[serde(skip_serializing_if = "Hooks::is_empty")]
+    pub hooks: Hooks,
+    /// Offer the experimental context tools (`context_note`,
+    /// `rewind_context`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_tools: Option<bool>,
+}
+
+/// Project hooks: shell commands run in the project root.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Hooks {
+    /// After the agent changed files, before checks (formatters, codegen).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub after_edit: Vec<String>,
+    /// When a turn that changed files ends.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub after_turn: Vec<String>,
+}
+
+impl Hooks {
+    pub fn is_empty(&self) -> bool {
+        self.after_edit.is_empty() && self.after_turn.is_empty()
+    }
 }
 
 /// A discovered project.
@@ -184,6 +213,18 @@ impl Project {
     /// repository's own build scripts.
     pub fn verify_enabled(&self) -> bool {
         self.trusted && self.config.verify.unwrap_or(true)
+    }
+
+    /// Language-server diagnostics run code from the repository (build
+    /// scripts, plugins), so they need trust too.
+    pub fn lsp_enabled(&self) -> bool {
+        self.verify_enabled() && self.config.lsp.unwrap_or(true)
+    }
+
+    /// `.microclaw/agents`, offered to the `explore` tool in trusted projects.
+    pub fn agents_dir(&self) -> Option<PathBuf> {
+        let dir = self.root.join(".microclaw").join("agents");
+        (self.trusted && dir.is_dir()).then_some(dir)
     }
 
     pub fn max_fix_rounds(&self) -> u32 {
