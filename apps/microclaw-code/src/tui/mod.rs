@@ -64,7 +64,11 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
         "show or switch this session's model: /model <name> | reset",
     ),
     ("/cost", "token usage of this session"),
-    ("/compact", "summarize older messages to free context"),
+    (
+        "/compact",
+        "summarize older messages to free context (/compact <focus>)",
+    ),
+    ("/context", "show how full the context window is"),
     ("/fork", "continue in a copy of this conversation"),
     ("/new", "start a new session"),
     ("/sessions", "list this project's sessions"),
@@ -90,8 +94,47 @@ enum SessionOp {
     Rewind(Option<String>),
     Cost,
     Model(Option<String>),
-    Compact,
+    Compact(Option<String>),
+    Context,
     Fork(String),
+}
+
+/// `/context`: window, threshold and where the tokens go.
+fn context_report(u: &microclaw_sdk::ContextUsage) -> String {
+    let t = |n: usize| format::tokens(n as i64);
+    let mut text = format!(
+        "context: ~{} of {} tokens ({}%) · model {}\n",
+        t(u.used_tokens),
+        t(u.window),
+        u.percent_used(),
+        u.model
+    );
+    if u.auto_compact_threshold > 0 {
+        text.push_str(&format!(
+            "automatic compaction at ~{} tokens ({} left)\n",
+            t(u.auto_compact_threshold),
+            t(u.auto_compact_threshold.saturating_sub(u.used_tokens))
+        ));
+    } else {
+        text.push_str("automatic compaction is off\n");
+    }
+    if let Some(last) = u.last_request_tokens {
+        text.push_str(&format!("last request: {} input tokens\n", t(last)));
+    }
+    text.push_str(&format!(
+        "conversation ({} messages): summary {} · your messages {} · replies {} · tool calls {} · tool output {}",
+        u.messages,
+        t(u.summary_tokens),
+        t(u.user_tokens),
+        t(u.assistant_tokens),
+        t(u.tool_call_tokens),
+        t(u.tool_result_tokens),
+    ));
+    if u.image_tokens > 0 {
+        text.push_str(&format!(" · images {}", t(u.image_tokens)));
+    }
+    text.push_str("\n/compact <focus> summarizes now");
+    text
 }
 
 async fn run_session_op(
@@ -166,12 +209,21 @@ async fn run_session_op(
                 Err(e) => notice(format!("could not switch the model: {e}")),
             }
         }
-        SessionOp::Compact => match session.compact().await {
-            Ok((before, after)) if after < before => notice(format!(
-                "compacted the conversation: {before} → {after} messages"
+        SessionOp::Compact(focus) => match session.compact(focus.as_deref()).await {
+            Ok(c) if c.method != "none" => notice(format!(
+                "compacted the conversation ({}): {} → {} messages, ~{} → ~{} tokens",
+                c.method,
+                c.messages_before,
+                c.messages_after,
+                format::tokens(c.tokens_before as i64),
+                format::tokens(c.tokens_after as i64),
             )),
             Ok(_) => notice("the conversation is already short; nothing to compact".into()),
             Err(e) => notice(format!("compact failed: {e}")),
+        },
+        SessionOp::Context => match session.context_usage().await {
+            Ok(u) => notice(context_report(&u)),
+            Err(e) => notice(format!("could not read the context: {e}")),
         },
         SessionOp::Fork(new_id) => {
             let from = session.session_id.clone();
@@ -209,6 +261,8 @@ pub struct App {
     pub session_label: String,
     pub scroll: usize,
     pub hint: Option<String>,
+    /// Context window in use after the last turn (status bar).
+    pub context_pct: Option<u8>,
     quit_armed: Option<Instant>,
     should_quit: bool,
     files: Option<Vec<String>>,
@@ -319,6 +373,7 @@ pub async fn run(
         dialog: None,
         scroll: 0,
         hint: None,
+        context_pct: None,
         quit_armed: None,
         should_quit: false,
         files: None,
@@ -417,6 +472,10 @@ impl App {
     }
 
     fn on_update(&mut self, update: Update) {
+        if let Update::ContextPercent(pct) = &update {
+            self.context_pct = Some(*pct);
+            return;
+        }
         if let Update::ApprovalRequested(approval) = &update {
             self.dialog = Some(Dialog::Approval(approval.clone()));
         }
@@ -453,6 +512,7 @@ impl App {
                     Err(e) => self.transcript.notice(format!("error: {e:#}"), Tone::Error),
                 }
                 self.session_label = session.session_id.clone();
+                session.report_context_percent(self.updates_tx.clone());
                 self.session = Some(session);
             }
             Err(e) => {
@@ -945,7 +1005,7 @@ impl App {
                 }
             }
             "/undo" | "/rewind" | "/cost" | "/usage" | "/model" | "/compact" | "/fork"
-            | "/review"
+            | "/review" | "/context"
                 if busy =>
             {
                 self.hint = Some("wait for the current turn to finish".into());
@@ -956,7 +1016,10 @@ impl App {
             "/model" => {
                 self.start_session_op(SessionOp::Model((!args.is_empty()).then(|| args.join(" "))))
             }
-            "/compact" => self.start_session_op(SessionOp::Compact),
+            "/compact" => self.start_session_op(SessionOp::Compact(
+                (!args.is_empty()).then(|| args.join(" ")),
+            )),
+            "/context" => self.start_session_op(SessionOp::Context),
             "/review" => self.start_review((!args.is_empty()).then(|| args.join(" "))),
             "/fork" => {
                 let Some(root) = self.project().map(|p| p.root.clone()) else {

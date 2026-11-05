@@ -37,10 +37,35 @@ See [Memory System](./memory) for details.
 
 ## Compaction strategy
 
-- Keep recent messages verbatim (`compact_keep_recent`).
-- Summarize older conversation into a compact summary block.
-- Fallback to truncation if summarization fails.
-- Strip large image payloads before session persistence.
+Before each model call the conversation is measured against the model's
+context window (`context_window.rs`: known models by name,
+`model_context_window(s)` overrides, the reply reserve subtracted). Compaction
+starts at `context_pressure_compact_pct` (at most 90%) of that budget, when a
+chat exceeds `max_session_messages`, or after a provider "context length
+exceeded" error, and runs in stages:
+
+1. **Prune** (no model call): older tool outputs are replaced by a one-line
+   stub naming the call; the newest `prune_protect_tokens` of tool output stay,
+   and pruning only happens when it frees at least `prune_minimum_tokens`, so
+   the provider's prompt cache is not invalidated for small gains. A
+   `read_file` result superseded by a later read of the same file is always
+   replaced. Spilled outputs keep their `fetch_artifact` id.
+2. **Summarize**: if still over budget, older history (everything before the
+   kept tail of `compact_keep_recent` messages or `compact_keep_recent_tokens`
+   tokens, always starting on a plain user message) is summarized into fixed
+   sections: goal and constraints, decisions, files and state, errors and
+   fixes, plan, verification, next step. The previous summary is updated
+   incrementally; long histories are summarized in chunks.
+3. **Re-inject**: the summary message also carries the user's own earlier
+   messages verbatim and the files changed, so constraints survive.
+4. **Fallback**: if the summarizer fails, a mechanical digest (earlier
+   summary, user requests, files changed, last commands) replaces the history
+   instead of dropping it. A turn stops compacting after two attempts that
+   cannot reduce further.
+
+Every compaction archives the full conversation first and emits a
+`context_compacted` runtime event. Images are stripped before session
+persistence.
 
 ## Structured-memory retrieval modes
 

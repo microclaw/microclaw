@@ -68,7 +68,8 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
 | `/model [name\|reset]` | Show or switch the model for this session. |
 | `/cost` | Requests and input/output tokens of this session, per model. |
-| `/compact` | Summarize older messages now to free context (long sessions also compact automatically). |
+| `/compact [focus]` | Summarize older messages now; the optional focus says what the summary must keep. |
+| `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
 | `/fork` | Continue in a copy of the conversation; the original session is kept. |
 
 Checkpoints are taken at the start of every turn in a shadow git repository
@@ -181,6 +182,7 @@ always_ask:
   - terraform apply
 instructions: |
   Use pnpm, not npm.
+compact_instructions: Keep the names of public APIs and any open TODOs.
 ```
 
 ## Editors, other agents and remote Servers

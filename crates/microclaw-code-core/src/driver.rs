@@ -230,6 +230,8 @@ pub enum Update {
     },
     ChecksGaveUp(CheckOutcome),
     Notice(String),
+    /// Share of the usable context window in use after a turn.
+    ContextPercent(u8),
 }
 
 /// Outcome of one user turn.
@@ -455,10 +457,33 @@ impl CodeSession {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    /// Summarize older messages now, keeping the last few verbatim.
-    pub async fn compact(&self) -> anyhow::Result<(usize, usize)> {
+    /// Summarize older messages now; `focus` says what the summary must keep.
+    pub async fn compact(
+        &self,
+        focus: Option<&str>,
+    ) -> anyhow::Result<microclaw_sdk::SessionCompaction> {
         self.microclaw
-            .compact_session(&self.session_id, COMPACT_KEEP_RECENT)
+            .compact_session_with(&self.session_id, COMPACT_KEEP_RECENT, focus)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Measure the context in the background and report it as
+    /// [`Update::ContextPercent`].
+    pub fn report_context_percent(&self, updates: tokio::sync::mpsc::UnboundedSender<Update>) {
+        let microclaw = self.microclaw.clone();
+        let session = self.session_id.clone();
+        tokio::spawn(async move {
+            if let Ok(usage) = microclaw.context_usage(&session).await {
+                let _ = updates.send(Update::ContextPercent(usage.percent_used()));
+            }
+        });
+    }
+
+    /// How full this session's context is.
+    pub async fn context_usage(&self) -> anyhow::Result<microclaw_sdk::ContextUsage> {
+        self.microclaw
+            .context_usage(&self.session_id)
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }

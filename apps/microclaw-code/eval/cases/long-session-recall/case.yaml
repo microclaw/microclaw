@@ -1,0 +1,13 @@
+# Cross-compaction recall: a constraint given in the first turn must still
+# be honoured after the small context window forces compaction.
+prompt: |
+  Remember for this whole session: every shell script you write must start
+  with `#!/bin/sh` and must not use bash-only syntax such as `[[ ]]`.
+  For now, just read notes.txt and tell me how many lines it has.
+followups:
+  - Read every file in the repository and summarize what each one is for.
+  - Create tools/hello.sh that prints "hello" followed by its first argument.
+  - Create tools/count.sh that prints how many arguments it got.
+check: sh test.sh
+context_window: 12000
+timeout_secs: 900

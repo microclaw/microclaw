@@ -225,7 +225,15 @@ pub(crate) fn default_model_context_window() -> usize {
 }
 
 pub(crate) fn default_context_pressure_compact_pct() -> usize {
-    85
+    80
+}
+
+pub(crate) fn default_prune_protect_tokens() -> usize {
+    40_000
+}
+
+pub(crate) fn default_prune_minimum_tokens() -> usize {
+    20_000
 }
 
 pub(crate) fn default_file_diffs_in_chat() -> bool {

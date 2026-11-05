@@ -121,6 +121,18 @@ pub enum RuntimeEvent {
     PlanUpdated {
         steps: Vec<RuntimePlanStep>,
     },
+    /// The conversation was reduced to fit the model's context window.
+    /// `method` is `pruned` (old tool outputs cleared), `summarized` or
+    /// `fallback` (mechanical digest after the summarizer failed).
+    ContextCompacted {
+        method: String,
+        trigger: String,
+        tokens_before: u64,
+        tokens_after: u64,
+        messages_before: usize,
+        messages_after: usize,
+        duration_ms: u64,
+    },
     ProcessOutput {
         call_id: String,
         command: String,
@@ -142,7 +154,7 @@ pub struct RuntimeEventEnvelope {
 }
 
 impl RuntimeEventEnvelope {
-    pub const SCHEMA_VERSION: u32 = 6;
+    pub const SCHEMA_VERSION: u32 = 7;
 
     pub fn new(run_id: impl Into<String>, sequence: u64, event: RuntimeEvent) -> Self {
         Self {

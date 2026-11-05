@@ -2096,31 +2096,6 @@ async fn process_with_agent_logic(
         return Ok("I didn't receive any message to process.".into());
     }
 
-    // Compact if messages exceed threshold
-    if messages.len() > state.config.max_session_messages {
-        let msg_count_before = messages.len();
-        archive_conversation(
-            &state.config.data_dir,
-            context.caller_channel,
-            chat_id,
-            &messages,
-        );
-        messages = compact_messages(
-            state,
-            context.caller_channel,
-            chat_id,
-            &messages,
-            state.config.compact_keep_recent,
-        )
-        .await;
-        info!(
-            chat_id,
-            messages_before = msg_count_before,
-            messages_after = messages.len(),
-            "Context compacted"
-        );
-    }
-
     if plan_mode_active {
         system_prompt.push_str(PLAN_MODE_SYSTEM_SUFFIX);
     }
@@ -2237,6 +2212,71 @@ async fn process_with_agent_logic(
     } else {
         None
     };
+    // Pre-turn compaction: by message count (chat channels, when
+    // `max_session_messages` > 0) or by estimated tokens against the model's
+    // context budget.
+    let context_budget =
+        crate::context_window::ContextBudget::for_model(&state.config, &effective_model);
+    let fixed_prompt_tokens = crate::context_window::estimate_text_tokens(&system_prompt)
+        + crate::context_window::estimate_text_tokens(
+            &serde_json::to_string(&tool_defs).unwrap_or_default(),
+        );
+    {
+        let estimated =
+            fixed_prompt_tokens + crate::context_window::estimate_messages_tokens(&messages);
+        let by_count = state.config.max_session_messages > 0
+            && messages.len() > state.config.max_session_messages;
+        let by_tokens = context_budget.over(estimated);
+        if by_count || by_tokens {
+            let msg_count_before = messages.len();
+            archive_conversation(
+                &state.config.data_dir,
+                context.caller_channel,
+                chat_id,
+                &messages,
+            );
+            let outcome = compact_conversation(
+                state,
+                context.caller_channel,
+                chat_id,
+                &messages,
+                CompactOptions {
+                    keep_recent: state.config.compact_keep_recent,
+                    target_tokens: by_tokens.then(|| {
+                        (context_budget.threshold * 3 / 4).saturating_sub(fixed_prompt_tokens)
+                    }),
+                    force_summary: by_count && !by_tokens,
+                    ..Default::default()
+                },
+            )
+            .await;
+            if outcome.changed() {
+                info!(
+                    chat_id,
+                    method = outcome.method,
+                    messages_before = msg_count_before,
+                    messages_after = outcome.messages.len(),
+                    tokens_before = outcome.tokens_before,
+                    tokens_after = outcome.tokens_after,
+                    "Context compacted"
+                );
+                if let Some(tx) = event_tx {
+                    let _ = tx.send(outcome.event(
+                        if by_tokens {
+                            "context_budget"
+                        } else {
+                            "message_count"
+                        },
+                        msg_count_before,
+                    ));
+                }
+                messages = outcome.messages;
+            }
+        }
+    }
+    // Automatic compactions this turn; a third one in a row means the
+    // conversation cannot be reduced further and the loop stops trying.
+    let mut pressure_compactions: usize = 0;
     let mut consecutive_send_message_calls: usize = 0;
     let mut last_tool_use_fingerprint: Option<String> = None;
     let mut repeated_tool_use_streak: usize = 0;
@@ -2312,34 +2352,52 @@ async fn process_with_agent_logic(
     let mut self_recheck_done = false;
     for iteration in 0..state.config.max_tool_iterations {
         // Context-pressure compaction: when the previous request already
-        // consumed more than `context_pressure_compact_pct` of the model's
-        // window, compact mid-turn instead of running into a hard overflow.
-        let pressure_pct = state.config.context_pressure_compact_pct;
-        if pressure_pct > 0 && last_observed_input_tokens > 0 {
-            let threshold = state
-                .config
-                .model_context_window
-                .saturating_mul(pressure_pct)
-                / 100;
-            if last_observed_input_tokens as usize >= threshold
-                && messages.len() > state.config.compact_keep_recent
-            {
-                info!(
-                    chat_id,
-                    last_observed_input_tokens,
-                    threshold,
-                    "Context pressure: compacting session mid-turn"
-                );
-                messages = compact_messages(
-                    state,
-                    context.caller_channel,
-                    chat_id,
-                    &messages,
-                    state.config.compact_keep_recent,
-                )
-                .await;
-                last_observed_input_tokens = 0;
+        // used more than the automatic-compaction threshold of the model's
+        // window, reduce the conversation before the next call overflows.
+        if context_budget.over(last_observed_input_tokens.max(0) as usize)
+            && pressure_compactions < 2
+        {
+            info!(
+                chat_id,
+                last_observed_input_tokens,
+                threshold = context_budget.threshold,
+                "Context pressure: compacting session mid-turn"
+            );
+            archive_conversation(
+                &state.config.data_dir,
+                context.caller_channel,
+                chat_id,
+                &messages,
+            );
+            let msg_count_before = messages.len();
+            let overhead = (last_observed_input_tokens.max(0) as usize)
+                .saturating_sub(crate::context_window::estimate_messages_tokens(&messages));
+            let outcome = compact_conversation(
+                state,
+                context.caller_channel,
+                chat_id,
+                &messages,
+                CompactOptions {
+                    keep_recent: state.config.compact_keep_recent,
+                    target_tokens: Some(
+                        (context_budget.threshold * 3 / 4).saturating_sub(overhead),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .await;
+            pressure_compactions += 1;
+            if outcome.changed() {
+                if let Some(tx) = event_tx {
+                    let _ = tx.send(outcome.event("context_pressure", msg_count_before));
+                }
+                messages = outcome.messages;
+            } else {
+                // Nothing left to reduce: stop retrying this turn.
+                pressure_compactions = usize::MAX;
+                warn!(chat_id, "Context pressure: nothing left to compact");
             }
+            last_observed_input_tokens = 0;
         }
         // Safe replay boundary: all preceding tool calls have paired results
         // and no tool is currently executing.
@@ -2455,25 +2513,39 @@ async fn process_with_agent_logic(
             };
             match attempt {
                 Ok(response) => break response,
-                Err(e)
-                    if !overflow_retry_done
-                        && crate::llm::is_context_overflow_error(&e)
-                        && messages.len() > state.config.compact_keep_recent =>
-                {
+                Err(e) if !overflow_retry_done && crate::llm::is_context_overflow_error(&e) => {
                     warn!(
                         chat_id,
                         iteration = iteration + 1,
                         "Provider reported context overflow; compacting session and retrying once"
                     );
                     overflow_retry_done = true;
-                    messages = compact_messages(
+                    archive_conversation(
+                        &state.config.data_dir,
+                        context.caller_channel,
+                        chat_id,
+                        &messages,
+                    );
+                    let msg_count_before = messages.len();
+                    let outcome = compact_conversation(
                         state,
                         context.caller_channel,
                         chat_id,
                         &messages,
-                        state.config.compact_keep_recent,
+                        CompactOptions {
+                            keep_recent: state.config.compact_keep_recent,
+                            force_summary: true,
+                            ..Default::default()
+                        },
                     )
                     .await;
+                    if !outcome.changed() {
+                        return Err(e.into());
+                    }
+                    if let Some(tx) = event_tx {
+                        let _ = tx.send(outcome.event("context_overflow", msg_count_before));
+                    }
+                    messages = outcome.messages;
                     last_observed_input_tokens = 0;
                 }
                 Err(e) => return Err(e.into()),
@@ -4322,6 +4394,48 @@ fn safe_compact_split(messages: &[Message], keep_recent: usize) -> usize {
     0
 }
 
+/// How a compaction should run.
+#[derive(Debug, Clone, Default)]
+pub struct CompactOptions {
+    /// Messages kept verbatim when `compact_keep_recent_tokens` is 0.
+    pub keep_recent: usize,
+    /// What the summary should focus on (`/compact <focus>`).
+    pub focus: Option<String>,
+    /// Summarize even when clearing old tool outputs alone would be enough.
+    pub force_summary: bool,
+    /// Stop after pruning when the estimate falls to this many tokens.
+    pub target_tokens: Option<usize>,
+}
+
+/// Result of [`compact_conversation`].
+#[derive(Debug, Clone)]
+pub struct CompactionOutcome {
+    pub messages: Vec<Message>,
+    /// `none`, `pruned`, `summarized` or `fallback`.
+    pub method: &'static str,
+    pub tokens_before: usize,
+    pub tokens_after: usize,
+    pub duration_ms: u64,
+}
+
+impl CompactionOutcome {
+    pub fn changed(&self) -> bool {
+        self.method != "none"
+    }
+
+    fn event(&self, trigger: &str, messages_before: usize) -> AgentEvent {
+        AgentEvent::ContextCompacted {
+            method: self.method.to_string(),
+            trigger: trigger.to_string(),
+            tokens_before: self.tokens_before as u64,
+            tokens_after: self.tokens_after as u64,
+            messages_before,
+            messages_after: self.messages.len(),
+            duration_ms: self.duration_ms,
+        }
+    }
+}
+
 pub(crate) async fn compact_messages(
     state: &AppState,
     caller_channel: &str,
@@ -4329,145 +4443,123 @@ pub(crate) async fn compact_messages(
     messages: &[Message],
     keep_recent: usize,
 ) -> Vec<Message> {
-    let total = messages.len();
-    if total <= keep_recent {
-        return messages.to_vec();
-    }
-
-    let split_at = safe_compact_split(messages, keep_recent);
-    if split_at == 0 {
-        return messages.to_vec();
-    }
-    let old_messages = &messages[..split_at];
-    let recent_messages = &messages[split_at..];
-
-    // Build text representation of old messages
-    let mut summary_input = String::new();
-    for msg in old_messages {
-        let role = &msg.role;
-        let text = message_to_text(msg);
-        summary_input.push_str(&format!("[{role}]: {text}\n\n"));
-    }
-
-    // Truncate if very long
-    if summary_input.len() > 20000 {
-        let cutoff = floor_char_boundary(&summary_input, 20000);
-        summary_input.truncate(cutoff);
-        summary_input.push_str("\n... (truncated)");
-    }
-
-    let summarize_prompt = "Summarize the following conversation concisely, preserving key facts, decisions, tool results, and context needed to continue the conversation. Be brief but thorough.";
-
-    let summarize_messages = vec![Message {
-        role: "user".into(),
-        content: MessageContent::Text(format!("{summarize_prompt}\n\n---\n\n{summary_input}")),
-    }];
-    let (effective_profile, effective_model, _session_settings) =
-        resolve_effective_provider_and_model(state, caller_channel, chat_id).await;
-    // Compaction is an ancillary task, so allow a (typically cheaper) auxiliary
-    // model to handle it. The aux model runs on the same provider profile as the
-    // main model; only the model name is swapped. Falls back to the main model.
-    let compaction_model = state
-        .config
-        .aux_models
-        .compaction_model(&effective_model)
-        .to_string();
-    if compaction_model != effective_model {
-        tracing::debug!(
-            chat_id,
-            main_model = %effective_model,
-            aux_model = %compaction_model,
-            "using auxiliary model for compaction"
-        );
-    }
-    let scoped_provider = if effective_profile.alias != state.config.llm_provider {
-        Some(crate::llm::create_provider(&build_provider_runtime_config(
-            state,
-            &effective_profile,
-            &compaction_model,
-        )))
-    } else {
-        None
-    };
-
-    let timeout_secs = state.config.compaction_timeout_secs;
-    let summary = match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
-        if let Some(provider) = scoped_provider.as_ref() {
-            provider
-                .send_message_with_model(
-                    "You are a helpful summarizer.",
-                    summarize_messages,
-                    None,
-                    Some(&compaction_model),
-                )
-                .await
-        } else {
-            state
-                .llm
-                .send_message_with_model(
-                    "You are a helpful summarizer.",
-                    summarize_messages,
-                    None,
-                    Some(&compaction_model),
-                )
-                .await
-        }
-    })
+    compact_conversation(
+        state,
+        caller_channel,
+        chat_id,
+        messages,
+        CompactOptions {
+            keep_recent,
+            ..Default::default()
+        },
+    )
     .await
-    {
-        Ok(Ok(response)) => {
-            if let Some(usage) = &response.usage {
-                let channel = caller_channel.to_string();
-                let provider = state.config.llm_provider.clone();
-                let model = compaction_model.clone();
-                let input_tokens = i64::from(usage.input_tokens);
-                let output_tokens = i64::from(usage.output_tokens);
-                let _ = call_blocking(state.db.clone(), move |db| {
-                    db.log_llm_usage(
-                        chat_id,
-                        &channel,
-                        &provider,
-                        &model,
-                        input_tokens,
-                        output_tokens,
-                        "compaction",
-                    )
-                    .map(|_| ())
-                })
-                .await;
-            }
-            response
-                .content
-                .iter()
-                .filter_map(|b| match b {
-                    ResponseContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("")
-        }
-        Ok(Err(e)) => {
-            tracing::warn!("Compaction summarization failed: {e}, falling back to truncation");
-            return recent_messages.to_vec();
-        }
-        Err(_) => {
-            tracing::warn!(
-                "Compaction summarization timed out after {timeout_secs}s, falling back to truncation"
-            );
-            return recent_messages.to_vec();
+    .messages
+}
+
+/// Reduce a conversation: clear older tool outputs first, then (if still
+/// needed) replace older history with a structured, incremental summary.
+/// A summarizer failure degrades to a mechanical digest; history is never
+/// silently dropped.
+pub async fn compact_conversation(
+    state: &AppState,
+    caller_channel: &str,
+    chat_id: i64,
+    messages: &[Message],
+    options: CompactOptions,
+) -> CompactionOutcome {
+    use crate::context_window as cw;
+    let started = std::time::Instant::now();
+    let tokens_before = cw::estimate_messages_tokens(messages);
+    let finish = |messages: Vec<Message>, method: &'static str| {
+        let tokens_after = cw::estimate_messages_tokens(&messages);
+        CompactionOutcome {
+            messages,
+            method,
+            tokens_before,
+            tokens_after,
+            duration_ms: started.elapsed().as_millis() as u64,
         }
     };
+
+    let mut working = messages.to_vec();
+    let pruned = cw::prune_tool_results(
+        &mut working,
+        state.config.prune_protect_tokens,
+        state.config.prune_minimum_tokens,
+    );
+    if pruned.results_cleared > 0 && !options.force_summary {
+        if let Some(target) = options.target_tokens {
+            if cw::estimate_messages_tokens(&working) <= target {
+                return finish(working, "pruned");
+            }
+        }
+    }
+    let unchanged_method = if pruned.results_cleared > 0 {
+        "pruned"
+    } else {
+        "none"
+    };
+
+    let split_at = if state.config.compact_keep_recent_tokens > 0 {
+        cw::token_split(&working, state.config.compact_keep_recent_tokens)
+    } else if working.len() > options.keep_recent {
+        safe_compact_split(&working, options.keep_recent)
+    } else {
+        0
+    };
+    if split_at == 0 {
+        return finish(working, unchanged_method);
+    }
+    let old_messages = &working[..split_at];
+    let recent_messages = &working[split_at..];
+
+    let previous = cw::previous_summary(old_messages);
+    let transcript = cw::render_for_summary(old_messages);
+    let mut chunks = cw::chunk_text(&transcript, 60_000);
+    const MAX_CHUNKS: usize = 8;
+    if chunks.len() > MAX_CHUNKS {
+        let skipped = chunks.len() - MAX_CHUNKS;
+        chunks.drain(..skipped);
+        if let Some(first) = chunks.first_mut() {
+            first.insert_str(
+                0,
+                "[Older history omitted from this summary pass; it is archived.]\n",
+            );
+        }
+    }
+
+    let mut summary = previous.clone();
+    let mut method = "summarized";
+    for chunk in &chunks {
+        let request = cw::summary_request(
+            summary.as_deref(),
+            chunk,
+            options.focus.as_deref(),
+            state.config.compact_instructions.as_deref(),
+        );
+        match summarize_once(state, caller_channel, chat_id, request).await {
+            Ok(text) if !text.trim().is_empty() => summary = Some(text),
+            Ok(_) | Err(_) => {
+                summary = Some(cw::fallback_summary(old_messages));
+                method = "fallback";
+                break;
+            }
+        }
+    }
+    let summary = summary.unwrap_or_else(|| cw::fallback_summary(old_messages));
 
     // Build compacted message list: summary context + recent messages
     let mut compacted = vec![
         Message {
             role: "user".into(),
-            content: MessageContent::Text(format!("[Conversation Summary]\n{summary}")),
+            content: MessageContent::Text(cw::summary_message_text(&summary, old_messages)),
         },
         Message {
             role: "assistant".into(),
             content: MessageContent::Text(
-                "Understood, I have the conversation context. How can I help?".into(),
+                "Understood. I have the summary of the earlier work and will continue from it."
+                    .into(),
             ),
         },
     ];
@@ -4495,7 +4587,96 @@ pub(crate) async fn compact_messages(
         }
     }
 
-    compacted
+    finish(compacted, method)
+}
+
+/// One summarizer call on the (optionally auxiliary) compaction model.
+async fn summarize_once(
+    state: &AppState,
+    caller_channel: &str,
+    chat_id: i64,
+    request: String,
+) -> anyhow::Result<String> {
+    let summarize_messages = vec![Message {
+        role: "user".into(),
+        content: MessageContent::Text(request),
+    }];
+    let (effective_profile, effective_model, _session_settings) =
+        resolve_effective_provider_and_model(state, caller_channel, chat_id).await;
+    // Compaction is an ancillary task, so allow a (typically cheaper) auxiliary
+    // model to handle it. The aux model runs on the same provider profile as the
+    // main model; only the model name is swapped. Falls back to the main model.
+    let compaction_model = state
+        .config
+        .aux_models
+        .compaction_model(&effective_model)
+        .to_string();
+    let scoped_provider = if effective_profile.alias != state.config.llm_provider {
+        Some(crate::llm::create_provider(&build_provider_runtime_config(
+            state,
+            &effective_profile,
+            &compaction_model,
+        )))
+    } else {
+        None
+    };
+    let system = crate::context_window::SUMMARY_SYSTEM_PROMPT;
+    let timeout_secs = state.config.compaction_timeout_secs;
+    let response = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+        if let Some(provider) = scoped_provider.as_ref() {
+            provider
+                .send_message_with_model(system, summarize_messages, None, Some(&compaction_model))
+                .await
+        } else {
+            state
+                .llm
+                .send_message_with_model(system, summarize_messages, None, Some(&compaction_model))
+                .await
+        }
+    })
+    .await;
+    let response = match response {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
+            tracing::warn!("Compaction summarization failed: {e}; using a mechanical digest");
+            anyhow::bail!("summarization failed: {e}");
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Compaction summarization timed out after {timeout_secs}s; using a mechanical digest"
+            );
+            anyhow::bail!("summarization timed out");
+        }
+    };
+    if let Some(usage) = &response.usage {
+        let channel = caller_channel.to_string();
+        let provider = state.config.llm_provider.clone();
+        let model = compaction_model.clone();
+        let input_tokens = i64::from(usage.input_tokens);
+        let output_tokens = i64::from(usage.output_tokens);
+        let _ = call_blocking(state.db.clone(), move |db| {
+            db.log_llm_usage(
+                chat_id,
+                &channel,
+                &provider,
+                &model,
+                input_tokens,
+                output_tokens,
+                "compaction",
+            )
+            .map(|_| ())
+        })
+        .await;
+    }
+    Ok(response
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ResponseContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(""))
 }
 
 #[cfg(test)]

@@ -93,8 +93,16 @@ At runtime, at least one channel must be enabled:
 | `control_chat_ids` | `[]` | Chat IDs allowed to perform cross-chat tool actions |
 | `plugins.enabled` | `false` | Enable plugin manifest loading and plugin command/tool/context runtime |
 | `plugins.dir` | `<data_dir>/plugins` | Optional plugin manifest directory override |
-| `max_session_messages` | `40` | Message threshold that triggers context compaction |
+| `max_session_messages` | `40` | Message threshold that triggers context compaction (`0`: compact by tokens only) |
 | `compact_keep_recent` | `20` | Number of recent messages kept verbatim during compaction |
+| `compact_keep_recent_tokens` | `0` | When > 0, keep roughly this many tokens of recent conversation verbatim instead of `compact_keep_recent` messages |
+| `model_context_window` | `200000` | Context window in tokens; when left at the default, known models are looked up by name |
+| `model_context_windows` | `{}` | Per-model context windows, e.g. `{my-local-model: 32768}` |
+| `context_pressure_compact_pct` | `80` | Compact automatically when the conversation reaches this share of the usable window (at most 90) |
+| `auto_compact` | `true` | Automatic compaction on/off (manual `/compact` keeps working) |
+| `prune_protect_tokens` | `40000` | Before summarizing, older tool outputs are cleared; the newest this many tokens of tool output stay |
+| `prune_minimum_tokens` | `20000` | Clear old tool outputs only when that frees at least this many tokens |
+| `compact_instructions` | unset | Extra instructions for compaction summaries |
 | `anthropic_prompt_cache_enabled` | `true` | Add up to 4 `cache_control` breakpoints (system + last 3 messages) to every Anthropic request so multi-turn chats hit the prompt cache. Anthropic-only; OpenAI-compat path is untouched. |
 | `anthropic_prompt_cache_ttl` | `"5m"` | Cache TTL marker for the breakpoints. `"5m"` (default) or `"1h"`; `"1h"` requires extended-cache opt-in on the API key. |
 | `system_prompt_time_detail` | `"date"` | How much live time detail the system prompt carries. `"none"`, `"date"` (default, stable for a whole local day), or `"full"`. Per-turn data (live clock, query-matched memories, ranked skills, mood) is delivered in a transient `<turn_context>` block attached to the latest user message (never persisted) so the system prompt and the earlier history stay cacheable. |

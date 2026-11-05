@@ -1,0 +1,9 @@
+# A task built up over several turns; each turn depends on the earlier ones.
+prompt: Add a `sub` operation to calc.sh (A - B).
+followups:
+  - Add `mul` (A * B) the same way.
+  - Add `div` with integer division; dividing by zero must print an error and exit non-zero.
+  - Document every operation in README.md, one line each.
+check: sh test.sh
+context_window: 16000
+timeout_secs: 900

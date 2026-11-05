@@ -92,6 +92,9 @@ pub struct ProjectConfig {
     /// Shell command patterns (regex) that always ask, even in auto mode.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub always_ask: Vec<String>,
+    /// What compaction summaries of this project's sessions must keep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_instructions: Option<String>,
 }
 
 /// A discovered project.

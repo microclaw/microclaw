@@ -253,6 +253,32 @@ pub struct Config {
     /// overflow-error retry still applies). Default: 85.
     #[serde(default = "default_context_pressure_compact_pct")]
     pub context_pressure_compact_pct: usize,
+    /// Per-model context windows (tokens), overriding `model_context_window`
+    /// and the built-in model table, e.g. `{"my-local-model": 32768}`.
+    #[serde(default)]
+    pub model_context_windows: HashMap<String, usize>,
+    /// Compact automatically when the conversation approaches the model's
+    /// context window (`context_pressure_compact_pct`, at most 90%). Manual
+    /// compaction keeps working when this is off. Default: true.
+    #[serde(default = "default_true")]
+    pub auto_compact: bool,
+    /// Before summarizing, older tool outputs are cleared; the most recent
+    /// this many tokens of tool output are always kept. Default: 40000.
+    #[serde(default = "default_prune_protect_tokens")]
+    pub prune_protect_tokens: usize,
+    /// Clear older tool outputs only when that frees at least this many
+    /// tokens (smaller savings are not worth invalidating the prompt cache).
+    /// Default: 20000.
+    #[serde(default = "default_prune_minimum_tokens")]
+    pub prune_minimum_tokens: usize,
+    /// Keep roughly the last this many tokens of conversation verbatim when
+    /// summarizing. 0 keeps the last `compact_keep_recent` messages instead.
+    /// Default: 0.
+    #[serde(default)]
+    pub compact_keep_recent_tokens: usize,
+    /// Extra instructions for compaction summaries (what to preserve).
+    #[serde(default)]
+    pub compact_instructions: Option<String>,
     /// Opt-in post-edit quality pass: after a turn that ran edit_file /
     /// write_file, one extra review iteration runs before the reply is
     /// finalized.
@@ -1025,6 +1051,12 @@ impl Config {
             allow_governance_file_writes: false,
             model_context_window: default_model_context_window(),
             context_pressure_compact_pct: default_context_pressure_compact_pct(),
+            model_context_windows: HashMap::new(),
+            auto_compact: true,
+            prune_protect_tokens: default_prune_protect_tokens(),
+            prune_minimum_tokens: default_prune_minimum_tokens(),
+            compact_keep_recent_tokens: 0,
+            compact_instructions: None,
             self_recheck: SelfRecheckConfig::default(),
             compact_keep_recent: 20,
             default_tool_timeout_secs: default_tool_timeout_secs(),
