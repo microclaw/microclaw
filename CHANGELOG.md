@@ -6,6 +6,51 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.23.1 - 2026-11-05
+
+Fixes found by running MicroClaw Code against real models (DeepSeek
+`deepseek-flash` and `deepseek-v4-pro`) on the eval cases and by hand.
+
+### Fixed
+
+- **Approvals resumed later were not understood**: answering a paused
+  approval with `1`/`2` or `3` in a later turn (`mccode --session <id> -p 1`,
+  the MCP `run` tool, and the Telegram / Discord / Slack / web option cards)
+  reached the model as a bare digit, which some models did not read as an
+  approval. The reply is now rewritten into an explicit instruction to retry
+  (or not run) the paused call.
+- **Compaction never ran with small context windows**: the verbatim tail kept
+  by a Code compaction (24k tokens) did not shrink with the target, so a
+  session on a small window (a local model, an eval case) could not be
+  compacted at all and ran into a context overflow. The tail is now capped at
+  half of the compaction target.
+- **DeepSeek V4 windows**: `deepseek-v4-pro` and `deepseek-flash`
+  (`deepseek-v4-flash`) are counted as 1M-token models instead of 128k.
+- **Language-server diagnostics**:
+  - pyright never published diagnostics because MicroClaw Code did not send
+    `workspace/didChangeConfiguration`;
+  - a server on `PATH` that cannot start (rustup's `rust-analyzer` proxy
+    without the component) was shown as a passing check; it is now reported
+    once with an install hint and skipped;
+  - a server that sends nothing in time is reported as not checked;
+  - when diagnostics were the only check, a fix round that made them pass
+    still ended `-p` with exit code 1.
+- **`@image` mentions followed by punctuation** (`@shot.png?`, `@shot.png。`)
+  were not attached.
+- **`mccode export`** failed without a terminal ("the interactive interface
+  needs a terminal").
+- **`--worktree` summary** suggested `git merge` while the changes were still
+  uncommitted in the worktree; it now says to commit them first.
+- **Repositories without a `.gitignore`**: `review` lists at most 100
+  untracked files (the rest counted per directory), and the per-turn change
+  fingerprint no longer reads every large untracked file.
+
+### Changed
+
+- `mccode eval`: `min_compactions` in `case.yaml` fails a case that did not
+  compact; the long-session cases use windows above the fixed prompt size so
+  they really compact, and the compaction count no longer races the run.
+
 ## 0.23.0 - 2026-11-05
 
 ### Added

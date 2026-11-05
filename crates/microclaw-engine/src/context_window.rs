@@ -39,6 +39,9 @@ const MODEL_WINDOWS: &[(&str, usize)] = &[
     ("o3", 200_000),
     ("codex", 272_000),
     ("gemini", 1_000_000),
+    // DeepSeek V4 / V4.1 (`deepseek-v4-pro`, `deepseek-flash`): 1M tokens.
+    ("deepseek-v4", 1_000_000),
+    ("deepseek-flash", 1_000_000),
     ("deepseek", 128_000),
     ("qwen3-coder", 256_000),
     ("qwen", 128_000),
@@ -446,6 +449,18 @@ pub fn prune_tool_results(
 /// last `keep_tokens` tokens. The tail always starts on a plain user message
 /// (never between a tool call and its result) and keeps at least the last
 /// such message. Returns 0 when there is nothing older to summarize.
+/// Tokens of recent history kept verbatim by a compaction that must bring
+/// the conversation down to `target_tokens`: the configured tail, but never
+/// more than half the target. Otherwise a small window (a local model, an
+/// eval case) whose whole history fits in the configured tail could never
+/// be compacted and would run into a context overflow instead.
+pub fn keep_recent_budget(configured: usize, target_tokens: Option<usize>) -> usize {
+    match target_tokens {
+        Some(target) => configured.min(target / 2),
+        None => configured,
+    }
+}
+
 pub fn token_split(messages: &[Message], keep_tokens: usize) -> usize {
     let mut kept = 0usize;
     let mut candidate = messages.len();
@@ -893,6 +908,10 @@ mod tests {
         assert_eq!(context_window_for(&config, "gpt-4o-mini"), 128_000);
         assert_eq!(context_window_for(&config, "gemini-2.5-pro"), 1_000_000);
         assert_eq!(context_window_for(&config, "unknown-model"), 200_000);
+        assert_eq!(context_window_for(&config, "deepseek-v4-pro"), 1_000_000);
+        assert_eq!(context_window_for(&config, "deepseek-flash"), 1_000_000);
+        assert_eq!(context_window_for(&config, "deepseek-v4-flash"), 1_000_000);
+        assert_eq!(context_window_for(&config, "deepseek-chat"), 128_000);
         config.model_context_window = 64_000;
         assert_eq!(context_window_for(&config, "gemini-2.5-pro"), 64_000);
         config
@@ -911,6 +930,18 @@ mod tests {
         assert_eq!(budget.threshold, (200_000 - 8_000) * 90 / 100);
         config.auto_compact = false;
         assert!(!ContextBudget::for_model(&config, "claude-x").enabled());
+    }
+
+    #[test]
+    fn keep_recent_budget_fits_inside_the_compaction_target() {
+        // Large windows keep the configured tail.
+        assert_eq!(keep_recent_budget(24_000, Some(150_000)), 24_000);
+        // A small window caps it at half the target, so compaction still
+        // has something to summarize.
+        assert_eq!(keep_recent_budget(24_000, Some(6_000)), 3_000);
+        assert_eq!(keep_recent_budget(24_000, Some(0)), 0);
+        // Manual compaction (no target) keeps the configured tail.
+        assert_eq!(keep_recent_budget(24_000, None), 24_000);
     }
 
     #[test]

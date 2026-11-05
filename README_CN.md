@@ -91,7 +91,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.23.0**。MicroClaw Code 换上了按 token 计算的上下文引擎（先清理旧工具输出、结构化增量摘要并保留你的原话、`/context`），模型可以参与管理上下文（预算提示、可并行的只读 `explore` 助手、`/handoff`），并新增项目记忆、语言服务器诊断、hooks、自定义斜杠命令、图片输入、`--worktree` 并行任务、`review --pr`、`/export` 和会话 token 预算。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.23.0)。
+最新版本为 **v0.23.1**，这是用真实模型测试 MicroClaw Code 后的修复版本（审批回复、小上下文窗口下的压缩、语言服务器诊断、图片引用、导出）。0.23.0 让 MicroClaw Code 换上了按 token 计算的上下文引擎（先清理旧工具输出、结构化增量摘要并保留你的原话、`/context`），模型可以参与管理上下文（预算提示、可并行的只读 `explore` 助手、`/handoff`），并新增项目记忆、语言服务器诊断、hooks、自定义斜杠命令、图片输入、`--worktree` 并行任务、`review --pr`、`/export` 和会话 token 预算。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.23.1)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -140,7 +140,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.23.0", features = ["full"] }
+microclaw-sdk = { version = "0.23.1", features = ["full"] }
 ```
 
 ```rust

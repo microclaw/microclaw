@@ -283,6 +283,15 @@ impl Server {
         server
             .send(&json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}))
             .await?;
+        // Some servers (pyright) do not analyze anything until the client
+        // has sent its settings at least once.
+        server
+            .send(&json!({
+                "jsonrpc": "2.0",
+                "method": "workspace/didChangeConfiguration",
+                "params": {"settings": {}}
+            }))
+            .await?;
         Ok(server)
     }
 
@@ -309,8 +318,13 @@ impl Server {
         Ok(())
     }
 
-    /// Open or update `path` and wait for its diagnostics.
-    async fn diagnose(&mut self, path: &Path, display: &str) -> anyhow::Result<Vec<Diagnostic>> {
+    /// Open or update `path` and wait for its diagnostics. `None`: the
+    /// server published nothing for the file within the wait.
+    async fn diagnose(
+        &mut self,
+        path: &Path,
+        display: &str,
+    ) -> anyhow::Result<Option<Vec<Diagnostic>>> {
         let text = tokio::fs::read_to_string(path).await?;
         let uri = file_uri(path);
         while let Ok(item) = self.incoming.try_recv() {
@@ -379,10 +393,21 @@ impl Server {
             }
         }
         self.warmed_up = true;
-        Ok(latest
-            .map(|params| errors_from_publish(&params, display))
-            .unwrap_or_default())
+        Ok(latest.map(|params| errors_from_publish(&params, display)))
     }
+}
+
+/// What to tell the user when `spec`'s server is on PATH but will not start
+/// (for example rustup's `rust-analyzer` proxy without the component).
+fn start_failure_message(spec: &ServerSpec, error: &anyhow::Error) -> String {
+    let hint = match spec.language {
+        "rust" => "; install it with `rustup component add rust-analyzer`",
+        _ => "",
+    };
+    format!(
+        "{} could not start ({error}); skipping {} language-server diagnostics{hint}",
+        spec.command, spec.language
+    )
 }
 
 /// Language servers of one workspace.
@@ -398,6 +423,9 @@ pub struct LspReport {
     pub errors: Vec<Diagnostic>,
     /// Languages whose server was used.
     pub languages: Vec<&'static str>,
+    /// Servers (commands) that published nothing for a file within the
+    /// wait, so those files were not actually checked.
+    pub silent: Vec<&'static str>,
 }
 
 impl LspPool {
@@ -418,8 +446,52 @@ impl LspPool {
         })
     }
 
+    /// Start the servers `files` need. Returns one message per server that
+    /// could not start; that language is then skipped for the session, so
+    /// each failure is reported once.
+    pub async fn start_servers(&mut self, files: &[String]) -> Vec<String> {
+        let mut failures = Vec::new();
+        for file in files {
+            let path = self.root.join(file);
+            if !path.is_file() {
+                continue;
+            }
+            let Some(spec) = spec_for(&path) else {
+                continue;
+            };
+            if self.unavailable.contains(&spec.language) || self.servers.contains_key(spec.language)
+            {
+                continue;
+            }
+            if !on_path(spec.command) {
+                self.unavailable.push(spec.language);
+                continue;
+            }
+            match Server::start(spec, &self.root).await {
+                Ok(server) => {
+                    self.servers.insert(spec.language, server);
+                }
+                Err(error) => {
+                    self.unavailable.push(spec.language);
+                    failures.push(start_failure_message(spec, &error));
+                }
+            }
+        }
+        failures
+    }
+
+    /// Whether a running server covers at least one of `files`.
+    pub fn ready_for(&self, files: &[String]) -> bool {
+        files.iter().any(|f| {
+            self.root.join(f).is_file()
+                && spec_for(Path::new(f))
+                    .is_some_and(|spec| self.servers.contains_key(spec.language))
+        })
+    }
+
     /// Diagnostics for `files` (paths relative to the root), errors only.
     pub async fn diagnose(&mut self, files: &[String]) -> LspReport {
+        self.start_servers(files).await;
         let mut report = LspReport::default();
         for file in files {
             let path = self.root.join(file);
@@ -429,33 +501,20 @@ impl LspPool {
             let Some(spec) = spec_for(&path) else {
                 continue;
             };
-            if self.unavailable.contains(&spec.language) {
-                continue;
-            }
-            if !self.servers.contains_key(spec.language) {
-                if !on_path(spec.command) {
-                    self.unavailable.push(spec.language);
-                    continue;
-                }
-                match Server::start(spec, &self.root).await {
-                    Ok(server) => {
-                        self.servers.insert(spec.language, server);
-                    }
-                    Err(_) => {
-                        self.unavailable.push(spec.language);
-                        continue;
-                    }
-                }
-            }
             let Some(server) = self.servers.get_mut(spec.language) else {
                 continue;
             };
             match server.diagnose(&path, file).await {
-                Ok(errors) => {
+                Ok(Some(errors)) => {
                     if !report.languages.contains(&spec.language) {
                         report.languages.push(spec.language);
                     }
                     report.errors.extend(errors);
+                }
+                Ok(None) => {
+                    if !report.silent.contains(&spec.command) {
+                        report.silent.push(spec.command);
+                    }
                 }
                 Err(_) => {
                     self.servers.remove(spec.language);
@@ -519,6 +578,40 @@ mod tests {
     /// End to end against a fake server written in shell: it answers
     /// initialize and publishes one error for any opened document.
     #[cfg(unix)]
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_server_that_exits_at_once_is_a_start_failure_with_a_hint() {
+        // Like rustup's rust-analyzer proxy when the component is missing.
+        let spec: &'static ServerSpec = Box::leak(Box::new(ServerSpec {
+            language: "rust",
+            language_id: "rust",
+            command: "false",
+            args: &[],
+            extensions: &["rs"],
+            first_wait: Duration::from_secs(10),
+        }));
+        let dir = tempfile::tempdir().unwrap();
+        let error = match Server::start(spec, dir.path()).await {
+            Ok(_) => panic!("a server that exits must not start"),
+            Err(error) => error,
+        };
+        let message = start_failure_message(spec, &error);
+        assert!(message.starts_with("false could not start"), "{message}");
+        assert!(
+            message.contains("rustup component add rust-analyzer"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_without_servers_is_not_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+        let mut pool = LspPool::new(dir.path());
+        let files = vec!["a.txt".to_string(), "gone.rs".to_string()];
+        assert!(pool.start_servers(&files).await.is_empty());
+        assert!(!pool.ready_for(&files));
+    }
     #[tokio::test]
     async fn server_round_trip_with_a_fake_language_server() {
         let dir = tempfile::tempdir().unwrap();
@@ -569,11 +662,11 @@ while True:
         let file = dir.path().join("a.fk");
         std::fs::write(&file, "x").unwrap();
         let mut server = Server::start(spec, dir.path()).await.unwrap();
-        let errors = server.diagnose(&file, "a.fk").await.unwrap();
+        let errors = server.diagnose(&file, "a.fk").await.unwrap().unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].message, "boom");
         std::fs::write(&file, "y").unwrap();
-        let errors = server.diagnose(&file, "a.fk").await.unwrap();
+        let errors = server.diagnose(&file, "a.fk").await.unwrap().unwrap();
         assert_eq!(errors.len(), 1);
     }
 }

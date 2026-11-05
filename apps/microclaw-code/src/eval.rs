@@ -43,6 +43,10 @@ pub struct CaseSpec {
     /// exercise automatic compaction without huge inputs.
     #[serde(default)]
     pub context_window: Option<usize>,
+    /// The case fails unless at least this many compactions happened (for
+    /// cases that test recall across a compaction).
+    #[serde(default)]
+    pub min_compactions: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -224,7 +228,7 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
         let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
         let compactions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = compactions.clone();
-        tokio::spawn(async move {
+        let counting = tokio::spawn(async move {
             while let Some(update) = updates_rx.recv().await {
                 if let microclaw_code_core::driver::Update::Runtime(envelope) = update
                     && matches!(
@@ -257,7 +261,9 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
             report.changed_files = changed;
         }
         drop(updates_tx);
-        tokio::task::yield_now().await;
+        // Wait until every queued update has been counted (bounded, in case
+        // a background task still holds a sender).
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), counting).await;
         result.compactions = compactions.load(std::sync::atomic::Ordering::Relaxed);
         result.status = report.status.clone();
         result.changed_files = report.changed_files.clone();
@@ -275,6 +281,13 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
         let outcome = verify::run_check(&session.project.root, &check).await;
         result.passed = outcome.success;
         result.check_tail = verify::tail(outcome.output.trim_end(), 400).to_string();
+        if result.compactions < spec.min_compactions {
+            result.passed = false;
+            result.check_tail = format!(
+                "expected at least {} compaction(s), got {}; {}",
+                spec.min_compactions, result.compactions, result.check_tail
+            );
+        }
         if report.approval_pending.is_some() {
             result.status = "approval_pending".into();
         }

@@ -504,7 +504,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         cli.command,
         Some(Command::Acp | Command::McpServer | Command::Eval { .. })
     );
-    let interactive = print_prompt.is_none();
+    // `export` only writes a file; it never opens the interface.
+    let export = matches!(cli.command, Some(Command::Export { .. }));
+    let interactive = print_prompt.is_none() && !export;
     if interactive && !acp && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
         anyhow::bail!(
             "the interactive interface needs a terminal; pass a task with -p \"...\" (or -p - to read it from stdin)"
@@ -540,7 +542,6 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     }
 
     let mut index = SessionIndex::load(SessionIndex::default_path());
-    let export = matches!(cli.command, Some(Command::Export { .. }));
     let session_id = if let Some(id) = &cli.session {
         id.clone()
     } else if cli.continue_last || export {

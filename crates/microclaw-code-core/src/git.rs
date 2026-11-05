@@ -17,6 +17,13 @@ fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     output.status.success().then_some(output.stdout)
 }
 
+/// Untracked files above this size are fingerprinted by metadata.
+const FINGERPRINT_READ_LIMIT: u64 = 1024 * 1024;
+
+/// Untracked paths listed by name in a review; the rest are counted per
+/// top-level directory.
+const REVIEW_UNTRACKED_LISTED: usize = 100;
+
 /// Fingerprint of the working tree relative to `HEAD` (tracked changes and
 /// untracked files). `None` outside a git repository.
 pub fn worktree_fingerprint(root: &Path) -> Option<String> {
@@ -31,10 +38,25 @@ pub fn worktree_fingerprint(root: &Path) -> Option<String> {
     hasher.update(&diff);
     // Untracked files are listed by name only; hash their contents too so a
     // second edit to a new file is still noticed.
+    // Large files (build output in a repository without a .gitignore) are
+    // fingerprinted by size and modification time instead of being read on
+    // every turn.
     for entry in status.split(|b| *b == 0) {
-        if let Some(path) = entry.strip_prefix(b"?? ")
-            && let Ok(bytes) = std::fs::read(root.join(String::from_utf8_lossy(path).as_ref()))
-        {
+        let Some(path) = entry.strip_prefix(b"?? ") else {
+            continue;
+        };
+        let full = root.join(String::from_utf8_lossy(path).as_ref());
+        let Ok(meta) = std::fs::metadata(&full) else {
+            continue;
+        };
+        if meta.len() > FINGERPRINT_READ_LIMIT {
+            hasher.update(meta.len().to_le_bytes());
+            if let Ok(modified) = meta.modified()
+                && let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH)
+            {
+                hasher.update(since.as_nanos().to_le_bytes());
+            }
+        } else if let Ok(bytes) = std::fs::read(&full) {
             hasher.update(&bytes);
         }
     }
@@ -65,8 +87,25 @@ pub fn review_diff(root: &Path, limit: usize) -> Option<String> {
     }
     if !untracked.trim().is_empty() {
         out.push_str("\nUntracked files (read them to review their content):\n");
-        for path in untracked.lines() {
+        let paths: Vec<&str> = untracked.lines().collect();
+        for path in paths.iter().take(REVIEW_UNTRACKED_LISTED) {
             out.push_str(&format!("  {path}\n"));
+        }
+        if paths.len() > REVIEW_UNTRACKED_LISTED {
+            let mut by_dir: std::collections::BTreeMap<&str, usize> = Default::default();
+            for path in &paths[REVIEW_UNTRACKED_LISTED..] {
+                let top = path.split('/').next().unwrap_or(path);
+                *by_dir.entry(top).or_default() += 1;
+            }
+            let summary = by_dir
+                .iter()
+                .map(|(dir, count)| format!("{dir} ({count})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "  … and {} more: {summary}\n",
+                paths.len() - REVIEW_UNTRACKED_LISTED
+            ));
         }
     }
     if out.len() > limit {
@@ -135,6 +174,29 @@ mod tests {
         std::fs::write(dir.path().join("new.txt"), "y").unwrap();
         assert_ne!(worktree_fingerprint(dir.path()).unwrap(), untracked);
         assert!(branch(dir.path()).is_some());
+    }
+
+    #[test]
+    fn review_diff_summarizes_long_untracked_lists() {
+        let dir = init_repo();
+        std::fs::create_dir_all(dir.path().join("target/debug")).unwrap();
+        for i in 0..(REVIEW_UNTRACKED_LISTED + 30) {
+            std::fs::write(dir.path().join(format!("target/debug/f{i:03}")), "x").unwrap();
+        }
+        let diff = review_diff(dir.path(), 1_000_000).unwrap();
+        let listed = diff.lines().filter(|l| l.starts_with("  target/")).count();
+        assert_eq!(listed, REVIEW_UNTRACKED_LISTED, "{diff}");
+        assert!(diff.contains("… and 30 more: target (30)"), "{diff}");
+    }
+
+    #[test]
+    fn fingerprint_notices_changes_to_large_untracked_files() {
+        let dir = init_repo();
+        let big = dir.path().join("big.bin");
+        std::fs::write(&big, vec![0u8; (FINGERPRINT_READ_LIMIT + 1) as usize]).unwrap();
+        let first = worktree_fingerprint(dir.path()).unwrap();
+        std::fs::write(&big, vec![1u8; (FINGERPRINT_READ_LIMIT + 2) as usize]).unwrap();
+        assert_ne!(worktree_fingerprint(dir.path()).unwrap(), first);
     }
 
     #[test]

@@ -9,5 +9,6 @@ followups:
   - Create tools/hello.sh that prints "hello" followed by its first argument.
   - Create tools/count.sh that prints how many arguments it got.
 check: sh test.sh
-context_window: 12000
+context_window: 26000
 timeout_secs: 900
+min_compactions: 1
