@@ -81,6 +81,16 @@ pub fn elapsed(duration: std::time::Duration) -> String {
 }
 
 /// Compact token count: 950, 12.3k, 4.1M.
+/// Human wording of a compaction method.
+pub fn compaction_label(method: &str) -> &'static str {
+    match method {
+        "pruned" => "cleared old tool output",
+        "summarized" => "summarized older history",
+        "fallback" => "summary failed; kept a digest",
+        _ => "no change",
+    }
+}
+
 pub fn tokens(n: i64) -> String {
     match n {
         n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1_000_000.0),

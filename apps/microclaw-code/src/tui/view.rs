@@ -162,7 +162,20 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     } else if let Some(hint) = &app.hint {
         Line::from(Span::styled(format!(" {hint}"), dim))
     } else {
-        Line::from(vec![
+        let mut spans = Vec::new();
+        if let Some(pct) = app.context_pct {
+            let color = match pct {
+                0..=69 => Color::DarkGray,
+                70..=84 => Color::Yellow,
+                _ => Color::Red,
+            };
+            spans.push(Span::styled(
+                format!(" ctx {pct}%"),
+                Style::default().fg(color),
+            ));
+            spans.push(Span::styled("  ·", dim));
+        }
+        spans.extend([
             Span::styled(" Shift+Tab", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(" mode  ·  ", dim),
             Span::styled("/help", Style::default().add_modifier(Modifier::BOLD)),
@@ -171,7 +184,8 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(" + Tab to mention a file  ·  ", dim),
             Span::styled("PgUp/PgDn", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(" scroll  ·  Ctrl+C twice to quit", dim),
-        ])
+        ]);
+        Line::from(spans)
     };
     frame.render_widget(Paragraph::new(line), area);
 }

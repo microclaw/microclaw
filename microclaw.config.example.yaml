@@ -162,7 +162,7 @@ timezone: "UTC"
 # voice_transcription_command: "whisper-mlx --file {file}"  # Command template for local transcription
                                                                # Use {file} placeholder for the audio file path
 
-# Session management
+# Session management (max_session_messages: 0 compacts by tokens only)
 max_session_messages: 40
 compact_keep_recent: 20
 
@@ -181,11 +181,24 @@ compact_keep_recent: 20
 # sandbox or OS-level permissions as well.
 # allow_governance_file_writes: false
 
-# Context-pressure compaction: compact the session mid-turn once a request
-# consumes this share of the model's context window (0 disables; the
-# compact-and-retry on provider "context length exceeded" errors always applies).
+# Context management. Before every model call the conversation is measured
+# against the model's context window (known models are looked up by name;
+# model_context_window / model_context_windows override it). Above
+# context_pressure_compact_pct (at most 90) of the usable window, older tool
+# outputs are cleared first (the newest prune_protect_tokens stay; only when
+# at least prune_minimum_tokens are freed), then older history is replaced by
+# a structured summary that keeps the user's own words and the files changed.
+# If the summarizer fails, a mechanical digest is kept instead; nothing is
+# dropped silently. "context length exceeded" errors compact and retry once.
 # model_context_window: 200000
-# context_pressure_compact_pct: 85
+# model_context_windows:
+#   my-local-model: 32768
+# context_pressure_compact_pct: 80
+# auto_compact: true
+# prune_protect_tokens: 40000
+# prune_minimum_tokens: 20000
+# compact_keep_recent_tokens: 0   # >0 keeps ~this many tokens verbatim instead of compact_keep_recent messages
+# compact_instructions: "Keep API names and open TODOs."
 
 # Post-edit self-recheck (off by default): after a turn that ran
 # edit_file/write_file, one extra review pass runs before the reply is final.

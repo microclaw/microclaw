@@ -35,6 +35,14 @@ pub struct CaseSpec {
     pub mode: Option<String>,
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// Further turns sent after `prompt`, in the same session (long-session
+    /// and cross-compaction cases).
+    #[serde(default)]
+    pub followups: Vec<String>,
+    /// Pretend the model's context window is this many tokens, so a case can
+    /// exercise automatic compaction without huge inputs.
+    #[serde(default)]
+    pub context_window: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,6 +55,8 @@ pub struct CaseResult {
     pub requests: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    /// Automatic or forced compactions during the case.
+    pub compactions: usize,
     pub check_tail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -143,6 +153,7 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
         requests: 0,
         input_tokens: 0,
         output_tokens: 0,
+        compactions: 0,
         check_tail: String::new(),
         error: None,
     };
@@ -191,6 +202,8 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
             .data_dir(microclaw_code_core::home::data_dir())
             .max_concurrent_runs(1)
             .shell_sandbox(options.sandbox.clone())
+            .compact_instructions(project.config.compact_instructions.clone())
+            .context_window(spec.context_window)
             .build()
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -206,11 +219,43 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
         };
         let mut session = CodeSession::new(engine, project, session_id, settings);
         let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move { while updates_rx.recv().await.is_some() {} });
+        let compactions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = compactions.clone();
+        tokio::spawn(async move {
+            while let Some(update) = updates_rx.recv().await {
+                if let microclaw_code_core::driver::Update::Runtime(envelope) = update
+                    && matches!(
+                        envelope.event,
+                        microclaw_sdk::RuntimeEvent::ContextCompacted { .. }
+                    )
+                {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        });
         let (_controls_tx, mut controls_rx) = mpsc::unbounded_channel();
-        let report = session
+        let mut report = session
             .turn(&spec.prompt, &updates_tx, &mut controls_rx)
             .await?;
+        for followup in &spec.followups {
+            if report.approval_pending.is_some() || report.failed {
+                break;
+            }
+            let next = session
+                .turn(followup, &updates_tx, &mut controls_rx)
+                .await?;
+            let mut changed = report.changed_files.clone();
+            for file in &next.changed_files {
+                if !changed.contains(file) {
+                    changed.push(file.clone());
+                }
+            }
+            report = next;
+            report.changed_files = changed;
+        }
+        drop(updates_tx);
+        tokio::task::yield_now().await;
+        result.compactions = compactions.load(std::sync::atomic::Ordering::Relaxed);
         result.status = report.status.clone();
         result.changed_files = report.changed_files.clone();
         if let Ok(usage) = session.usage().await {
@@ -272,12 +317,13 @@ pub async fn run(options: &EvalOptions, dir: &Path, json: bool) -> anyhow::Resul
             println!("{}", serde_json::to_string(&result)?);
         } else {
             println!(
-                "{} {:<32} {:>6.1}s  {:>3} req  {:>7} tok  {}",
+                "{} {:<32} {:>6.1}s  {:>3} req  {:>7} tok  {:>2} cmp  {}",
                 if result.passed { "PASS" } else { "FAIL" },
                 result.case,
                 result.seconds,
                 result.requests,
                 result.input_tokens + result.output_tokens,
+                result.compactions,
                 result
                     .error
                     .clone()

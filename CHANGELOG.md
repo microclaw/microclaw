@@ -6,6 +6,54 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Added
+
+- **Token-aware context management** (all products). Each request is
+  measured against the model's context window (known models are recognized by
+  name; `model_context_window` / `model_context_windows` override it).
+  Compaction starts at `context_pressure_compact_pct` (now 80, at most 90) of
+  the usable window and runs in stages:
+  - first, older tool outputs are cleared without a model call
+    (`prune_protect_tokens`, `prune_minimum_tokens`), and a file read again
+    later replaces the earlier read;
+  - then older history becomes a structured, incremental summary (goal and
+    constraints, decisions, files and state, errors and fixes, plan,
+    verification, next step) that keeps the user's own earlier messages
+    verbatim and lists the files changed;
+  - long histories are summarized in chunks instead of being cut at 20,000
+    characters.
+- `compact_instructions`, `auto_compact` and `compact_keep_recent_tokens`
+  settings. `max_session_messages: 0` compacts by tokens only.
+- `RuntimeEvent::ContextCompacted` (runtime event schema 7). The Web stream
+  publishes it as `context_compacted`.
+- SDK: `MicroClaw::context_usage`, `compact_session_with(…, focus)`,
+  `ContextUsage`, `SessionCompaction`, and the builder options
+  `compact_instructions` and `context_window`.
+- MicroClaw Code:
+  - `/context` (window, compaction point and token breakdown);
+  - `/compact <focus>`;
+  - a `ctx N%` indicator in the status bar;
+  - compaction notices in the TUI and in `-p` output;
+  - `compact_instructions` in `.microclaw/project.yaml`.
+- `mccode eval`:
+  - multi-turn cases (`followups`) and a `context_window` override;
+  - a `compactions` count per case;
+  - two long-session cases (`long-session-recall`, `long-session-steps`).
+
+### Changed
+
+- When the summarizer fails, compaction keeps a mechanical digest (earlier
+  summary, user requests, files changed, last commands) instead of dropping
+  the older history.
+- A turn stops compacting after two pressure compactions that cannot reduce
+  the conversation further.
+- The conversation is archived before mid-turn and overflow compactions too.
+- SDK workspaces (MicroClaw Code):
+  - compaction is by tokens, keeping about 24k tokens verbatim;
+  - tool results are inlined up to 60,000 characters (previously 4,000), so
+    whole source files reach the model and old outputs are pruned later
+    instead of being truncated up front.
+
 ## 0.20.0 - 2026-11-04
 
 ### Added

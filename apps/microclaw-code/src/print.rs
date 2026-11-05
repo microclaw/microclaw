@@ -168,6 +168,23 @@ impl Printer {
                     }
                 }
                 RuntimeEvent::ApprovalRequired { .. } => self.approval_in_run = true,
+                RuntimeEvent::ContextCompacted {
+                    method,
+                    tokens_before,
+                    tokens_after,
+                    ..
+                } => {
+                    let _ = writeln!(
+                        err,
+                        "{}",
+                        style.dim(&format!(
+                            "context compacted ({}): ~{} → ~{} tokens",
+                            crate::format::compaction_label(method),
+                            crate::format::tokens(*tokens_before as i64),
+                            crate::format::tokens(*tokens_after as i64)
+                        ))
+                    );
+                }
                 RuntimeEvent::PlanUpdated { steps } => {
                     let _ = writeln!(err, "{}", style.bold("Plan"));
                     for step in steps {
@@ -270,7 +287,7 @@ impl Printer {
                     let _ = writeln!(err, "    {}", style.dim(line));
                 }
             }
-            Update::SteerAccepted(_) | Update::SteerRejected(_) => {}
+            Update::SteerAccepted(_) | Update::SteerRejected(_) | Update::ContextPercent(_) => {}
             Update::Notice(text) => {
                 let _ = writeln!(err, "{}", style.dim(text));
             }

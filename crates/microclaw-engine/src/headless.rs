@@ -104,10 +104,39 @@ pub struct HeadlessUsage {
 }
 
 /// Result of compacting a session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadlessCompaction {
     pub messages_before: usize,
     pub messages_after: usize,
+    pub tokens_before: usize,
+    pub tokens_after: usize,
+    /// `none`, `pruned`, `summarized` or `fallback`.
+    pub method: String,
+}
+
+/// How full a session's context is (see [`HeadlessRuntime::context_usage`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadlessContextUsage {
+    pub model: String,
+    pub window: usize,
+    pub reserved_output: usize,
+    /// Tokens at which automatic compaction starts (0: disabled).
+    pub auto_compact_threshold: usize,
+    /// Input tokens of the session's last request, as reported by the
+    /// provider (system prompt, tools and messages).
+    pub last_request_tokens: Option<usize>,
+    /// Estimated tokens of the stored conversation, by kind.
+    pub conversation: crate::context_window::ContextBreakdown,
+}
+
+impl HeadlessContextUsage {
+    /// Tokens the next request will carry: the last measured request, or
+    /// the conversation estimate when there is none yet.
+    pub fn used(&self) -> usize {
+        self.last_request_tokens
+            .unwrap_or_else(|| self.conversation.total())
+            .max(self.conversation.total())
+    }
 }
 
 /// UI-neutral projection of one durable Subagent run.
@@ -595,14 +624,15 @@ impl HeadlessRuntime {
         self.session_model(channel, session).await
     }
 
-    /// Summarize older messages of a session now, keeping the last
-    /// `keep_recent` verbatim (the same compaction a long session gets
-    /// automatically).
+    /// Summarize older messages of a session now (the same compaction a long
+    /// session gets automatically, but always summarizing). `focus` steers
+    /// what the summary keeps.
     pub async fn compact_session(
         &self,
         channel: &str,
         session: &str,
         keep_recent: usize,
+        focus: Option<&str>,
     ) -> anyhow::Result<HeadlessCompaction> {
         let Some(chat_id) = self.existing_session_chat_id(session).await? else {
             anyhow::bail!("session `{session}` has no conversation yet");
@@ -613,24 +643,77 @@ impl HeadlessRuntime {
         };
         let messages: Vec<microclaw_core::llm_types::Message> = serde_json::from_str(&json)?;
         let before = messages.len();
-        let compacted = crate::agent_engine::compact_messages(
+        crate::agent_engine::archive_conversation(
+            &self.state.config.data_dir,
+            channel,
+            chat_id,
+            &messages,
+        );
+        let outcome = crate::agent_engine::compact_conversation(
             &self.state,
             channel,
             chat_id,
             &messages,
-            keep_recent.max(2),
+            crate::agent_engine::CompactOptions {
+                keep_recent: keep_recent.max(2),
+                focus: focus.map(str::to_string),
+                force_summary: true,
+                target_tokens: None,
+            },
         )
         .await;
-        let after = compacted.len();
-        if after < before {
-            let json = serde_json::to_string(&compacted)?;
+        if outcome.changed() {
+            let json = serde_json::to_string(&outcome.messages)?;
             let db = self.state.db.clone();
             call_blocking(db, move |db| db.save_session(chat_id, &json)).await?;
         }
         Ok(HeadlessCompaction {
             messages_before: before,
-            messages_after: after,
+            messages_after: outcome.messages.len(),
+            tokens_before: outcome.tokens_before,
+            tokens_after: outcome.tokens_after,
+            method: outcome.method.to_string(),
         })
+    }
+
+    /// How full a session's context is: the model's window and compaction
+    /// threshold, the last request's size and where the conversation's
+    /// tokens go.
+    pub async fn context_usage(
+        &self,
+        channel: &str,
+        session: &str,
+    ) -> anyhow::Result<HeadlessContextUsage> {
+        let model = self.session_model(channel, session).await?;
+        let budget = crate::context_window::ContextBudget::for_model(&self.state.config, &model);
+        let mut usage = HeadlessContextUsage {
+            model: model.clone(),
+            window: budget.window,
+            reserved_output: budget.reserved_output,
+            auto_compact_threshold: budget.threshold,
+            last_request_tokens: None,
+            conversation: Default::default(),
+        };
+        let Some(chat_id) = self.existing_session_chat_id(session).await? else {
+            return Ok(usage);
+        };
+        let db = self.state.db.clone();
+        let (stored, latest) = call_blocking(db, move |db| {
+            Ok::<_, microclaw_core::error::MicroClawError>((
+                db.load_session(chat_id)?,
+                db.latest_agent_request(chat_id)?,
+            ))
+        })
+        .await?;
+        if let Some((json, _)) = stored {
+            let messages: Vec<microclaw_core::llm_types::Message> =
+                serde_json::from_str(&json).unwrap_or_default();
+            usage.conversation = crate::context_window::breakdown(&messages);
+        }
+        usage.last_request_tokens = latest
+            .filter(|(_, last_model)| last_model == &model)
+            .map(|(tokens, _)| tokens.max(0) as usize);
+        Ok(usage)
     }
 
     /// Copy a session's conversation (agent context and stored messages)
@@ -1663,14 +1746,187 @@ mod tests {
         );
 
         let short = runtime
-            .compact_session(CODE_CHANNEL, "orig", 8)
+            .compact_session(CODE_CHANNEL, "orig", 8, None)
             .await
             .unwrap();
         assert_eq!(short.messages_before, short.messages_after);
         assert!(runtime
-            .compact_session(CODE_CHANNEL, "never-ran", 8)
+            .compact_session(CODE_CHANNEL, "never-ran", 8, None)
             .await
             .is_err());
+    }
+
+    /// Answers agent turns with a fixed reply and summarization requests
+    /// with a structured summary (or an error when `fail_summaries`).
+    struct SummarizingLlm {
+        summary_requests: Arc<std::sync::Mutex<Vec<String>>>,
+        fail_summaries: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for SummarizingLlm {
+        async fn send_message(
+            &self,
+            system: &str,
+            messages: Vec<Message>,
+            _tools: Option<Vec<ToolDefinition>>,
+        ) -> Result<MessagesResponse, MicroClawError> {
+            let text = if system == crate::context_window::SUMMARY_SYSTEM_PROMPT {
+                let request = messages
+                    .iter()
+                    .map(crate::agent_engine::message_to_text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.summary_requests.lock().unwrap().push(request);
+                if self.fail_summaries {
+                    return Err(MicroClawError::LlmApi("summarizer down".into()));
+                }
+                "## Goal and constraints\nSUMMARY-OK".to_string()
+            } else {
+                "done".to_string()
+            };
+            Ok(MessagesResponse {
+                content: vec![ResponseContentBlock::Text { text }],
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            })
+        }
+    }
+
+    async fn run_turns(runtime: &HeadlessRuntime, session: &str, prompts: &[String]) {
+        for (index, prompt) in prompts.iter().enumerate() {
+            runtime
+                .run(
+                    HeadlessRunRequest::code(
+                        prompt.clone(),
+                        Some(session.into()),
+                        format!("{session}-{index}"),
+                    ),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    fn stored_session(runtime: &HeadlessRuntime, session: &str) -> Vec<Message> {
+        let chat_id = runtime
+            .state
+            .db
+            .find_chat_id(HEADLESS_CHANNEL, &format!("headless:{session}"))
+            .ok()
+            .flatten()
+            .expect("session chat");
+        let (json, _) = runtime.state.db.load_session(chat_id).unwrap().unwrap();
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_summarizes_with_focus_and_keeps_user_words() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runtime = runtime_with_llm(
+            directory.path(),
+            Box::new(SummarizingLlm {
+                summary_requests: requests.clone(),
+                fail_summaries: false,
+            }),
+        );
+        let mut prompts = vec!["Rule: always use pnpm, never npm.".to_string()];
+        prompts.extend((0..5).map(|i| format!("step {i}")));
+        run_turns(&runtime, "long", &prompts).await;
+
+        let usage = runtime.context_usage(CODE_CHANNEL, "long").await.unwrap();
+        assert_eq!(usage.conversation.messages, 12);
+        assert!(usage.window > 0 && usage.auto_compact_threshold > 0);
+
+        let compaction = runtime
+            .compact_session(CODE_CHANNEL, "long", 2, Some("the package manager"))
+            .await
+            .unwrap();
+        assert_eq!(compaction.method, "summarized");
+        assert!(compaction.messages_after < compaction.messages_before);
+        let request = requests.lock().unwrap().last().cloned().unwrap();
+        assert!(request.contains("the package manager"), "{request}");
+        assert!(request.contains("## Goal and constraints"));
+
+        let stored = stored_session(&runtime, "long");
+        let first = crate::agent_engine::message_to_text(&stored[0]);
+        assert!(first.starts_with(crate::context_window::SUMMARY_MARKER));
+        assert!(first.contains("SUMMARY-OK"));
+        assert!(first.contains("always use pnpm, never npm."), "{first}");
+
+        // A second compaction builds on the first summary.
+        run_turns(
+            &runtime,
+            "long",
+            &["step 9".to_string(), "step 10".to_string()],
+        )
+        .await;
+        runtime
+            .compact_session(CODE_CHANNEL, "long", 2, None)
+            .await
+            .unwrap();
+        let request = requests.lock().unwrap().last().cloned().unwrap();
+        assert!(request.contains("The summary so far"), "{request}");
+        assert!(request.contains("SUMMARY-OK"));
+    }
+
+    #[tokio::test]
+    async fn failed_summaries_fall_back_to_a_digest_instead_of_dropping_history() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime_with_llm(
+            directory.path(),
+            Box::new(SummarizingLlm {
+                summary_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+                fail_summaries: true,
+            }),
+        );
+        let mut prompts = vec!["Never touch the public API.".to_string()];
+        prompts.extend((0..4).map(|i| format!("step {i}")));
+        run_turns(&runtime, "fb", &prompts).await;
+        let compaction = runtime
+            .compact_session(CODE_CHANNEL, "fb", 2, None)
+            .await
+            .unwrap();
+        assert_eq!(compaction.method, "fallback");
+        let first = crate::agent_engine::message_to_text(&stored_session(&runtime, "fb")[0]);
+        assert!(first.contains("Never touch the public API."), "{first}");
+        assert!(first.contains("mechanical digest"), "{first}");
+    }
+
+    #[tokio::test]
+    async fn sessions_compact_automatically_by_tokens() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let mut runtime = runtime_with_llm(
+            directory.path(),
+            Box::new(SummarizingLlm {
+                summary_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+                fail_summaries: false,
+            }),
+        );
+        {
+            let config = &mut Arc::get_mut(&mut runtime.state).unwrap().config;
+            config.max_session_messages = 0;
+            config.model_context_window = 6_000;
+            config.max_tokens = 500;
+            config.compact_keep_recent_tokens = 300;
+        }
+        // Each prompt is ~500 tokens; the window fills after a few turns.
+        let prompts: Vec<String> = (0..8)
+            .map(|i| format!("turn {i}: {}", "lorem ipsum dolor ".repeat(110)))
+            .collect();
+        run_turns(&runtime, "auto", &prompts).await;
+        let stored = stored_session(&runtime, "auto");
+        assert!(
+            crate::context_window::is_summary_message(&stored[0]),
+            "expected an automatic summary, got {} messages",
+            stored.len()
+        );
+        assert!(stored.len() < 16);
     }
 
     #[tokio::test]

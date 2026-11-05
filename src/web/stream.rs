@@ -286,6 +286,33 @@ async fn start_stream_run_internal(
                                 )
                                 .await;
                         }
+                        AgentEvent::ContextCompacted {
+                            method,
+                            trigger,
+                            tokens_before,
+                            tokens_after,
+                            messages_before,
+                            messages_after,
+                            duration_ms,
+                        } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "context_compacted",
+                                    json!({
+                                        "method": method,
+                                        "trigger": trigger,
+                                        "tokens_before": tokens_before,
+                                        "tokens_after": tokens_after,
+                                        "messages_before": messages_before,
+                                        "messages_after": messages_after,
+                                        "duration_ms": duration_ms,
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                         AgentEvent::PlanUpdated { steps } => {
                             run_hub
                                 .publish(

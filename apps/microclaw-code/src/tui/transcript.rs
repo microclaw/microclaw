@@ -160,6 +160,7 @@ impl Transcript {
                 );
             }
             Update::Notice(text) => self.notice(text.clone(), Tone::Info),
+            Update::ContextPercent(_) => {}
         }
     }
 
@@ -282,6 +283,20 @@ impl Transcript {
                 }
             }
             RuntimeEvent::ApprovalRequired { .. } => self.approval_in_run = true,
+            RuntimeEvent::ContextCompacted {
+                method,
+                tokens_before,
+                tokens_after,
+                ..
+            } => self.notice(
+                format!(
+                    "context compacted ({}): ~{} → ~{} tokens",
+                    crate::format::compaction_label(method),
+                    crate::format::tokens(*tokens_before as i64),
+                    crate::format::tokens(*tokens_after as i64)
+                ),
+                Tone::Info,
+            ),
             RuntimeEvent::SubagentStarted { label, .. } => {
                 self.notice(format!("sub-agent started: {label}"), Tone::Info)
             }

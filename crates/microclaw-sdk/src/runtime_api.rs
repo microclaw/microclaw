@@ -51,6 +51,48 @@ pub struct SessionUsage {
     pub by_model: Vec<ModelUsage>,
 }
 
+/// Result of compacting a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCompaction {
+    pub messages_before: usize,
+    pub messages_after: usize,
+    pub tokens_before: usize,
+    pub tokens_after: usize,
+    /// `none`, `pruned`, `summarized` or `fallback`.
+    pub method: String,
+}
+
+/// How full a session's context is (estimates; see `MicroClaw::context_usage`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextUsage {
+    pub model: String,
+    /// The model's context window (tokens).
+    pub window: usize,
+    /// Tokens kept free for the reply.
+    pub reserved_output: usize,
+    /// Tokens at which automatic compaction starts (0: disabled).
+    pub auto_compact_threshold: usize,
+    /// Tokens the next request carries (measured when available).
+    pub used_tokens: usize,
+    /// Input tokens of the last request, as reported by the provider.
+    pub last_request_tokens: Option<usize>,
+    pub summary_tokens: usize,
+    pub user_tokens: usize,
+    pub assistant_tokens: usize,
+    pub tool_call_tokens: usize,
+    pub tool_result_tokens: usize,
+    pub image_tokens: usize,
+    pub messages: usize,
+}
+
+impl ContextUsage {
+    /// Share of the usable window (window minus the output reserve) in use.
+    pub fn percent_used(&self) -> u8 {
+        let usable = self.window.saturating_sub(self.reserved_output).max(1);
+        ((self.used_tokens * 100) / usable).min(100) as u8
+    }
+}
+
 /// Token usage of one model within a session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelUsage {
@@ -578,10 +620,54 @@ impl MicroClaw {
         session: impl AsRef<str>,
         keep_recent: usize,
     ) -> Result<(usize, usize), SdkError> {
-        self.engine()?
-            .compact_session(&self.caller_channel, session.as_ref(), keep_recent)
+        self.compact_session_with(session, keep_recent, None)
             .await
             .map(|c| (c.messages_before, c.messages_after))
+    }
+
+    /// Summarize a session's older messages now; `focus` tells the
+    /// summarizer what to keep (for example "the parser refactor").
+    #[cfg(feature = "full")]
+    pub async fn compact_session_with(
+        &self,
+        session: impl AsRef<str>,
+        keep_recent: usize,
+        focus: Option<&str>,
+    ) -> Result<SessionCompaction, SdkError> {
+        self.engine()?
+            .compact_session(&self.caller_channel, session.as_ref(), keep_recent, focus)
+            .await
+            .map(|c| SessionCompaction {
+                messages_before: c.messages_before,
+                messages_after: c.messages_after,
+                tokens_before: c.tokens_before,
+                tokens_after: c.tokens_after,
+                method: c.method,
+            })
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// How full a session's context is.
+    #[cfg(feature = "full")]
+    pub async fn context_usage(&self, session: impl AsRef<str>) -> Result<ContextUsage, SdkError> {
+        self.engine()?
+            .context_usage(&self.caller_channel, session.as_ref())
+            .await
+            .map(|u| ContextUsage {
+                used_tokens: u.used(),
+                model: u.model,
+                window: u.window,
+                reserved_output: u.reserved_output,
+                auto_compact_threshold: u.auto_compact_threshold,
+                last_request_tokens: u.last_request_tokens,
+                summary_tokens: u.conversation.summary,
+                user_tokens: u.conversation.user_text,
+                assistant_tokens: u.conversation.assistant_text,
+                tool_call_tokens: u.conversation.tool_calls,
+                tool_result_tokens: u.conversation.tool_results,
+                image_tokens: u.conversation.images,
+                messages: u.conversation.messages,
+            })
             .map_err(|error| SdkError::Runtime(error.to_string()))
     }
 
@@ -679,6 +765,25 @@ pub fn local_sandbox() -> Option<&'static str> {
     microclaw_engine::tool_runtime::local_sandbox::detect().map(|kind| kind.name())
 }
 
+/// Context settings for a coding workspace, applied where the configuration
+/// still has the chat-oriented defaults: compaction by tokens instead of
+/// message count, a larger verbatim tail, and whole source files in tool
+/// results (old outputs are pruned instead of truncated up front).
+#[cfg(feature = "full")]
+fn apply_workspace_context_defaults(config: &mut microclaw_engine::config::Config) {
+    if config.max_session_messages == 40 {
+        config.max_session_messages = 0;
+    }
+    if config.compact_keep_recent_tokens == 0 {
+        config.compact_keep_recent_tokens = 24_000;
+    }
+    if config.tool_result_truncation_threshold_chars == 4_000 {
+        config.tool_result_truncation_threshold_chars = 60_000;
+        config.tool_result_truncation_head_chars = 40_000;
+        config.tool_result_truncation_tail_chars = 10_000;
+    }
+}
+
 /// Minimal provider configuration for a full embedded Agent Engine.
 #[cfg(feature = "full")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -722,6 +827,8 @@ pub struct MicroClawBuilder {
     max_concurrent_runs: usize,
     shell_sandbox: Option<ShellSandbox>,
     command_reviewer: Option<Option<String>>,
+    compact_instructions: Option<String>,
+    context_window: Option<usize>,
 }
 
 #[cfg(feature = "full")]
@@ -737,6 +844,8 @@ impl MicroClawBuilder {
             max_concurrent_runs: 4,
             shell_sandbox: None,
             command_reviewer: None,
+            compact_instructions: None,
+            context_window: None,
         }
     }
 
@@ -751,6 +860,8 @@ impl MicroClawBuilder {
             max_concurrent_runs: 4,
             shell_sandbox: None,
             command_reviewer: None,
+            compact_instructions: None,
+            context_window: None,
         }
     }
 
@@ -765,6 +876,8 @@ impl MicroClawBuilder {
             max_concurrent_runs: 4,
             shell_sandbox: None,
             command_reviewer: None,
+            compact_instructions: None,
+            context_window: None,
         }
     }
 
@@ -812,6 +925,20 @@ impl MicroClawBuilder {
         self
     }
 
+    /// Extra instructions for compaction summaries: what a summary of this
+    /// workspace's sessions must keep.
+    pub fn compact_instructions(mut self, instructions: Option<String>) -> Self {
+        self.compact_instructions = instructions.filter(|i| !i.trim().is_empty());
+        self
+    }
+
+    /// Treat the model's context window as this many tokens (overrides the
+    /// configured and built-in sizes; `None` keeps them).
+    pub fn context_window(mut self, tokens: Option<usize>) -> Self {
+        self.context_window = tokens.filter(|t| *t > 0);
+        self
+    }
+
     pub async fn build(self) -> Result<MicroClaw, SdkError> {
         use microclaw_engine::config::Config;
         use microclaw_engine::headless::HeadlessRuntime;
@@ -837,6 +964,15 @@ impl MicroClawBuilder {
             config.working_dir = path.to_string_lossy().into_owned();
             config.working_dir_isolation = microclaw_engine::config::WorkingDirIsolation::Direct;
             config.checkpoints_enabled = true;
+            apply_workspace_context_defaults(&mut config);
+        }
+        if self.compact_instructions.is_some() {
+            config.compact_instructions = self.compact_instructions;
+        }
+        if let Some(window) = self.context_window {
+            config.model_context_window = window;
+            let model = config.model.clone();
+            config.model_context_windows.insert(model, window);
         }
         if let Some(model) = self.command_reviewer {
             config.aux_models.approval_reviewer = Some(

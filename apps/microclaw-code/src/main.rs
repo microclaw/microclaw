@@ -532,7 +532,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         .workspace(&project.root)
         .data_dir(home::data_dir())
         .max_concurrent_runs(1)
-        .shell_sandbox(sandbox_choice);
+        .shell_sandbox(sandbox_choice)
+        .compact_instructions(project.config.compact_instructions.clone());
     if cli.review_commands {
         builder = builder.command_reviewer(None);
     }

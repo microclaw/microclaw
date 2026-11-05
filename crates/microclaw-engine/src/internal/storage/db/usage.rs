@@ -52,6 +52,24 @@ impl Database {
         Ok(conn.last_insert_rowid())
     }
 
+    /// Input tokens and model of the most recent main-loop request of a chat.
+    pub fn latest_agent_request(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<(i64, String)>, MicroClawError> {
+        let conn = self.lock_conn();
+        let row = conn
+            .query_row(
+                "SELECT input_tokens, model FROM llm_usage_logs
+                 WHERE chat_id = ?1 AND request_kind = 'agent_loop'
+                 ORDER BY id DESC LIMIT 1",
+                params![chat_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        Ok(row)
+    }
+
     pub fn get_llm_usage_summary(
         &self,
         chat_id: Option<i64>,

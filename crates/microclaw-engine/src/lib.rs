@@ -47,6 +47,7 @@ pub mod completion_contract;
 pub mod config;
 pub mod config_persistence;
 pub mod context_references;
+pub mod context_window;
 pub mod embedding;
 pub mod headless;
 pub mod hooks;

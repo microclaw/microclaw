@@ -47,7 +47,8 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
 | `/model [name\|reset]` | Show or switch the model for this session. |
 | `/cost` | Requests and input/output tokens of this session, per model. |
-| `/compact` | Summarize older messages now to free context (long sessions also compact automatically). |
+| `/compact [focus]` | Summarize older messages now; the optional focus says what the summary must keep. |
+| `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
 | `/fork` | Continue in a copy of the conversation; the original session is kept. |
 
 Checkpoints are taken at the start of every turn in a shadow git repository
@@ -160,7 +161,30 @@ always_ask:
   - terraform apply
 instructions: |
   Use pnpm, not npm.
+compact_instructions: Keep the names of public APIs and any open TODOs.
 ```
+
+## Context and compaction
+
+The status bar shows how full the model's context window is (`ctx 42%`;
+yellow from 70%, red from 85%), and `/context` breaks it down. Code measures
+every request against the model's window (known models are recognized by
+name; set `model_context_windows` in the model config for others) and, from
+80% of it:
+
+1. clears older tool outputs first (the newest ~40k tokens of output stay;
+   a file read again later replaces the earlier read), then
+2. summarizes older history into fixed sections (goal and constraints,
+   decisions, files and state, errors and fixes, plan, verification, next
+   step), keeping your own earlier messages verbatim and the list of files
+   changed. The last ~24k tokens of the conversation stay as they are.
+
+If summarizing fails, a mechanical digest is kept; history is never dropped
+silently, and the full conversation is archived before every compaction. A
+notice in the transcript (and on stderr with `-p`) says when it happened.
+`/compact <focus>` compacts now and tells the summary what matters;
+`compact_instructions` in `.microclaw/project.yaml` does the same for every
+compaction in the project.
 
 ## Interactive programs
 
