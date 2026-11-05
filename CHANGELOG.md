@@ -51,6 +51,11 @@ Fixes found by running MicroClaw Code against real models (DeepSeek
   compact; the long-session cases use windows above the fixed prompt size so
   they really compact, and the compaction count no longer races the run.
 
+### Security
+
+- hyper 1.12.0, which drops the unmaintained `pin-utils`
+  (RUSTSEC-2026-0441, published on release day).
+
 ## 0.23.0 - 2026-11-05
 
 ### Added
