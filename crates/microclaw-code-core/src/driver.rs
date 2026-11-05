@@ -951,8 +951,8 @@ impl CodeSession {
         }
     }
 
-    /// Language-server errors in `files`, as a check outcome (`None`: no
-    /// server covers them or nothing to report).
+    /// Language-server diagnostics for `files`, as a check outcome (`None`:
+    /// no running server covers them).
     async fn lsp_check(
         &mut self,
         files: &[String],
@@ -968,6 +968,14 @@ impl CodeSession {
         if !pool.covers(files) {
             return None;
         }
+        // Start the servers before announcing a check: a server that is on
+        // PATH but cannot run must not show up as a passing check.
+        for message in pool.start_servers(files).await {
+            let _ = updates.send(Update::Notice(message));
+        }
+        if !pool.ready_for(files) {
+            return None;
+        }
         let check = Check {
             name: "lsp".into(),
             run: "language server diagnostics".into(),
@@ -977,6 +985,12 @@ impl CodeSession {
         let _ = updates.send(Update::CheckStarted(check.clone()));
         let started = std::time::Instant::now();
         let report = pool.diagnose(files).await;
+        if !report.silent.is_empty() {
+            let _ = updates.send(Update::Notice(format!(
+                "{} sent no diagnostics in time (still indexing?); those files were not checked",
+                report.silent.join(", ")
+            )));
+        }
         let output = report
             .errors
             .iter()
@@ -997,7 +1011,7 @@ impl CodeSession {
             },
         };
         let _ = updates.send(Update::CheckFinished(outcome.clone()));
-        (!outcome.success).then_some(outcome)
+        Some(outcome)
     }
 
     /// Run the checks, stopping at the first failure. `None` = cancelled.
@@ -1151,13 +1165,20 @@ impl CodeSession {
                 let hooks = self.project.config.hooks.after_edit.clone();
                 self.run_hooks("after_edit", &hooks, updates).await;
             }
-            let lsp_failure = if changed_now {
+            let lsp = if changed_now {
                 let files = report.changed_files.clone();
                 self.lsp_check(&files, updates).await
             } else {
                 None
             };
+            let lsp_passed = lsp.as_ref().is_some_and(|outcome| outcome.success);
+            let lsp_failure = lsp.filter(|outcome| !outcome.success);
             if lsp_failure.is_none() && (!self.verify_active() || !changed_now) {
+                // Language-server diagnostics were the only check: their
+                // result is the turn's (it may follow a failed round).
+                if lsp_passed {
+                    report.checks_passed = Some(true);
+                }
                 self.finish_turn(&report, updates).await;
                 return Ok(report);
             }

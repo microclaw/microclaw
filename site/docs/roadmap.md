@@ -14,12 +14,14 @@ MicroClaw ships three products on one execution model. MicroClaw Server is the s
 
 ## Active priorities
 
-- Ship MicroClaw Code as a release (its own `mccode` archives and Homebrew
-  formula) and measure it with `mccode eval` on real coding tasks, including
-  cases replayed from this repository's bug-fix history.
-- Let evaluation results decide the next investments: a real pseudo-terminal
-  for TTY-only programs, seccomp on top of the OS sandbox, syncing the local
-  repository for remote runs, or heavier machinery such as LSP diagnostics.
+- Test MicroClaw Code against real models and fix what that finds before
+  adding features; grow `mccode eval` with longer sessions and cases replayed
+  from this repository's bug-fix history, so token use can be measured.
+- Reach more people: model presets for popular coding models (window, output
+  limit, image support, price), a VS Code integration over ACP, and Windows
+  on ARM builds.
+- Close the Windows gap: an OS sandbox for shell commands on Windows
+  (today Windows asks before every command).
 - Keep Server and Code on one provider-neutral Agent Engine, with Code
   reaching it only through `microclaw-sdk`.
 - Preserve Server support, channels, APIs, scheduling, Web management,
@@ -29,7 +31,9 @@ MicroClaw ships three products on one execution model. MicroClaw Server is the s
 
 MicroClaw does not pursue channel count for its own sake, require a vector database as a core dependency, or allow extensions to bypass runtime governance. New work should strengthen the shared runtime rather than introduce channel-specific agent loops.
 
-The canonical plan is the
-[MicroClaw Code proposal](https://github.com/microclaw/microclaw/blob/main/docs/roadmap/microclaw-code-proposal-cn.md).
+The current plan is
+[next-plan-2026-11-cn.md](https://github.com/microclaw/microclaw/blob/main/docs/roadmap/next-plan-2026-11-cn.md);
+the [MicroClaw Code proposal](https://github.com/microclaw/microclaw/blob/main/docs/roadmap/microclaw-code-proposal-cn.md)
+explains the product line.
 Shipped behavior is documented in the [MicroClaw Code guide](./code), main guides, and
 [release notes](https://github.com/microclaw/microclaw/releases).

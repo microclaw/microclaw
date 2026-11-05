@@ -48,7 +48,12 @@ pub fn first_image(root: &Path, prompt: &str) -> Result<Option<PromptImage>, Str
         let Some(mention) = token.strip_prefix('@') else {
             continue;
         };
-        let mention = mention.trim_end_matches([',', '.', ';', ':', ')']);
+        // Sentence punctuation after the path ("what is in @shot.png?"),
+        // ASCII or full-width.
+        let mention = mention.trim_end_matches([
+            ',', '.', ';', ':', ')', ']', '?', '!', '"', '\'', '，', '。', '；', '：', '）', '？',
+            '！', '、',
+        ]);
         let path = resolve(root, mention);
         let Some(media_type) = media_type(&path) else {
             continue;
@@ -120,6 +125,17 @@ mod tests {
         assert_eq!(image.media_type, "image/png");
         assert_eq!(image.base64, "iVBORw==");
         assert!(first_image(dir.path(), "no images here").unwrap().is_none());
+        for prompt in [
+            "what is in @shot.png?",
+            "look at @shot.png!",
+            "看看 @shot.png。",
+            "这是什么 @shot.png？",
+        ] {
+            assert!(
+                first_image(dir.path(), prompt).unwrap().is_some(),
+                "{prompt}"
+            );
+        }
     }
 
     #[test]

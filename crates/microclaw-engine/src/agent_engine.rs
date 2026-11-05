@@ -1073,6 +1073,34 @@ pub(crate) enum ApprovalReply {
     DenyOrOther,
 }
 
+/// What an approving reply to a paused `tool` call is rewritten to, so the
+/// model retries the call instead of asking again.
+pub(crate) fn approval_granted_instruction(tool: &str, reply: ApprovalReply) -> String {
+    let scope = if reply == ApprovalReply::ApproveAlways {
+        " and allowed it for the rest of this chat"
+    } else {
+        ""
+    };
+    format!(
+        "[approval_granted]: The user approved the `{tool}` call that was waiting for \
+         approval{scope}. Run that call again now, unchanged, and continue the task."
+    )
+}
+
+/// What a bare "3" (the card's deny option) is rewritten to.
+pub(crate) fn approval_denied_instruction(tool: &str) -> String {
+    format!(
+        "[approval_denied]: The user denied the `{tool}` call that was waiting for approval; \
+         it was not executed. Do not retry it unchanged. Continue without it, or explain \
+         what you need and why."
+    )
+}
+
+/// Whether `text` is just the approval card's deny option.
+pub(crate) fn is_bare_denial(text: &str) -> bool {
+    strip_xml_like_tags(text).trim() == "3"
+}
+
 pub(crate) fn parse_approval_reply(text: &str) -> ApprovalReply {
     let cleaned = strip_xml_like_tags(text);
     let normalized = cleaned.trim().to_ascii_lowercase();
@@ -1770,6 +1798,21 @@ async fn process_with_agent_logic(
         {
             let reply = parse_approval_reply(&latest_user_text_for_approval);
             explicit_user_approval = reply != ApprovalReply::DenyOrOther;
+            if explicit_user_approval {
+                // A bare "1" / "approve" after an approval_required tool
+                // result is ambiguous to many models; say what it means so
+                // the paused call is retried (the gate then honours it).
+                if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
+                    messages[idx].content =
+                        MessageContent::Text(approval_granted_instruction(&tool, reply));
+                }
+                info!(chat_id, tool = %tool, "Approval reply — retrying the paused call");
+            } else if is_bare_denial(&latest_user_text_for_approval) {
+                if let Some(idx) = messages.iter().rposition(|m| m.role == "user") {
+                    messages[idx].content =
+                        MessageContent::Text(approval_denied_instruction(&tool));
+                }
+            }
             if reply == ApprovalReply::ApproveAlways {
                 let grant_key = format!("approved_tool:{chat_id}:{tool}");
                 let _ = call_blocking(state.db.clone(), move |db| {
@@ -4667,7 +4710,13 @@ pub async fn compact_conversation(
     };
 
     let split_at = if state.config.compact_keep_recent_tokens > 0 {
-        cw::token_split(&working, state.config.compact_keep_recent_tokens)
+        cw::token_split(
+            &working,
+            cw::keep_recent_budget(
+                state.config.compact_keep_recent_tokens,
+                options.target_tokens,
+            ),
+        )
     } else if working.len() > options.keep_recent {
         safe_compact_split(&working, options.keep_recent)
     } else {
@@ -7047,6 +7096,25 @@ mod tests {
         assert!(approves("Go ahead and run it"));
         assert!(!approves("不要执行"));
         assert!(!approves("not approve this command"));
+    }
+
+    #[test]
+    fn approval_replies_are_rewritten_into_explicit_instructions() {
+        use super::{
+            approval_denied_instruction, approval_granted_instruction, is_bare_denial,
+            ApprovalReply,
+        };
+        let once = approval_granted_instruction("bash", ApprovalReply::ApproveOnce);
+        assert!(once.starts_with("[approval_granted]"), "{once}");
+        assert!(once.contains("`bash`") && !once.contains("rest of this chat"));
+        let always = approval_granted_instruction("bash", ApprovalReply::ApproveAlways);
+        assert!(always.contains("rest of this chat"), "{always}");
+        assert!(approval_denied_instruction("bash").starts_with("[approval_denied]"));
+        assert!(is_bare_denial(
+            "<user_message sender=\"code\">3</user_message>"
+        ));
+        assert!(is_bare_denial(" 3 "));
+        assert!(!is_bare_denial("use 3 threads"));
     }
 
     #[test]

@@ -217,9 +217,11 @@ mccode eval replay v0.10.0..HEAD --check "cargo test" --out eval/replay
 ```
 
 A case is a directory with `case.yaml` (`prompt`, `check`, optional `setup`,
-`mode`, `timeout_secs`) and a `repo/` snapshot. Each case runs in a fresh git
+`mode`, `timeout_secs`, `followups` for further turns in the same session,
+`context_window` to pretend the model's window is smaller, and
+`min_compactions`) and a `repo/` snapshot. Each case runs in a fresh git
 repository in `auto` mode with verification; the case passes when `check`
-exits 0 afterwards. `eval replay` turns bug-fix commits into cases (parent
+exits 0 afterwards and at least `min_compactions` compactions happened. `eval replay` turns bug-fix commits into cases (parent
 commit = snapshot, commit message = prompt), a regression set built from real
 history. Results include duration, requests and tokens.
 

@@ -1713,7 +1713,11 @@ mod tests {
                 });
             }
             let rendered = format!("{messages:?}");
-            let text = if rendered.contains("denied this bash call") {
+            let text = if rendered.contains("[approval_granted]") {
+                "saw grant"
+            } else if rendered.contains("[approval_denied]") {
+                "saw text denial"
+            } else if rendered.contains("denied this bash call") {
                 "saw denial"
             } else if rendered.contains("in-run-ok") {
                 "saw output"
@@ -1802,6 +1806,49 @@ mod tests {
         assert_eq!(approvals, 1);
         assert!(text.contains("bash"), "{text}");
         assert!(!crate::approval_broker::is_registered(CODE_CHANNEL, 1));
+    }
+
+    /// A run without in-run approvals pauses; the next prompt in the same
+    /// session answers the card.
+    async fn answer_text_approval(session: &str, reply: &str) -> String {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = runtime_with_llm(
+            directory.path(),
+            Box::new(ApprovalLlm {
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }),
+        );
+        let runtime = engine.into_embedded_runtime(CODE_CHANNEL, 1).unwrap();
+        for prompt in ["run the command", reply] {
+            let mut request = RunRequest::new(prompt);
+            request.session_id = Some(SessionId::new(session));
+            let mut run = runtime.agent(AgentProfile::default()).run(request);
+            tokio::time::timeout(std::time::Duration::from_secs(20), async {
+                while run.next_event().await.is_some() {}
+            })
+            .await
+            .expect("run should finish");
+            let result = run.result().await.unwrap();
+            if prompt == reply {
+                return result.final_text;
+            }
+        }
+        unreachable!()
+    }
+
+    #[tokio::test]
+    async fn a_text_approval_reply_is_spelled_out_for_the_model() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        assert_eq!(answer_text_approval("text-approve", "1").await, "saw grant");
+    }
+
+    #[tokio::test]
+    async fn a_text_denial_reply_is_spelled_out_for_the_model() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        assert_eq!(
+            answer_text_approval("text-deny", "3").await,
+            "saw text denial"
+        );
     }
 
     #[tokio::test]

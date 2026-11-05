@@ -154,19 +154,31 @@ pub fn summary(tree: &Worktree, repo_root: &Path) -> String {
         &["rev-list", "--count", &format!("HEAD..{}", tree.branch)],
     )
     .unwrap_or_else(|_| "0".into());
+    let path = tree.path.display();
+    let mut next = vec![format!("review with `git -C {path} diff HEAD`")];
+    if !stat.is_empty() {
+        // The agent leaves its edits uncommitted; merging the branch alone
+        // would bring nothing over.
+        next.push(format!(
+            "commit them there with `git -C {path} add -A && git -C {path} commit -m \"…\"`, then merge with `git merge {}`",
+            tree.branch
+        ));
+    } else if commits != "0" {
+        next.push(format!("merge with `git merge {}`", tree.branch));
+    }
+    next.push(format!(
+        "remove with `mccode worktree remove {}`",
+        tree.name
+    ));
     format!(
-        "worktree {} (branch {}): {} new commit(s){}; review with `git -C {} diff`, merge with `git merge {}`, remove with `mccode worktree remove {}`",
-        tree.path.display(),
+        "worktree {path} (branch {}): {commits} new commit(s){}; {}",
         tree.branch,
-        commits,
         if stat.is_empty() {
             String::new()
         } else {
             format!(", uncommitted: {stat}")
         },
-        tree.path.display(),
-        tree.branch,
-        tree.name
+        next.join(", ")
     )
 }
 
@@ -246,7 +258,17 @@ mod tests {
         let listed = list_in(&base, repo.path()).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "t1");
-        assert!(summary(&tree, repo.path()).contains("mccode/t1"));
+        let clean = summary(&tree, repo.path());
+        assert!(clean.contains("mccode/t1"), "{clean}");
+        assert!(
+            !clean.contains("git merge"),
+            "nothing to merge yet: {clean}"
+        );
+        std::fs::write(tree.path.join("a.txt"), "two\n").unwrap();
+        let edited = summary(&tree, repo.path());
+        assert!(edited.contains("uncommitted"), "{edited}");
+        assert!(edited.contains("commit -m"), "{edited}");
+        git(&tree.path, &["checkout", "--", "a.txt"]).unwrap();
         remove_in(&base, repo.path(), "t1").unwrap();
         assert!(list_in(&base, repo.path()).unwrap().is_empty());
         assert!(remove_in(&base, repo.path(), "t1").is_err());
