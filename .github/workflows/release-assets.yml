@@ -197,8 +197,13 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target.cross && matrix.target.target_triple || '' }}
+
+      - name: Add cross-compilation target
+        if: matrix.target.cross
+        shell: bash
+        # Run inside the checkout so the target is added to the toolchain
+        # pinned by rust-toolchain.toml, which cargo uses.
+        run: rustup target add "${{ matrix.target.target_triple }}"
 
       - name: Restore Rust release cache
         uses: Swatinem/rust-cache@v2
