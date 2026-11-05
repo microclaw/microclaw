@@ -242,7 +242,12 @@ fn already_reduced(content: &str) -> bool {
 fn protected_tool(name: &str) -> bool {
     matches!(
         name,
-        "todo_read" | "todo_write" | "activate_skill" | "report_progress" | "clarify"
+        "todo_read"
+            | "todo_write"
+            | "activate_skill"
+            | "report_progress"
+            | "clarify"
+            | "context_note"
     )
 }
 
@@ -783,6 +788,50 @@ pub fn summary_message_text(summary: &str, summarized: &[Message]) -> String {
         }
     }
     text
+}
+
+/// One line telling the model how full its context is.
+pub fn budget_note(budget: &ContextBudget, used_tokens: usize) -> String {
+    let usable = budget.window.saturating_sub(budget.reserved_output).max(1);
+    let pct = (used_tokens * 100 / usable).min(100);
+    if budget.enabled() {
+        format!(
+            "<context_budget>~{used_tokens} of {usable} tokens used ({pct}%); older history is compacted automatically at ~{} tokens. Prefer targeted reads and delegate wide searches to `explore` when the budget is tight.</context_budget>",
+            budget.threshold
+        )
+    } else {
+        format!("<context_budget>~{used_tokens} of {usable} tokens used ({pct}%).</context_budget>")
+    }
+}
+
+/// `context_note` and `rewind_context`, handled by the agent loop itself.
+pub fn context_tool_definitions() -> Vec<microclaw_core::llm_types::ToolDefinition> {
+    use microclaw_core::llm_types::ToolDefinition;
+    vec![
+        ToolDefinition {
+            name: "context_note".into(),
+            description: "Save a checkpoint in this turn with a one-line note about what you know so far (for example before trying an approach that may not work). Returns a checkpoint id for rewind_context. Notes also survive compaction.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "note": {"type": "string", "description": "What you have established so far"}
+                },
+                "required": ["note"]
+            }),
+        },
+        ToolDefinition {
+            name: "rewind_context".into(),
+            description: "Drop everything after a checkpoint from your context (failed attempts, long useless outputs) and continue from there with a note to your earlier self, e.g. \"the bug is not in parser.rs; look at lexer.rs\". Files you changed are NOT reverted.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "checkpoint": {"type": "string", "description": "Checkpoint id from context_note, e.g. cp-1"},
+                    "note": {"type": "string", "description": "What your earlier self should know"}
+                },
+                "required": ["checkpoint", "note"]
+            }),
+        },
+    ]
 }
 
 #[cfg(test)]

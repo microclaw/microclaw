@@ -196,6 +196,7 @@ pub fn tool_concurrency_class(name: &str) -> ToolConcurrencyClass {
         | "subagents_log"
         | "browser"
         | "bash_output"
+        | "explore"
         | "fetch_artifact" => ToolConcurrencyClass::ReadOnly,
         // Exclusive tools: must run alone
         "bash" | "activate_skill" | "sessions_spawn" => ToolConcurrencyClass::Exclusive,

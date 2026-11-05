@@ -22,6 +22,21 @@ End your reply with a numbered implementation plan (files to change, approach, h
 /// Repository instruction files, in priority order (the first one found is
 /// loaded).
 pub const INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md", "AGENT.md"];
+
+/// Durable notes the agent keeps for a trusted repository.
+pub const MEMORY_FILE: &str = ".microclaw/memory.md";
+const MAX_MEMORY_BYTES: usize = 8 * 1024;
+
+fn truncate_to_bytes(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n…(truncated)", &text[..end])
+}
 /// Cap on the instruction file text placed in the system prompt.
 const INSTRUCTION_FILE_LIMIT: usize = 16 * 1024;
 
@@ -102,6 +117,21 @@ pub fn system_prompt_with_sandbox(
             ));
         }
     }
+    // Project memory: durable lessons the agent keeps for this repository.
+    if project.trusted {
+        let memory_path = project.root.join(MEMORY_FILE);
+        let memory = std::fs::read_to_string(&memory_path).unwrap_or_default();
+        prompt.push_str("\n# Project memory\n\n");
+        if memory.trim().is_empty() {
+            prompt.push_str(&format!("There is no `{MEMORY_FILE}` yet. "));
+        } else {
+            let text = truncate_to_bytes(memory.trim(), MAX_MEMORY_BYTES);
+            prompt.push_str(&format!("From `{MEMORY_FILE}`:\n\n{text}\n\n"));
+        }
+        prompt.push_str(&format!(
+            "When you learn something durable about this repository that a future session would otherwise rediscover (how to build or test it, slow or flaky tests, a non-obvious convention, a pitfall and its fix), add one short bullet to `{MEMORY_FILE}` with the file tools. Keep it under 60 bullets; update or remove stale ones. Never store secrets.\n"
+        ));
+    }
     if let Some(sandbox) = sandbox {
         prompt.push_str(&format!(
             "\n# Shell sandbox\n\nShell commands run in an OS sandbox ({}): they can write only inside the repository, the temp directory and tool caches (cargo, npm, …){}, and {}. If a command fails because of the sandbox (\"Read-only file system\", \"Operation not permitted\", network errors), do not try to work around it; tell the user which command needs more access.\n",
@@ -155,6 +185,18 @@ mod tests {
         let prompt = system_prompt(&untrusted, Mode::Ask, None);
         assert!(!prompt.contains("Run make lint."));
         assert!(prompt.contains("The repository has AGENTS.md"));
+    }
+
+    #[test]
+    fn project_memory_is_loaded_for_trusted_projects_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".microclaw")).unwrap();
+        std::fs::write(dir.path().join(MEMORY_FILE), "- tests need `make db` first").unwrap();
+        let trusted = Project::discover(dir.path(), |_, _| true).unwrap();
+        let prompt = system_prompt(&trusted, Mode::Ask, None);
+        assert!(prompt.contains("tests need `make db` first"));
+        let untrusted = Project::discover(dir.path(), |_, _| false).unwrap();
+        assert!(!system_prompt(&untrusted, Mode::Ask, None).contains("make db"));
     }
 
     #[test]

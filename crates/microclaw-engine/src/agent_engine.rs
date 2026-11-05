@@ -2187,6 +2187,10 @@ async fn process_with_agent_logic(
     } else {
         available_tools
     };
+    let mut tool_defs: Vec<microclaw_core::llm_types::ToolDefinition> = tool_defs;
+    if state.config.context_tools && !plan_mode_active && !learning_foundry_mode {
+        tool_defs.extend(crate::context_window::context_tool_definitions());
+    }
     let profile_allowed_tools = (profile_read_only || profile_workspace_write).then(|| {
         tool_defs
             .iter()
@@ -2277,6 +2281,8 @@ async fn process_with_agent_logic(
     // Automatic compactions this turn; a third one in a row means the
     // conversation cannot be reduced further and the loop stops trying.
     let mut pressure_compactions: usize = 0;
+    // `context_note` checkpoints of this turn: (id, message count to keep).
+    let mut context_checkpoints: Vec<(String, usize)> = Vec::new();
     let mut consecutive_send_message_calls: usize = 0;
     let mut last_tool_use_fingerprint: Option<String> = None;
     let mut repeated_tool_use_streak: usize = 0;
@@ -2392,6 +2398,7 @@ async fn process_with_agent_logic(
                     let _ = tx.send(outcome.event("context_pressure", msg_count_before));
                 }
                 messages = outcome.messages;
+                context_checkpoints.clear();
             } else {
                 // Nothing left to reduce: stop retrying this turn.
                 pressure_compactions = usize::MAX;
@@ -2450,6 +2457,17 @@ async fn process_with_agent_logic(
                 }
             }
         }
+        // The budget line rides on the newest message of the request only, so
+        // the cached prefix (and the persisted history) stays unchanged.
+        let budget_line =
+            (state.config.context_tools || state.config.context_budget_hint).then(|| {
+                let used = if last_observed_input_tokens > 0 {
+                    last_observed_input_tokens as usize
+                } else {
+                    fixed_prompt_tokens + crate::context_window::estimate_messages_tokens(&messages)
+                };
+                crate::context_window::budget_note(&context_budget, used)
+            });
         let llm_span_id = new_span_id();
         let llm_start = now_unix_nano();
 
@@ -2470,7 +2488,10 @@ async fn process_with_agent_logic(
                     provider
                         .send_message_stream_with_model(
                             &system_prompt,
-                            attach_turn_context(&messages, &turn_context_block),
+                            with_budget_line(
+                                attach_turn_context(&messages, &turn_context_block),
+                                budget_line.as_deref(),
+                            ),
                             Some(tool_defs.clone()),
                             Some(&llm_tx),
                             Some(&effective_model),
@@ -2481,7 +2502,10 @@ async fn process_with_agent_logic(
                         .llm
                         .send_message_stream_with_model(
                             &system_prompt,
-                            attach_turn_context(&messages, &turn_context_block),
+                            with_budget_line(
+                                attach_turn_context(&messages, &turn_context_block),
+                                budget_line.as_deref(),
+                            ),
                             Some(tool_defs.clone()),
                             Some(&llm_tx),
                             Some(&effective_model),
@@ -2495,7 +2519,10 @@ async fn process_with_agent_logic(
                 provider
                     .send_message_with_model(
                         &system_prompt,
-                        attach_turn_context(&messages, &turn_context_block),
+                        with_budget_line(
+                            attach_turn_context(&messages, &turn_context_block),
+                            budget_line.as_deref(),
+                        ),
                         Some(tool_defs.clone()),
                         Some(&effective_model),
                     )
@@ -2505,7 +2532,10 @@ async fn process_with_agent_logic(
                     .llm
                     .send_message_with_model(
                         &system_prompt,
-                        attach_turn_context(&messages, &turn_context_block),
+                        with_budget_line(
+                            attach_turn_context(&messages, &turn_context_block),
+                            budget_line.as_deref(),
+                        ),
                         Some(tool_defs.clone()),
                         Some(&effective_model),
                     )
@@ -2546,6 +2576,7 @@ async fn process_with_agent_logic(
                         let _ = tx.send(outcome.event("context_overflow", msg_count_before));
                     }
                     messages = outcome.messages;
+                    context_checkpoints.clear();
                     last_observed_input_tokens = 0;
                 }
                 Err(e) => return Err(e.into()),
@@ -3122,6 +3153,87 @@ async fn process_with_agent_logic(
                 }
             }
 
+            // Context tools are handled here, not by the registry: they act on
+            // this loop's conversation.
+            let mut pending_rewind: Option<(usize, String)> = None;
+            pending_calls.retain(|call| {
+                let result = match call.name.as_str() {
+                    "context_note" => {
+                        let note = call
+                            .input
+                            .get("note")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string();
+                        let id = format!("cp-{}", context_checkpoints.len() + 1);
+                        // Keep everything up to and including the tool results
+                        // that answer this call.
+                        context_checkpoints.push((id.clone(), messages.len() + 1));
+                        Some((
+                            format!("Checkpoint {id} saved. Note: {note}"),
+                            false,
+                        ))
+                    }
+                    "rewind_context" => {
+                        let target = call
+                            .input
+                            .get("checkpoint")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        let note = call
+                            .input
+                            .get("note")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string();
+                        match context_checkpoints.iter().find(|(id, _)| id == target) {
+                            Some((_, keep)) if note.is_empty() => {
+                                let _ = keep;
+                                Some(("rewind_context needs a `note` for your earlier self".into(), true))
+                            }
+                            Some((_, keep)) => {
+                                pending_rewind = Some((*keep, format!(
+                                    "[Context rewound to checkpoint {target}; the steps after it were removed. Note from your later self: {note}]"
+                                )));
+                                Some((format!("Rewinding to {target}."), false))
+                            }
+                            None => Some((
+                                format!(
+                                    "Unknown checkpoint `{target}`. Known checkpoints this turn: {}",
+                                    if context_checkpoints.is_empty() {
+                                        "none (create one with context_note)".to_string()
+                                    } else {
+                                        context_checkpoints
+                                            .iter()
+                                            .map(|(id, _)| id.clone())
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    }
+                                ),
+                                true,
+                            )),
+                        }
+                    }
+                    _ => None,
+                };
+                match result {
+                    Some((content, is_error)) => {
+                        short_circuit_results.push((
+                            call.id.clone(),
+                            ContentBlock::ToolResult {
+                                tool_use_id: call.id.clone(),
+                                content,
+                                is_error: is_error.then_some(true),
+                            },
+                        ));
+                        false
+                    }
+                    None => true,
+                }
+            });
+
             let mut batch_ctx = crate::tool_executor::ToolBatchContext {
                 failed_tools: failed_tools.clone(),
                 failed_tool_details: failed_tool_details.clone(),
@@ -3316,6 +3428,40 @@ async fn process_with_agent_logic(
                 role: "user".into(),
                 content: MessageContent::Blocks(tool_results),
             });
+            if let Some((keep, note)) = pending_rewind.take() {
+                if keep > 0 && keep < messages.len() {
+                    let before = messages.len();
+                    let tokens_before = crate::context_window::estimate_messages_tokens(&messages);
+                    messages.truncate(keep);
+                    if let Some(Message {
+                        content: MessageContent::Blocks(blocks),
+                        ..
+                    }) = messages.last_mut()
+                    {
+                        blocks.push(ContentBlock::Text { text: note });
+                    }
+                    context_checkpoints.retain(|(_, k)| *k <= keep);
+                    last_observed_input_tokens = 0;
+                    info!(
+                        chat_id,
+                        before,
+                        after = messages.len(),
+                        "Context rewound by the model"
+                    );
+                    if let Some(tx) = event_tx {
+                        let _ = tx.send(AgentEvent::ContextCompacted {
+                            method: "rewound".into(),
+                            trigger: "model".into(),
+                            tokens_before: tokens_before as u64,
+                            tokens_after: crate::context_window::estimate_messages_tokens(&messages)
+                                as u64,
+                            messages_before: before,
+                            messages_after: messages.len(),
+                            duration_ms: 0,
+                        });
+                    }
+                }
+            }
             checkpoint_turn_state(
                 state,
                 chat_id,
@@ -4087,6 +4233,25 @@ pub fn build_turn_context(ctx: &TurnContext, configured_timezone: &str) -> Strin
 /// therefore a stable, cacheable prefix, tool-loop iterations within the turn
 /// only append after it, and no `system` role ever enters `messages`, which
 /// the Anthropic Messages API rejects.
+/// Append `line` to the last message of a request (never persisted).
+fn with_budget_line(mut messages: Vec<Message>, line: Option<&str>) -> Vec<Message> {
+    let Some(line) = line else {
+        return messages;
+    };
+    if let Some(last) = messages.last_mut().filter(|m| m.role == "user") {
+        match &mut last.content {
+            MessageContent::Text(text) => {
+                text.push('\n');
+                text.push_str(line);
+            }
+            MessageContent::Blocks(blocks) => blocks.push(ContentBlock::Text {
+                text: line.to_string(),
+            }),
+        }
+    }
+    messages
+}
+
 pub fn attach_turn_context(messages: &[Message], block: &str) -> Vec<Message> {
     let mut out = messages.to_vec();
     if block.trim().is_empty() {
@@ -4591,7 +4756,7 @@ pub async fn compact_conversation(
 }
 
 /// One summarizer call on the (optionally auxiliary) compaction model.
-async fn summarize_once(
+pub(crate) async fn summarize_once(
     state: &AppState,
     caller_channel: &str,
     chat_id: i64,

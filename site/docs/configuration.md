@@ -103,6 +103,10 @@ At runtime, at least one channel must be enabled:
 | `prune_protect_tokens` | `40000` | Before summarizing, older tool outputs are cleared; the newest this many tokens of tool output stay |
 | `prune_minimum_tokens` | `20000` | Clear old tool outputs only when that frees at least this many tokens |
 | `compact_instructions` | unset | Extra instructions for compaction summaries |
+| `context_budget_hint` | `false` | Tell the model on every request how full its context is (on in coding workspaces) |
+| `explore_tool` | `false` | Offer the read-only `explore` helper (on in coding workspaces) |
+| `project_agents_dir` | unset | Directory of agent definitions (`<name>.md`) offered to `explore` |
+| `context_tools` | `false` | Offer the experimental `context_note` / `rewind_context` tools |
 | `anthropic_prompt_cache_enabled` | `true` | Add up to 4 `cache_control` breakpoints (system + last 3 messages) to every Anthropic request so multi-turn chats hit the prompt cache. Anthropic-only; OpenAI-compat path is untouched. |
 | `anthropic_prompt_cache_ttl` | `"5m"` | Cache TTL marker for the breakpoints. `"5m"` (default) or `"1h"`; `"1h"` requires extended-cache opt-in on the API key. |
 | `system_prompt_time_detail` | `"date"` | How much live time detail the system prompt carries. `"none"`, `"date"` (default, stable for a whole local day), or `"full"`. Per-turn data (live clock, query-matched memories, ranked skills, mood) is delivered in a transient `<turn_context>` block attached to the latest user message (never persisted) so the system prompt and the earlier history stay cacheable. |

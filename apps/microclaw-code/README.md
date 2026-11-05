@@ -70,6 +70,9 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/cost` | Requests and input/output tokens of this session, per model. |
 | `/compact [focus]` | Summarize older messages now; the optional focus says what the summary must keep. |
 | `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
+| `/handoff <next task>` | Start a new session from a summary of this one focused on the next task. |
+
+Also: custom commands from `.microclaw/commands/*.md` and `~/.microclaw/code/commands/*.md`, project memory in `.microclaw/memory.md`, project helper agents in `.microclaw/agents/*.md` for the `explore` tool, language-server diagnostics after edits, and `hooks` (`after_edit`, `after_turn`) in the project file; see the [usage guide](https://microclaw.org/docs/code-usage).
 | `/fork` | Continue in a copy of the conversation; the original session is kept. |
 
 Checkpoints are taken at the start of every turn in a shadow git repository

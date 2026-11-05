@@ -8,6 +8,31 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ### Added
 
+- **Model-managed context**:
+  - with `context_budget_hint` (on in coding workspaces), the model sees how
+    full its context is on every request; the note rides on the newest
+    message, so the prompt cache is unaffected;
+  - experimental `context_note` / `rewind_context` tools (`context_tools`,
+    `mccode --context-tools`): the model checkpoints its own context and
+    rewinds it, with a note to itself, dropping failed attempts.
+- **`explore`**: a read-only helper with its own context that answers wide
+  questions and returns a short report. Several calls run in parallel.
+  Project agents in `.microclaw/agents/<name>.md` (front matter
+  `description`, `model`) are offered to it in trusted projects
+  (`explore_tool`, `project_agents_dir`).
+- **Handoff**: SDK `MicroClaw::handoff_session` and `mccode /handoff <task>`
+  start a new session from a summary focused on the next task.
+- MicroClaw Code:
+  - **project memory**: `.microclaw/memory.md`, loaded in trusted projects
+    and kept up to date by the agent with the file tools;
+  - **custom slash commands** from `.microclaw/commands/*.md` and
+    `~/.microclaw/code/commands/*.md`, with `$ARGUMENTS` (also in `-p`);
+  - **language-server diagnostics** (rust-analyzer,
+    typescript-language-server, pyright, gopls) after edits, handed back like
+    a failed check (`lsp: false` disables them);
+  - **project hooks** `after_edit` / `after_turn`.
+
+
 - **Token-aware context management** (all products). Each request is
   measured against the model's context window (known models are recognized by
   name; `model_context_window` / `model_context_windows` override it).

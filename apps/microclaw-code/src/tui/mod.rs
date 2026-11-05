@@ -70,6 +70,10 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ),
     ("/context", "show how full the context window is"),
     ("/fork", "continue in a copy of this conversation"),
+    (
+        "/handoff",
+        "start a new session from a summary focused on the next task",
+    ),
     ("/new", "start a new session"),
     ("/sessions", "list this project's sessions"),
     ("/status", "show project, mode and session details"),
@@ -97,6 +101,7 @@ enum SessionOp {
     Compact(Option<String>),
     Context,
     Fork(String),
+    Handoff(String, String),
 }
 
 /// `/context`: window, threshold and where the tokens go.
@@ -225,6 +230,17 @@ async fn run_session_op(
             Ok(u) => notice(context_report(&u)),
             Err(e) => notice(format!("could not read the context: {e}")),
         },
+        SessionOp::Handoff(new_id, goal) => {
+            let from = session.session_id.clone();
+            match session.handoff(new_id, &goal).await {
+                Ok(tokens) => notice(format!(
+                    "handed off {from} → {} (~{} tokens of context); {from} is unchanged",
+                    session.session_id,
+                    format::tokens(tokens as i64)
+                )),
+                Err(e) => notice(format!("handoff failed: {e}")),
+            }
+        }
         SessionOp::Fork(new_id) => {
             let from = session.session_id.clone();
             match session.fork(new_id).await {
@@ -844,6 +860,16 @@ impl App {
                 for (cmd, desc) in SLASH_COMMANDS {
                     text.push_str(&format!("\n  {cmd:<10} {desc}"));
                 }
+                let custom = self.custom_commands();
+                if !custom.is_empty() {
+                    text.push_str("\nCustom commands:");
+                    for c in &custom {
+                        text.push_str(&format!(
+                            "\n  /{:<9} {} ({})",
+                            c.name, c.description, c.scope
+                        ));
+                    }
+                }
                 text.push_str(
                     "\nKeys: Enter send · Alt+Enter/Ctrl+J new line · Shift+Tab mode · Tab complete /commands and @files\n      Esc stop the agent · type while it works to guide it · PgUp/PgDn scroll · Ctrl+C twice quit",
                 );
@@ -1005,7 +1031,7 @@ impl App {
                 }
             }
             "/undo" | "/rewind" | "/cost" | "/usage" | "/model" | "/compact" | "/fork"
-            | "/review" | "/context"
+            | "/review" | "/context" | "/handoff"
                 if busy =>
             {
                 self.hint = Some("wait for the current turn to finish".into());
@@ -1021,6 +1047,21 @@ impl App {
             )),
             "/context" => self.start_session_op(SessionOp::Context),
             "/review" => self.start_review((!args.is_empty()).then(|| args.join(" "))),
+            "/handoff" if args.is_empty() => {
+                self.hint = Some("usage: /handoff <the next task>".into());
+            }
+            "/handoff" => {
+                let Some(root) = self.project().map(|p| p.root.clone()) else {
+                    return;
+                };
+                match self.index.create(&root) {
+                    Ok(record) => {
+                        let _ = self.index.touch(&record.id, &args.join(" "));
+                        self.start_session_op(SessionOp::Handoff(record.id, args.join(" ")))
+                    }
+                    Err(e) => self.transcript.notice(e.to_string(), Tone::Error),
+                }
+            }
             "/fork" => {
                 let Some(root) = self.project().map(|p| p.root.clone()) else {
                     return;
@@ -1125,10 +1166,27 @@ impl App {
                 }
             }
             "/clear" => self.transcript.clear(),
-            _ => self.transcript.notice(
-                format!("unknown command {name}; /help lists commands"),
-                Tone::Error,
+            _ => match microclaw_code_core::commands::expand(&self.custom_commands(), line) {
+                Some(_) if busy => {
+                    self.hint = Some("wait for the current turn to finish".into());
+                }
+                Some(prompt) => self.start_turn(prompt, Some(line.trim().to_string())),
+                None => self.transcript.notice(
+                    format!("unknown command {name}; /help lists commands"),
+                    Tone::Error,
+                ),
+            },
+        }
+    }
+
+    /// Custom commands (`.microclaw/commands`, `~/.microclaw/code/commands`).
+    fn custom_commands(&self) -> Vec<microclaw_code_core::commands::CustomCommand> {
+        match self.project() {
+            Some(project) => microclaw_code_core::commands::load(
+                project,
+                &microclaw_code_core::commands::personal_dir(),
             ),
+            None => Vec::new(),
         }
     }
 
@@ -1178,6 +1236,11 @@ impl App {
             SLASH_COMMANDS
                 .iter()
                 .map(|(c, _)| c.to_string())
+                .chain(
+                    self.custom_commands()
+                        .iter()
+                        .map(|c| format!("/{}", c.name)),
+                )
                 .filter(|c| c.starts_with(&word))
                 .collect()
         } else if let Some(prefix) = word.strip_prefix('@') {

@@ -301,6 +301,8 @@ pub struct CodeSession {
     /// Workspace checkpoints taken at the start of each turn, oldest first,
     /// with the turn's prompt.
     turn_checkpoints: Vec<(Checkpoint, String)>,
+    /// Language servers, started on first use.
+    lsp: Option<crate::lsp::LspPool>,
     /// Tool policy for the next run instead of the mode's (reviews).
     policy_override: Option<ToolPolicy>,
 }
@@ -347,6 +349,7 @@ impl CodeSession {
             allow_rules: AllowRules::load(AllowRules::default_path()),
             pending_approval: None,
             turn_checkpoints: Vec::new(),
+            lsp: None,
             policy_override: None,
         }
     }
@@ -505,6 +508,26 @@ impl CodeSession {
             self.set_model(Some(&model)).await?;
         }
         Ok(())
+    }
+
+    /// Continue in a new session `new_id` that starts from a summary of
+    /// this one focused on `goal`; this session stays as it was.
+    pub async fn handoff(&mut self, new_id: String, goal: &str) -> anyhow::Result<usize> {
+        let model = self.model().await.ok();
+        let tokens = self
+            .microclaw
+            .handoff_session(&self.session_id, &new_id, goal)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.session_id = new_id;
+        self.pending_approval = None;
+        self.turn_checkpoints.clear();
+        if let Some(model) = model
+            && self.model().await.ok().as_deref() != Some(model.as_str())
+        {
+            self.set_model(Some(&model)).await?;
+        }
+        Ok(tokens)
     }
 
     /// Review the uncommitted changes with read-only tools. `focus` narrows
@@ -827,6 +850,74 @@ impl CodeSession {
         }
     }
 
+    /// Run project hooks; a failing hook is reported but does not stop the turn.
+    async fn run_hooks(&self, kind: &str, commands: &[String], updates: &UnboundedSender<Update>) {
+        for command in commands {
+            let check = Check {
+                name: format!("{kind} hook"),
+                run: command.clone(),
+                auto: false,
+                timeout_secs: Some(120),
+            };
+            let outcome = verify::run_check(&self.project.root, &check).await;
+            if !outcome.success {
+                let _ = updates.send(Update::Notice(format!(
+                    "{kind} hook `{command}` failed: {}",
+                    verify::tail(outcome.output.trim_end(), 300)
+                )));
+            }
+        }
+    }
+
+    /// Language-server errors in `files`, as a check outcome (`None`: no
+    /// server covers them or nothing to report).
+    async fn lsp_check(
+        &mut self,
+        files: &[String],
+        updates: &UnboundedSender<Update>,
+    ) -> Option<CheckOutcome> {
+        if !self.project.lsp_enabled() || self.settings.mode == Mode::Plan || files.is_empty() {
+            return None;
+        }
+        let root = self.project.root.clone();
+        let pool = self
+            .lsp
+            .get_or_insert_with(|| crate::lsp::LspPool::new(&root));
+        if !pool.covers(files) {
+            return None;
+        }
+        let check = Check {
+            name: "lsp".into(),
+            run: "language server diagnostics".into(),
+            auto: true,
+            timeout_secs: None,
+        };
+        let _ = updates.send(Update::CheckStarted(check.clone()));
+        let started = std::time::Instant::now();
+        let report = pool.diagnose(files).await;
+        let output = report
+            .errors
+            .iter()
+            .take(40)
+            .map(|d| d.render())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let outcome = CheckOutcome {
+            check,
+            success: report.errors.is_empty(),
+            exit_code: Some(if report.errors.is_empty() { 0 } else { 1 }),
+            timed_out: false,
+            duration: started.elapsed(),
+            output: if output.is_empty() {
+                format!("no errors ({})", report.languages.join(", "))
+            } else {
+                output
+            },
+        };
+        let _ = updates.send(Update::CheckFinished(outcome.clone()));
+        (!outcome.success).then_some(outcome)
+    }
+
     /// Run the checks, stopping at the first failure. `None` = cancelled.
     async fn run_checks(
         &self,
@@ -856,6 +947,17 @@ impl CodeSession {
             }
         }
         Some(None)
+    }
+
+    /// End of a turn: `after_turn` hooks when files changed.
+    async fn finish_turn(&self, report: &TurnReport, updates: &UnboundedSender<Update>) {
+        if !report.changed_files.is_empty()
+            && self.project.trusted
+            && self.settings.mode != Mode::Plan
+        {
+            let hooks = self.project.config.hooks.after_turn.clone();
+            self.run_hooks("after_turn", &hooks, updates).await;
+        }
     }
 
     /// One user turn: run the agent, resolve approvals, verify changes and
@@ -948,23 +1050,43 @@ impl CodeSession {
                 (Some(a), Some(b)) => a != b,
                 _ => false,
             };
-            if !self.verify_active() || (report.changed_files.is_empty() && !worktree_changed) {
+            let changed_now = !report.changed_files.is_empty() || worktree_changed;
+            if changed_now && self.settings.mode != Mode::Plan && self.project.trusted {
+                let hooks = self.project.config.hooks.after_edit.clone();
+                self.run_hooks("after_edit", &hooks, updates).await;
+            }
+            let lsp_failure = if changed_now {
+                let files = report.changed_files.clone();
+                self.lsp_check(&files, updates).await
+            } else {
+                None
+            };
+            if lsp_failure.is_none() && (!self.verify_active() || !changed_now) {
+                self.finish_turn(&report, updates).await;
                 return Ok(report);
             }
-            let checks = self.project.auto_checks();
-            match self.run_checks(&checks, updates, controls).await {
+            let result = match lsp_failure {
+                Some(failure) => Some(Some(failure)),
+                None => {
+                    let checks = self.project.auto_checks();
+                    self.run_checks(&checks, updates, controls).await
+                }
+            };
+            match result {
                 None => {
                     report.cancelled = true;
                     return Ok(report);
                 }
                 Some(None) => {
                     report.checks_passed = Some(true);
+                    self.finish_turn(&report, updates).await;
                     return Ok(report);
                 }
                 Some(Some(failure)) => {
                     report.checks_passed = Some(false);
                     if fix_round >= self.settings.max_fix_rounds {
                         let _ = updates.send(Update::ChecksGaveUp(failure));
+                        self.finish_turn(&report, updates).await;
                         return Ok(report);
                     }
                     fix_round += 1;

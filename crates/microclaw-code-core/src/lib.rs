@@ -14,9 +14,11 @@
 //! The Agent Engine is reached only through `microclaw-sdk`.
 
 pub mod allow;
+pub mod commands;
 pub mod driver;
 pub mod git;
 pub mod home;
+pub mod lsp;
 pub mod project;
 pub mod prompt;
 pub mod remote;
