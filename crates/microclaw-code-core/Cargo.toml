@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 microclaw-sdk = { version = "0.20.0", path = "../microclaw-sdk", features = ["full"] }
 anyhow = "1"
+base64 = "0.22"
 chrono = "0.4"
 dirs = "6"
 futures-util = "0.3"

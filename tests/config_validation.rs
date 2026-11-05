@@ -140,6 +140,7 @@ fn minimal_config() -> Config {
         tool_repeat_window: 10,
         tool_repeat_limit: 3,
         anthropic_prompt_cache_enabled: true,
+        anthropic_context_editing: false,
         anthropic_prompt_cache_ttl: "5m".into(),
         checkpoints_enabled: false,
         skill_archive_after_days: 30,

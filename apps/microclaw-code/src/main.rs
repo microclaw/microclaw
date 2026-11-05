@@ -107,6 +107,15 @@ struct Cli {
     #[arg(long)]
     context_tools: bool,
 
+    /// Run in a new git worktree on branch `mccode/<NAME>` (default: a
+    /// generated name), leaving the main checkout untouched.
+    #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
+    worktree: Option<String>,
+
+    /// Stop once this session used this many tokens (input + output).
+    #[arg(long, value_name = "TOKENS")]
+    max_session_tokens: Option<u64>,
+
     /// With -p: run the task on the paired MicroClaw Server (see
     /// `mccode remote pair`) instead of this machine.
     #[arg(long, requires = "print")]
@@ -187,6 +196,24 @@ enum Command {
     Review {
         /// What to focus on, e.g. "error handling" or a path.
         focus: Vec<String>,
+        /// Review pull request N (via `gh pr diff`, or fetched from origin)
+        /// instead of the uncommitted changes.
+        #[arg(long, value_name = "N")]
+        pr: Option<u64>,
+        /// With --pr: post the review as a PR comment (`gh pr comment`).
+        #[arg(long, requires = "pr")]
+        post: bool,
+    },
+    /// Write a session's transcript as Markdown.
+    Export {
+        /// Output file (default: mccode-<session>.md in the current directory).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// List or remove worktrees created with --worktree.
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
     },
     /// List, add or remove shell commands that run without asking here.
     Allow {
@@ -211,6 +238,14 @@ enum EvalAction {
         #[arg(long)]
         all: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorktreeAction {
+    /// List this repository's MicroClaw Code worktrees.
+    List,
+    /// Remove a worktree (it must have no uncommitted changes) and its merged branch.
+    Remove { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -303,6 +338,61 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         project.set_trusted(true);
     }
 
+    if let Some(Command::Worktree { action }) = &cli.command {
+        match action {
+            WorktreeAction::List => {
+                let trees = microclaw_code_core::worktree::list(&project.root)?;
+                if trees.is_empty() {
+                    println!(
+                        "No MicroClaw Code worktrees for {}.",
+                        project.root.display()
+                    );
+                }
+                for tree in trees {
+                    println!(
+                        "{:<20} {:<28} {}",
+                        tree.name,
+                        tree.branch,
+                        tree.path.display()
+                    );
+                }
+            }
+            WorktreeAction::Remove { name } => {
+                microclaw_code_core::worktree::remove(&project.root, name)?;
+                println!("Removed worktree {name}.");
+            }
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let main_root = project.root.clone();
+    let worktree = match &cli.worktree {
+        Some(name) => {
+            let name = if name.trim().is_empty() {
+                microclaw_code_core::worktree::default_name()
+            } else {
+                name.trim().to_string()
+            };
+            let tree = microclaw_code_core::worktree::create(&project.root, &name)?;
+            let was_trusted = project.trusted;
+            project =
+                Project::discover(&tree.path, |root, hash| trust_store.is_trusted(root, hash))?;
+            if was_trusted && !project.trusted {
+                trust_store.set(&project.root, true, project.config_sha256.as_deref())?;
+                project.set_trusted(true);
+            }
+            eprintln!(
+                "{}",
+                style.dim(&format!(
+                    "Working in worktree {} (branch {}).",
+                    tree.path.display(),
+                    tree.branch
+                ))
+            );
+            Some(tree)
+        }
+        None => None,
+    };
+
     match &cli.command {
         Some(Command::Setup { .. }) => unreachable!("handled above"),
         Some(Command::Info) => {
@@ -364,7 +454,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
-        Some(Command::Review { .. })
+        Some(Command::Worktree { .. }) => unreachable!("handled above"),
+        Some(Command::Export { .. })
+        | Some(Command::Review { .. })
         | Some(Command::Remote { .. })
         | Some(Command::Update { .. })
         | Some(Command::Eval { .. })
@@ -374,7 +466,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     }
 
     let review_focus = match &cli.command {
-        Some(Command::Review { focus }) => Some(focus.join(" ")),
+        Some(Command::Review { focus, .. }) => Some(focus.join(" ")),
         _ => None,
     };
     let print_prompt = match cli.print.as_deref() {
@@ -448,9 +540,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     }
 
     let mut index = SessionIndex::load(SessionIndex::default_path());
+    let export = matches!(cli.command, Some(Command::Export { .. }));
     let session_id = if let Some(id) = &cli.session {
         id.clone()
-    } else if cli.continue_last {
+    } else if cli.continue_last || export {
         index
             .for_project(&project.root)
             .first()
@@ -479,6 +572,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             None
         }
     };
+    if sandbox.is_none() && mode == Mode::Auto {
+        notices.push(AUTO_WITHOUT_SANDBOX.into());
+        if !interactive && !cli.json {
+            eprintln!("{}", style.yellow(AUTO_WITHOUT_SANDBOX));
+        }
+    }
 
     if acp {
         let mode = cli
@@ -547,6 +646,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let microclaw = builder.build().await.map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let settings = SessionSettings {
+        max_session_tokens: cli.max_session_tokens.or(project.config.max_session_tokens),
         mode,
         verify: !cli.no_verify,
         max_fix_rounds: cli
@@ -557,11 +657,33 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     };
     let session = CodeSession::new(microclaw, project, session_id.clone(), settings);
 
-    match print_prompt {
+    if let Some(Command::Export { out }) = &cli.command {
+        let markdown = session.export_markdown()?;
+        let path = out
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(format!("mccode-{session_id}.md")));
+        std::fs::write(&path, markdown)?;
+        println!("Wrote {}.", path.display());
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let code = match print_prompt {
         Some(prompt) => {
-            let task = match review_focus {
-                Some(focus) => PrintTask::Review(Some(focus).filter(|f| !f.trim().is_empty())),
-                None => {
+            let task = match (review_focus, &cli.command) {
+                (
+                    Some(focus),
+                    Some(Command::Review {
+                        pr: Some(number),
+                        post,
+                        ..
+                    }),
+                ) => PrintTask::ReviewPr {
+                    number: *number,
+                    focus: Some(focus).filter(|f| !f.trim().is_empty()),
+                    post: *post,
+                },
+                (Some(focus), _) => PrintTask::Review(Some(focus).filter(|f| !f.trim().is_empty())),
+                (None, _) => {
                     let commands = microclaw_code_core::commands::load(
                         &session.project,
                         &microclaw_code_core::commands::personal_dir(),
@@ -580,7 +702,14 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             eprintln!("Session {id} saved. Resume with `mccode -c`.");
             Ok(ExitCode::SUCCESS)
         }
+    };
+    if let Some(tree) = &worktree {
+        eprintln!(
+            "{}",
+            style.bold(&microclaw_code_core::worktree::summary(tree, &main_root))
+        );
     }
+    code
 }
 
 /// `-p`: one turn, printed as lines (or JSON Lines).
@@ -588,6 +717,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 enum PrintTask {
     Prompt(String),
     Review(Option<String>),
+    ReviewPr {
+        number: u64,
+        focus: Option<String>,
+        post: bool,
+    },
 }
 
 async fn print_mode(
@@ -600,6 +734,13 @@ async fn print_mode(
     let label = match &task {
         PrintTask::Prompt(prompt) => prompt.clone(),
         PrintTask::Review(focus) => format!("/review {}", focus.as_deref().unwrap_or("")),
+        PrintTask::ReviewPr { number, .. } => format!("/review --pr {number}"),
+    };
+    let post_pr = match &task {
+        PrintTask::ReviewPr {
+            number, post: true, ..
+        } => Some(*number),
+        _ => None,
     };
     let _ = index.touch(&session.session_id, label.trim());
     let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
@@ -611,6 +752,20 @@ async fn print_mode(
                 session
                     .review(focus.as_deref(), &updates_tx, &mut controls_rx)
                     .await
+            }
+            PrintTask::ReviewPr { number, focus, .. } => {
+                match microclaw_code_core::worktree::pull_request_diff(
+                    &session.project.root,
+                    number,
+                ) {
+                    Ok(diff) if !diff.trim().is_empty() => {
+                        session
+                            .review_diff(&diff, focus.as_deref(), &updates_tx, &mut controls_rx)
+                            .await
+                    }
+                    Ok(_) => Err(anyhow::anyhow!("pull request #{number} has no changes")),
+                    Err(e) => Err(anyhow::anyhow!("could not get pull request #{number}: {e}")),
+                }
             }
         };
         (session, report)
@@ -657,6 +812,41 @@ async fn print_mode(
         }
     } else if report.checks_passed == Some(true) && !json {
         eprintln!("{}", style.green("all checks passed"));
+    }
+    if let Some(number) = post_pr
+        && !report.failed
+        && !report.final_text.trim().is_empty()
+    {
+        let body = format!(
+            "{}\n\n---\n_Review by MicroClaw Code_",
+            report.final_text.trim()
+        );
+        let posted = std::process::Command::new("gh")
+            .args(["pr", "comment", &number.to_string(), "--body-file", "-"])
+            .current_dir(&session.project.root)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    stdin.write_all(body.as_bytes())?;
+                }
+                child.wait()
+            });
+        match posted {
+            Ok(status) if status.success() => {
+                eprintln!(
+                    "{}",
+                    style.green(&format!("posted the review on #{number}"))
+                )
+            }
+            _ => eprintln!(
+                "{}",
+                style.yellow(
+                    "could not post the review (is the GitHub CLI `gh` installed and logged in?)"
+                )
+            ),
+        }
     }
     if json {
         println!(
@@ -979,7 +1169,16 @@ async fn remote_print(cli: &Cli, style: Style) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::from(report.exit_code()))
 }
 
-const NO_SANDBOX_NOTICE: &str = "No OS sandbox on this machine: shell commands run unsandboxed (install bubblewrap on Linux; pass --sandbox off to hide this notice).";
+const NO_SANDBOX_NOTICE: &str = if cfg!(windows) {
+    "Windows has no OS sandbox for shell commands yet: they run with your permissions. In ask mode every command asks first; avoid auto mode in repositories you do not trust (--sandbox off hides this notice)."
+} else if cfg!(target_os = "macos") {
+    "No OS sandbox: sandbox-exec is unavailable, so shell commands run unsandboxed (--sandbox off hides this notice)."
+} else {
+    "No OS sandbox on this machine: shell commands run unsandboxed (install bubblewrap; pass --sandbox off to hide this notice)."
+};
+
+/// Auto mode without a sandbox runs commands with the user's full permissions.
+const AUTO_WITHOUT_SANDBOX: &str = "auto mode without an OS sandbox: non-destructive commands run without asking and with your full permissions.";
 
 /// The shell sandbox chosen by `--sandbox` / `MICROCLAW_CODE_SANDBOX`.
 fn sandbox_choice(cli: &Cli) -> anyhow::Result<ShellSandbox> {
@@ -1051,7 +1250,11 @@ async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<Ex
         ),
         (ShellSandbox::WorkspaceWrite { .. }, None) => bad(
             "shell sandbox",
-            "unavailable: install bubblewrap (`bwrap`) and allow unprivileged user namespaces; commands run unsandboxed".into(),
+            if cfg!(windows) {
+                "unavailable on Windows: commands run with your permissions and ask first in ask mode".into()
+            } else {
+                "unavailable: install bubblewrap (`bwrap`) and allow unprivileged user namespaces; commands run unsandboxed".into()
+            },
         ),
     }
     match MicroClaw::builder(&path)

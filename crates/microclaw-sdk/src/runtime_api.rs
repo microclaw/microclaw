@@ -21,6 +21,11 @@ pub use microclaw_engine::{WebSocketWorkerTransport, WorkerHost};
 /// ending the run with a text prompt that the next message answers.
 pub const INTERACTIVE_APPROVALS: &str = microclaw_engine::headless::INTERACTIVE_APPROVALS_KEY;
 
+/// `RunRequest::metadata` key for an image attached to the prompt:
+/// `{"media_type": "image/png", "data": "<base64>"}`.
+#[cfg(feature = "full")]
+pub const IMAGE_METADATA: &str = microclaw_engine::headless::IMAGE_KEY;
+
 /// A workspace checkpoint (see `MicroClaw::checkpoint`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checkpoint {

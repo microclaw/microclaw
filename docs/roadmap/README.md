@@ -8,7 +8,7 @@ plan exists first.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`mccode-next-plan-cn.md`](./mccode-next-plan-cn.md) | Planned | Next MicroClaw Code plan after 0.20.0: comparison with Claude Code, Codex CLI, OpenCode and Kimi CLI; token-based context engine (pruning, structured incremental compaction, `/context`), model-driven context tools, LSP, hooks, Windows sandbox. |
+| [`mccode-next-plan-cn.md`](./mccode-next-plan-cn.md) | Delivered (0.21–0.23) | Next MicroClaw Code plan after 0.20.0: comparison with Claude Code, Codex CLI, OpenCode and Kimi CLI; token-based context engine (pruning, structured incremental compaction, `/context`), model-driven context tools, LSP, hooks, Windows sandbox. |
 | [`microclaw-code-proposal-cn.md`](./microclaw-code-proposal-cn.md) | Delivered | MicroClaw Code (`mccode`) product line and its five batches (#527–#531); section 10 lists open ideas. |
 | [`v0.20.0-plan.md`](./v0.20.0-plan.md) | Delivered | First MicroClaw Code (`mccode`) release: terminal coding agent, OS sandbox, verification, ACP/MCP, separate packages and install scripts. |
 | [`v0.11.1-plan.md`](./v0.11.1-plan.md) | Delivered | Security patch: global `tool_policy.allow_tools` is a real allowlist with wildcards, the tool catalog is filtered by policy, and doctor / config check flag an empty policy. |

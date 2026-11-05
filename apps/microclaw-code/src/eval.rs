@@ -211,6 +211,7 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let session_id = format!("eval-{name}-{}", chrono_stamp());
         let settings = SessionSettings {
+            max_session_tokens: project.config.max_session_tokens,
             mode,
             verify: true,
             max_fix_rounds: options

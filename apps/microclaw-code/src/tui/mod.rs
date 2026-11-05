@@ -1047,6 +1047,30 @@ impl App {
             )),
             "/context" => self.start_session_op(SessionOp::Context),
             "/review" => self.start_review((!args.is_empty()).then(|| args.join(" "))),
+            "/export" => {
+                let Some(session) = &self.session else {
+                    self.hint = Some("wait for the current turn to finish".into());
+                    return;
+                };
+                let path = match args.first() {
+                    Some(path) => std::path::PathBuf::from(path),
+                    None => session
+                        .project
+                        .root
+                        .join(format!("mccode-{}.md", session.session_id)),
+                };
+                match session
+                    .export_markdown()
+                    .and_then(|text| std::fs::write(&path, text).map_err(Into::into))
+                {
+                    Ok(()) => self
+                        .transcript
+                        .notice(format!("wrote {}", path.display()), Tone::Success),
+                    Err(e) => self
+                        .transcript
+                        .notice(format!("export failed: {e}"), Tone::Error),
+                }
+            }
             "/handoff" if args.is_empty() => {
                 self.hint = Some("usage: /handoff <the next task>".into());
             }

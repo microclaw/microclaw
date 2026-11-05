@@ -8,6 +8,26 @@ pub struct AnthropicProvider {
     base_url: String,
     prompt_cache_enabled: bool,
     prompt_cache_ttl: String,
+    /// Server-side clearing of old tool results (Anthropic context editing,
+    /// beta): `(trigger_tokens, keep_tool_uses)`.
+    context_editing: Option<(usize, usize)>,
+}
+
+/// Beta flag for Anthropic context editing.
+const CONTEXT_MANAGEMENT_BETA: &str = "context-management-2025-06-27";
+
+/// `context_management` for Anthropic context editing: clear older tool
+/// results on the server once the prompt passes `trigger` tokens, keeping the
+/// newest `keep` tool uses.
+fn context_management_body(trigger: usize, keep: usize) -> serde_json::Value {
+    json!({
+        "edits": [{
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "input_tokens", "value": trigger},
+            "keep": {"type": "tool_uses", "value": keep},
+            "clear_at_least": {"type": "input_tokens", "value": 10_000}
+        }]
+    })
 }
 
 impl AnthropicProvider {
@@ -20,7 +40,28 @@ impl AnthropicProvider {
             base_url: resolve_anthropic_messages_url(config.llm_base_url.as_deref().unwrap_or("")),
             prompt_cache_enabled: config.anthropic_prompt_cache_enabled,
             prompt_cache_ttl: config.anthropic_prompt_cache_ttl.clone(),
+            context_editing: config.anthropic_context_editing.then(|| {
+                let budget = crate::context_window::ContextBudget::for_model(config, &config.model);
+                let trigger = if budget.enabled() {
+                    budget.threshold * 3 / 4
+                } else {
+                    100_000
+                };
+                (trigger.max(10_000), 6)
+            }),
         }
+    }
+
+    /// Headers and body additions for server-side context editing.
+    fn extra_headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if self.context_editing.is_some() {
+            headers.insert(
+                "anthropic-beta",
+                reqwest::header::HeaderValue::from_static(CONTEXT_MANAGEMENT_BETA),
+            );
+        }
+        headers
     }
 
     /// Serialize the request and, if prompt caching is enabled, mutate the
@@ -34,6 +75,9 @@ impl AnthropicProvider {
         })?;
         if self.prompt_cache_enabled {
             crate::prompt_cache::apply_anthropic_prompt_cache(&mut body, &self.prompt_cache_ttl);
+        }
+        if let Some((trigger, keep)) = self.context_editing {
+            body["context_management"] = context_management_body(trigger, keep);
         }
         Ok(body)
     }
@@ -61,6 +105,7 @@ impl AnthropicProvider {
             .header("x-api-key", self.key_pool.current())
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
+            .headers(self.extra_headers())
             .json(&body)
             .send()
             .await?;
@@ -326,6 +371,7 @@ impl LlmProvider for AnthropicProvider {
                 .header("x-api-key", self.key_pool.current())
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
+                .headers(self.extra_headers())
                 .json(&body)
                 .send()
                 .await;
@@ -449,5 +495,40 @@ mod tests {
     fn test_resolve_anthropic_messages_url_appends_messages_path_for_prefix_base() {
         let url = resolve_anthropic_messages_url("http://127.0.0.1:3000/api/");
         assert_eq!(url, "http://127.0.0.1:3000/api/v1/messages");
+    }
+}
+
+#[cfg(test)]
+mod context_editing_tests {
+    use super::*;
+
+    #[test]
+    fn context_editing_is_opt_in_and_shapes_the_request() {
+        let mut config = Config::test_defaults();
+        config.llm_provider = "anthropic".into();
+        config.model = "claude-sonnet-4-5".into();
+        let provider = AnthropicProvider::new(&config);
+        assert!(provider.extra_headers().is_empty());
+        let request = MessagesRequest {
+            model: config.model.clone(),
+            max_tokens: 100,
+            system: String::new(),
+            messages: vec![],
+            tools: None,
+            stream: None,
+        };
+        let body = provider.build_request_body(&request).unwrap();
+        assert!(body.get("context_management").is_none());
+
+        config.anthropic_context_editing = true;
+        let provider = AnthropicProvider::new(&config);
+        assert_eq!(
+            provider.extra_headers().get("anthropic-beta").unwrap(),
+            CONTEXT_MANAGEMENT_BETA
+        );
+        let body = provider.build_request_body(&request).unwrap();
+        let edit = &body["context_management"]["edits"][0];
+        assert_eq!(edit["type"], "clear_tool_uses_20250919");
+        assert!(edit["trigger"]["value"].as_u64().unwrap() >= 10_000);
     }
 }

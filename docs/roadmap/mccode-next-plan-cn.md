@@ -1,6 +1,6 @@
 # MicroClaw Code 下一阶段开发规划（对比主流 Coding Agent）
 
-状态：**规划中（暂不开发）**
+状态：**0.21–0.23 已实现**（#538、#539、#540）
 更新：**2026-11-04**
 基线：**v0.20.0**（MicroClaw Code 首个版本）
 
@@ -219,6 +219,16 @@ AGENTS.md 已在系统提示词里，保持不变。
 | D6 | nixpkgs、Windows ARM | 补齐分发渠道 |
 
 ---
+
+## 交付情况
+
+| 版本范围 | PR | 说明 |
+|---|---|---|
+| 0.21：C1–C6、C12 | #538 | 按 token 计预算（含模型窗口表）、先裁剪后摘要、结构化增量摘要、补回用户原话与改动文件、失败兜底、`/context`、状态栏占用、`ContextCompacted` 事件、多轮评测用例 |
+| 0.22：C7–C11、E1–E3 | #539 | 向模型暴露预算、`context_note` / `rewind_context`（默认关闭）、`explore` 只读助手与项目 agent、`/handoff`、项目记忆 `.microclaw/memory.md`、LSP 诊断、`after_edit` / `after_turn` hooks、自定义斜杠命令 |
+| 0.23：E4–E8、D3、D5 | #540 | `@图片`（含 ACP）、Windows 明确降级、`--worktree` 并行任务、`review --pr`、`/export`、Anthropic 服务端 context editing（可选）、会话 token 预算 |
+
+尚未做：D1 VS Code、D2 JetBrains、D4 模型预设、D6 nixpkgs / Windows ARM；Windows 真正的沙箱（AppContainer / 受限令牌）仍待实现。
 
 ## 4. 版本计划
 

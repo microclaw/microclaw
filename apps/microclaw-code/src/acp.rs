@@ -161,6 +161,14 @@ fn flatten_prompt(blocks: &[ContentBlock]) -> String {
                     ));
                 }
             }
+            ContentBlock::Image(image) => {
+                let dir = microclaw_code_core::home::code_home().join("acp-images");
+                match microclaw_code_core::images::save_base64(&dir, &image.mime_type, &image.data)
+                {
+                    Ok(path) => parts.push(format!("(image attached: @{})", path.display())),
+                    Err(e) => parts.push(format!("(an image could not be attached: {e})")),
+                }
+            }
             _ => {}
         }
     }
@@ -393,6 +401,7 @@ impl CodeAcpAgent {
             .or(project.config.mode)
             .unwrap_or_default();
         let settings = SessionSettings {
+            max_session_tokens: project.config.max_session_tokens,
             mode,
             verify: self.options.verify,
             max_fix_rounds: self
@@ -425,7 +434,9 @@ impl Agent for CodeAcpAgent {
             .agent_capabilities(
                 AgentCapabilities::new()
                     .load_session(true)
-                    .prompt_capabilities(PromptCapabilities::new().embedded_context(true)),
+                    .prompt_capabilities(
+                        PromptCapabilities::new().embedded_context(true).image(true),
+                    ),
             ))
     }
 
