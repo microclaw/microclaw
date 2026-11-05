@@ -1,7 +1,7 @@
 {
   "name": "microclaw-web-e2e",
   "private": true,
-  "version": "0.20.0",
+  "version": "0.23.0",
   "type": "module",
   "description": "Browser smoke tests for the embedded MicroClaw Web UI (runs against the built microclaw binary).",
   "engines": {

@@ -93,7 +93,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.20.0**, the first release of **MicroClaw Code** (`mccode`, preview): a coding agent for your repository with a full-screen terminal UI, `plan` / `ask` / `auto` modes, an OS sandbox for shell commands, automatic verification with your project's checks, `/undo` checkpoints, Zed integration over ACP and an MCP server for other agents. It ships as its own download and install script. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.20.0).
+The latest release is **v0.23.0**. MicroClaw Code gets a token-aware context engine (tool-output pruning, structured incremental summaries that keep your own words, `/context`), model-managed context (budget hints, a parallel read-only `explore` helper, `/handoff`), project memory, language-server diagnostics, hooks, custom slash commands, image input, `--worktree` tasks, `review --pr`, `/export` and session token budgets. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.23.0).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -142,7 +142,7 @@ Worker support without pulling in the Server, Web console, or concrete channel a
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.20.0", features = ["full"] }
+microclaw-sdk = { version = "0.23.0", features = ["full"] }
 ```
 
 ```rust

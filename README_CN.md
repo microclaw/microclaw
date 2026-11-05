@@ -91,7 +91,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.20.0**，是 **MicroClaw Code**（`mccode`，预览版）的首个版本：面向你自己仓库的编码智能体，提供全屏终端界面、`plan` / `ask` / `auto` 三种模式、shell 命令的系统沙箱、按项目检查自动验证、`/undo` 检查点、通过 ACP 接入 Zed，以及供其他智能体调用的 MCP 服务。它有独立的下载包和安装脚本。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.20.0)。
+最新版本为 **v0.23.0**。MicroClaw Code 换上了按 token 计算的上下文引擎（先清理旧工具输出、结构化增量摘要并保留你的原话、`/context`），模型可以参与管理上下文（预算提示、可并行的只读 `explore` 助手、`/handoff`），并新增项目记忆、语言服务器诊断、hooks、自定义斜杠命令、图片输入、`--worktree` 并行任务、`review --pr`、`/export` 和会话 token 预算。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.23.0)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -140,7 +140,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.20.0", features = ["full"] }
+microclaw-sdk = { version = "0.23.0", features = ["full"] }
 ```
 
 ```rust
