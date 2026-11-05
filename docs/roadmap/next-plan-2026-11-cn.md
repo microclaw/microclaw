@@ -25,6 +25,9 @@
 用 DeepSeek（`deepseek-flash`、`deepseek-v4-pro`）跑评测和逐项手测，
 结果与修复记录在 [`v0.23.1-plan.md`](./v0.23.1-plan.md)。
 
+状态：完成，[v0.23.1](https://github.com/microclaw/microclaw/releases/tag/v0.23.1)
+已于 2026-11-05 发布（crates.io、Homebrew 同步）。
+
 遗留：
 - 评测用例太小，还不能衡量 0.21 定的“每个任务 token 降 25%”；需要更大的长会话用例，
   以及 `eval replay` 从本仓库历史生成的回归集。
