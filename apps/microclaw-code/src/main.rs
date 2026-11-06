@@ -345,9 +345,6 @@ enum AllowAction {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    if let Some(note) = home::migrate_legacy_home() {
-        eprintln!("mccode: {note}");
-    }
     // SAFETY: no other thread exists yet; the runtime is built below.
     unsafe { isolate_engine_env(&home::code_home()) };
     let runtime = match tokio::runtime::Builder::new_multi_thread()

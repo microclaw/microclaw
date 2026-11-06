@@ -15,27 +15,9 @@ use serde::Serialize;
 pub const HOME_ENV: &str = "MCCODE_HOME";
 /// Environment variable naming an explicit configuration file.
 pub const CONFIG_ENV: &str = "MCCODE_CONFIG";
-/// Earlier names of the variables above, still honoured.
-const LEGACY_ENV: &[(&str, &str)] = &[
-    ("MCCODE_HOME", "MICROCLAW_CODE_HOME"),
-    ("MCCODE_CONFIG", "MICROCLAW_CODE_CONFIG"),
-    ("MCCODE_SANDBOX", "MICROCLAW_CODE_SANDBOX"),
-    ("MCCODE_MANAGED", "MICROCLAW_CODE_MANAGED"),
-];
-
-/// A non-empty `MCCODE_*` variable, or its pre-0.26 `MICROCLAW_CODE_*` name.
+/// A non-empty environment variable.
 pub fn env_var(name: &str) -> Option<OsString> {
-    env_var_in(name, |var| std::env::var_os(var))
-}
-
-fn env_var_in(name: &str, env: impl Fn(&str) -> Option<OsString>) -> Option<OsString> {
-    let set = |var: &str| env(var).filter(|v| !v.is_empty());
-    set(name).or_else(|| {
-        LEGACY_ENV
-            .iter()
-            .find(|(current, _)| *current == name)
-            .and_then(|(_, legacy)| set(legacy))
-    })
+    std::env::var_os(name).filter(|v| !v.is_empty())
 }
 
 /// The Code home directory.
@@ -43,75 +25,9 @@ pub fn code_home() -> PathBuf {
     if let Some(dir) = env_var(HOME_ENV) {
         return PathBuf::from(dir);
     }
-    default_home(&dirs::home_dir().unwrap_or_else(std::env::temp_dir))
-}
-
-fn default_home(user_home: &Path) -> PathBuf {
-    user_home.join(".mccode")
-}
-
-/// Where versions before 0.26 kept the Code home.
-fn legacy_home(user_home: &Path) -> PathBuf {
-    user_home.join(".microclaw").join("code")
-}
-
-/// Move a Code home left by an earlier version from `~/.microclaw/code` to
-/// `~/.mccode`, once. Returns a line to show the user when something moved or
-/// could not be moved. Does nothing when `MCCODE_HOME` is set or `~/.mccode`
-/// already exists.
-pub fn migrate_legacy_home() -> Option<String> {
-    if env_var(HOME_ENV).is_some() {
-        return None;
-    }
-    migrate_legacy_home_in(&dirs::home_dir()?)
-}
-
-fn migrate_legacy_home_in(user_home: &Path) -> Option<String> {
-    let new = default_home(user_home);
-    let old = legacy_home(user_home);
-    if new.exists() || !old.is_dir() {
-        return None;
-    }
-    if let Err(e) = std::fs::rename(&old, &new) {
-        return Some(format!(
-            "could not move {} to {}: {e}. Move it by hand to keep your settings and sessions.",
-            old.display(),
-            new.display()
-        ));
-    }
-    repair_worktrees(&new.join("worktrees"));
-    // Leave `~/.microclaw` alone unless Code was the only thing in it.
-    if let Some(parent) = old.parent() {
-        let _ = std::fs::remove_dir(parent);
-    }
-    Some(format!(
-        "moved MicroClaw Code data from {} to {}.",
-        old.display(),
-        new.display()
-    ))
-}
-
-/// `--worktree` checkouts moved with the home: point their repositories at
-/// the new location (best effort; `git worktree repair` is idempotent).
-fn repair_worktrees(root: &Path) {
-    let Ok(repos) = std::fs::read_dir(root) else {
-        return;
-    };
-    for repo in repos.flatten() {
-        let Ok(trees) = std::fs::read_dir(repo.path()) else {
-            continue;
-        };
-        for tree in trees.flatten() {
-            let path = tree.path();
-            if path.join(".git").is_file() {
-                let _ = std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(&path)
-                    .args(["worktree", "repair"])
-                    .output();
-            }
-        }
-    }
+    dirs::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".mccode")
 }
 
 /// Engine data directory (SQLite, memory, checkpoints, MCP and skill state).
@@ -270,71 +186,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = resolve_config_in(None, dir.path(), None).unwrap_err();
         assert!(err.to_string().contains("mccode setup"));
-    }
-
-    #[test]
-    fn legacy_env_names_still_work() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| {
-            move |var: &str| {
-                pairs
-                    .iter()
-                    .find(|(k, _)| *k == var)
-                    .map(|(_, v)| OsString::from(*v))
-            }
-        };
-        assert_eq!(
-            env_var_in(HOME_ENV, env(&[("MICROCLAW_CODE_HOME", "/old")])),
-            Some("/old".into())
-        );
-        assert_eq!(
-            env_var_in(
-                HOME_ENV,
-                env(&[("MICROCLAW_CODE_HOME", "/old"), ("MCCODE_HOME", "/new")])
-            ),
-            Some("/new".into())
-        );
-        assert_eq!(env_var_in(HOME_ENV, env(&[("MCCODE_HOME", "")])), None);
-        // Server variables are not Code variables.
-        assert_eq!(
-            env_var_in(CONFIG_ENV, env(&[("MICROCLAW_CONFIG", "/s")])),
-            None
-        );
-    }
-
-    #[test]
-    fn legacy_home_moves_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let user = dir.path();
-        assert_eq!(migrate_legacy_home_in(user), None);
-
-        let old = user.join(".microclaw/code");
-        std::fs::create_dir_all(old.join("data")).unwrap();
-        std::fs::write(old.join("settings.yaml"), "version: 1\n").unwrap();
-        let note = migrate_legacy_home_in(user).unwrap();
-        assert!(note.starts_with("moved"), "{note}");
-        assert!(user.join(".mccode/settings.yaml").is_file());
-        assert!(user.join(".mccode/data").is_dir());
-        assert!(!old.exists());
-        // `~/.microclaw` held only Code data, so it is gone too.
-        assert!(!user.join(".microclaw").exists());
-        assert_eq!(migrate_legacy_home_in(user), None);
-
-        // A Server data directory next to it is left alone.
-        let dir = tempfile::tempdir().unwrap();
-        let user = dir.path();
-        std::fs::create_dir_all(user.join(".microclaw/code")).unwrap();
-        std::fs::write(user.join(".microclaw/microclaw.config.yaml"), "x").unwrap();
-        migrate_legacy_home_in(user).unwrap();
-        assert!(user.join(".microclaw/microclaw.config.yaml").is_file());
-        assert!(user.join(".mccode").is_dir());
-
-        // An existing ~/.mccode wins; the old directory is not touched.
-        let dir = tempfile::tempdir().unwrap();
-        let user = dir.path();
-        std::fs::create_dir_all(user.join(".microclaw/code")).unwrap();
-        std::fs::create_dir_all(user.join(".mccode")).unwrap();
-        assert_eq!(migrate_legacy_home_in(user), None);
-        assert!(user.join(".microclaw/code").is_dir());
     }
 
     #[test]

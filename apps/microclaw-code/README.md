@@ -34,8 +34,7 @@ MicroClaw Code and the MicroClaw Server are separate products. Each installs,
 updates and uninstalls on its own, and neither reads the other's
 configuration, data or `MICROCLAW_*` / `MCCODE_*` variables; they share no
 model settings. Pairing with a Server (`mccode remote pair`) is the only link,
-and only when you set it up. Versions before 0.26 kept Code data in
-`~/.microclaw/code`; the first run of a newer `mccode` moves it to `~/.mccode`.
+and only when you set it up.
 
 ## Use
 

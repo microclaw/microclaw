@@ -9,15 +9,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 ### Changed
 
 - **MicroClaw Code is fully separate from the MicroClaw Server.** Its home
-  moves from `~/.microclaw/code` to `~/.mccode`; the first run of the new
-  `mccode` moves an existing directory there (settings, sessions, trust,
-  checkpoints and `--worktree` checkouts, which are repaired). Code no longer
+  moves from `~/.microclaw/code` to `~/.mccode` (nothing is migrated: move the
+  old directory by hand to keep settings and sessions). Code no longer
   borrows model credentials from `MICROCLAW_CONFIG` or
   `~/.microclaw/microclaw.config.yaml`: it uses `--config`, `MCCODE_CONFIG`,
   `~/.mccode/config.yaml` or a settings profile. Its variables are
   `MCCODE_HOME`, `MCCODE_CONFIG`, `MCCODE_SANDBOX`, `MCCODE_MANAGED`,
   `MCCODE_LOCAL_SANDBOX`, `MCCODE_PATH_ALLOWLIST` and `MCCODE_REPO` (the old
-  `MICROCLAW_CODE_*` names still work), and Server variables such as
+  `MICROCLAW_CODE_*` names are no longer read), and Server variables such as
   `MICROCLAW_CONFIG`, `MICROCLAW_SKILLS_DIR` and `MICROCLAW_LOCAL_SANDBOX`
   no longer affect it. Managed settings move to `/etc/mccode/managed.yaml`
   (macOS `/Library/Application Support/mccode/managed.yaml`, Windows
