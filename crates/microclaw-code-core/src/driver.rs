@@ -891,6 +891,15 @@ impl CodeSession {
     /// Decide whether an approval needs a person.
     fn gate(&self, approval: &PendingApproval) -> Gate {
         let preview = approval.preview.as_deref().unwrap_or("");
+        // An `ask` permission rule or a pre_tool_use hook asked for a
+        // person: neither auto mode nor the sandbox shortcut may answer it.
+        if self
+            .tool_gate
+            .as_ref()
+            .is_some_and(|g| g.take_ask(&approval.tool))
+        {
+            return Gate::Ask;
+        }
         if self.always_ask.iter().any(|re| re.is_match(preview)) {
             return Gate::Ask;
         }
@@ -1367,9 +1376,13 @@ impl CodeSession {
         use crate::user_hooks::{HookEvent, HookPayload};
         let hooks = self.hooks();
         let mut prompt = prompt.to_string();
+        // A bare option value answers an approval left pending by a
+        // non-interactive run; the engine only recognizes it unchanged, so
+        // prompt hooks (which may append context) do not run on it.
+        let approval_answer = matches!(prompt.trim(), "1" | "2" | "3");
         if let Some(h) = hooks
             .as_ref()
-            .filter(|h| h.has(HookEvent::UserPromptSubmit))
+            .filter(|h| !approval_answer && h.has(HookEvent::UserPromptSubmit))
         {
             let outcome = h
                 .run(
@@ -1445,6 +1458,9 @@ impl CodeSession {
         controls: &mut UnboundedReceiver<Control>,
     ) -> anyhow::Result<TurnReport> {
         let mut report = TurnReport::default();
+        if let Some(gate) = &self.tool_gate {
+            gate.clear_asks();
+        }
         // Checkpoint the workspace so `/undo` can return to this point.
         match self
             .microclaw
@@ -1508,14 +1524,11 @@ impl CodeSession {
 
             // Text-path approvals (non-interactive runs): the run ended; answer
             // it with the next message.
+            // Only approvals that `gate()` already sent to a person get here
+            // (they were deferred above), so they are not gated a second time:
+            // a rule's ask is claimed once, and auto mode must not answer it.
             if let Some(approval) = self.pending_approval.take() {
-                let answer = if let Gate::Auto { rule } = self.gate(&approval) {
-                    let _ = updates.send(Update::AutoApproved {
-                        tool: approval.tool.clone(),
-                        rule,
-                    });
-                    Waited::Answer("1".into())
-                } else if self.settings.interactive {
+                let answer = if self.settings.interactive {
                     let _ = updates.send(Update::ApprovalRequested(approval.clone()));
                     self.wait_for_answer(&approval, controls).await
                 } else {

@@ -386,10 +386,13 @@ impl CodeAcpAgent {
             .insert(root.to_path_buf(), (code_settings.clone(), gate.clone()));
         let mut builder = MicroClaw::builder(&self.options.config_path)
             .tool_gate(std::sync::Arc::new(gate))
-            .summary_model(microclaw_code_core::settings::role_model(
-                &code_settings,
-                "summary",
-            ))
+            .summary_model({
+                let setup = crate::role_setup(&code_settings, None);
+                for warning in &setup.warnings {
+                    eprintln!("mccode: {warning}");
+                }
+                setup.summary
+            })
             .caller_channel(microclaw_code_core::driver::CALLER_CHANNEL)
             .workspace(root)
             .data_dir(microclaw_code_core::home::data_dir())
@@ -434,7 +437,7 @@ impl CodeAcpAgent {
         let mut session = CodeSession::new(engine, project, id.clone(), settings);
         if let Some((code_settings, gate)) = self.gates.borrow().get(&root) {
             session.set_tool_gate(gate.clone());
-            session.set_role_models(crate::role_models(code_settings));
+            session.set_role_models(crate::role_setup(code_settings, None).roles);
         }
         self.sessions.borrow_mut().insert(
             id.clone(),

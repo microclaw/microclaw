@@ -85,6 +85,9 @@ const MAX_PENDING: usize = 64;
 pub struct CodeToolGate {
     state: Arc<RwLock<GateState>>,
     pending: Arc<Mutex<HashMap<String, Pending>>>,
+    /// Per tool, calls a rule or hook sent to a person and not yet claimed
+    /// by [`CodeToolGate::take_ask`].
+    asked: Arc<Mutex<HashMap<String, usize>>>,
     events: Option<UnboundedSender<GateEvent>>,
 }
 
@@ -107,8 +110,33 @@ impl CodeToolGate {
                 root: root.into(),
             })),
             pending: Arc::default(),
+            asked: Arc::default(),
             events: None,
         }
+    }
+
+    /// Whether a rule or hook asked for a person on a call of `tool` that
+    /// is now waiting for approval; claims one such call. The driver uses
+    /// this so auto mode (and the ask-mode sandbox shortcut) cannot approve
+    /// what an `ask` rule sent to a person. A stray count only makes a later
+    /// approval of the same tool ask a person too, never the reverse.
+    pub fn take_ask(&self, tool: &str) -> bool {
+        let mut asked = self.asked.lock().unwrap_or_else(|e| e.into_inner());
+        match asked.get_mut(tool) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                if *n == 0 {
+                    asked.remove(tool);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Forget unclaimed asks (a new turn starts).
+    pub fn clear_asks(&self) {
+        self.asked.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// Report what the gate does on `tx`.
@@ -222,6 +250,25 @@ fn hook_response(result: &ToolGateResult<'_>) -> Value {
 #[async_trait]
 impl ToolGate for CodeToolGate {
     async fn before(&self, call: &ToolGateCall<'_>) -> ToolGateOutcome {
+        let outcome = self.decide(call).await;
+        if !call.approved && matches!(outcome.decision, ToolGateDecision::Ask { .. }) {
+            *self
+                .asked
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(call.tool.to_string())
+                .or_default() += 1;
+        }
+        outcome
+    }
+
+    async fn after(&self, call: &ToolGateCall<'_>, result: &ToolGateResult<'_>) -> Option<String> {
+        self.after_call(call, result).await
+    }
+}
+
+impl CodeToolGate {
+    async fn decide(&self, call: &ToolGateCall<'_>) -> ToolGateOutcome {
         if UNGATED_TOOLS.contains(&call.tool) {
             return ToolGateOutcome::allow();
         }
@@ -347,7 +394,11 @@ impl ToolGate for CodeToolGate {
         }
     }
 
-    async fn after(&self, call: &ToolGateCall<'_>, result: &ToolGateResult<'_>) -> Option<String> {
+    async fn after_call(
+        &self,
+        call: &ToolGateCall<'_>,
+        result: &ToolGateResult<'_>,
+    ) -> Option<String> {
         if UNGATED_TOOLS.contains(&call.tool) || result.error_type == Some("approval_required") {
             return None;
         }
@@ -575,6 +626,14 @@ mod tests {
         let retry = g.before(&call("bash", &ls, true)).await;
         assert_eq!(retry.decision, ToolGateDecision::Allow);
         assert_eq!(retry.updated_input, Some(json!({"command": "ls -la"})));
+        // The rule's ask is claimed once by the driver; the approved retry
+        // does not count again.
+        assert!(g.take_ask("bash"));
+        assert!(!g.take_ask("bash"));
+        assert!(!g.take_ask("read_file"));
+        g.before(&call("bash", &ls, false)).await;
+        g.clear_asks();
+        assert!(!g.take_ask("bash"));
         let res = ToolGateResult {
             content: "out",
             is_error: false,

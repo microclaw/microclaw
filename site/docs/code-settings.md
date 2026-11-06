@@ -16,7 +16,7 @@ the look of the terminal interface, key bindings and notifications.
 |---|---|---|
 | user | `~/.microclaw/code/settings.yaml` | Your preferences for every project. |
 | project | `<repo>/.microclaw/settings.yaml` | Shared with the repository. Read only in [trusted projects](./code-usage#project-trust). |
-| local | `<repo>/.microclaw/settings.local.yaml` | This project, not committed. Read only in trusted projects. "Always allow" choices and `/permissions add` go here. |
+| local | `<repo>/.microclaw/settings.local.yaml` | This project, not committed: mccode adds it to the repository's `.git/info/exclude` when it writes the file. Read only in trusted projects. "Always allow" choices and `/permissions add` go here. |
 | managed | `/etc/microclaw/code/managed.yaml` (macOS: `/Library/Application Support/MicroClaw/code/managed.yaml`) | Set by an administrator. Its values win and its `deny` / `ask` rules always apply. |
 
 The layers merge in that order: user, then project, then local, then managed.
@@ -127,7 +127,11 @@ API keys in environment variables (`api_key_env`), or put `api_key` in the
 user layer only; `mccode config doctor` warns about keys in project layers.
 
 `model.roles` picks models for kinds of work: `plan` for plan-mode turns,
-`review` for reviews, `summary` for compaction summaries and handoffs.
+`review` for reviews, `summary` for compaction summaries and handoffs. A role
+switches the model within the session's provider, so it must name a model on
+the same profile (`ds/deepseek-v4-pro` when the session runs on `ds`) or a bare
+model name; a role on another profile is skipped with a warning. Unset roles
+use the session's model.
 `/model` opens a picker with your profiles and the built-in presets, which
 list each model's context window.
 

@@ -510,9 +510,29 @@ Hooks 事件（第一版）：`session_start`、`user_prompt_submit`、`pre_tool
 
 已知限制：
 
-- 没有用真实模型做端到端测试（本机没有模型配置）；TUI 用 expect 驱动的无模型冒烟测试覆盖了启动、
-  弹出补全、shell 模式、`/config`、`/permissions`、主题选择器、全文模式、内联模式与回退。
+- 无模型冒烟测试（expect 驱动）覆盖了启动、弹出补全、shell 模式、`/config`、`/permissions`、
+  主题选择器、全文模式、内联模式与回退。真实模型测试见下一节。
 - `read(...)` 规则不覆盖 bash（`cat .env` 不被 `read(**/.env)` 拦截，靠沙箱和路径保护）；`net(...)`
   只覆盖 `web_fetch`。
 - 终端背景深浅只从 `COLORFGBG` 判断，没有做 OSC 11 查询；判断不了时按深色。
 - Server 重启会丢失待处理的远程审批（客户端看到 `Gone`，回到终端里答）。
+
+### 10.1 真实模型测试（DeepSeek）
+
+用 `deepseek-flash` 和 `deepseek-v4-pro`（macOS arm64，独立 `MICROCLAW_CODE_HOME`，设置里的
+`ds` profile，`type: deepseek` + `api_key_env`）测试；TUI 用伪终端驱动并渲染屏幕检查。
+
+| 项目 | 做法 | 结果 |
+|---|---|---|
+| profile 启动 + plan 模式 | `-p --mode plan` | **bug**：角色模型把 `ds/deepseek-flash` 原样当模型名发出 → 修复（`settings::role_model_for`，同 profile 才切换，其他 profile 跳过并警告） |
+| auto 模式修 bug + 检查 | `-p --mode auto --trust` | 一次修好，lsp 与 build 检查通过 |
+| deny / allow 规则、pre_tool_use hook 拦截、user_prompt_submit 加上下文 | `-p --mode ask` | 全部生效 |
+| `ask` 规则 | auto 模式下 `edit(src/**)` | **bug**：auto 模式直接批准了规则要求问人的调用 → 修复（gate 记录规则/hook 的 ask，driver 不再自动批准；文本路径不再二次判断） |
+| 暂停后 `-p 1` 继续 | 同上 | **bug**：prompt hook 给 `1` 加了上下文，引擎认不出是审批，反复要求批准 → 修复（`1`/`2`/`3` 不跑 prompt hook） |
+| shell 工具 | TUI 里模型的 `grep --include=*.rs` | **bug**：命令用 `$SHELL`（zsh）执行，未匹配的通配符直接报错 → 修复（有 bash 就用 bash） |
+| TUI 一轮 + 审批对话框 + 回执 | ask 模式，4 次审批 | 对话框、回执（文件、检查、沙箱/网络、token、检查点）正常 |
+| `/btw`、`/configure` | 同一会话 | 侧问回答正确；`/configure` 提议 `user · tui.theme = github-light`，确认后写入并即时换主题 |
+| `/goal` | 带溢出测试的失败用例，auto 模式 | 1 轮达成，3/3 测试通过；`ask` 规则在 auto 模式下仍要求了 1 次批准 |
+| review 角色 | `mccode review`，`review: ds/deepseek-v4-pro` | 用 v4-pro 审查（换成不存在的模型名会被 API 拒绝，证明角色生效），找到除零与 `i64::MIN / -1` |
+| 本地设置文件 | review 指出 `settings.local.yaml` 未被忽略 | 改进：写本地层时加入 `.git/info/exclude` |
+| 后台命令 `bash_kill` | 改用 bash 后的单元测试 | **bug**：只杀 shell，子进程（如 `npm run dev` 下的 node）留着并占住输出，状态一直是 running → 修复（独立进程组，`killpg`；杀掉后最多等 2 秒输出）。Linux bubblewrap 用 `--new-session`，沙箱里的孙进程仍可能残留，需要 `--unshare-pid`，留待以后 |

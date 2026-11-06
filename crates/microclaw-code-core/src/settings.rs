@@ -1315,6 +1315,56 @@ fn role_key(role: &str) -> &'static str {
     }
 }
 
+/// The model name to switch to for a role inside a running session.
+///
+/// The engine can change a session's model but not its provider, so a role
+/// spec is resolved against the profiles: `profile/model` or a bare profile
+/// name on the session's own profile becomes the bare model name, and one
+/// on another profile is an `Err` for the caller to report. A bare model
+/// name is used as is. `Ok(None)`: the role is not set (the session's model
+/// is used).
+pub fn role_model_for(
+    settings: &CodeSettings,
+    role: &str,
+    active_profile: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(spec) = role_value(&settings.model.roles, role)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+    let profiles = &settings.model.profiles;
+    let (profile, model) = if let Some((name, model)) = spec.split_once('/')
+        && profiles.contains_key(name)
+        && !model.trim().is_empty()
+    {
+        (Some(name), model.trim().to_string())
+    } else if let Some(p) = profiles.get(&spec) {
+        match &p.model {
+            Some(m) => (Some(spec.as_str()), m.clone()),
+            None => {
+                return Err(format!(
+                    "model.roles.{role}: profile `{spec}` has no model; use `{spec}/<model>`"
+                ));
+            }
+        }
+    } else {
+        (None, spec.clone())
+    };
+    match profile {
+        Some(p) if active_profile == Some(p) => Ok(Some(model)),
+        Some(p) => Err(format!(
+            "model.roles.{role} uses profile `{p}`, but this session runs on {}; \
+             a role can only change the model within the session's provider",
+            active_profile
+                .map(|a| format!("profile `{a}`"))
+                .unwrap_or_else(|| "the MicroClaw configuration file".into())
+        )),
+        None => Ok(Some(model)),
+    }
+}
+
 fn role_value(roles: &ModelRoles, role: &str) -> Option<String> {
     match role {
         "plan" => roles.plan.clone(),
@@ -1416,7 +1466,58 @@ fn write_doc(path: &Path, header: Option<&str>, doc: &Value) -> anyhow::Result<(
     let tmp = path.with_extension("yaml.tmp");
     std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path)?;
+    if layer_of_file(path) == SettingsLayer::ProjectLocal {
+        keep_out_of_git(path);
+    }
     Ok(())
+}
+
+/// Add the local settings file to the repository's `info/exclude` (local to
+/// the clone; the tracked `.gitignore` is left alone) so personal rules and
+/// hook paths are not committed by accident. Best effort.
+fn keep_out_of_git(path: &Path) {
+    let Some(root) = path.parent().and_then(Path::parent) else {
+        return;
+    };
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let Some(exclude) = git(&[
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-path",
+        "info/exclude",
+    ])
+    .filter(|p| !p.is_empty()) else {
+        return;
+    };
+    let entry = format!("/{}/{LOCAL_SETTINGS_FILE}", crate::project::PROJECT_DIR);
+    // Already ignored (by .gitignore, a global ignore or an earlier run)?
+    let relative = format!("{}/{LOCAL_SETTINGS_FILE}", crate::project::PROJECT_DIR);
+    if git(&["check-ignore", "-q", &relative]).is_some() {
+        return;
+    }
+    let exclude = PathBuf::from(exclude);
+    let mut text = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if text.lines().any(|l| l.trim() == entry) {
+        return;
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&entry);
+    text.push('\n');
+    if let Some(parent) = exclude.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&exclude, text);
 }
 
 /// Strict check of a document before it is written: schema plus
@@ -2133,6 +2234,51 @@ mod tests {
     }
 
     #[test]
+    fn local_settings_are_kept_out_of_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        if !git(&["init", "-q"]).status.success() {
+            return; // no git on this machine
+        }
+        let local = SettingsLayer::ProjectLocal.path(dir.path());
+        set_in_file(&local, "tui.diff", "split").unwrap();
+        append_in_file(&local, "permissions.ask", "bash(git push *)").unwrap();
+        assert!(
+            git(&["check-ignore", "-q", ".microclaw/settings.local.yaml"])
+                .status
+                .success()
+        );
+        let exclude = std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
+        assert_eq!(
+            exclude
+                .lines()
+                .filter(|l| *l == "/.microclaw/settings.local.yaml")
+                .count(),
+            1,
+            "{exclude}"
+        );
+        // The shared project layer stays visible to git.
+        set_in_file(
+            &SettingsLayer::Project.path(dir.path()),
+            "tui.diff",
+            "split",
+        )
+        .unwrap();
+        assert!(
+            !git(&["check-ignore", "-q", ".microclaw/settings.yaml"])
+                .status
+                .success()
+        );
+    }
+
+    #[test]
     fn resolve_model_cases() {
         let mut settings = CodeSettings::default();
         assert_eq!(resolve_model(&settings, Some("x")), None);
@@ -2198,6 +2344,29 @@ mod tests {
             Some("claude/claude-sonnet-4-6")
         );
         assert_eq!(resolve_role(&settings, "review").unwrap().profile, "ds");
+
+        // Roles switch the model inside the session's profile only.
+        settings.model.roles.review = Some("ds/deepseek-flash".into());
+        assert_eq!(
+            role_model_for(&settings, "review", Some("ds")),
+            Ok(Some("deepseek-flash".into()))
+        );
+        settings.model.roles.review = Some("ds".into());
+        assert_eq!(
+            role_model_for(&settings, "review", Some("ds")),
+            Ok(Some("deepseek-v4-pro".into()))
+        );
+        assert!(role_model_for(&settings, "review", Some("claude")).is_err());
+        assert!(role_model_for(&settings, "review", None).is_err());
+        settings.model.roles.review = Some("claude".into());
+        assert!(role_model_for(&settings, "review", Some("claude")).is_err());
+        settings.model.roles.review = Some("gpt-5-mini".into());
+        assert_eq!(
+            role_model_for(&settings, "review", None),
+            Ok(Some("gpt-5-mini".into()))
+        );
+        // Unset roles do not fall back to model.default.
+        assert_eq!(role_model_for(&settings, "plan", Some("claude")), Ok(None));
     }
 
     #[test]

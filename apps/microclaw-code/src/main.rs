@@ -764,6 +764,16 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         eprintln!("{}", style.dim("Starting the Agent Engine…"));
     }
     let (gate, gate_events) = build_gate(&project, &settings_doc, &session_id);
+    let role_setup = role_setup(
+        &settings_doc,
+        profile_model.as_ref().map(|m| m.profile.as_str()),
+    );
+    for warning in &role_setup.warnings {
+        if !interactive && !cli.json {
+            eprintln!("{}", style.yellow(warning));
+        }
+        notices.push(warning.clone());
+    }
     let mut builder = match &profile_model {
         Some(m) => {
             let mut runtime =
@@ -776,7 +786,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         None => MicroClaw::builder(&config_path),
     }
     .tool_gate(std::sync::Arc::new(gate.clone()))
-    .summary_model(code_settings::role_model(&settings_doc, "summary"))
+    .summary_model(role_setup.summary.clone())
     .caller_channel(CALLER_CHANNEL)
     .workspace(&project.root)
     .data_dir(home::data_dir())
@@ -802,7 +812,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     };
     let mut session = CodeSession::new(microclaw, project, session_id.clone(), settings);
     session.set_tool_gate(gate.clone());
-    session.set_role_models(role_models(&settings_doc));
+    session.set_role_models(role_setup.roles.clone());
     for message in session
         .session_hook(
             microclaw_code_core::user_hooks::HookEvent::SessionStart,
@@ -1012,7 +1022,7 @@ async fn print_mode(
         if !json {
             eprintln!("{}", approval_card(style, &approval.without_code_options()));
             let hint = if session.settings.mode == Mode::Auto {
-                " This command always asks, even in auto mode.".to_string()
+                " A permission rule or the always-ask list sends this call to a person, even in auto mode.".to_string()
             } else if let Some(rule) = &approval.suggested_rule {
                 format!(" Or allow it from now on with `mccode allow add {rule}`.")
             } else {
@@ -1624,12 +1634,34 @@ pub(crate) fn project_gate(
     (loaded.settings, gate)
 }
 
-pub(crate) fn role_models(
+/// Per-role models resolved for a session on `active_profile` (`None`: the
+/// MicroClaw configuration file).
+pub(crate) struct RoleSetup {
+    pub roles: microclaw_code_core::driver::RoleModels,
+    pub summary: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+pub(crate) fn role_setup(
     settings: &code_settings::CodeSettings,
-) -> microclaw_code_core::driver::RoleModels {
-    microclaw_code_core::driver::RoleModels {
-        plan: code_settings::role_model(settings, "plan"),
-        review: code_settings::role_model(settings, "review"),
+    active_profile: Option<&str>,
+) -> RoleSetup {
+    let mut warnings = Vec::new();
+    let mut get = |role: &str| {
+        code_settings::role_model_for(settings, role, active_profile).unwrap_or_else(|e| {
+            warnings.push(e);
+            None
+        })
+    };
+    let roles = microclaw_code_core::driver::RoleModels {
+        plan: get("plan"),
+        review: get("review"),
+    };
+    let summary = get("summary");
+    RoleSetup {
+        roles,
+        summary,
+        warnings,
     }
 }
 
