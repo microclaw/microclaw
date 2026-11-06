@@ -28,6 +28,13 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 struct Server {
     options: ServeOptions,
     engines: HashMap<PathBuf, MicroClaw>,
+    gates: HashMap<
+        PathBuf,
+        (
+            microclaw_code_core::settings::CodeSettings,
+            microclaw_code_core::gate::CodeToolGate,
+        ),
+    >,
 }
 
 fn tools() -> Value {
@@ -105,7 +112,15 @@ impl Server {
         if let Some(engine) = self.engines.get(root) {
             return Ok(engine.clone());
         }
+        let (code_settings, gate) = crate::project_gate(root);
+        self.gates
+            .insert(root.to_path_buf(), (code_settings.clone(), gate.clone()));
         let mut builder = MicroClaw::builder(&self.options.config_path)
+            .tool_gate(std::sync::Arc::new(gate))
+            .summary_model(microclaw_code_core::settings::role_model(
+                &code_settings,
+                "summary",
+            ))
             .caller_channel(microclaw_code_core::driver::CALLER_CHANNEL)
             .workspace(root)
             .data_dir(microclaw_code_core::home::data_dir())
@@ -157,7 +172,13 @@ impl Server {
             sandbox: self.options.sandbox_info.clone(),
         };
         let engine = self.engine(&project.root).await?;
-        Ok(CodeSession::new(engine, project, id, settings))
+        let root = project.root.clone();
+        let mut session = CodeSession::new(engine, project, id, settings);
+        if let Some((code_settings, gate)) = self.gates.get(&root) {
+            session.set_tool_gate(gate.clone());
+            session.set_role_models(crate::role_models(code_settings));
+        }
+        Ok(session)
     }
 
     async fn call(&mut self, name: &str, args: &Value) -> anyhow::Result<(String, bool)> {
@@ -244,6 +265,7 @@ pub async fn serve(options: ServeOptions) -> anyhow::Result<()> {
     let mut server = Server {
         options,
         engines: HashMap::new(),
+        gates: HashMap::new(),
     };
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();

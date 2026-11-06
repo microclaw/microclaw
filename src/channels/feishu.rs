@@ -2461,6 +2461,20 @@ async fn handle_feishu_event(
         return;
     }
 
+    // A reply naming an option of a pending MicroClaw Code remote approval
+    // in this chat answers it and never reaches the agent.
+    if crate::remote_approvals::intercept_text_reply(
+        &app_state,
+        &runtime.channel_name,
+        chat_id_str,
+        &format!("feishu:{sender_open_id}"),
+        &text,
+    )
+    .await
+    {
+        return;
+    }
+
     // Send ACK reaction (已读标记) — only when enabled in config
     if feishu_cfg.ack_reaction {
         let ack_http_client = http_client.clone();

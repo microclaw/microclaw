@@ -38,6 +38,7 @@ include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
 mod a2a;
 mod auth;
 mod chat_abort;
+mod code_remote;
 mod config;
 mod governance;
 mod metrics;

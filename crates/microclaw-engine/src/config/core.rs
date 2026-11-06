@@ -287,6 +287,10 @@ pub struct Config {
     /// `explore` tool. Set by embedders for trusted workspaces.
     #[serde(default)]
     pub project_agents_dir: Option<String>,
+    /// Embedder-supplied gate consulted before every tool call (permission
+    /// rules, user hooks). Never read from or written to the file.
+    #[serde(skip)]
+    pub tool_gate: crate::tool_gate::ToolGateHandle,
     /// Offer the model the context tools `context_note` and
     /// `rewind_context`. Default: false.
     #[serde(default)]
@@ -1079,6 +1083,7 @@ impl Config {
             compact_keep_recent_tokens: 0,
             compact_instructions: None,
             project_agents_dir: None,
+            tool_gate: Default::default(),
             context_tools: false,
             context_budget_hint: false,
             explore_tool: false,

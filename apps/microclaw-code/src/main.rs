@@ -7,12 +7,14 @@
 //! binary only handles the command line and presentation.
 
 mod acp;
+mod clipboard;
 mod eval;
 mod format;
 mod mcp_server;
 mod print;
 mod setup;
 mod tui;
+mod ui;
 mod update;
 
 use std::io::IsTerminal;
@@ -27,6 +29,7 @@ use microclaw_code_core::driver::{
 use microclaw_code_core::home;
 use microclaw_code_core::project::{self, Mode, Project};
 use microclaw_code_core::sessions::SessionIndex;
+use microclaw_code_core::settings as code_settings;
 use microclaw_code_core::trust::{TrustDecision, TrustStore};
 use microclaw_code_core::verify;
 use microclaw_sdk::{MicroClaw, ShellSandbox};
@@ -215,6 +218,22 @@ enum Command {
         #[command(subcommand)]
         action: WorktreeAction,
     },
+    /// Show or change settings (`~/.microclaw/code/settings.yaml`,
+    /// `.microclaw/settings.yaml`, `.microclaw/settings.local.yaml`).
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
+    /// Import settings, commands, agents, hooks and MCP servers from
+    /// claude, codex or opencode (dry run unless --apply).
+    Import {
+        source: String,
+        #[arg(long)]
+        apply: bool,
+        /// Write into `user` or `project` settings.
+        #[arg(long, default_value = "project")]
+        target: String,
+    },
     /// List, add or remove shell commands that run without asking here.
     Allow {
         #[command(subcommand)]
@@ -264,6 +283,48 @@ enum RemoteAction {
     Status,
     /// Remove the stored pairing (revoke the device in the Server too).
     Forget,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigAction {
+    /// Print the effective settings (default).
+    Show,
+    /// Print one key and the layer it comes from (e.g. `tui.theme`).
+    Get { key: String },
+    /// Set a key in a layer (`user` by default; `project`, `local`).
+    Set {
+        key: String,
+        #[arg(required = true, num_args = 1..)]
+        value: Vec<String>,
+        #[arg(long, default_value = "user")]
+        layer: String,
+    },
+    /// Remove a key from a layer.
+    Unset {
+        key: String,
+        #[arg(long, default_value = "user")]
+        layer: String,
+    },
+    /// List the settings files in merge order.
+    Paths,
+    /// Check every layer: unknown keys, bad rules, bad values.
+    Doctor,
+    /// Write a commented settings template (user layer unless --layer).
+    Init {
+        #[arg(long, default_value = "user")]
+        layer: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the JSON Schema of the settings file.
+    Schema,
+    /// Upgrade older settings files to the current format.
+    Migrate,
+    /// Open a settings layer in $EDITOR.
+    Edit {
+        #[arg(long, default_value = "user")]
+        layer: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -336,6 +397,18 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if cli.trust && !project.trusted {
         trust_store.set(&project.root, true, project.config_sha256.as_deref())?;
         project.set_trusted(true);
+    }
+
+    if let Some(Command::Config { action }) = &cli.command {
+        return config_command(action.as_ref().unwrap_or(&ConfigAction::Show), &project);
+    }
+    if let Some(Command::Import {
+        source,
+        apply,
+        target,
+    }) = &cli.command
+    {
+        return import_command(source, *apply, target, &project);
     }
 
     if let Some(Command::Worktree { action }) = &cli.command {
@@ -454,7 +527,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
-        Some(Command::Worktree { .. }) => unreachable!("handled above"),
+        Some(Command::Worktree { .. })
+        | Some(Command::Config { .. })
+        | Some(Command::Import { .. }) => unreachable!("handled above"),
         Some(Command::Export { .. })
         | Some(Command::Review { .. })
         | Some(Command::Remote { .. })
@@ -525,13 +600,64 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
     }
 
-    let mode = match cli.mode.as_deref() {
+    // Layered settings (user, project, project-local, managed).
+    let loaded = code_settings::load(&project.root, project.trusted);
+    notices.extend(loaded.warnings.iter().cloned());
+    let settings_doc = loaded.settings.clone();
+    let mut mode = match cli.mode.as_deref() {
         Some(raw) => Mode::parse(raw)
             .ok_or_else(|| anyhow::anyhow!("unknown mode '{raw}' (expected plan, ask or auto)"))?,
-        None => project.config.mode.unwrap_or_default(),
+        None => project
+            .config
+            .mode
+            .or_else(|| {
+                settings_doc
+                    .permissions
+                    .default_mode
+                    .as_deref()
+                    .and_then(Mode::parse)
+            })
+            .unwrap_or_default(),
     };
-    let (config_path, source) = home::resolve_config(cli.config.as_deref())?;
-    if source == home::ConfigSource::Server && !cli.json {
+    if settings_doc
+        .permissions
+        .disabled_modes
+        .iter()
+        .any(|m| m == mode.as_str())
+    {
+        let message = format!(
+            "{} mode is disabled by managed settings; using ask mode",
+            mode.as_str()
+        );
+        if !interactive && !cli.json {
+            eprintln!("{}", style.yellow(&message));
+        }
+        notices.push(message);
+        mode = Mode::Ask;
+    }
+    // A Code provider profile (`model.default` in settings) replaces the
+    // MicroClaw configuration file unless --config names one.
+    let profile_model = if cli.config.is_none() {
+        code_settings::resolve_model(&settings_doc, None)
+    } else {
+        None
+    };
+    let (config_path, source) = match home::resolve_config(cli.config.as_deref()) {
+        Ok(found) => found,
+        Err(_) if profile_model.is_some() => (PathBuf::new(), home::ConfigSource::CodeHome),
+        Err(e) => return Err(e),
+    };
+    if let Some(m) = &profile_model
+        && !cli.json
+    {
+        eprintln!(
+            "{}",
+            style.dim(&format!(
+                "Using model {} from settings profile `{}`.",
+                m.model, m.profile
+            ))
+        );
+    } else if source == home::ConfigSource::Server && !cli.json {
         eprintln!(
             "{}",
             style.dim(&format!(
@@ -557,7 +683,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         index.create(&project.root)?.id
     };
 
-    let sandbox_choice = sandbox_choice(&cli)?;
+    let sandbox_choice = settings_sandbox(sandbox_choice(&cli)?, &cli, &settings_doc);
     let sandbox = match (&sandbox_choice, microclaw_sdk::local_sandbox()) {
         (ShellSandbox::Off, _) => None,
         (ShellSandbox::WorkspaceWrite { network, .. }, Some(mechanism)) => Some(SandboxInfo {
@@ -580,6 +706,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
     }
 
+    if acp && config_path.as_os_str().is_empty() {
+        anyhow::bail!(
+            "acp, mcp-server and eval need a MicroClaw configuration file; run `mccode setup`"
+        );
+    }
     if acp {
         let mode = cli
             .mode
@@ -632,15 +763,28 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if !cli.json {
         eprintln!("{}", style.dim("Starting the Agent Engine…"));
     }
-    let mut builder = MicroClaw::builder(&config_path)
-        .caller_channel(CALLER_CHANNEL)
-        .workspace(&project.root)
-        .data_dir(home::data_dir())
-        .max_concurrent_runs(1)
-        .shell_sandbox(sandbox_choice)
-        .compact_instructions(project.config.compact_instructions.clone())
-        .context_tools(cli.context_tools || project.config.context_tools == Some(true))
-        .project_agents_dir(project.agents_dir());
+    let (gate, gate_events) = build_gate(&project, &settings_doc, &session_id);
+    let mut builder = match &profile_model {
+        Some(m) => {
+            let mut runtime =
+                microclaw_sdk::FullRuntimeConfig::new(&m.provider, &m.model, &m.api_key);
+            if let Some(url) = &m.base_url {
+                runtime = runtime.base_url(url);
+            }
+            MicroClaw::configure(runtime)
+        }
+        None => MicroClaw::builder(&config_path),
+    }
+    .tool_gate(std::sync::Arc::new(gate.clone()))
+    .summary_model(code_settings::role_model(&settings_doc, "summary"))
+    .caller_channel(CALLER_CHANNEL)
+    .workspace(&project.root)
+    .data_dir(home::data_dir())
+    .max_concurrent_runs(1)
+    .shell_sandbox(sandbox_choice)
+    .compact_instructions(project.config.compact_instructions.clone())
+    .context_tools(cli.context_tools || project.config.context_tools == Some(true))
+    .project_agents_dir(project.agents_dir());
     if cli.review_commands {
         builder = builder.command_reviewer(None);
     }
@@ -656,7 +800,22 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         interactive,
         sandbox,
     };
-    let session = CodeSession::new(microclaw, project, session_id.clone(), settings);
+    let mut session = CodeSession::new(microclaw, project, session_id.clone(), settings);
+    session.set_tool_gate(gate.clone());
+    session.set_role_models(role_models(&settings_doc));
+    for message in session
+        .session_hook(
+            microclaw_code_core::user_hooks::HookEvent::SessionStart,
+            if cli.session.is_some() || cli.continue_last {
+                "resume"
+            } else {
+                "startup"
+            },
+        )
+        .await
+    {
+        notices.push(message);
+    }
 
     if let Some(Command::Export { out }) = &cli.command {
         let markdown = session.export_markdown()?;
@@ -699,7 +858,63 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         None => {
             let initial = (!cli.prompt.is_empty()).then(|| cli.prompt.join(" "));
             let resumed = cli.session.is_some() || cli.continue_last;
-            let id = tui::run(session, index, trust_store, initial, notices, resumed).await?;
+            let model = session.model().await.unwrap_or_default();
+            let end_hooks = session.tool_gate().map(|g| g.hooks());
+            let remote = match &settings_doc.notify.chat {
+                Some(chat) => {
+                    match microclaw_code_core::remote_notify::RemoteNotifier::from_pairing(chat) {
+                        Ok(Some(n)) => Some(n),
+                        Ok(None) => {
+                            notices.push(format!(
+                            "notify.chat is {chat}, but this machine is not paired with a Server (`mccode remote pair`)"
+                        ));
+                            None
+                        }
+                        Err(e) => {
+                            notices.push(format!("chat notifications are off: {e}"));
+                            None
+                        }
+                    }
+                }
+                None => None,
+            };
+            let reload_gate = gate.clone();
+            let reload_session = session_id.clone();
+            let options = tui::TuiOptions {
+                settings: settings_doc.clone(),
+                warnings: Vec::new(),
+                user_settings_path: code_settings::user_settings_path(),
+                themes_dir: home::code_home().join("themes"),
+                history_file: home::code_home().join("history.jsonl"),
+                model,
+                remote,
+                gate_events: Some(gate_events),
+                on_settings_reload: Some(Box::new(move |root, loaded| {
+                    let (rules, hooks) = gate_parts(root, &loaded.settings, &reload_session);
+                    reload_gate.update(rules, hooks);
+                })),
+            };
+            let id = tui::run(
+                session,
+                index,
+                trust_store,
+                initial,
+                notices,
+                resumed,
+                options,
+            )
+            .await?;
+            if let Some(hooks) = end_hooks
+                && hooks.has(microclaw_code_core::user_hooks::HookEvent::SessionEnd)
+            {
+                let _ = hooks
+                    .run(
+                        microclaw_code_core::user_hooks::HookEvent::SessionEnd,
+                        microclaw_code_core::user_hooks::HookPayload::default()
+                            .with("reason", "exit"),
+                    )
+                    .await;
+            }
             eprintln!("Session {id} saved. Resume with `mccode -c`.");
             Ok(ExitCode::SUCCESS)
         }
@@ -1182,6 +1397,283 @@ const NO_SANDBOX_NOTICE: &str = if cfg!(windows) {
 const AUTO_WITHOUT_SANDBOX: &str = "auto mode without an OS sandbox: non-destructive commands run without asking and with your full permissions.";
 
 /// The shell sandbox chosen by `--sandbox` / `MICROCLAW_CODE_SANDBOX`.
+fn layer_arg(name: &str) -> anyhow::Result<code_settings::SettingsLayer> {
+    code_settings::SettingsLayer::parse(name).ok_or_else(|| {
+        anyhow::anyhow!("unknown layer '{name}' (expected user, project, local or managed)")
+    })
+}
+
+fn config_command(action: &ConfigAction, project: &Project) -> anyhow::Result<ExitCode> {
+    let root = &project.root;
+    match action {
+        ConfigAction::Show => {
+            let loaded = code_settings::load(root, project.trusted);
+            print!("{}", serde_yaml::to_string(&loaded.settings)?);
+            for w in &loaded.warnings {
+                eprintln!("warning: {w}");
+            }
+        }
+        ConfigAction::Get { key } => {
+            let loaded = code_settings::load(root, project.trusted);
+            match code_settings::get(&loaded, key) {
+                Some(value) => {
+                    print!("{}", serde_yaml::to_string(&value)?);
+                    if let Some(layer) = loaded.source_of(key) {
+                        eprintln!("(from {})", layer.name());
+                    }
+                }
+                None => {
+                    eprintln!("{key} is not set");
+                    return Ok(ExitCode::from(1));
+                }
+            }
+        }
+        ConfigAction::Set { key, value, layer } => {
+            let path = layer_arg(layer)?.path(root);
+            code_settings::set_in_file(&path, key, &value.join(" "))?;
+            println!("{key} set in {}", path.display());
+        }
+        ConfigAction::Unset { key, layer } => {
+            let path = layer_arg(layer)?.path(root);
+            if code_settings::unset_in_file(&path, key)? {
+                println!("{key} removed from {}", path.display());
+            } else {
+                println!("{key} was not set in {}", path.display());
+            }
+        }
+        ConfigAction::Paths => {
+            let loaded = code_settings::load(root, project.trusted);
+            for (layer, path, ok) in &loaded.layers {
+                println!(
+                    "{:<14} {} {}",
+                    layer.name(),
+                    if *ok { "loaded " } else { "-      " },
+                    path.display()
+                );
+            }
+        }
+        ConfigAction::Doctor => {
+            let diags = code_settings::doctor(root, project.trusted);
+            if diags.is_empty() {
+                println!("Settings look fine.");
+            }
+            let mut failed = false;
+            for d in diags {
+                failed |= d.severity == code_settings::Severity::Error;
+                println!(
+                    "{:?}: {} ({}): {}",
+                    d.severity,
+                    d.layer.name(),
+                    d.path.display(),
+                    d.message
+                );
+            }
+            if failed {
+                return Ok(ExitCode::from(1));
+            }
+        }
+        ConfigAction::Init { layer, force } => {
+            let path = layer_arg(layer)?.path(root);
+            if path.exists() && !force {
+                anyhow::bail!("{} exists (pass --force to overwrite)", path.display());
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, code_settings::template())?;
+            println!("Wrote {}.", path.display());
+        }
+        ConfigAction::Schema => println!("{}", code_settings::json_schema()),
+        ConfigAction::Migrate => {
+            let loaded = code_settings::load(root, true);
+            for (layer, path, _) in &loaded.layers {
+                if !path.is_file() || *layer == code_settings::SettingsLayer::Managed {
+                    continue;
+                }
+                let notes = code_settings::migrate_file(path)?;
+                if notes.is_empty() {
+                    println!("{}: up to date", path.display());
+                }
+                for note in notes {
+                    println!("{}: {note}", path.display());
+                }
+            }
+        }
+        ConfigAction::Edit { layer } => {
+            let path = layer_arg(layer)?.path(root);
+            if !path.exists() {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&path, code_settings::template())?;
+            }
+            let editor = std::env::var("VISUAL")
+                .or_else(|_| std::env::var("EDITOR"))
+                .unwrap_or_else(|_| "vi".into());
+            let mut parts = editor.split_whitespace();
+            let status = std::process::Command::new(parts.next().unwrap_or("vi"))
+                .args(parts)
+                .arg(&path)
+                .status()?;
+            if !status.success() {
+                anyhow::bail!("{editor} exited with {status}");
+            }
+            for d in code_settings::doctor(root, true) {
+                if d.path == path {
+                    println!("{:?}: {}", d.severity, d.message);
+                }
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn import_command(
+    source: &str,
+    apply: bool,
+    target: &str,
+    project: &Project,
+) -> anyhow::Result<ExitCode> {
+    use microclaw_code_core::import::{ImportSource, ImportTarget, apply_import, plan_import};
+    let source: ImportSource = source.parse().map_err(|_| {
+        anyhow::anyhow!("unknown source '{source}' (expected claude, codex or opencode)")
+    })?;
+    let plan = plan_import(source, &project.root, &dirs_home());
+    for line in plan.summary() {
+        println!("{line}");
+    }
+    if !apply {
+        println!("(dry run; pass --apply to write)");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let target = match target {
+        "user" => ImportTarget::User,
+        "project" => ImportTarget::Project,
+        other => anyhow::bail!("unknown target '{other}' (expected user or project)"),
+    };
+    let report = apply_import(&plan, target)?;
+    println!(
+        "Imported {} rule(s), {} hook(s), {} file(s), {} MCP server(s).",
+        report.rules_added,
+        report.hooks_added,
+        report.files_written.len(),
+        report.mcp_added.len()
+    );
+    for s in report.skipped {
+        println!("skipped: {s}");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Permission rules and hooks for the tool gate from merged settings.
+pub(crate) fn gate_parts(
+    root: &std::path::Path,
+    settings: &code_settings::CodeSettings,
+    session_id: &str,
+) -> (
+    microclaw_code_core::rules::PermissionRules,
+    std::sync::Arc<microclaw_code_core::user_hooks::UserHooks>,
+) {
+    use microclaw_code_core::rules::{Effect, PermissionRules};
+    let network_default = match settings.sandbox.network {
+        Some(code_settings::NetworkMode::Ask) => Some(Effect::Ask),
+        Some(code_settings::NetworkMode::Off) => Some(Effect::Deny),
+        _ => None,
+    };
+    let rules = PermissionRules::from_config(&settings.permissions, root)
+        .with_network(network_default, &settings.sandbox.allow_domains);
+    let hooks = std::sync::Arc::new(microclaw_code_core::user_hooks::UserHooks::new(
+        settings.hooks.clone(),
+        root.to_path_buf(),
+        session_id.to_string(),
+    ));
+    (rules, hooks)
+}
+
+fn build_gate(
+    project: &Project,
+    settings: &code_settings::CodeSettings,
+    session_id: &str,
+) -> (
+    microclaw_code_core::gate::CodeToolGate,
+    tokio::sync::mpsc::UnboundedReceiver<microclaw_code_core::gate::GateEvent>,
+) {
+    let (rules, hooks) = gate_parts(&project.root, settings, session_id);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let gate = microclaw_code_core::gate::CodeToolGate::new(rules, hooks, project.root.clone())
+        .with_events(tx);
+    (gate, rx)
+}
+
+/// Apply `sandbox.*` settings unless the command line chose.
+/// Settings, tool gate and role models for an engine serving `root`
+/// (ACP / MCP server, one gate per project).
+pub(crate) fn project_gate(
+    root: &std::path::Path,
+) -> (
+    code_settings::CodeSettings,
+    microclaw_code_core::gate::CodeToolGate,
+) {
+    let trust = TrustStore::load(TrustStore::default_path());
+    let trusted = Project::discover(root, |r, hash| trust.is_trusted(r, hash))
+        .map(|p| p.trusted)
+        .unwrap_or(false);
+    let loaded = code_settings::load(root, trusted);
+    let (rules, hooks) = gate_parts(root, &loaded.settings, "editor");
+    let gate = microclaw_code_core::gate::CodeToolGate::new(rules, hooks, root.to_path_buf());
+    (loaded.settings, gate)
+}
+
+pub(crate) fn role_models(
+    settings: &code_settings::CodeSettings,
+) -> microclaw_code_core::driver::RoleModels {
+    microclaw_code_core::driver::RoleModels {
+        plan: code_settings::role_model(settings, "plan"),
+        review: code_settings::role_model(settings, "review"),
+    }
+}
+
+fn settings_sandbox(
+    choice: ShellSandbox,
+    cli: &Cli,
+    settings: &code_settings::CodeSettings,
+) -> ShellSandbox {
+    let explicit = cli.sandbox.is_some() || std::env::var_os("MICROCLAW_CODE_SANDBOX").is_some();
+    if !explicit && settings.sandbox.backend.as_deref() == Some("off") {
+        return ShellSandbox::Off;
+    }
+    match choice {
+        ShellSandbox::WorkspaceWrite {
+            network,
+            mut writable_roots,
+        } => {
+            let network = network
+                && !matches!(
+                    settings.sandbox.network,
+                    Some(code_settings::NetworkMode::Off | code_settings::NetworkMode::Ask)
+                );
+            for root in &settings.sandbox.writable_roots {
+                let path = match root.strip_prefix("~/") {
+                    Some(rest) => dirs_home().join(rest),
+                    None => PathBuf::from(root),
+                };
+                writable_roots.push(path);
+            }
+            ShellSandbox::WorkspaceWrite {
+                network,
+                writable_roots,
+            }
+        }
+        other => other,
+    }
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
 fn sandbox_choice(cli: &Cli) -> anyhow::Result<ShellSandbox> {
     let raw = cli
         .sandbox

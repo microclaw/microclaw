@@ -1164,6 +1164,186 @@ async fn handle_slack_approval_action(
     }
 }
 
+/// Native approval cards for MicroClaw Code remote approvals
+/// (`crate::remote_approvals`): Block Kit buttons whose value is
+/// `mcc:<id>:<n>`, distinct from the agent's `apv:` buttons.
+#[async_trait::async_trait]
+impl crate::remote_approvals::ApprovalCardSender for SlackAdapter {
+    async fn send_card(
+        &self,
+        external_chat_id: &str,
+        text: &str,
+        buttons: &[crate::remote_approvals::CardButton],
+    ) -> Result<crate::remote_approvals::CardRef, String> {
+        let (channel, thread_ts) = split_slack_external_chat_id(external_chat_id);
+        let elements: Vec<serde_json::Value> = buttons
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let mut button = serde_json::json!({
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": crate::remote_approvals::truncate_chars(&b.label, 75),
+                    },
+                    "action_id": format!("mcc_{}", i + 1),
+                    "value": b.data,
+                });
+                if i == 0 {
+                    button["style"] = serde_json::Value::String("primary".into());
+                }
+                button
+            })
+            .collect();
+        let text = crate::remote_approvals::truncate_chars(text, 2900);
+        let mut body = serde_json::json!({
+            "channel": channel,
+            "text": text,
+            "blocks": [
+                {"type": "section", "text": {"type": "plain_text", "text": text}},
+                {"type": "actions", "elements": elements},
+            ],
+        });
+        if let Some(thread_ts) = thread_ts.filter(|t| !t.trim().is_empty()) {
+            body["thread_ts"] = serde_json::Value::String(thread_ts.to_string());
+        }
+        let resp = self
+            .http_client
+            .post("https://slack.com/api/chat.postMessage")
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", self.bot_token),
+            )
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to post Slack approval card: {e}"))?;
+        let resp_json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse Slack chat.postMessage response: {e}"))?;
+        if resp_json.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+            let err = resp_json
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            return Err(format!("Slack chat.postMessage error: {err}"));
+        }
+        Ok(crate::remote_approvals::CardRef {
+            chat: resp_json
+                .get("channel")
+                .and_then(|v| v.as_str())
+                .unwrap_or(channel)
+                .to_string(),
+            message_id: resp_json
+                .get("ts")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+
+    async fn edit_card(
+        &self,
+        card: &crate::remote_approvals::CardRef,
+        text: &str,
+    ) -> Result<(), String> {
+        replace_slack_card(&self.bot_token, &card.chat, &card.message_id, text).await
+    }
+}
+
+/// Replace a remote-approval card (text and buttons) with plain text.
+async fn replace_slack_card(
+    bot_token: &str,
+    channel: &str,
+    ts: &str,
+    text: &str,
+) -> Result<(), String> {
+    if channel.is_empty() || ts.is_empty() {
+        return Err("Slack approval card has no channel or ts".into());
+    }
+    let text = crate::remote_approvals::truncate_chars(text, 2900);
+    let resp = reqwest::Client::new()
+        .post("https://slack.com/api/chat.update")
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {bot_token}"),
+        )
+        .json(&serde_json::json!({
+            "channel": channel,
+            "ts": ts,
+            "text": text,
+            "blocks": [{"type": "section", "text": {"type": "plain_text", "text": text}}],
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to update Slack approval card: {e}"))?;
+    let resp_json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Slack chat.update response: {e}"))?;
+    if resp_json.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = resp_json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("Slack chat.update error: {err}"));
+    }
+    Ok(())
+}
+
+/// Handle a tap on a MicroClaw Code remote-approval button (`mcc:`).
+async fn handle_slack_remote_approval_action(
+    runtime: SlackRuntimeContext,
+    bot_token: String,
+    payload: serde_json::Value,
+) {
+    let value = payload
+        .pointer("/actions/0/value")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let channel = payload
+        .pointer("/channel/id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let message_ts = payload
+        .pointer("/message/ts")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let thread_ts = payload
+        .pointer("/message/thread_ts")
+        .and_then(|v| v.as_str());
+    let user = payload
+        .pointer("/user/id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let user_name = payload
+        .pointer("/user/username")
+        .or_else(|| payload.pointer("/user/name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(user);
+    let outcome = if channel.is_empty()
+        || (!runtime.allowed_channels.is_empty()
+            && !runtime.allowed_channels.iter().any(|c| c == channel))
+    {
+        crate::remote_approvals::TapOutcome::Rejected("This channel cannot answer requests.".into())
+    } else {
+        let external_chat_id =
+            slack_external_chat_id(channel, normalize_slack_thread_ts(thread_ts));
+        crate::remote_approvals::handle_tap(
+            value,
+            &runtime.channel_name,
+            &external_chat_id,
+            &format!("slack:{user_name}"),
+        )
+    };
+    if let Some(ack) = crate::remote_approvals::tap_ack_text(&outcome) {
+        if let Err(e) = replace_slack_card(&bot_token, channel, message_ts, &ack).await {
+            warn!("Slack: remote approval ack edit failed: {e}");
+        }
+    }
+}
+
 /// Edit an existing Slack message in place via chat.update.
 async fn update_slack_message(
     bot_token: &str,
@@ -1305,6 +1485,18 @@ async fn run_socket_mode(
                 if envelope_type == "interactive" {
                     let payload = envelope.get("payload").cloned().unwrap_or_default();
                     if payload.get("type").and_then(|v| v.as_str()) == Some("block_actions") {
+                        let is_remote_approval = payload
+                            .pointer("/actions/0/value")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(crate::remote_approvals::is_remote_callback);
+                        if is_remote_approval {
+                            tokio::spawn(handle_slack_remote_approval_action(
+                                runtime.clone(),
+                                bot_token.to_string(),
+                                payload,
+                            ));
+                            continue;
+                        }
                         let is_approval = payload
                             .pointer("/actions/0/value")
                             .and_then(|v| v.as_str())
@@ -1509,6 +1701,20 @@ async fn handle_slack_message(
         return;
     }
     if should_drop_recent_duplicate_message(&runtime.channel_name, &inbound_message_id) {
+        return;
+    }
+
+    // A reply naming an option of a pending MicroClaw Code remote approval
+    // in this channel answers it and never reaches the agent.
+    if crate::remote_approvals::intercept_text_reply(
+        &app_state,
+        &runtime.channel_name,
+        &external_chat_id,
+        &format!("slack:{user}"),
+        text,
+    )
+    .await
+    {
         return;
     }
 

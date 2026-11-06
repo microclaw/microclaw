@@ -53,6 +53,7 @@ fn minimal_config() -> Config {
         compact_keep_recent_tokens: 0,
         compact_instructions: None,
         project_agents_dir: None,
+        tool_gate: Default::default(),
         context_tools: false,
         context_budget_hint: false,
         explore_tool: false,

@@ -72,19 +72,22 @@ impl RemoteConfig {
         }
     }
 
-    fn endpoint(&self, path: &str) -> String {
+    /// Absolute URL of `path` on the paired Server.
+    pub fn endpoint(&self, path: &str) -> String {
         format!("{}{path}", self.url.trim_end_matches('/'))
     }
 }
 
-fn client() -> reqwest::Client {
+/// HTTP client used for every Server call (shared with `remote_notify`).
+pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(concat!("mccode/", env!("CARGO_PKG_VERSION")))
         .build()
         .unwrap_or_default()
 }
 
-async fn error_text(response: reqwest::Response) -> String {
+/// `"<status>: <body>"` for an unsuccessful Server response.
+pub(crate) async fn error_text(response: reqwest::Response) -> String {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     format!("{status}: {}", body.trim())

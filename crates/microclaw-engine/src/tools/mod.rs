@@ -952,6 +952,62 @@ impl ToolRegistry {
             return ToolResult::error(msg).with_error_type("execution_policy_blocked");
         }
         let mut input = input;
+        // Embedder gate (permission rules, user hooks). Runs after the
+        // operator policies above, so it can only tighten them.
+        let gate = self.config.tool_gate.get().cloned();
+        let gate_input = crate::tool_gate::public_input(&input);
+        if let Some(gate) = &gate {
+            let approved = input
+                .get(crate::internal::tool_runtime::runtime::HIGH_RISK_APPROVED_KEY)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let call = crate::tool_gate::ToolGateCall {
+                tool: name,
+                input: &gate_input,
+                caller_channel: &auth.caller_channel,
+                principal: &auth.principal,
+                chat_id: auth.caller_chat_id,
+                approved,
+            };
+            let outcome = gate.before(&call).await;
+            if let Some(updated) = outcome.updated_input {
+                input = crate::tool_gate::merge_internal_keys(&input, updated);
+            }
+            match outcome.decision {
+                crate::tool_gate::ToolGateDecision::Allow => {}
+                crate::tool_gate::ToolGateDecision::Approve { rule } => {
+                    tracing::info!(
+                        tool = name,
+                        ?rule,
+                        "Tool call approved by the embedder gate"
+                    );
+                    if let serde_json::Value::Object(map) = &mut input {
+                        map.insert(
+                            crate::internal::tool_runtime::runtime::HIGH_RISK_APPROVED_KEY
+                                .to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                    }
+                }
+                crate::tool_gate::ToolGateDecision::Ask { reason } => {
+                    if !approved && self.config.high_risk_tool_user_confirmation_required {
+                        let why = reason.map(|r| format!(" ({r})")).unwrap_or_default();
+                        return ToolResult::error(format!(
+                            "Approval required for '{name}' by a permission rule{why}."
+                        ))
+                        .with_error_type("approval_required");
+                    }
+                }
+                crate::tool_gate::ToolGateDecision::Deny { reason } => {
+                    tracing::info!(tool = name, %reason, "Tool call denied by the embedder gate");
+                    return ToolResult::error(format!(
+                        "Tool call blocked: {reason}. Do not retry it unchanged; \
+                         use another approach or explain the limitation to the user."
+                    ))
+                    .with_error_type("tool_gate_denied");
+                }
+            }
+        }
         if self.config.high_risk_tool_user_confirmation_required {
             // Only tools that can actually pause for approval need the
             // standing-grant lookup: High-risk tools (registry gate) plus the
@@ -1016,12 +1072,32 @@ impl ToolRegistry {
         );
         let input = Self::inject_default_chat_id_if_missing(name, input, auth);
         let input = inject_auth_context(input, auth);
-        let result = self.execute(name, input.clone()).await;
+        let mut result = self.execute(name, input.clone()).await;
         if result.error_type.as_deref() == Some("unknown_tool") {
             if let Some(dynamic) =
                 crate::plugins::execute_dynamic_plugin_tool(&self.config, name, input).await
             {
-                return dynamic;
+                result = dynamic;
+            }
+        }
+        if let Some(gate) = &gate {
+            let call = crate::tool_gate::ToolGateCall {
+                tool: name,
+                input: &gate_input,
+                caller_channel: &auth.caller_channel,
+                principal: &auth.principal,
+                chat_id: auth.caller_chat_id,
+                approved: true,
+            };
+            let seen = crate::tool_gate::ToolGateResult {
+                content: &result.content,
+                is_error: result.is_error,
+                error_type: result.error_type.as_deref(),
+            };
+            if let Some(extra) = gate.after(&call, &seen).await {
+                if !extra.trim().is_empty() {
+                    result.content = format!("{}\n\n{}", result.content.trim_end(), extra.trim());
+                }
             }
         }
         result
@@ -1750,5 +1826,173 @@ tools:
         let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
         assert_eq!(payload["chat_id"].as_i64(), Some(9001));
         assert_eq!(payload["text"].as_str(), Some("progress update"));
+    }
+
+    struct FakeGate {
+        outcome: crate::tool_gate::ToolGateOutcome,
+        after: Option<String>,
+        seen: std::sync::Mutex<Vec<(String, bool, serde_json::Value)>>,
+    }
+
+    impl FakeGate {
+        fn new(outcome: crate::tool_gate::ToolGateOutcome) -> Arc<Self> {
+            Arc::new(Self {
+                outcome,
+                after: None,
+                seen: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl crate::tool_gate::ToolGate for FakeGate {
+        async fn before(
+            &self,
+            call: &crate::tool_gate::ToolGateCall<'_>,
+        ) -> crate::tool_gate::ToolGateOutcome {
+            self.seen.lock().unwrap().push((
+                call.tool.to_string(),
+                call.approved,
+                call.input.clone(),
+            ));
+            self.outcome.clone()
+        }
+
+        async fn after(
+            &self,
+            _call: &crate::tool_gate::ToolGateCall<'_>,
+            _result: &crate::tool_gate::ToolGateResult<'_>,
+        ) -> Option<String> {
+            self.after.clone()
+        }
+    }
+
+    fn gated_registry(gate: Arc<FakeGate>, tool: Box<dyn Tool>) -> ToolRegistry {
+        let mut config = crate::config::Config::test_defaults();
+        config.tool_gate = crate::tool_gate::ToolGateHandle::new(gate);
+        ToolRegistry {
+            config,
+            sandbox_mode: SandboxMode::Off,
+            sandbox_runtime_available: false,
+            cached_static_definitions: OnceLock::new(),
+            audit_db: None,
+            risk_overrides: std::collections::HashMap::new(),
+            tools: vec![tool],
+        }
+    }
+
+    fn gate_auth() -> ToolAuthContext {
+        ToolAuthContext {
+            caller_channel: "code".into(),
+            caller_chat_id: 7,
+            principal: "main".into(),
+            control_chat_ids: vec![],
+            env_files: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_gate_deny_blocks_the_call() {
+        let gate = FakeGate::new(crate::tool_gate::ToolGateOutcome::with(
+            crate::tool_gate::ToolGateDecision::Deny {
+                reason: "denied by permission rule `read(**/.env)`".into(),
+            },
+        ));
+        let registry = gated_registry(
+            gate.clone(),
+            Box::new(DummyTool {
+                tool_name: "read_file".into(),
+            }),
+        );
+        let result = registry
+            .execute_with_auth("read_file", json!({"path": ".env"}), &gate_auth())
+            .await;
+        assert!(result.is_error);
+        assert_eq!(result.error_type.as_deref(), Some("tool_gate_denied"));
+        assert!(result.content.contains("read(**/.env)"));
+        // The gate sees the public input only.
+        let seen = gate.seen.lock().unwrap();
+        assert_eq!(seen[0].0, "read_file");
+        assert_eq!(seen[0].2, json!({"path": ".env"}));
+    }
+
+    #[tokio::test]
+    async fn test_tool_gate_ask_requires_approval_marker() {
+        let gate = FakeGate::new(crate::tool_gate::ToolGateOutcome::with(
+            crate::tool_gate::ToolGateDecision::Ask {
+                reason: Some("rule".into()),
+            },
+        ));
+        // A low-risk tool that would normally run without approval.
+        let registry = gated_registry(
+            gate.clone(),
+            Box::new(DummyTool {
+                tool_name: "read_file".into(),
+            }),
+        );
+        let first = registry
+            .execute_with_auth("read_file", json!({"path": "a"}), &gate_auth())
+            .await;
+        assert!(first.is_error);
+        assert_eq!(first.error_type.as_deref(), Some("approval_required"));
+        assert!(first.content.contains("(rule)"));
+
+        let approved = registry
+            .execute_with_auth(
+                "read_file",
+                json!({"path": "a", "__microclaw_high_risk_approved": true}),
+                &gate_auth(),
+            )
+            .await;
+        assert!(!approved.is_error, "{}", approved.content);
+        assert_eq!(approved.content, "ok");
+        let seen = gate.seen.lock().unwrap();
+        assert_eq!(
+            seen.iter().map(|s| s.1).collect::<Vec<_>>(),
+            vec![false, true]
+        );
+        assert_eq!(seen[1].2, json!({"path": "a"}));
+    }
+
+    #[tokio::test]
+    async fn test_tool_gate_updated_input_is_applied() {
+        let gate = FakeGate::new(crate::tool_gate::ToolGateOutcome {
+            decision: crate::tool_gate::ToolGateDecision::Allow,
+            updated_input: Some(json!({"text": "rewritten"})),
+        });
+        let registry = gated_registry(
+            gate,
+            Box::new(CaptureInputTool {
+                tool_name: "echo_tool".into(),
+            }),
+        );
+        let result = registry
+            .execute_with_auth("echo_tool", json!({"text": "original"}), &gate_auth())
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(payload["text"], "rewritten");
+        // Internal keys survive the rewrite.
+        assert_eq!(payload["__microclaw_auth"]["caller_chat_id"], 7);
+    }
+
+    #[tokio::test]
+    async fn test_tool_gate_after_text_is_appended() {
+        let gate = Arc::new(FakeGate {
+            outcome: crate::tool_gate::ToolGateOutcome::allow(),
+            after: Some("  hook says: run the tests  ".into()),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let registry = gated_registry(
+            gate,
+            Box::new(DummyTool {
+                tool_name: "read_file".into(),
+            }),
+        );
+        let result = registry
+            .execute_with_auth("read_file", json!({"path": "a"}), &gate_auth())
+            .await;
+        assert!(!result.is_error);
+        assert_eq!(result.content, "ok\n\nhook says: run the tests");
     }
 }

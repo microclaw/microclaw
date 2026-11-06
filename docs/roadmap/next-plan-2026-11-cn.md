@@ -35,21 +35,23 @@
 - `review --pr` 在大 PR 上很慢（> 10 分钟），可以考虑限制工具调用轮数或先按文件分片。
 - `context_note` / `rewind_context` 仍默认关闭，需要专门的用例再决定。
 
-## 阶段 2：0.24，扩大能用上的人群
+## 阶段 2：0.25，MicroClaw Code 体验大版本
+
+原计划的 0.24（模型预设、VS Code、Windows ARM）和 0.25（Windows 沙箱）调整为：0.25 一次完成
+[`mccode-ux-config-plan-2026-11-cn.md`](./mccode-ux-config-plan-2026-11-cn.md) 的全部内容
+（TUI 改版、交互、四层配置、权限规则、hooks、导入、聊天审批、回执、按块审阅），
+模型预设（原 D4）随之完成。交付情况见该文第 10 节。
+
+## 阶段 3：并行轨道
 
 | 项 | 说明 |
 |---|---|
-| 模型预设（原 D4） | Kimi、DeepSeek、Qwen、GLM、Ollama 等编码模型的窗口、最大输出、价格、是否支持图片、推荐参数；`mccode setup` 直接选用。0.23.1 已发现 DeepSeek V4 窗口表过期，说明这类数据要集中维护 |
 | VS Code（原 D1） | 先走 ACP 桥接或轻量扩展，复用 `mccode acp` |
 | Windows ARM（原 D6 的一半） | 发版工作流加 `aarch64-pc-windows-msvc` |
-| 评测集扩充 | 见阶段 1 遗留 |
-
-## 阶段 3：0.25，补安全短板
-
-| 项 | 说明 |
-|---|---|
-| Windows 沙箱（原 E5） | AppContainer 或受限令牌 + Job Object 限制写入；在此之前 Windows 保持默认 `ask` 并明确提示 |
+| Windows 沙箱（原 E5） | AppContainer 或受限令牌 + Job Object；在此之前 Windows 保持默认 `ask` |
 | JetBrains（原 D2） | 等 JetBrains 的 ACP 支持稳定后接入 |
+| 评测集扩充 | 见阶段 1 遗留 |
+| 0.25 遗留 | Ctrl+B 后台化、对话级回退、子代理角色模型、模型价格表 |
 
 ## 暂缓
 
