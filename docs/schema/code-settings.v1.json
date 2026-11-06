@@ -191,7 +191,7 @@
           ]
         },
         "subagent": {
-          "description": "Sub-agents and `explore`.",
+          "description": "Reserved for sub-agents and `explore`; not used yet (they run on the session's model).",
           "type": [
             "string",
             "null"
