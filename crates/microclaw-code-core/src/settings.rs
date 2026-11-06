@@ -81,7 +81,7 @@ pub struct ModelRoles {
     /// `/review` and `mccode review`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review: Option<String>,
-    /// Sub-agents and `explore`.
+    /// Reserved for sub-agents and `explore`; not used yet (they run on the session's model).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent: Option<String>,
     /// Compaction summaries and handoffs.
@@ -1791,10 +1791,11 @@ model:
   # `<profile>/<model>`, `<profile>` (uses the profile's model) or a bare
   # model name when there is exactly one profile.
   default: deepseek/deepseek-v4-pro
+  # Roles switch the model within the session's profile; a role on another
+  # profile is skipped with a warning. `subagent` is not used yet.
   roles:
     plan: deepseek/deepseek-v4-pro
     review: deepseek/deepseek-v4-pro
-    subagent: deepseek/deepseek-flash
     # summary: deepseek/deepseek-flash
   profiles:
     deepseek:

@@ -68,8 +68,8 @@ version: 1
 model:
   default: deepseek/deepseek-v4-pro      # <profile>/<model>
   roles:
-    plan: anthropic/claude-opus-5-5      # plan-mode turns
-    review: deepseek-v4-pro              # /review and mccode review
+    plan: deepseek/deepseek-v4-pro       # plan-mode turns
+    review: deepseek/deepseek-v4-pro     # /review and mccode review
     summary: deepseek-flash              # compaction summaries and handoffs
   profiles:
     deepseek:
@@ -131,7 +131,8 @@ user layer only; `mccode config doctor` warns about keys in project layers.
 switches the model within the session's provider, so it must name a model on
 the same profile (`ds/deepseek-v4-pro` when the session runs on `ds`) or a bare
 model name; a role on another profile is skipped with a warning. Unset roles
-use the session's model.
+use the session's model. `subagent` is accepted but not used yet: sub-agents
+and `explore` run on the session's model.
 `/model` opens a picker with your profiles and the built-in presets, which
 list each model's context window.
 
