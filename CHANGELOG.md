@@ -78,6 +78,11 @@ Found by testing this release with DeepSeek (`deepseek-flash`,
 - `scripts/generate_docs_artifacts.mjs` leaves `#[serde(skip)]` config fields
   out of the generated defaults.
 
+### Security
+
+- vodozemac 0.11.2 (Matrix end-to-end encryption), which restores secret
+  zeroization (RUSTSEC-2026-0445, published on release day).
+
 ### Known gaps
 
 Ctrl+B does not move a running command to the background (it toggles the
