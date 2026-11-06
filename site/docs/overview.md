@@ -24,7 +24,7 @@ policy and approval path, memory, skills, MCP integration, checkpoints, and
 runtime event protocol. MicroClaw Code reaches the engine only through the SDK
 and does not maintain its own agent loop.
 
-The latest release is **v0.25.0**. Use the `stable` branch for conservative
+The latest release is **v0.26.0**. Use the `stable` branch for conservative
 production deployments; `main` is the active development branch.
 
 ## What makes it different

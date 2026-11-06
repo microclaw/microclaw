@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-code"
-version = "0.25.0"
+version = "0.26.0"
 edition = "2024"
 license = "MIT"
 description = "MicroClaw Code (mccode): a terminal coding agent built on the MicroClaw SDK"
@@ -11,8 +11,8 @@ name = "mccode"
 path = "src/main.rs"
 
 [dependencies]
-microclaw-code-core = { version = "0.25.0", path = "../../crates/microclaw-code-core" }
-microclaw-sdk = { version = "0.25.0", path = "../../crates/microclaw-sdk", features = ["full"] }
+microclaw-code-core = { version = "0.26.0", path = "../../crates/microclaw-code-core" }
+microclaw-sdk = { version = "0.26.0", path = "../../crates/microclaw-sdk", features = ["full"] }
 agent-client-protocol = "0.10.4"
 anyhow = "1"
 async-trait = "0.1"
