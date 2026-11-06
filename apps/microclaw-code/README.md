@@ -44,18 +44,27 @@ mccode -p "explain the build" --json            # JSON Lines runtime events
 microclaw code …                         # same, through the Server binary
 ```
 
-In the TUI:
+In the TUI (all keys can be rebound in `tui.keymap`; `/keys` lists them):
 
 | Key | Action |
 |---|---|
-| Enter | send (while the agent works: guide it) |
-| Alt+Enter, Ctrl+J, trailing `\` | new line |
+| Enter | send; while the agent works, queue the message for the next turn |
+| Ctrl+S | while the agent works: send now, as guidance for the running turn |
+| Alt+Enter, Shift+Enter, Ctrl+J | new line |
 | Shift+Tab | cycle mode: plan → ask → auto |
-| Tab | complete `/commands` and `@path` file mentions |
+| `/`, `@` | fuzzy pop-ups for commands and files (Tab or Enter accepts) |
+| Ctrl+P | command palette |
+| Up / Ctrl+R | input history / search it (kept per project) |
+| Ctrl+G | edit the prompt in `$EDITOR` |
+| `!` at the start | run a shell command yourself; its output goes into the next prompt |
+| Ctrl+V | attach an image from the clipboard |
+| Ctrl+T | the whole transcript, with search |
+| Ctrl+O, click | expand the selected tool call |
+| Esc Esc | pick an earlier turn to rewind the files to |
+| F2 | review changes hunk by hunk: revert one, or comment and send the comments as a prompt |
+| Ctrl+B | show or hide the side panel (plan, checks, changes, sub-agents) |
 | Esc / Ctrl+C | stop the running agent |
 | Ctrl+C twice, Ctrl+D, `/exit` | quit |
-| PgUp / PgDn, End | scroll the transcript |
-| Up / Down | input history |
 
 Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 `/verify [on|off]`, `/trust`, `/allow`, `/diff [full]`, `/new`, `/sessions`, `/status`,
@@ -66,14 +75,50 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/undo` | Restore the files to how they were before the last turn that changed them. The state you leave is checkpointed too. |
 | `/rewind [id]` | List workspace checkpoints, or restore one. |
 | `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
-| `/model [name\|reset]` | Show or switch the model for this session. |
+| `/model [name\|reset]` | Show or switch the model for this session (a picker without a name). |
 | `/cost` | Requests and input/output tokens of this session, per model. |
 | `/compact [focus]` | Summarize older messages now; the optional focus says what the summary must keep. |
 | `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
 | `/handoff <next task>` | Start a new session from a summary of this one focused on the next task. |
+| `/fork` | Continue in a copy of the conversation; the original session is kept. |
+| `/goal <condition>` | Keep working, turn after turn, until the condition holds and the checks pass. |
+| `/btw <question>` | Ask a side question in a copy of the session; the main conversation is not changed. |
+| `/changes` | Review the changes (same as F2). |
+| `/theme [name]` | Pick a theme, with a live preview. |
+| `/config`, `/permissions`, `/hooks` | Show the effective settings, permission rules and hooks, and where each comes from. |
+| `/configure <request>` | Describe a settings change in plain words; the model proposes it and you confirm before anything is written. |
+| `/queue`, `/keys`, `/import` | Queued messages, key bindings, importing Claude Code / Codex / OpenCode settings. |
+
+Each turn ends with a receipt: changed files, check results, sandbox and
+network use, tokens (and cost when the model's price is known) and the
+checkpoint to rewind to.
 
 Also: custom commands from `.microclaw/commands/*.md` and `~/.microclaw/code/commands/*.md`, project memory in `.microclaw/memory.md`, project helper agents in `.microclaw/agents/*.md` for the `explore` tool, language-server diagnostics after edits, and `hooks` (`after_edit`, `after_turn`) in the project file; see the [usage guide](https://microclaw.org/docs/code-usage).
-| `/fork` | Continue in a copy of the conversation; the original session is kept. |
+
+## Settings, permission rules and hooks
+
+Settings are YAML in four layers, later ones winning: user
+(`~/.microclaw/code/settings.yaml`), project (`.microclaw/settings.yaml`,
+shared), local (`.microclaw/settings.local.yaml`, kept out of git) and
+managed (set by an administrator). They hold the model and provider profiles
+(a profile can replace the configuration file), per-role models, permission
+rules, hooks, sandbox and network options, the theme and other TUI options,
+and chat notifications. `mccode config show|get|set|unset|paths|doctor|init|schema|edit`
+manages them, and `mccode import claude|codex|opencode` brings settings over
+from other agents.
+
+Permission rules are `allow`, `ask` and `deny` lists of `bash(...)`,
+`read(...)`, `edit(...)`, `net(...)`, `mcp(...)`, `agent(...)` and `tool(...)`
+patterns. Deny wins over ask, ask over allow, and an `ask` rule needs a person
+even in auto mode. Hooks follow the Claude Code protocol (JSON on stdin, exit
+code 2 blocks, `permissionDecision`, `updatedInput`, `additionalContext`), so
+existing hook scripts work unchanged. Rules and hooks are enforced inside the
+engine, so sub-agents cannot get around them. See the
+[settings guide](https://microclaw.org/docs/code-settings).
+
+With a paired MicroClaw Server, approvals and "done" notifications can be sent
+to Telegram, Discord or Slack (with buttons) or Feishu while you are away from
+the terminal (`notify.chat`).
 
 Checkpoints are taken at the start of every turn in a shadow git repository
 inside the Code home (`data/checkpoints`); they never touch your own `.git`.

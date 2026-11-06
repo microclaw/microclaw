@@ -14,6 +14,11 @@ pub use microclaw_engine::{
 #[cfg(feature = "remote-worker")]
 pub use microclaw_engine::{WebSocketWorkerTransport, WorkerHost};
 
+/// Embedder tool gate (permission rules, hooks); see [`MicroClawBuilder::tool_gate`].
+pub use microclaw_engine::tool_gate::{
+    ToolGate, ToolGateCall, ToolGateDecision, ToolGateOutcome, ToolGateResult,
+};
+
 /// `RunRequest::metadata` key. Set it to `true` and a tool call that needs a
 /// human pauses the run: the Agent Engine emits `ApprovalRequired` and waits
 /// for `RunController::resolve_approval_confirmed(approval_id, "1" | "2" | "3")`
@@ -854,6 +859,8 @@ pub struct MicroClawBuilder {
     context_window: Option<usize>,
     context_tools: bool,
     project_agents_dir: Option<PathBuf>,
+    tool_gate: Option<Arc<dyn ToolGate>>,
+    summary_model: Option<String>,
 }
 
 #[cfg(feature = "full")]
@@ -873,6 +880,8 @@ impl MicroClawBuilder {
             context_window: None,
             context_tools: false,
             project_agents_dir: None,
+            tool_gate: None,
+            summary_model: None,
         }
     }
 
@@ -891,6 +900,8 @@ impl MicroClawBuilder {
             context_window: None,
             context_tools: false,
             project_agents_dir: None,
+            tool_gate: None,
+            summary_model: None,
         }
     }
 
@@ -909,6 +920,8 @@ impl MicroClawBuilder {
             context_window: None,
             context_tools: false,
             project_agents_dir: None,
+            tool_gate: None,
+            summary_model: None,
         }
     }
 
@@ -983,6 +996,20 @@ impl MicroClawBuilder {
         self
     }
 
+    /// Consult `gate` before and after every tool call (main agent and
+    /// sub-agents): permission rules, user hooks. See [`ToolGate`].
+    pub fn tool_gate(mut self, gate: Arc<dyn ToolGate>) -> Self {
+        self.tool_gate = Some(gate);
+        self
+    }
+
+    /// Model for compaction summaries and handoffs (`None` keeps the
+    /// configured one, which defaults to the main model).
+    pub fn summary_model(mut self, model: Option<String>) -> Self {
+        self.summary_model = model.filter(|m| !m.trim().is_empty());
+        self
+    }
+
     pub async fn build(self) -> Result<MicroClaw, SdkError> {
         use microclaw_engine::config::Config;
         use microclaw_engine::headless::HeadlessRuntime;
@@ -1018,6 +1045,12 @@ impl MicroClawBuilder {
         }
         if let Some(dir) = self.project_agents_dir {
             config.project_agents_dir = Some(dir.to_string_lossy().into_owned());
+        }
+        if let Some(model) = self.summary_model {
+            config.aux_models.compaction = Some(model);
+        }
+        if let Some(gate) = self.tool_gate {
+            config.tool_gate = microclaw_engine::tool_gate::ToolGateHandle::new(gate);
         }
         if let Some(window) = self.context_window {
             config.model_context_window = window;

@@ -987,6 +987,24 @@ async fn handle_message(
 
     let external_chat_id =
         telegram_external_chat_id(raw_chat_id, msg.thread_id, tg_topic_routing_enabled);
+
+    // A reply naming an option of a pending MicroClaw Code remote approval
+    // in this chat answers it and never reaches the agent.
+    if let Some(raw_text) = msg.text() {
+        if remote_approval_sender_allowed(&tg_allowed_user_ids, sender_user_id)
+            && crate::remote_approvals::intercept_text_reply(
+                &state,
+                &tg_channel_name,
+                &external_chat_id,
+                &format!("telegram:{sender_name}"),
+                raw_text,
+            )
+            .await
+        {
+            return Ok(());
+        }
+    }
+
     let chat_title_for_lookup = chat_title.clone();
     let chat_type_for_lookup = db_chat_type.to_string();
     let channel_name = tg_channel_name.clone();
@@ -1482,6 +1500,114 @@ async fn handle_message(
     Ok(())
 }
 
+/// Native approval cards for MicroClaw Code remote approvals
+/// (`crate::remote_approvals`): an inline keyboard whose callback data is
+/// `mcc:<id>:<n>`, distinct from the agent's `apv:` buttons.
+#[async_trait]
+impl crate::remote_approvals::ApprovalCardSender for TelegramAdapter {
+    async fn send_card(
+        &self,
+        external_chat_id: &str,
+        text: &str,
+        buttons: &[crate::remote_approvals::CardButton],
+    ) -> Result<crate::remote_approvals::CardRef, String> {
+        use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+        let (chat, thread_id) = Self::parse_telegram_external_chat_id(external_chat_id)?;
+        let rows: Vec<Vec<InlineKeyboardButton>> = buttons
+            .iter()
+            .map(|b| {
+                vec![InlineKeyboardButton::callback(
+                    b.label.clone(),
+                    b.data.clone(),
+                )]
+            })
+            .collect();
+        let text = crate::remote_approvals::truncate_chars(text, 3500);
+        let mut req = self
+            .bot
+            .send_message(chat, text)
+            .reply_markup(InlineKeyboardMarkup::new(rows));
+        if let Some(tid) = thread_id {
+            req = req.message_thread_id(tid);
+        }
+        let sent = req
+            .await
+            .map_err(|e| format!("Telegram approval card send failed: {e}"))?;
+        Ok(crate::remote_approvals::CardRef {
+            chat: chat.0.to_string(),
+            message_id: sent.id.0.to_string(),
+        })
+    }
+
+    async fn edit_card(
+        &self,
+        card: &crate::remote_approvals::CardRef,
+        text: &str,
+    ) -> Result<(), String> {
+        let chat = card
+            .chat
+            .parse::<i64>()
+            .map_err(|_| format!("invalid Telegram chat id '{}'", card.chat))?;
+        let message_id = card
+            .message_id
+            .parse::<i32>()
+            .map_err(|_| format!("invalid Telegram message id '{}'", card.message_id))?;
+        self.bot
+            .edit_message_text(ChatId(chat), MessageId(message_id), text.to_string())
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Telegram approval card edit failed: {e}"))
+    }
+}
+
+/// Whether a Telegram user may answer a MicroClaw Code remote approval:
+/// when `allowed_user_ids` is set, only those users can (in any chat type).
+fn remote_approval_sender_allowed(allowed_user_ids: &[i64], sender_user_id: Option<i64>) -> bool {
+    allowed_user_ids.is_empty() || sender_user_id.is_some_and(|id| allowed_user_ids.contains(&id))
+}
+
+/// Handle a tap on a MicroClaw Code remote-approval button (`mcc:`).
+async fn handle_remote_approval_tap(
+    bot: &Bot,
+    q: &teloxide::types::CallbackQuery,
+    data: &str,
+    ctx: &TelegramRuntimeContext,
+) {
+    let Some(message) = q.message.as_ref() else {
+        let _ = bot.answer_callback_query(q.id.clone()).await;
+        return;
+    };
+    let chat_id = message.chat().id;
+    let thread_id = message.regular_message().and_then(|m| m.thread_id);
+    let external_chat_id =
+        telegram_external_chat_id(chat_id.0, thread_id, ctx.topic_routing_enabled);
+    let sender_user_id = i64::try_from(q.from.id.0).ok();
+    if !remote_approval_sender_allowed(&ctx.allowed_user_ids, sender_user_id) {
+        let _ = bot
+            .answer_callback_query(q.id.clone())
+            .text("You are not allowed to answer this request.")
+            .await;
+        return;
+    }
+    let clicker = q
+        .from
+        .username
+        .clone()
+        .unwrap_or_else(|| q.from.first_name.clone());
+    let outcome = crate::remote_approvals::handle_tap(
+        data,
+        &ctx.channel_name,
+        &external_chat_id,
+        &format!("telegram:{clicker}"),
+    );
+    let _ = bot.answer_callback_query(q.id.clone()).await;
+    // Only the tapped message (in this chat) is edited, never the card in
+    // another chat that the callback data names.
+    if let Some(ack) = crate::remote_approvals::tap_ack_text(&outcome) {
+        let _ = bot.edit_message_text(chat_id, message.id(), ack).await;
+    }
+}
+
 /// Send the interactive Approve/Always/Deny keyboard that follows a
 /// high-risk approval prompt. Callback data embeds the option number plus
 /// the internal chat id and chat type so the callback handler can rebuild
@@ -1535,6 +1661,10 @@ async fn handle_callback_query(
     let Some(data) = q.data.clone() else {
         return Ok(());
     };
+    if crate::remote_approvals::is_remote_callback(&data) {
+        handle_remote_approval_tap(&bot, &q, &data, &ctx).await;
+        return Ok(());
+    }
     let Some(rest) = data.strip_prefix("apv:") else {
         return Ok(());
     };
@@ -3274,5 +3404,14 @@ commands:
                 "menu command '{slash}' is not documented in build_help_response"
             );
         }
+    }
+
+    #[test]
+    fn remote_approval_answers_respect_allowed_user_ids() {
+        assert!(super::remote_approval_sender_allowed(&[], None));
+        assert!(super::remote_approval_sender_allowed(&[], Some(7)));
+        assert!(super::remote_approval_sender_allowed(&[7, 8], Some(7)));
+        assert!(!super::remote_approval_sender_allowed(&[7, 8], Some(9)));
+        assert!(!super::remote_approval_sender_allowed(&[7], None));
     }
 }

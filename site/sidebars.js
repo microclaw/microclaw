@@ -45,7 +45,7 @@ const sidebars = {
       type: 'category',
       label: 'MicroClaw Code',
       link: {type: 'doc', id: 'code'},
-      items: ['code-usage', 'code-editors', 'code-remote'],
+      items: ['code-usage', 'code-settings', 'code-editors', 'code-remote'],
     },
     {
       type: 'category',

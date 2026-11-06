@@ -6,6 +6,85 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.25.0 - 2026-11-06
+
+The MicroClaw Code interaction and configuration release. The planned 0.24
+(TUI), 0.25 (settings and permissions) and 0.26 (innovations) ship together;
+see `docs/roadmap/mccode-ux-config-plan-2026-11-cn.md`.
+
+### Added
+
+- **TUI look**: theme tokens with truecolor, 256- and 16-colour fallback;
+  11 built-in themes, user YAML themes and OpenCode theme files; Markdown
+  replies with syntax highlighting; diffs with line numbers, word-level
+  highlights and a side-by-side layout on wide terminals; consecutive reads
+  and searches grouped into one "Explored" row; a side panel for the plan,
+  checks, changed files and running sub-agents; a per-item render cache; an
+  inline mode that uses the terminal's own scrollback (`tui.screen: inline`,
+  falling back to full screen when the terminal does not report the cursor).
+- **TUI interaction**: Enter queues a message while the agent works and
+  Ctrl+S steers the running turn; fuzzy `/` and `@` pop-ups and a Ctrl+P
+  palette; per-project prompt history with Ctrl+R search; Ctrl+G edits in
+  `$EDITOR`; `!` runs a shell command yourself; large pastes become a chip;
+  Ctrl+V attaches a clipboard image; Ctrl+T opens the transcript with search;
+  Esc Esc rewinds the files to an earlier turn; model, theme (live preview)
+  and session pickers; mouse scrolling and click-to-expand; desktop
+  notifications (OSC 9/777) when the terminal is unfocused; rebindable keys
+  (`tui.keymap`, `/keys`).
+- **Per-turn receipts** (files, checks, sandbox and network use, tokens, cost
+  when the price is known, checkpoint), **hunk-level review** on F2 (revert a
+  hunk, or turn comments into a prompt), **`/goal`** (keep going until a
+  condition holds and the checks pass), **`/btw`** (a side question in a copy
+  of the session) and **`/configure`** (describe a settings change; the model
+  proposes it and you confirm).
+- **Layered settings** for MicroClaw Code: user, project, local and managed
+  YAML layers with a JSON schema (`docs/schema/code-settings.v1.json`) and
+  per-key provenance; `mccode config show|get|set|unset|paths|doctor|init|schema|migrate|edit`;
+  `mccode import claude|codex|opencode`; provider profiles that can replace
+  the configuration file; per-role models (`plan`, `review`, `summary`).
+- **Permission rules** (`allow` / `ask` / `deny` for `bash`, `read`, `edit`,
+  `net`, `mcp`, `agent`, `tool`; Claude Code spellings accepted) and **hooks**
+  compatible with the Claude Code protocol (ten events; exit code 2 blocks;
+  `permissionDecision`, `updatedInput`, `additionalContext`). Both are
+  enforced through a new engine `ToolGate` (SDK `MicroClawBuilder::tool_gate`),
+  so sub-agents go through them too. ACP and MCP-server modes load the same
+  settings.
+- **Approvals and notifications in chat**: with a paired Server, MicroClaw
+  Code sends approval cards (buttons on Telegram, Discord and Slack; numbered
+  options on Feishu) and "done" notifications while you are away
+  (`notify.chat`); Server endpoints `/api/code/notify` and
+  `/api/code/approvals`.
+- SDK: `MicroClawBuilder::summary_model`; the `ToolGate` types are re-exported.
+
+### Fixed
+
+Found by testing this release with DeepSeek (`deepseek-flash`,
+`deepseek-v4-pro`):
+
+- The shell tool ran commands in the login shell (`$SHELL`); zsh aborts on an
+  unmatched glob such as `grep --include=*.rs`. Commands now run in bash when
+  it is installed (Server and Code).
+- `bash_kill` stopped only the shell, so a child (a dev server under
+  `npm run dev`) kept running and the process stayed "running". Background
+  commands now run in their own process group and are stopped as a group.
+- Role models sent `profile/model` to the provider as the model name; an
+  `ask` rule could be answered by auto mode; `-p 1` after a pause looped when
+  a prompt hook added context to the answer.
+
+### Changed
+
+- Writing `.microclaw/settings.local.yaml` adds it to the repository's
+  `.git/info/exclude`.
+- `scripts/generate_docs_artifacts.mjs` leaves `#[serde(skip)]` config fields
+  out of the generated defaults.
+
+### Known gaps
+
+Ctrl+B does not move a running command to the background (it toggles the
+side panel); Esc Esc rewinds files but not the conversation; there is no
+sub-agent role model; model presets carry no prices; `read(...)` rules do not
+cover shell commands and `net(...)` rules cover `web_fetch` only.
+
 ## 0.23.1 - 2026-11-05
 
 Fixes found by running MicroClaw Code against real models (DeepSeek

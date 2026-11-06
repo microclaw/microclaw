@@ -97,6 +97,19 @@ impl Drop for ProcessRegistry {
     }
 }
 
+/// SIGKILL the process group led by `pid` (see `process_group(0)`).
+fn kill_group(pid: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(pid) = pid.and_then(|p| libc::pid_t::try_from(p).ok()) {
+        // SAFETY: plain syscall on a group id this registry created.
+        unsafe {
+            libc::killpg(pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -154,10 +167,16 @@ impl ProcessRegistry {
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::piped())
             .kill_on_drop(true);
+        // Its own process group, so bash_kill stops the whole command
+        // (`cd app && npm run dev` leaves node as a grandchild that holds the
+        // output pipes), not only the shell.
+        #[cfg(unix)]
+        cmd.process_group(0);
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start background command: {e}"))?;
         let stdin = child.stdin.take();
+        let pid = child.id();
 
         let id = next_id();
         let output = Arc::new(Mutex::new(OutputBuffer::default()));
@@ -196,12 +215,20 @@ impl ProcessRegistry {
                 let status = tokio::select! {
                     status = child.wait() => status.ok().and_then(|s| s.code()).unwrap_or(-1),
                     _ = &mut kill_rx => {
+                        kill_group(pid);
                         let _ = child.kill().await;
                         -9
                     }
                 };
+                // A process that left the group can keep the pipes open;
+                // after a kill, do not wait for it.
                 for reader in readers {
-                    let _ = reader.await;
+                    if status == -9 {
+                        let _ =
+                            tokio::time::timeout(std::time::Duration::from_secs(2), reader).await;
+                    } else {
+                        let _ = reader.await;
+                    }
                 }
                 *lock(&exit_code) = Some(status);
             });

@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-engine"
-version = "0.23.1"
+version = "0.25.0"
 edition = "2021"
 license.workspace = true
 authors.workspace = true
@@ -19,7 +19,7 @@ sqlite-vec = ["dep:sqlite-vec"]
 journald = ["dep:tracing-journald"]
 
 [dependencies]
-microclaw-core = { version = "0.23.1", path = "../microclaw-core", features = ["http-errors", "sqlite-errors"] }
+microclaw-core = { version = "0.25.0", path = "../microclaw-core", features = ["http-errors", "sqlite-errors"] }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
@@ -77,5 +77,5 @@ sqlite-vec = { version = "0.1.8", optional = true }
 [dev-dependencies]
 tempfile = "3"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1,0 +1,493 @@
+{
+  "$id": "https://microclaw.ai/schema/code-settings.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CodeSettings",
+  "description": "The whole settings document.",
+  "type": "object",
+  "properties": {
+    "hooks": {
+      "$ref": "#/$defs/HooksConfig"
+    },
+    "model": {
+      "$ref": "#/$defs/ModelConfig"
+    },
+    "notify": {
+      "$ref": "#/$defs/NotifyConfig"
+    },
+    "permissions": {
+      "$ref": "#/$defs/PermissionsConfig"
+    },
+    "sandbox": {
+      "$ref": "#/$defs/SandboxConfig"
+    },
+    "tui": {
+      "$ref": "#/$defs/TuiConfig"
+    },
+    "version": {
+      "description": "Settings format version (currently 1).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "DiffStyle": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "split",
+        "unified"
+      ]
+    },
+    "HookSpec": {
+      "description": "One hook handler.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Shell command; receives the event as JSON on stdin. `{file}` is\nreplaced by the edited file for `post_edit`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matcher": {
+          "description": "Regex on the tool name (ours or the Claude Code name, e.g. `Bash`,\n`Edit|Write`); empty matches everything. Tool events only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "description": "Seconds (default 60).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "url": {
+          "description": "HTTP endpoint that receives the event as a JSON POST instead.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HooksConfig": {
+      "description": "Hooks by event. Commands follow the Claude Code hook protocol: JSON on\nstdin, exit code 2 blocks, JSON on stdout may carry `decision`,\n`reason`, `hookSpecificOutput.permissionDecision`, `updatedInput`,\n`additionalContext`.",
+      "type": "object",
+      "properties": {
+        "notification": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "permission_request": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "post_edit": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "post_tool_use": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "pre_compact": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "pre_tool_use": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "session_end": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "session_start": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "stop": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        },
+        "user_prompt_submit": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HookSpec"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModelConfig": {
+      "description": "Models: the default, per-role overrides and Code's own provider profiles.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "description": "Default model, `<profile>/<model>` or a bare model name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profiles": {
+          "description": "Provider profiles by name (used instead of a full MicroClaw config).",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ProviderProfile"
+          }
+        },
+        "roles": {
+          "description": "Per-role models.",
+          "$ref": "#/$defs/ModelRoles"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModelRoles": {
+      "description": "Models for specific kinds of work; unset roles use the default model.",
+      "type": "object",
+      "properties": {
+        "plan": {
+          "description": "Plan mode turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review": {
+          "description": "`/review` and `mccode review`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "description": "Sub-agents and `explore`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "description": "Compaction summaries and handoffs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "NetworkMode": {
+      "description": "Network access of sandboxed shell commands.",
+      "type": "string",
+      "enum": [
+        "off",
+        "ask",
+        "on"
+      ]
+    },
+    "NotifyConfig": {
+      "description": "Push notifications and approvals to a chat through a paired MicroClaw\nServer (`mccode remote pair`).",
+      "type": "object",
+      "properties": {
+        "after_idle_secs": {
+          "description": "Send approvals to the chat only after the terminal has been\nunattended this many seconds (default 60; 0 = always).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "chat": {
+          "description": "Chat to notify, `<channel>:<chat id>` (e.g. `telegram:123456789`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "events": {
+          "description": "Events: `approval`, `done`, `check_failed`, `error`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PermissionsConfig": {
+      "description": "Permission rules. A rule is `<kind>(<pattern>)` with kind `bash`, `read`,\n`edit`, `net`, `mcp`, `agent` or `tool`; deny wins over ask, ask over\nallow.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ask": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_mode": {
+          "description": "Starting mode: `plan`, `ask` or `auto`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disabled_modes": {
+          "description": "Managed only: modes users may not select (e.g. `[auto]`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProviderProfile": {
+      "description": "One LLM provider endpoint.",
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "description": "API key in clear text (keep this in the user layer only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "api_key_env": {
+          "description": "Environment variable holding the API key (preferred over `api_key`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Model used when the profile is selected without a model name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Provider kind: `anthropic`, `openai` (any OpenAI-compatible API),\n`ollama`, `deepseek`, … (the MicroClaw `llm_provider` names).",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false
+    },
+    "SandboxConfig": {
+      "type": "object",
+      "properties": {
+        "allow_domains": {
+          "description": "Domains web tools may reach without asking (`*.example.com` allowed).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "backend": {
+          "description": "`local` (OS sandbox, default) or `off`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "writable_roots": {
+          "description": "Extra writable directories for shell commands.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ScreenMode": {
+      "description": "Where transcript output goes.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "fullscreen",
+            "inline"
+          ]
+        },
+        {
+          "description": "Fullscreen, except inline under tmux / Zellij.",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
+    },
+    "SidebarMode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "show",
+        "hide"
+      ]
+    },
+    "TerminalNotifications": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "description": "`auto`, `osc9`, `osc777`, `bell` or `off`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "when": {
+          "description": "`unfocused` (default) or `always`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TuiConfig": {
+      "description": "Terminal UI preferences.",
+      "type": "object",
+      "properties": {
+        "animations": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "diff": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiffStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keymap": {
+          "description": "Key bindings: action → key (e.g. `chat.steer: ctrl+s`).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "mouse": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "notifications": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalNotifications"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "screen": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScreenMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sidebar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SidebarMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status_line": {
+          "description": "Status line items in order: `mode`, `model`, `context`, `tokens`,\n`cost`, `branch`, `sandbox`, `session`, `checks`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "theme": {
+          "description": "Theme name (`auto`, `dark`, `light`, `ansi`, a built-in or a file in\n`~/.microclaw/code/themes/`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

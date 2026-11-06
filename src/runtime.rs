@@ -166,10 +166,12 @@ pub async fn run(
         &mut llm_model_overrides,
         build_discord_runtime_contexts,
         |runtime, reg| {
-            reg.register(Arc::new(DiscordAdapter::new(
+            let adapter = Arc::new(DiscordAdapter::new(
                 runtime.1.channel_name.clone(),
                 runtime.0.clone(),
-            )));
+            ));
+            crate::remote_approvals::register_card_sender(&runtime.1.channel_name, adapter.clone());
+            reg.register(adapter);
         },
         |runtime| {
             runtime
@@ -186,10 +188,12 @@ pub async fn run(
         &mut llm_model_overrides,
         build_slack_runtime_contexts,
         |runtime, reg| {
-            reg.register(Arc::new(SlackAdapter::new(
+            let adapter = Arc::new(SlackAdapter::new(
                 runtime.channel_name.clone(),
                 runtime.bot_token.clone(),
-            )));
+            ));
+            crate::remote_approvals::register_card_sender(&runtime.channel_name, adapter.clone());
+            reg.register(adapter);
         },
         |runtime| {
             runtime
@@ -399,11 +403,16 @@ pub async fn run(
                     llm_model_overrides.insert(runtime_ctx.channel_name.clone(), model);
                 }
                 let bot = teloxide::Bot::new(&token);
-                registry.register(Arc::new(TelegramAdapter::new(
+                let adapter = Arc::new(TelegramAdapter::new(
                     runtime_ctx.channel_name.clone(),
                     bot.clone(),
                     tg_cfg.clone(),
-                )));
+                ));
+                crate::remote_approvals::register_card_sender(
+                    &runtime_ctx.channel_name,
+                    adapter.clone(),
+                );
+                registry.register(adapter);
                 telegram_runtimes.push((bot, runtime_ctx));
             }
         }

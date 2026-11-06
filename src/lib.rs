@@ -5,6 +5,7 @@ pub mod doctor;
 pub mod eval;
 pub mod gateway;
 pub mod outbox;
+pub mod remote_approvals;
 pub mod runtime;
 pub mod scheduler;
 pub mod setup;

@@ -93,7 +93,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.23.1**, a fix release from testing MicroClaw Code against real models (approval replies, compaction on small context windows, language-server diagnostics, image mentions, export). 0.23.0 gave MicroClaw Code a token-aware context engine (tool-output pruning, structured incremental summaries that keep your own words, `/context`), model-managed context (budget hints, a parallel read-only `explore` helper, `/handoff`), project memory, language-server diagnostics, hooks, custom slash commands, image input, `--worktree` tasks, `review --pr`, `/export` and session token budgets. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.23.1).
+The latest release is **v0.25.0**, the MicroClaw Code interaction and configuration release: themes, Markdown and syntax-highlighted diffs, a side panel, queue-or-steer input, fuzzy pop-ups, a transcript pager and hunk-level review in the TUI; layered settings with `allow` / `ask` / `deny` permission rules and Claude Code-compatible hooks enforced inside the engine; approval cards pushed to Telegram, Discord, Slack and Feishu through a paired Server; per-turn receipts, `/goal`, `/btw` and `/configure`. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.25.0).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -142,7 +142,7 @@ Worker support without pulling in the Server, Web console, or concrete channel a
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.23.1", features = ["full"] }
+microclaw-sdk = { version = "0.25.0", features = ["full"] }
 ```
 
 ```rust

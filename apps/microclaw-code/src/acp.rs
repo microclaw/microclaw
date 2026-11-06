@@ -65,6 +65,15 @@ struct CodeAcpAgent {
     options: AcpOptions,
     outbound: mpsc::UnboundedSender<Outbound>,
     engines: RefCell<HashMap<PathBuf, MicroClaw>>,
+    gates: RefCell<
+        HashMap<
+            PathBuf,
+            (
+                microclaw_code_core::settings::CodeSettings,
+                microclaw_code_core::gate::CodeToolGate,
+            ),
+        >,
+    >,
     sessions: Rc<RefCell<HashMap<String, AcpSession>>>,
 }
 
@@ -82,6 +91,7 @@ pub async fn serve(options: AcpOptions) -> anyhow::Result<()> {
                 options,
                 outbound: outbound_tx,
                 engines: RefCell::new(HashMap::new()),
+                gates: RefCell::new(HashMap::new()),
                 sessions: Rc::new(RefCell::new(HashMap::new())),
             };
             let (client, io) = AgentSideConnection::new(
@@ -370,7 +380,19 @@ impl CodeAcpAgent {
         if let Some(engine) = self.engines.borrow().get(root) {
             return Ok(engine.clone());
         }
+        let (code_settings, gate) = crate::project_gate(root);
+        self.gates
+            .borrow_mut()
+            .insert(root.to_path_buf(), (code_settings.clone(), gate.clone()));
         let mut builder = MicroClaw::builder(&self.options.config_path)
+            .tool_gate(std::sync::Arc::new(gate))
+            .summary_model({
+                let setup = crate::role_setup(&code_settings, None);
+                for warning in &setup.warnings {
+                    eprintln!("mccode: {warning}");
+                }
+                setup.summary
+            })
             .caller_channel(microclaw_code_core::driver::CALLER_CHANNEL)
             .workspace(root)
             .data_dir(microclaw_code_core::home::data_dir())
@@ -411,7 +433,12 @@ impl CodeAcpAgent {
             interactive: true,
             sandbox: self.options.sandbox_info.clone(),
         };
-        let session = CodeSession::new(engine, project, id.clone(), settings);
+        let root = project.root.clone();
+        let mut session = CodeSession::new(engine, project, id.clone(), settings);
+        if let Some((code_settings, gate)) = self.gates.borrow().get(&root) {
+            session.set_tool_gate(gate.clone());
+            session.set_role_models(crate::role_setup(code_settings, None).roles);
+        }
         self.sessions.borrow_mut().insert(
             id.clone(),
             AcpSession {

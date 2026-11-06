@@ -245,6 +245,15 @@ pub(crate) fn build_router(web_state: WebState) -> Router {
         .route("/api/stream", get(stream::api_stream))
         .route("/api/run_status", get(stream::api_run_status))
         .route("/api/runs/:run_id/cancel", post(stream::api_run_cancel))
+        .route("/api/code/notify", post(code_remote::api_code_notify))
+        .route(
+            "/api/code/approvals",
+            post(code_remote::api_code_approval_create),
+        )
+        .route(
+            "/api/code/approvals/:id",
+            get(code_remote::api_code_approval_get).delete(code_remote::api_code_approval_cancel),
+        )
         .route("/api/reset", post(sessions::api_reset))
         .route("/api/delete_session", post(sessions::api_delete_session))
         .route("/api/skills", get(skills::api_list_skills))

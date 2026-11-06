@@ -1,0 +1,96 @@
+<!-- Source of screenshots/headline.png. Render with:
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
+    --force-device-scale-factor=2 --window-size=800,367 --screenshot=screenshots/headline.png \
+    "file://$PWD/docs/assets/readme/headline-banner.html"
+-->
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  :root{
+    --bg0:#060b18; --bg1:#0b1630; --line:rgba(120,170,255,.14);
+    --blue:#2f7bff; --cyan:#35d6ff; --text:#eaf2ff; --muted:#8fa6c9;
+    --panel:#0a1224; --panel-line:#1f3358; --green:#4ade80; --red:#f87171; --amber:#fbbf24; --violet:#a78bfa;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:800px;height:367px;overflow:hidden;background:var(--bg0)}
+  body{font-family:"Avenir Next","Segoe UI",Helvetica,Arial,sans-serif;color:var(--text);position:relative}
+  .bg{position:absolute;inset:0;
+    background:
+      radial-gradient(520px 300px at 22% 38%, rgba(47,123,255,.30), transparent 70%),
+      radial-gradient(420px 260px at 88% 75%, rgba(53,214,255,.16), transparent 70%),
+      linear-gradient(135deg,var(--bg1),var(--bg0) 60%);}
+  .grid{position:absolute;inset:0;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:28px 28px;
+    -webkit-mask-image:radial-gradient(600px 330px at 30% 45%,#000 20%,transparent 75%);}
+  .left{position:absolute;left:46px;top:58px;width:322px}
+  .brand{display:flex;align-items:center;gap:14px}
+  .logo{width:64px;height:64px;border-radius:50%;filter:drop-shadow(0 0 14px rgba(53,214,255,.55))}
+  h1{font-size:44px;font-weight:700;letter-spacing:-.5px;line-height:1}
+  h1 span{background:linear-gradient(90deg,#7fb4ff,var(--cyan));-webkit-background-clip:text;color:transparent}
+  .tag{margin-top:20px;font-size:16.5px;line-height:1.35;color:#cfe0ff;font-weight:500}
+  .pills{display:flex;gap:8px;margin-top:20px}
+  .pill{font-size:11.5px;font-weight:600;letter-spacing:.3px;padding:5px 11px;border-radius:999px;
+        border:1px solid rgba(53,214,255,.35);background:rgba(47,123,255,.12);color:#bfe3ff}
+  .pill b{color:var(--cyan);font-weight:700}
+  .url{position:absolute;left:46px;bottom:34px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12px;color:var(--muted)}
+  .url i{font-style:normal;color:var(--cyan)}
+  .ver{position:absolute;left:46px;bottom:56px;font-size:11px;font-weight:700;letter-spacing:1.2px;color:var(--cyan);text-transform:uppercase}
+  /* terminal */
+  .term{position:absolute;right:34px;top:34px;width:380px;height:300px;border-radius:12px;
+    background:linear-gradient(180deg,rgba(13,22,44,.96),rgba(8,14,30,.96));
+    border:1px solid var(--panel-line);box-shadow:0 18px 50px rgba(0,0,0,.55),0 0 0 1px rgba(53,214,255,.05),0 0 40px rgba(47,123,255,.18);
+    font-family:"SF Mono",Menlo,Consolas,monospace;font-size:10.2px;line-height:1.5;overflow:hidden}
+  .bar{display:flex;align-items:center;gap:6px;padding:8px 11px;border-bottom:1px solid var(--panel-line);color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .bar .t{margin-left:8px;color:#c7d6f2}
+  .bar .r{margin-left:auto;display:flex;gap:8px;font-size:9.5px}
+  .ok{color:var(--green)} .cy{color:var(--cyan)} .mu{color:var(--muted)} .vi{color:var(--violet)} .am{color:var(--amber)}
+  .body{padding:9px 12px}
+  .u{color:#e6eeff}
+  .u:before{content:"› ";color:var(--cyan)}
+  .row{white-space:pre}
+  .diff{margin:4px 0 4px 10px;border-left:2px solid var(--panel-line);padding-left:8px}
+  .add{background:rgba(74,222,128,.13);color:#b7f5cc}
+  .del{background:rgba(248,113,113,.12);color:#ffc2c2}
+  .add em{background:rgba(74,222,128,.32);font-style:normal}
+  .rcpt{margin-top:7px;border:1px solid var(--panel-line);border-radius:7px;padding:5px 8px;color:#c7d6f2}
+  .rcpt .h{color:var(--muted);font-size:9px;letter-spacing:.8px;text-transform:uppercase}
+  .input{position:absolute;left:10px;right:10px;bottom:10px;border:1px solid rgba(53,214,255,.55);border-radius:8px;padding:6px 9px;color:var(--muted);
+         box-shadow:0 0 12px rgba(53,214,255,.15)}
+  .input .m{position:absolute;top:-8px;left:10px;background:#0a1224;padding:0 5px;color:var(--cyan);font-size:9px;font-weight:700}
+  .cur{display:inline-block;width:6px;height:11px;background:var(--cyan);vertical-align:-2px;margin-left:1px}
+</style></head>
+<body>
+<div class="bg"></div><div class="grid"></div>
+<div class="left">
+  <div class="brand"><img class="logo" src="../../../icon.png"><h1>Micro<span>Claw</span></h1></div>
+  <div class="tag">One embeddable Rust agent core.<br>Chat bots, a coding agent, your own apps.</div>
+  <div class="pills"><div class="pill"><b>◆</b> Server</div><div class="pill"><b>›_</b> Code</div><div class="pill"><b>{ }</b> SDK</div></div>
+</div>
+<div class="ver"><span style="text-transform:none">v0.25</span> · themes · rules · hooks</div>
+<div class="url">github.com/<i>microclaw</i>/microclaw</div>
+
+<div class="term">
+  <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>
+    <span class="t">mccode · <span class="cy">calc</span> · main</span>
+    <span class="r"><span>sandbox <span class="ok">●</span></span><span>ctx 4%</span></span></div>
+  <div class="body">
+    <div class="row u">make mean return 0 for an empty slice</div>
+    <div class="row mu" style="margin-top:4px"><span class="ok">●</span> Explored <span class="u2">2 files</span>  · read src/lib.rs, grep mean</div>
+    <div class="row"><span class="ok">●</span> Edit <span class="cy">src/lib.rs</span> <span class="ok">+3</span> <span style="color:var(--red)">−0</span></div>
+    <div class="diff">
+      <div class="row mu"> 2  pub fn mean(xs: &amp;[i64]) -&gt; i64 {</div>
+      <div class="row add"> 3+     <em>if xs.is_empty() {</em></div>
+      <div class="row add"> 4+         <em>return 0;</em></div>
+      <div class="row add"> 5+     <em>}</em></div>
+      <div class="row mu"> 6      xs.iter().sum::&lt;i64&gt;() / xs.len() …</div>
+    </div>
+    <div class="row"><span class="ok">✓</span> build  <span class="mu">cargo check</span>   <span class="ok">✓</span> lsp   <span class="ok">✓</span> test <span class="mu">3 passed</span></div>
+    <div class="rcpt"><div class="h">done</div>
+      <div class="row">1 file +3 −0 · checks <span class="ok">✓</span> · net unused</div>
+      <div class="row mu">12.4k in · 655 out · checkpoint <span class="vi">2cbee01</span></div></div>
+  </div>
+  <div class="input"><span class="m">ask</span>ask, or / for commands, @ for files<span class="cur"></span></div>
+</div>
+</body></html>

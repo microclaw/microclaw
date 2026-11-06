@@ -257,6 +257,12 @@ pub enum Update {
     Notice(String),
     /// Share of the usable context window in use after a turn.
     ContextPercent(u8),
+    /// Tokens the turn (or review) used, and the model that ran it.
+    TurnUsage {
+        input_tokens: i64,
+        output_tokens: i64,
+        model: String,
+    },
 }
 
 /// Outcome of one user turn.
@@ -335,6 +341,74 @@ pub struct CodeSession {
     lsp: Option<crate::lsp::LspPool>,
     /// Tool policy for the next run instead of the mode's (reviews).
     policy_override: Option<ToolPolicy>,
+    /// Models for specific kinds of turns (`model.roles` in settings).
+    roles: RoleModels,
+    /// Permission rules and user hooks (shared with the engine's gate).
+    tool_gate: Option<crate::gate::CodeToolGate>,
+}
+
+/// Answers `/btw` side questions with read-only tools in a fork of the
+/// conversation; the main session is not changed.
+#[derive(Clone)]
+pub struct SideAsker {
+    microclaw: MicroClaw,
+    session_id: String,
+    project: Project,
+}
+
+impl SideAsker {
+    pub async fn ask(&self, question: &str) -> anyhow::Result<String> {
+        self.ask_raw(&format!(
+            "[Side question from the user, answered in a throwaway copy of the conversation. \
+             Answer briefly and directly; do not change any files and do not continue the main task.]\n\n{question}"
+        ))
+        .await
+    }
+
+    /// Run `prompt` read-only in a throwaway fork and return the reply.
+    pub async fn ask_raw(&self, prompt: &str) -> anyhow::Result<String> {
+        let fork = format!(
+            "{}-btw-{}",
+            self.session_id,
+            chrono::Utc::now().format("%H%M%S%3f")
+        );
+        // A brand-new session has nothing to fork; then ask without history.
+        let _ = self.microclaw.fork_session(&self.session_id, &fork).await;
+        let agent = self
+            .microclaw
+            .agent(AGENT_NAME)
+            .system_prompt(crate::prompt::system_prompt_with_sandbox(
+                &self.project,
+                Mode::Plan,
+                None,
+                None,
+            ))
+            .tool_policy(ToolPolicy::ReadOnly)
+            .build()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut request = RunRequest::new(prompt.to_string());
+        request.session_id = Some(SessionId::new(fork));
+        request.workspace = Some(self.project.root.clone());
+        let mut run = agent.run_request(request);
+        while run.next_event().await.is_some() {}
+        let result = run
+            .result()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+        match result.error {
+            Some(error) if result.final_text.trim().is_empty() => {
+                anyhow::bail!("{}", error.message)
+            }
+            _ => Ok(result.final_text),
+        }
+    }
+}
+
+/// Per-role model overrides; `None` uses the session's model.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleModels {
+    pub plan: Option<String>,
+    pub review: Option<String>,
 }
 
 fn one_line(text: &str, max: usize) -> String {
@@ -381,7 +455,116 @@ impl CodeSession {
             turn_checkpoints: Vec::new(),
             lsp: None,
             policy_override: None,
+            roles: RoleModels::default(),
+            tool_gate: None,
         }
+    }
+
+    /// Use `gate` (the same one given to the SDK builder) for allow rules
+    /// and user hooks.
+    pub fn set_tool_gate(&mut self, gate: crate::gate::CodeToolGate) {
+        self.tool_gate = Some(gate);
+    }
+
+    pub fn tool_gate(&self) -> Option<&crate::gate::CodeToolGate> {
+        self.tool_gate.as_ref()
+    }
+
+    fn hooks(&self) -> Option<std::sync::Arc<crate::user_hooks::UserHooks>> {
+        self.tool_gate.as_ref().map(|g| g.hooks())
+    }
+
+    /// Run a session-level hook (`session_start`, `session_end`); returns
+    /// context and messages to show.
+    pub async fn session_hook(
+        &self,
+        event: crate::user_hooks::HookEvent,
+        source: &str,
+    ) -> Vec<String> {
+        let Some(hooks) = self.hooks().filter(|h| h.has(event)) else {
+            return Vec::new();
+        };
+        let outcome = hooks
+            .run(
+                event,
+                crate::user_hooks::HookPayload::default().with("source", source),
+            )
+            .await;
+        let mut out = outcome.system_messages.clone();
+        out.extend(outcome.errors.iter().map(|e| format!("{event} hook: {e}")));
+        out
+    }
+
+    /// A handle that answers side questions (`/btw`) in a throwaway copy of
+    /// this conversation, usable while a turn is running.
+    pub fn side_asker(&self) -> SideAsker {
+        SideAsker {
+            microclaw: self.microclaw.clone(),
+            session_id: self.session_id.clone(),
+            project: self.project.clone(),
+        }
+    }
+
+    /// Use these models for plan-mode turns and reviews.
+    pub fn set_role_models(&mut self, roles: RoleModels) {
+        self.roles = roles;
+    }
+
+    pub fn role_models(&self) -> &RoleModels {
+        &self.roles
+    }
+
+    /// Switch to `role_model` for one piece of work; returns the model to
+    /// restore afterwards (`None`: nothing switched).
+    async fn enter_role(
+        &self,
+        role_model: Option<String>,
+        updates: &UnboundedSender<Update>,
+    ) -> Option<Option<String>> {
+        let target = role_model.filter(|m| !m.trim().is_empty())?;
+        let current = self.model().await.ok();
+        if current.as_deref() == Some(target.as_str()) {
+            return None;
+        }
+        match self
+            .microclaw
+            .set_session_model(&self.session_id, Some(&target))
+            .await
+        {
+            Ok(_) => Some(current),
+            Err(e) => {
+                let _ = updates.send(Update::Notice(format!(
+                    "could not switch to {target} for this turn: {e}"
+                )));
+                None
+            }
+        }
+    }
+
+    async fn leave_role(&self, restore: Option<Option<String>>) {
+        if let Some(previous) = restore {
+            let _ = self
+                .microclaw
+                .set_session_model(&self.session_id, previous.as_deref())
+                .await;
+        }
+    }
+
+    /// Tokens used so far in this session (input, output).
+    async fn tokens_so_far(&self) -> (i64, i64) {
+        self.usage()
+            .await
+            .map(|u| (u.input_tokens, u.output_tokens))
+            .unwrap_or((0, 0))
+    }
+
+    async fn report_usage(&self, before: (i64, i64), updates: &UnboundedSender<Update>) {
+        let after = self.tokens_so_far().await;
+        let _ = updates.send(Update::TurnUsage {
+            input_tokens: (after.0 - before.0).max(0),
+            output_tokens: (after.1 - before.1).max(0),
+            model: self.model().await.unwrap_or_default(),
+        });
     }
 
     /// Use a specific allow-rule store (tests, custom homes).
@@ -495,6 +678,25 @@ impl CodeSession {
         &self,
         focus: Option<&str>,
     ) -> anyhow::Result<microclaw_sdk::SessionCompaction> {
+        if let Some(hooks) = self
+            .hooks()
+            .filter(|h| h.has(crate::user_hooks::HookEvent::PreCompact))
+        {
+            let outcome = hooks
+                .run(
+                    crate::user_hooks::HookEvent::PreCompact,
+                    crate::user_hooks::HookPayload::default()
+                        .with("trigger", "manual")
+                        .with("custom_instructions", focus.unwrap_or_default()),
+                )
+                .await;
+            if outcome.blocked {
+                anyhow::bail!(
+                    "a pre_compact hook blocked compaction: {}",
+                    outcome.reason.unwrap_or_default()
+                );
+            }
+        }
         self.microclaw
             .compact_session_with(&self.session_id, COMPACT_KEEP_RECENT, focus)
             .await
@@ -614,7 +816,11 @@ impl CodeSession {
         };
         let prompt = review_prompt(&diff, focus);
         self.policy_override = Some(ToolPolicy::ReadOnly);
+        let before = self.tokens_so_far().await;
+        let restore = self.enter_role(self.roles.review.clone(), updates).await;
         let outcome = self.run_once(&prompt, updates, controls).await;
+        self.leave_role(restore).await;
+        self.report_usage(before, updates).await;
         self.policy_override = None;
         let (status, final_text, error, _) = outcome?;
         report.final_text = final_text;
@@ -630,6 +836,12 @@ impl CodeSession {
             _ => {}
         }
         Ok(report)
+    }
+
+    /// Checkpoints taken at the start of this session's turns, oldest
+    /// first, with each turn's prompt (the `/rewind` timeline).
+    pub fn turn_checkpoints(&self) -> &[(Checkpoint, String)] {
+        &self.turn_checkpoints
     }
 
     pub fn pending_approval(&self) -> Option<&PendingApproval> {
@@ -679,6 +891,15 @@ impl CodeSession {
     /// Decide whether an approval needs a person.
     fn gate(&self, approval: &PendingApproval) -> Gate {
         let preview = approval.preview.as_deref().unwrap_or("");
+        // An `ask` permission rule or a pre_tool_use hook asked for a
+        // person: neither auto mode nor the sandbox shortcut may answer it.
+        if self
+            .tool_gate
+            .as_ref()
+            .is_some_and(|g| g.take_ask(&approval.tool))
+        {
+            return Gate::Ask;
+        }
         if self.always_ask.iter().any(|re| re.is_match(preview)) {
             return Gate::Ask;
         }
@@ -714,6 +935,14 @@ impl CodeSession {
             return Gate::Auto {
                 rule: Some(rule.to_string()),
             };
+        }
+        if approval.tool == "bash"
+            && let Some(rule) = self
+                .tool_gate
+                .as_ref()
+                .and_then(|g| g.allows_command(preview))
+        {
+            return Gate::Auto { rule: Some(rule) };
         }
         Gate::Ask
     }
@@ -835,7 +1064,21 @@ impl CodeSession {
                                     "could not auto-approve {}: {}", approval.tool, e.message
                                 )));
                             }
+                        } else if let Some((value, why)) = self.permission_hook(&approval).await {
+                            let _ = updates.send(Update::AutoApproved {
+                                tool: approval.tool.clone(),
+                                rule: Some(why),
+                            });
+                            if let Err(e) = controller
+                                .resolve_approval_confirmed(approval.approval_id.clone(), value)
+                                .await
+                            {
+                                let _ = updates.send(Update::Notice(format!(
+                                    "could not answer the approval for {}: {}", approval.tool, e.message
+                                )));
+                            }
                         } else if self.settings.interactive {
+                            self.notification_hook(&approval);
                             let _ = updates.send(Update::ApprovalRequested(approval.clone()));
                             awaiting = Some(approval);
                         } else {
@@ -930,6 +1173,51 @@ impl CodeSession {
                 Some(_) => {}
             }
         }
+    }
+
+    /// `permission_request` hooks may answer an approval: `Some(("1" | "3",
+    /// why))`.
+    async fn permission_hook(&self, approval: &PendingApproval) -> Option<(String, String)> {
+        use crate::user_hooks::{HookDecision, HookEvent, HookPayload};
+        let hooks = self
+            .hooks()
+            .filter(|h| h.has(HookEvent::PermissionRequest))?;
+        let input = serde_json::json!({"command": approval.preview.clone().unwrap_or_default()});
+        let outcome = hooks
+            .run(
+                HookEvent::PermissionRequest,
+                HookPayload::tool(&approval.tool, input)
+                    .with("permission_mode", self.settings.mode.as_str()),
+            )
+            .await;
+        match outcome.decision {
+            Some(HookDecision::Allow) => Some(("1".into(), "a permission_request hook".into())),
+            Some(HookDecision::Deny) => Some((
+                "3".into(),
+                format!(
+                    "denied by a permission_request hook{}",
+                    outcome.reason.map(|r| format!(": {r}")).unwrap_or_default()
+                ),
+            )),
+            _ => None,
+        }
+    }
+
+    /// Fire `notification` hooks (not awaited).
+    fn notification_hook(&self, approval: &PendingApproval) {
+        use crate::user_hooks::{HookEvent, HookPayload};
+        let Some(hooks) = self.hooks().filter(|h| h.has(HookEvent::Notification)) else {
+            return;
+        };
+        let message = format!(
+            "MicroClaw Code needs your permission to use {}",
+            approval.tool
+        );
+        tokio::spawn(async move {
+            let _ = hooks
+                .run(HookEvent::Notification, HookPayload::message(message))
+                .await;
+        });
     }
 
     /// Run project hooks; a failing hook is reported but does not stop the turn.
@@ -1064,7 +1352,115 @@ impl CodeSession {
         updates: &UnboundedSender<Update>,
         controls: &mut UnboundedReceiver<Control>,
     ) -> anyhow::Result<TurnReport> {
+        let before = self.tokens_so_far().await;
+        let role = if self.settings.mode == Mode::Plan {
+            self.roles.plan.clone()
+        } else {
+            None
+        };
+        let restore = self.enter_role(role, updates).await;
+        let report = self.turn_with_hooks(prompt, updates, controls).await;
+        self.leave_role(restore).await;
+        self.report_usage(before, updates).await;
+        report
+    }
+
+    /// `user_prompt_submit` before the turn, `stop` after it (a blocking
+    /// stop hook sends its reason back to the agent once).
+    async fn turn_with_hooks(
+        &mut self,
+        prompt: &str,
+        updates: &UnboundedSender<Update>,
+        controls: &mut UnboundedReceiver<Control>,
+    ) -> anyhow::Result<TurnReport> {
+        use crate::user_hooks::{HookEvent, HookPayload};
+        let hooks = self.hooks();
+        let mut prompt = prompt.to_string();
+        // A bare option value answers an approval left pending by a
+        // non-interactive run; the engine only recognizes it unchanged, so
+        // prompt hooks (which may append context) do not run on it.
+        let approval_answer = matches!(prompt.trim(), "1" | "2" | "3");
+        if let Some(h) = hooks
+            .as_ref()
+            .filter(|h| !approval_answer && h.has(HookEvent::UserPromptSubmit))
+        {
+            let outcome = h
+                .run(
+                    HookEvent::UserPromptSubmit,
+                    HookPayload::prompt(prompt.clone()),
+                )
+                .await;
+            for message in outcome.system_messages.iter().chain(outcome.errors.iter()) {
+                let _ = updates.send(Update::Notice(format!(
+                    "user_prompt_submit hook: {message}"
+                )));
+            }
+            if outcome.blocked || outcome.stop_reason.is_some() {
+                let reason = outcome
+                    .reason
+                    .or(outcome.stop_reason)
+                    .unwrap_or_else(|| "no reason given".into());
+                let _ = updates.send(Update::Notice(format!(
+                    "a user_prompt_submit hook blocked this prompt: {reason}"
+                )));
+                return Ok(TurnReport {
+                    status: "blocked".into(),
+                    failed: true,
+                    ..TurnReport::default()
+                });
+            }
+            if let Some(context) = outcome.additional_context.filter(|c| !c.trim().is_empty()) {
+                prompt = format!("{prompt}\n\n[Context from a project hook]\n{context}");
+            }
+        }
+        let mut report = self.turn_inner(&prompt, updates, controls).await?;
+        if report.cancelled || report.failed {
+            return Ok(report);
+        }
+        if let Some(h) = hooks.as_ref().filter(|h| h.has(HookEvent::Stop)) {
+            let outcome = h
+                .run(
+                    HookEvent::Stop,
+                    HookPayload::default()
+                        .with("stop_hook_active", false)
+                        .with("last_assistant_message", report.final_text.clone()),
+                )
+                .await;
+            for message in outcome.system_messages.iter().chain(outcome.errors.iter()) {
+                let _ = updates.send(Update::Notice(format!("stop hook: {message}")));
+            }
+            if outcome.blocked
+                && let Some(reason) = outcome.reason.filter(|r| !r.trim().is_empty())
+            {
+                let _ = updates.send(Update::Notice(format!(
+                    "a stop hook asked the agent to continue: {reason}"
+                )));
+                let more = self.turn_inner(&reason, updates, controls).await?;
+                for path in more.changed_files.clone() {
+                    if !report.changed_files.contains(&path) {
+                        report.changed_files.push(path);
+                    }
+                }
+                let changed = std::mem::take(&mut report.changed_files);
+                report = TurnReport {
+                    changed_files: changed,
+                    ..more
+                };
+            }
+        }
+        Ok(report)
+    }
+
+    async fn turn_inner(
+        &mut self,
+        prompt: &str,
+        updates: &UnboundedSender<Update>,
+        controls: &mut UnboundedReceiver<Control>,
+    ) -> anyhow::Result<TurnReport> {
         let mut report = TurnReport::default();
+        if let Some(gate) = &self.tool_gate {
+            gate.clear_asks();
+        }
         // Checkpoint the workspace so `/undo` can return to this point.
         match self
             .microclaw
@@ -1128,14 +1524,11 @@ impl CodeSession {
 
             // Text-path approvals (non-interactive runs): the run ended; answer
             // it with the next message.
+            // Only approvals that `gate()` already sent to a person get here
+            // (they were deferred above), so they are not gated a second time:
+            // a rule's ask is claimed once, and auto mode must not answer it.
             if let Some(approval) = self.pending_approval.take() {
-                let answer = if let Gate::Auto { rule } = self.gate(&approval) {
-                    let _ = updates.send(Update::AutoApproved {
-                        tool: approval.tool.clone(),
-                        rule,
-                    });
-                    Waited::Answer("1".into())
-                } else if self.settings.interactive {
+                let answer = if self.settings.interactive {
                     let _ = updates.send(Update::ApprovalRequested(approval.clone()));
                     self.wait_for_answer(&approval, controls).await
                 } else {

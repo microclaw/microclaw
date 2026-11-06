@@ -74,6 +74,7 @@ pub mod subdirectory_hints;
 pub mod supervision;
 pub mod title_generator;
 pub mod tool_executor;
+pub mod tool_gate;
 pub mod tool_guardrails;
 pub mod tools;
 pub mod trust_report;

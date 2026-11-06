@@ -473,6 +473,20 @@ impl EventHandler for Handler {
             return;
         }
 
+        // A reply naming an option of a pending MicroClaw Code remote
+        // approval in this channel answers it and never reaches the agent.
+        if crate::remote_approvals::intercept_text_reply(
+            &self.app_state,
+            &self.runtime.channel_name,
+            &external_channel_id.to_string(),
+            &format!("discord:{sender_name}"),
+            &msg.content,
+        )
+        .await
+        {
+            return;
+        }
+
         if is_slash_command(&text) {
             if !should_respond && !self.app_state.config.allow_group_slash_without_mention {
                 return;
@@ -922,6 +936,34 @@ impl EventHandler for Handler {
             return;
         };
         let custom_id = comp.data.custom_id.clone();
+        if crate::remote_approvals::is_remote_callback(&custom_id) {
+            let channel_id = comp.channel_id.get();
+            let outcome = if !self.runtime.allowed_channels.is_empty()
+                && !self.runtime.allowed_channels.contains(&channel_id)
+            {
+                crate::remote_approvals::TapOutcome::Rejected(
+                    "This channel cannot answer requests.".into(),
+                )
+            } else {
+                crate::remote_approvals::handle_tap(
+                    &custom_id,
+                    &self.runtime.channel_name,
+                    &channel_id.to_string(),
+                    &format!("discord:{}", comp.user.name),
+                )
+            };
+            if let Some(ack) = crate::remote_approvals::tap_ack_text(&outcome) {
+                let response = serenity::builder::CreateInteractionResponse::UpdateMessage(
+                    serenity::builder::CreateInteractionResponseMessage::new()
+                        .content(ack)
+                        .components(vec![]),
+                );
+                if let Err(e) = comp.create_response(&ctx.http, response).await {
+                    warn!("Discord: remote approval ack failed: {e}");
+                }
+            }
+            return;
+        }
         let Some(rest) = custom_id.strip_prefix("apv:") else {
             return;
         };
@@ -1028,6 +1070,107 @@ impl EventHandler for Handler {
                 }
             }
         }
+    }
+}
+
+/// Native approval cards for MicroClaw Code remote approvals
+/// (`crate::remote_approvals`): buttons with `mcc:<id>:<n>` custom ids,
+/// distinct from the agent's `apv:` buttons.
+#[async_trait::async_trait]
+impl crate::remote_approvals::ApprovalCardSender for DiscordAdapter {
+    async fn send_card(
+        &self,
+        external_chat_id: &str,
+        text: &str,
+        buttons: &[crate::remote_approvals::CardButton],
+    ) -> Result<crate::remote_approvals::CardRef, String> {
+        let discord_chat_id = external_chat_id
+            .parse::<u64>()
+            .map_err(|_| format!("Invalid Discord external_chat_id '{external_chat_id}'"))?;
+        let components: Vec<serde_json::Value> = buttons
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                json!({
+                    "type": 2,
+                    // 1 primary, 2 secondary.
+                    "style": if i == 0 { 1 } else { 2 },
+                    "label": crate::remote_approvals::truncate_chars(&b.label, 80),
+                    "custom_id": b.data,
+                })
+            })
+            .collect();
+        let body = json!({
+            "content": crate::remote_approvals::truncate_chars(text, 1900),
+            "components": [{"type": 1, "components": components}],
+        });
+        let url = format!("https://discord.com/api/v10/channels/{discord_chat_id}/messages");
+        let resp = self
+            .http_client
+            .post(&url)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.token),
+            )
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format_reqwest_error("Failed to send Discord approval card", &e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "Failed to send Discord approval card: HTTP {status} {}",
+                body.chars().take(300).collect::<String>()
+            ));
+        }
+        let sent: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse Discord message response: {e}"))?;
+        Ok(crate::remote_approvals::CardRef {
+            chat: discord_chat_id.to_string(),
+            message_id: sent
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+
+    async fn edit_card(
+        &self,
+        card: &crate::remote_approvals::CardRef,
+        text: &str,
+    ) -> Result<(), String> {
+        if card.message_id.is_empty() {
+            return Err("Discord approval card has no message id".into());
+        }
+        let url = format!(
+            "https://discord.com/api/v10/channels/{}/messages/{}",
+            card.chat, card.message_id
+        );
+        let resp = self
+            .http_client
+            .patch(&url)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bot {}", self.token),
+            )
+            .json(&json!({
+                "content": crate::remote_approvals::truncate_chars(text, 1900),
+                "components": [],
+            }))
+            .send()
+            .await
+            .map_err(|e| format_reqwest_error("Failed to edit Discord approval card", &e))?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "Failed to edit Discord approval card: HTTP {}",
+                resp.status()
+            ));
+        }
+        Ok(())
     }
 }
 

@@ -27,14 +27,29 @@ In the TUI:
 
 | Key | Action |
 |---|---|
-| Enter | send (while the agent works: guide it) |
-| Alt+Enter, Ctrl+J, trailing `\` | new line |
+| Enter | send; while the agent works, queue the message for after this turn |
+| Ctrl+S | send now as guidance to the running turn |
+| Up (empty input) | take the last queued message back for editing |
+| Alt+Enter, Shift+Enter, Ctrl+J, trailing `\` | new line |
+| `/` and `@` | command and file pop-ups (fuzzy; ↑↓ choose, Tab / Enter accept) |
+| `!` (empty input) | shell mode: run a command yourself; its output goes to the agent with your next message |
 | Shift+Tab | cycle mode: plan → ask → auto |
-| Tab | complete `/commands` and `@path` file mentions |
 | Esc / Ctrl+C | stop the running agent |
+| Esc Esc | rewind: pick an earlier turn, restore its files and edit its prompt |
+| Ctrl+P | command palette |
+| Ctrl+R | search earlier prompts (history is kept per project) |
+| Ctrl+G | edit the prompt in `$EDITOR` |
+| Ctrl+V | attach an image from the clipboard |
+| Ctrl+O | expand / collapse all tool output and diffs (or click one) |
+| Ctrl+T | the whole transcript in a pager with `/` search |
+| F2 | review the uncommitted changes hunk by hunk |
+| Ctrl+B | show / hide the side panel |
+| PgUp / PgDn, mouse wheel, End | scroll the transcript |
 | Ctrl+C twice, Ctrl+D, `/exit` | quit |
-| PgUp / PgDn, End | scroll the transcript |
-| Up / Down | input history |
+
+Keys can be rebound, and themes, the status line and the screen mode
+changed, in [settings](./code-settings). Large pastes collapse into a
+`[Pasted #1 +120 lines]` chip that is expanded when you send.
 
 Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 `/verify [on|off]`, `/trust`, `/allow`, `/diff [full]`, `/new`, `/sessions`, `/status`,
@@ -42,16 +57,29 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 
 | Command | What it does |
 |---|---|
+| `/goal <objective>` | Keep working, turn after turn (at most 8), until the agent reports the goal met and the project's checks pass. `/goal stop` ends it. |
+| `/btw <question>` | Answer a side question in a throwaway copy of the conversation, even while a turn runs; the main session is not changed. |
+| `/changes` (F2) | Review the uncommitted changes file by file: revert a single hunk (a backup patch goes to `.git/microclaw/reverted/`), mark files reviewed, and leave comments that become a prompt for the agent. |
 | `/undo` | Restore the files to how they were before the last turn that changed them. The state you leave is checkpointed too. |
-| `/rewind [id]` | List workspace checkpoints, or restore one. |
+| `/rewind [id]` | Pick an earlier turn (also Esc Esc) and restore its files, or restore a checkpoint by id. |
 | `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
-| `/model [name\|reset]` | Show or switch the model for this session. |
+| `/model [name\|reset]` | Pick (or switch to) a model for this session. |
+| `/theme [name]` | Pick a theme with live preview. |
+| `/config`, `/configure <request>` | Show or change [settings](./code-settings); `/configure` turns a plain-language request into changes you confirm. |
+| `/permissions`, `/hooks`, `/keys` | Show permission rules, hooks and key bindings; `/permissions add allow\|ask\|deny <rule>`. |
+| `/import claude\|codex\|opencode` | Import settings from another coding agent. |
+| `/queue [clear]` | Show or clear messages queued while a turn runs. |
 | `/cost` | Requests and input/output tokens of this session, per model. |
 | `/compact [focus]` | Summarize older messages now; the optional focus says what the summary must keep. |
 | `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
 | `/handoff <next task>` | Start a new session from a summary of this one focused on the next task; this session stays as it is. |
 | `/export [file]` | Write this session as Markdown (also `mccode export --session <id> [--out file]`). |
 | `/fork` | Continue in a copy of the conversation; the original session is kept. |
+
+After a turn that changed files, ran checks or fetched pages, a summary card
+shows the files and line counts, check results, the sandbox, any network use,
+tokens and cost, and the checkpoint to rewind to. On wide terminals a side
+panel keeps the plan, checks, changed files and running sub-agents in view.
 
 Checkpoints are taken at the start of every turn in a shadow git repository
 inside the Code home (`data/checkpoints`); they never touch your own `.git`.

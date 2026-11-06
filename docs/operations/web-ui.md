@@ -46,6 +46,55 @@ Common entry points include:
 
 Web API calls that mutate state require an API key with the appropriate scope. `/hooks/*` uses the dedicated `channels.web.hooks_token` setting and rejects requests when no hook token is configured.
 
+## MicroClaw Code: notifications and approvals in chat
+
+A paired MicroClaw Code (`mccode remote pair`) can reach you in a chat app
+while you are away from the terminal. The endpoints take the device token (or
+any API key) as `Authorization: Bearer …`; sending needs `operator.write`.
+The chat is written `<channel>:<chat id>`, using the channel name from the
+config (`telegram`, `telegram.<account>`, `discord`, `slack`, `feishu`, …)
+and the chat id the platform uses (Telegram chat id, Discord channel id,
+Slack channel id, Feishu `chat_id`).
+
+| Endpoint | Body / result |
+| --- | --- |
+| `POST /api/code/notify` | `{"chat": "telegram:123", "text": "…", "title": "…"}` (title optional) → `{"ok": true, "delivery": "delivered" \| "queued"}`. Uses the normal delivery path, so a failed send is retried from the outbox. |
+| `POST /api/code/approvals` | `{"chat", "title", "text", "options": [{"value": "approve", "label": "Approve once"}, …], "ttl_secs": 1800}` (1–5 options; `ttl_secs` defaults to 30 min, clamped to 30 s–24 h) → `{"ok": true, "id", "status": "pending", "expires_at", …}` |
+| `GET /api/code/approvals/:id` | `{"status": "pending" \| "answered" \| "expired" \| "cancelled", "value", "label", "answered_by", "expires_at", "finished_at"}` |
+| `DELETE /api/code/approvals/:id[?reason=…]` | Cancels a pending approval and edits the card to say it was answered in the terminal (`{"cancelled": true}`; `false` when it was already finished). |
+
+Errors: `400` for a malformed body, a disabled channel or a channel without
+approval support; `404` for a chat the Server has never seen (send the bot a
+message from it first) or an approval id that is unknown or belongs to
+another caller; `403` when an approval targets a chat that is not a control
+chat; `502` when the channel send fails.
+
+How answers come back:
+
+- Telegram, Discord and Slack show the options as buttons. Their callback
+  data is `mcc:<id>:<n>`, separate from the agent's own `apv:` approval
+  buttons, so a tap on one can never answer the other.
+- On every supported channel (Telegram, Discord, Slack, Feishu/Lark) a text
+  reply with the option's number, value or label in the card's chat answers
+  the newest pending card there; the reply is not passed to the agent. Any
+  other message goes to the agent as usual. In Telegram groups with privacy
+  mode on, reply to the card (or tap) so the bot sees the message.
+- Pending approvals are kept in memory: a Server restart drops them and the
+  client reports them as gone.
+
+Rules:
+
+- Approval cards only go to chats listed in `control_chat_ids`. Notifications
+  may go to any chat the Server already knows on an enabled channel.
+- An answer counts only when it comes from the chat (or a thread/topic in it)
+  that received the card; a tap carrying the same callback data in another
+  chat is rejected.
+- The channel's own inbound checks still apply: Telegram `allowed_user_ids`
+  (when set, only those users can answer, in groups too), Discord/Slack
+  `allowed_channels`, Feishu `allowed_chats`.
+- Only the device or key that created an approval (or an admin key) can read
+  or cancel it.
+
 ## WebSocket gateway
 
 The OpenClaw Mission Control-compatible bridge upgrades WebSocket connections at `GET /`.
