@@ -42,7 +42,7 @@ release, verifies it against the release's `SHA256SUMS.txt`, and installs it
 to `/usr/local/bin` (or `~/.local/bin` when that is not writable). Options:
 
 ```sh
-curl -fsSL https://microclaw.org/install-mccode.sh | bash -s -- --version 0.23.1
+curl -fsSL https://microclaw.org/install-mccode.sh | bash -s -- --version 0.25.0
 curl -fsSL https://microclaw.org/install-mccode.sh | bash -s -- --dir ~/bin
 ```
 
