@@ -158,14 +158,14 @@ jobs:
           - label: macos-x86_64
             # Cross-compiled on Apple Silicon: the Intel runners are the
             # slowest and most queued, and doubled the release time.
-            os: macos-14
+            os: macos-15
             cross: true
             bin: microclaw
             target_triple: x86_64-apple-darwin
             asset_triple: x86_64-apple-darwin
             archive_ext: tar.gz
           - label: macos-arm64
-            os: macos-14
+            os: macos-15
             bin: microclaw
             target_triple: aarch64-apple-darwin
             asset_triple: aarch64-apple-darwin
