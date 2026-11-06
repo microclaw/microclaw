@@ -94,9 +94,19 @@ function parseConfigDefaults() {
       pending = { kind: 'serde' };
       continue;
     }
+    // Runtime-only fields (`#[serde(skip)]`) cannot be set in a config file.
+    if (/^#\[serde\(skip\)\]$/.test(line)) {
+      pending = { kind: 'skip' };
+      continue;
+    }
 
     const field = line.match(/^pub\s+([a-z0-9_]+):\s*([^,]+),$/i);
     if (!field) continue;
+
+    if (pending?.kind === 'skip') {
+      pending = null;
+      continue;
+    }
 
     const key = field[1];
     const typeName = field[2].trim();
