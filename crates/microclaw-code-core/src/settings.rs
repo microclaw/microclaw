@@ -3,12 +3,12 @@
 //! One file format, four layers, merged in this order (later wins for
 //! scalars; lists such as permission rules and hooks are concatenated):
 //!
-//! 1. user — `~/.microclaw/code/settings.yaml`
+//! 1. user — `~/.mccode/settings.yaml`
 //! 2. project — `<repo>/.microclaw/settings.yaml` (trusted projects only)
 //! 3. project-local — `<repo>/.microclaw/settings.local.yaml` (trusted only,
 //!    not committed)
-//! 4. managed — `/etc/microclaw/code/managed.yaml` (macOS:
-//!    `/Library/Application Support/MicroClaw/code/managed.yaml`); it can
+//! 4. managed — `/etc/mccode/managed.yaml` (macOS:
+//!    `/Library/Application Support/mccode/managed.yaml`); it can
 //!    only tighten: its `deny` / `ask` rules always apply and its scalars win.
 //!
 //! The types below are the file schema (`version: 1`). Below them:
@@ -270,7 +270,7 @@ pub struct TerminalNotifications {
 #[serde(default, deny_unknown_fields)]
 pub struct TuiConfig {
     /// Theme name (`auto`, `dark`, `light`, `ansi`, a built-in or a file in
-    /// `~/.microclaw/code/themes/`).
+    /// `~/.mccode/themes/`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,7 +328,7 @@ impl NotifyConfig {
 // ---------------------------------------------------------------------------
 
 /// Environment variable overriding the managed settings path (tests, MDM).
-pub const MANAGED_ENV: &str = "MICROCLAW_CODE_MANAGED";
+pub const MANAGED_ENV: &str = "MCCODE_MANAGED";
 /// Settings file name in the Code home and in `.microclaw/`.
 pub const SETTINGS_FILE: &str = "settings.yaml";
 /// Project-local (not committed) settings file name in `.microclaw/`.
@@ -402,7 +402,7 @@ impl fmt::Display for SettingsLayer {
     }
 }
 
-/// `~/.microclaw/code/settings.yaml` (honours `MICROCLAW_CODE_HOME`).
+/// `~/.mccode/settings.yaml` (honours `MCCODE_HOME`).
 pub fn user_settings_path() -> PathBuf {
     crate::home::code_home().join(SETTINGS_FILE)
 }
@@ -418,10 +418,9 @@ pub fn local_settings_path(root: &Path) -> PathBuf {
         .join(LOCAL_SETTINGS_FILE)
 }
 
-/// The managed (administrator) settings file; `MICROCLAW_CODE_MANAGED`
-/// overrides it.
+/// The managed (administrator) settings file; `MCCODE_MANAGED` overrides it.
 pub fn managed_settings_path() -> PathBuf {
-    if let Some(path) = std::env::var_os(MANAGED_ENV).filter(|v| !v.is_empty()) {
+    if let Some(path) = crate::home::env_var(MANAGED_ENV) {
         return PathBuf::from(path);
     }
     default_managed_path()
@@ -429,7 +428,7 @@ pub fn managed_settings_path() -> PathBuf {
 
 #[cfg(target_os = "macos")]
 fn default_managed_path() -> PathBuf {
-    PathBuf::from("/Library/Application Support/MicroClaw/code/managed.yaml")
+    PathBuf::from("/Library/Application Support/mccode/managed.yaml")
 }
 
 #[cfg(windows)]
@@ -437,12 +436,12 @@ fn default_managed_path() -> PathBuf {
     let base = std::env::var_os("ProgramData")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
-    base.join("MicroClaw").join("code").join("managed.yaml")
+    base.join("mccode").join("managed.yaml")
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
 fn default_managed_path() -> PathBuf {
-    PathBuf::from("/etc/microclaw/code/managed.yaml")
+    PathBuf::from("/etc/mccode/managed.yaml")
 }
 
 /// The four layer files; [`LayerPaths::discover`] for the real locations,
@@ -1781,7 +1780,7 @@ pub fn template() -> &'static str {
 const TEMPLATE: &str = r#"# yaml-language-server: $schema=https://microclaw.ai/schema/code-settings.v1.json
 # MicroClaw Code settings. The same format is read from four layers, merged
 # in this order (later wins for single values; lists are concatenated):
-#   ~/.microclaw/code/settings.yaml          user
+#   ~/.mccode/settings.yaml          user
 #   <repo>/.microclaw/settings.yaml          project (trusted projects only)
 #   <repo>/.microclaw/settings.local.yaml    project-local, not committed
 #   managed.yaml                             administrator, always wins

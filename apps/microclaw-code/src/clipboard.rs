@@ -1,5 +1,5 @@
 //! Clipboard images (Ctrl+V): read a PNG from the system clipboard with
-//! the platform's own tools and save it under `~/.microclaw/code/attachments`.
+//! the platform's own tools and save it under `~/.mccode/attachments`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

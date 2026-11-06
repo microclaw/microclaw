@@ -66,7 +66,7 @@ impl FromStr for ImportSource {
 /// Settings layer to write into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportTarget {
-    /// `~/.microclaw/code/settings.yaml` and the Code home.
+    /// `~/.mccode/settings.yaml` and the Code home.
     User,
     /// `<repo>/.microclaw/settings.yaml` and `<repo>/.microclaw/`.
     Project,
@@ -1156,8 +1156,8 @@ pub fn looks_secret(text: &str) -> bool {
         .is_match(text)
 }
 
-/// Write `plan` into `target` (Code home from `MICROCLAW_CODE_HOME` or
-/// `~/.microclaw/code`).
+/// Write `plan` into `target` (Code home from `MCCODE_HOME` or
+/// `~/.mccode`).
 pub fn apply_import(plan: &ImportPlan, target: ImportTarget) -> anyhow::Result<ImportReport> {
     apply_import_in(plan, target, &crate::home::code_home())
 }

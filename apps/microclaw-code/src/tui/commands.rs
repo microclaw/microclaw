@@ -1231,7 +1231,7 @@ impl App {
         }
     }
 
-    /// Custom commands (`.microclaw/commands`, `~/.microclaw/code/commands`).
+    /// Custom commands (`.microclaw/commands`, `~/.mccode/commands`).
     pub(super) fn custom_commands(&self) -> Vec<microclaw_code_core::commands::CustomCommand> {
         match self.project() {
             Some(project) => microclaw_code_core::commands::load(

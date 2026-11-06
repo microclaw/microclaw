@@ -7,7 +7,7 @@
 # binary is installed.
 set -euo pipefail
 
-REPO="${MICROCLAW_REPO:-microclaw/microclaw}"
+REPO="${MCCODE_REPO:-microclaw/microclaw}"
 BIN_NAME="mccode"
 API_URL="${MCCODE_RELEASE_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}"
 VERSION="${MCCODE_VERSION:-}"

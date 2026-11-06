@@ -80,7 +80,7 @@ mccode update --check   # only report whether a newer release exists
 ```
 
 Homebrew installs update with `brew upgrade mccode`. To uninstall, delete the
-`mccode` binary (and `~/.microclaw/code` to remove settings and sessions).
+`mccode` binary (and `~/.mccode` to remove settings and sessions).
 
 ## Configure a model
 
@@ -90,18 +90,18 @@ mccode setup
 
 `setup` asks for a provider (OpenAI, Anthropic, OpenRouter, DeepSeek, Ollama
 and the other providers MicroClaw supports), a model and an API key, and
-writes `~/.microclaw/code/config.yaml` (readable only by you). For scripts:
+writes `~/.mccode/config.yaml` (readable only by you). For scripts:
 
 ```sh
 mccode setup --provider anthropic --model claude-sonnet-4-5 --api-key "$ANTHROPIC_API_KEY"
 mccode setup --provider ollama --model qwen3-coder --base-url http://127.0.0.1:11434/v1
 ```
 
-Without that file, `mccode` borrows model settings from `--config <PATH>`,
-`MICROCLAW_CODE_CONFIG`, `MICROCLAW_CONFIG` or a MicroClaw Server
-configuration in `~/.microclaw/`. A `microclaw.config.yaml` inside a
-repository is never loaded, so a cloned project cannot choose your model
-endpoint.
+A model profile in `~/.mccode/settings.yaml` works instead of that file (see
+[settings](./code-settings.md)), and `--config <PATH>` or `MCCODE_CONFIG`
+names another configuration file. `mccode` never uses a MicroClaw Server
+configuration, and a `microclaw.config.yaml` inside a repository is never
+loaded, so a cloned project cannot choose your model endpoint.
 
 Check everything with:
 
@@ -141,10 +141,16 @@ mccode -p "fix the failing parser test"
 
 ## Where things live
 
-Everything MicroClaw Code stores is in `~/.microclaw/code` (override with
-`MICROCLAW_CODE_HOME`): the model configuration, the engine database and
-memory, checkpoints, the session index, trust decisions and allow rules. It
-never shares a database with a MicroClaw Server on the same machine.
+Everything MicroClaw Code stores is in `~/.mccode` (override with
+`MCCODE_HOME`): the model configuration, the engine database and
+memory, checkpoints, the session index, trust decisions and allow rules.
+
+MicroClaw Code and the MicroClaw Server are separate products: each installs,
+updates and uninstalls on its own, and neither reads the other's
+configuration, data or environment variables. Pairing with a Server
+(`mccode remote pair`) is the only link, and only when you set it up.
+Versions before 0.26 kept Code data in `~/.microclaw/code`; the first run of a
+newer `mccode` moves it to `~/.mccode`.
 
 ## Next
 

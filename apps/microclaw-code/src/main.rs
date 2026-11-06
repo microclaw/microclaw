@@ -90,7 +90,7 @@ struct Cli {
     max_fix_rounds: Option<u32>,
 
     /// Shell sandbox: `workspace-write` (default: commands write only the
-    /// repository, temp and tool caches) or `off`. Also MICROCLAW_CODE_SANDBOX.
+    /// repository, temp and tool caches) or `off`. Also MCCODE_SANDBOX.
     #[arg(long, value_name = "MODE")]
     sandbox: Option<String>,
 
@@ -218,7 +218,7 @@ enum Command {
         #[command(subcommand)]
         action: WorktreeAction,
     },
-    /// Show or change settings (`~/.microclaw/code/settings.yaml`,
+    /// Show or change settings (`~/.mccode/settings.yaml`,
     /// `.microclaw/settings.yaml`, `.microclaw/settings.local.yaml`).
     Config {
         #[command(subcommand)]
@@ -343,14 +343,67 @@ enum AllowAction {
     },
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(cli).await {
+    if let Some(note) = home::migrate_legacy_home() {
+        eprintln!("mccode: {note}");
+    }
+    // SAFETY: no other thread exists yet; the runtime is built below.
+    unsafe { isolate_engine_env(&home::code_home()) };
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("mccode: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    match runtime.block_on(run(cli)) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("mccode: {error:#}");
             ExitCode::from(1)
+        }
+    }
+}
+
+/// The Agent Engine reads a few `MICROCLAW_*` variables meant for the
+/// MicroClaw Server. MicroClaw Code is a separate product, so it replaces them
+/// with its own `MCCODE_*` values (or clears them) and a Server environment
+/// never changes how Code behaves.
+fn engine_env_overrides(
+    get: impl Fn(&str) -> Option<std::ffi::OsString>,
+    code_home: &std::path::Path,
+) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+    let get = |var: &str| get(var).filter(|v| !v.is_empty());
+    vec![
+        ("MICROCLAW_CONFIG", None),
+        ("MICROCLAW_SKILLS_DIR", None),
+        ("MICROCLAW_OPENAI_API_KEY", None),
+        ("MICROCLAW_SANDBOX_MOUNT_ALLOWLIST", None),
+        (
+            "MICROCLAW_PATH_ALLOWLIST",
+            Some(
+                get("MCCODE_PATH_ALLOWLIST")
+                    .unwrap_or_else(|| code_home.join("sandbox-path-allowlist.txt").into()),
+            ),
+        ),
+        ("MICROCLAW_LOCAL_SANDBOX", get("MCCODE_LOCAL_SANDBOX")),
+    ]
+}
+
+/// # Safety
+/// Must run before any other thread is started.
+unsafe fn isolate_engine_env(code_home: &std::path::Path) {
+    for (var, value) in engine_env_overrides(|v| std::env::var_os(v), code_home) {
+        // SAFETY: the caller guarantees the process is single-threaded.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(var, value),
+                None => std::env::remove_var(var),
+            }
         }
     }
 }
@@ -642,9 +695,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     } else {
         None
     };
-    let (config_path, source) = match home::resolve_config(cli.config.as_deref()) {
-        Ok(found) => found,
-        Err(_) if profile_model.is_some() => (PathBuf::new(), home::ConfigSource::CodeHome),
+    let config_path = match home::resolve_config(cli.config.as_deref()) {
+        Ok((path, _)) => path,
+        Err(_) if profile_model.is_some() => PathBuf::new(),
         Err(e) => return Err(e),
     };
     if let Some(m) = &profile_model
@@ -655,14 +708,6 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             style.dim(&format!(
                 "Using model {} from settings profile `{}`.",
                 m.model, m.profile
-            ))
-        );
-    } else if source == home::ConfigSource::Server && !cli.json {
-        eprintln!(
-            "{}",
-            style.dim(&format!(
-                "Using model credentials from {} (run `mccode setup` for a Code-only configuration).",
-                config_path.display()
             ))
         );
     }
@@ -1406,7 +1451,7 @@ const NO_SANDBOX_NOTICE: &str = if cfg!(windows) {
 /// Auto mode without a sandbox runs commands with the user's full permissions.
 const AUTO_WITHOUT_SANDBOX: &str = "auto mode without an OS sandbox: non-destructive commands run without asking and with your full permissions.";
 
-/// The shell sandbox chosen by `--sandbox` / `MICROCLAW_CODE_SANDBOX`.
+/// The shell sandbox chosen by `--sandbox` / `MCCODE_SANDBOX`.
 fn layer_arg(name: &str) -> anyhow::Result<code_settings::SettingsLayer> {
     code_settings::SettingsLayer::parse(name).ok_or_else(|| {
         anyhow::anyhow!("unknown layer '{name}' (expected user, project, local or managed)")
@@ -1670,7 +1715,7 @@ fn settings_sandbox(
     cli: &Cli,
     settings: &code_settings::CodeSettings,
 ) -> ShellSandbox {
-    let explicit = cli.sandbox.is_some() || std::env::var_os("MICROCLAW_CODE_SANDBOX").is_some();
+    let explicit = cli.sandbox.is_some() || home::env_var("MCCODE_SANDBOX").is_some();
     if !explicit && settings.sandbox.backend.as_deref() == Some("off") {
         return ShellSandbox::Off;
     }
@@ -1710,7 +1755,7 @@ fn sandbox_choice(cli: &Cli) -> anyhow::Result<ShellSandbox> {
     let raw = cli
         .sandbox
         .clone()
-        .or_else(|| std::env::var("MICROCLAW_CODE_SANDBOX").ok())
+        .or_else(|| home::env_var("MCCODE_SANDBOX").and_then(|v| v.into_string().ok()))
         .unwrap_or_else(|| "workspace-write".into());
     match raw.trim().to_ascii_lowercase().as_str() {
         "off" | "none" | "danger-full-access" => Ok(ShellSandbox::Off),
@@ -1810,9 +1855,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn server_environment_does_not_reach_the_engine() {
+        let home = std::path::Path::new("/h/.mccode");
+        let server_only = |var: &str| {
+            var.starts_with("MICROCLAW_")
+                .then(|| std::ffi::OsString::from("/server"))
+        };
+        let overrides: std::collections::HashMap<_, _> = engine_env_overrides(server_only, home)
+            .into_iter()
+            .collect();
+        assert_eq!(overrides["MICROCLAW_CONFIG"], None);
+        assert_eq!(overrides["MICROCLAW_SKILLS_DIR"], None);
+        assert_eq!(overrides["MICROCLAW_LOCAL_SANDBOX"], None);
+        assert_eq!(
+            overrides["MICROCLAW_PATH_ALLOWLIST"],
+            Some("/h/.mccode/sandbox-path-allowlist.txt".into())
+        );
+
+        let code = |var: &str| match var {
+            "MCCODE_PATH_ALLOWLIST" => Some("/mine.txt".into()),
+            "MCCODE_LOCAL_SANDBOX" => Some("landlock".into()),
+            _ => None,
+        };
+        let overrides: std::collections::HashMap<_, _> =
+            engine_env_overrides(code, home).into_iter().collect();
+        assert_eq!(
+            overrides["MICROCLAW_PATH_ALLOWLIST"],
+            Some("/mine.txt".into())
+        );
+        assert_eq!(
+            overrides["MICROCLAW_LOCAL_SANDBOX"],
+            Some("landlock".into())
+        );
+    }
+
+    #[test]
     fn sandbox_choice_defaults_to_workspace_write() {
         let cli = Cli::try_parse_from(["mccode", "--no-network"]).unwrap();
-        if std::env::var_os("MICROCLAW_CODE_SANDBOX").is_none() {
+        if home::env_var("MCCODE_SANDBOX").is_none() {
             assert_eq!(
                 sandbox_choice(&cli).unwrap(),
                 ShellSandbox::WorkspaceWrite {

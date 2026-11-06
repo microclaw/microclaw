@@ -23,7 +23,7 @@ useful when the code, credentials or hardware live on another machine.
    ```
 
 Pairing trades the single-use code for a device token. The token is stored in
-`~/.microclaw/code/remote.json` (readable only by you) and can be revoked from
+`~/.mccode/remote.json` (readable only by you) and can be revoked from
 the Server's Access tab. `mccode remote forget` deletes it locally.
 
 ## Run a task
