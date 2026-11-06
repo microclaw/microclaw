@@ -21,16 +21,20 @@ mccode
 mccode update                              # later: install the latest release (checksum-verified)
 ```
 
-`mccode setup` writes `~/.microclaw/code/config.yaml`. Without it, `mccode`
-borrows model credentials from `--config <PATH>`, `MICROCLAW_CODE_CONFIG`,
-`MICROCLAW_CONFIG` or a MicroClaw Server `~/.microclaw/microclaw.config.yaml`.
-A `microclaw.config.yaml` inside the repository is never loaded, so a cloned
-project cannot choose the model endpoint or tool policy.
+`mccode setup` writes `~/.mccode/config.yaml`; a model profile in
+`~/.mccode/settings.yaml` works too. Otherwise pass `--config <PATH>` or set
+`MCCODE_CONFIG`. A `microclaw.config.yaml` inside the repository is never
+loaded, so a cloned project cannot choose the model endpoint or tool policy.
 
-All Code state lives in `~/.microclaw/code` (override with
-`MICROCLAW_CODE_HOME`): the engine database, memory and checkpoints
-(`data/`), the session index and trust decisions. It never shares a database
-or memory with a MicroClaw Server on the same machine.
+All Code state lives in `~/.mccode` (override with `MCCODE_HOME`): the model
+configuration, the engine database, memory and checkpoints (`data/`), the
+session index and trust decisions.
+
+MicroClaw Code and the MicroClaw Server are separate products. Each installs,
+updates and uninstalls on its own, and neither reads the other's
+configuration, data or `MICROCLAW_*` / `MCCODE_*` variables; they share no
+model settings. Pairing with a Server (`mccode remote pair`) is the only link,
+and only when you set it up.
 
 ## Use
 
@@ -93,12 +97,12 @@ Each turn ends with a receipt: changed files, check results, sandbox and
 network use, tokens (and cost when the model's price is known) and the
 checkpoint to rewind to.
 
-Also: custom commands from `.microclaw/commands/*.md` and `~/.microclaw/code/commands/*.md`, project memory in `.microclaw/memory.md`, project helper agents in `.microclaw/agents/*.md` for the `explore` tool, language-server diagnostics after edits, and `hooks` (`after_edit`, `after_turn`) in the project file; see the [usage guide](https://microclaw.org/docs/code-usage).
+Also: custom commands from `.microclaw/commands/*.md` and `~/.mccode/commands/*.md`, project memory in `.microclaw/memory.md`, project helper agents in `.microclaw/agents/*.md` for the `explore` tool, language-server diagnostics after edits, and `hooks` (`after_edit`, `after_turn`) in the project file; see the [usage guide](https://microclaw.org/docs/code-usage).
 
 ## Settings, permission rules and hooks
 
 Settings are YAML in four layers, later ones winning: user
-(`~/.microclaw/code/settings.yaml`), project (`.microclaw/settings.yaml`,
+(`~/.mccode/settings.yaml`), project (`.microclaw/settings.yaml`,
 shared), local (`.microclaw/settings.local.yaml`, kept out of git) and
 managed (set by an administrator). They hold the model and provider profiles
 (a profile can replace the configuration file), per-role models, permission
@@ -142,13 +146,13 @@ system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
 - On Linux without a working `bwrap`, **Landlock** is used instead: writes are
   confined the same way (and outgoing TCP is blocked on kernels with Landlock
   ABI 4+), but credential directories stay readable, so commands keep asking.
-  `MICROCLAW_LOCAL_SANDBOX=bubblewrap|landlock|none` overrides the choice.
+  `MCCODE_LOCAL_SANDBOX=bubblewrap|landlock|none` overrides the choice.
 
 `--review-commands` has the model annotate every approval with a one-line
 verdict; a command it calls `DANGEROUS` asks you even in `auto` mode.
 
 This is defence in depth: the approval rules above still apply. Turn it off
-with `--sandbox off` (or `MICROCLAW_CODE_SANDBOX=off`). If the machine has no
+with `--sandbox off` (or `MCCODE_SANDBOX=off`). If the machine has no
 working OS sandbox (no `bwrap`, or unprivileged user namespaces disabled),
 Code says so at startup and commands run unsandboxed; `mccode doctor` reports
 the state. The MicroClaw Server can use the same mechanism with
@@ -174,7 +178,7 @@ example `cargo test`. Such a rule covers only single simple commands that
 start with the prefix (`cargo test -p x`, but never `cargo test && …`, pipes,
 redirections or `$(…)`); interpreters, `sudo`, `rm`, `curl` and the like
 cannot be allowed by prefix, and the destructive list above still asks.
-Rules live in `~/.microclaw/code/allow-rules.json`; manage them with
+Rules live in `~/.mccode/allow-rules.json`; manage them with
 `/allow [list | add <prefix> | rm <prefix>]` or `mccode allow [list | add | remove]`.
 
 In `-p` mode an approval that needs a person ends the run with exit code 2;

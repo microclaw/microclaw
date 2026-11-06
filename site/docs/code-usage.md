@@ -103,13 +103,13 @@ system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
 - On Linux without a working `bwrap`, **Landlock** is used instead: writes are
   confined the same way (and outgoing TCP is blocked on kernels with Landlock
   ABI 4+), but credential directories stay readable, so commands keep asking.
-  `MICROCLAW_LOCAL_SANDBOX=bubblewrap|landlock|none` overrides the choice.
+  `MCCODE_LOCAL_SANDBOX=bubblewrap|landlock|none` overrides the choice.
 
 `--review-commands` has the model annotate every approval with a one-line
 verdict; a command it calls `DANGEROUS` asks you even in `auto` mode.
 
 This is defence in depth: the approval rules above still apply. Turn it off
-with `--sandbox off` (or `MICROCLAW_CODE_SANDBOX=off`). If the machine has no
+with `--sandbox off` (or `MCCODE_SANDBOX=off`). If the machine has no
 working OS sandbox (no `bwrap`, or unprivileged user namespaces disabled),
 Code says so at startup and commands run unsandboxed; `mccode doctor` reports
 the state. The MicroClaw Server can use the same mechanism with
@@ -135,7 +135,7 @@ example `cargo test`. Such a rule covers only single simple commands that
 start with the prefix (`cargo test -p x`, but never `cargo test && …`, pipes,
 redirections or `$(…)`); interpreters, `sudo`, `rm`, `curl` and the like
 cannot be allowed by prefix, and the destructive list above still asks.
-Rules live in `~/.microclaw/code/allow-rules.json`; manage them with
+Rules live in `~/.mccode/allow-rules.json`; manage them with
 `/allow [list | add <prefix> | rm <prefix>]` or `mccode allow [list | add | remove]`.
 
 In `-p` mode an approval that needs a person ends the run with exit code 2;
@@ -263,7 +263,7 @@ Fix issue #$ARGUMENTS: read it with `gh issue view`, write a failing test
 first, then fix it.
 ```
 
-Put personal commands in `~/.microclaw/code/commands/` and project commands in
+Put personal commands in `~/.mccode/commands/` and project commands in
 `.microclaw/commands/` (trusted projects only; they win on a name clash).
 `/help` lists them, Tab completes them, and `mccode -p "/fix-issue 42"` runs
 one non-interactively.
@@ -308,7 +308,7 @@ mccode worktree remove retries
 ```
 
 `--worktree [name]` runs the session in a new git worktree on branch
-`mccode/<name>` (under `~/.microclaw/code/worktrees`), so several tasks can
+`mccode/<name>` (under `~/.mccode/worktrees`), so several tasks can
 run at once without touching your checkout or each other. When it ends,
 Code prints the branch, its commits and how to review, merge or remove it.
 Trust carries over from the main checkout.

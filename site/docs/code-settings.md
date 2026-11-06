@@ -14,10 +14,10 @@ the look of the terminal interface, key bindings and notifications.
 
 | Layer | File | Notes |
 |---|---|---|
-| user | `~/.microclaw/code/settings.yaml` | Your preferences for every project. |
+| user | `~/.mccode/settings.yaml` | Your preferences for every project. |
 | project | `<repo>/.microclaw/settings.yaml` | Shared with the repository. Read only in [trusted projects](./code-usage#project-trust). |
 | local | `<repo>/.microclaw/settings.local.yaml` | This project, not committed: mccode adds it to the repository's `.git/info/exclude` when it writes the file. Read only in trusted projects. "Always allow" choices and `/permissions add` go here. |
-| managed | `/etc/microclaw/code/managed.yaml` (macOS: `/Library/Application Support/MicroClaw/code/managed.yaml`) | Set by an administrator. Its values win and its `deny` / `ask` rules always apply. |
+| managed | `/etc/mccode/managed.yaml` (macOS: `/Library/Application Support/mccode/managed.yaml`) | Set by an administrator. Its values win and its `deny` / `ask` rules always apply. |
 
 The layers merge in that order: user, then project, then local, then managed.
 For a single value, the later layer wins. Lists are combined instead:
@@ -213,7 +213,7 @@ and a `timeout` in seconds (default 60). The older `hooks.after_edit` and
 - **Picking one:** `/theme` previews themes live as you move through the list
   and saves your choice to the user layer.
 
-**Custom themes.** Put YAML files in `~/.microclaw/code/themes/`.
+**Custom themes.** Put YAML files in `~/.mccode/themes/`.
 OpenCode theme JSON files work in the same directory.
 
 ```yaml

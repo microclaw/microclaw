@@ -1,6 +1,6 @@
 //! Custom slash commands: Markdown prompt templates.
 //!
-//! `~/.microclaw/code/commands/<name>.md` (personal) and, in trusted
+//! `~/.mccode/commands/<name>.md` (personal) and, in trusted
 //! projects, `.microclaw/commands/<name>.md` (shared with the repository)
 //! define `/name`. The file body is the prompt; `$ARGUMENTS` is replaced by
 //! what follows the command (or the arguments are appended when the body has

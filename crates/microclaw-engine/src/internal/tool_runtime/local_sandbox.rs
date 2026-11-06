@@ -62,6 +62,7 @@ const HIDDEN_HOME_DIRS: &[&str] = &[
     ".netrc",
     ".git-credentials",
     ".microclaw",
+    ".mccode",
 ];
 
 /// Home-relative tool caches commands may write (package downloads, build

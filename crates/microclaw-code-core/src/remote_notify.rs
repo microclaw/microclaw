@@ -80,7 +80,7 @@ impl RemoteNotifier {
         })
     }
 
-    /// Use the stored pairing (`~/.microclaw/code/remote.json`); `None` when
+    /// Use the stored pairing (`~/.mccode/remote.json`); `None` when
     /// this machine is not paired with a Server.
     pub fn from_pairing(chat: &str) -> anyhow::Result<Option<Self>> {
         let chat = validate_chat(chat)?;

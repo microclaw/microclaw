@@ -53,7 +53,7 @@ and add:
   Useful ones: `--mode plan|ask|auto` (starting mode), `--no-network`,
   `--sandbox off`, `--no-verify`, `--config <PATH>` (model settings).
 - `env` passes environment variables, for example
-  `"MICROCLAW_CODE_HOME": "/path/to/another/home"` or an API key referenced
+  `"MCCODE_HOME": "/path/to/another/home"` or an API key referenced
   by your configuration.
 
 ### 2. Start a thread

@@ -480,7 +480,7 @@
           }
         },
         "theme": {
-          "description": "Theme name (`auto`, `dark`, `light`, `ansi`, a built-in or a file in\n`~/.microclaw/code/themes/`).",
+          "description": "Theme name (`auto`, `dark`, `light`, `ansi`, a built-in or a file in\n`~/.mccode/themes/`).",
           "type": [
             "string",
             "null"

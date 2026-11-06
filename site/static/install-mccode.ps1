@@ -5,7 +5,7 @@
 # The archive is verified against the release's SHA256SUMS.txt before the
 # binary is installed.
 param(
-  [string]$Repo = $(if ($env:MICROCLAW_REPO) { $env:MICROCLAW_REPO } else { 'microclaw/microclaw' }),
+  [string]$Repo = $(if ($env:MCCODE_REPO) { $env:MCCODE_REPO } else { 'microclaw/microclaw' }),
   [string]$InstallDir = $(if ($env:MCCODE_INSTALL_DIR) { $env:MCCODE_INSTALL_DIR } else { Join-Path $env:USERPROFILE '.local\bin' }),
   [string]$Version = $(if ($env:MCCODE_VERSION) { $env:MCCODE_VERSION } else { '' })
 )
