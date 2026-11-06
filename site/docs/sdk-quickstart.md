@@ -15,7 +15,7 @@ Use the published SDK from crates.io:
 
 ```toml title="Cargo.toml"
 [dependencies]
-microclaw-sdk = { version = "0.25.0", features = ["full"] }
+microclaw-sdk = { version = "0.26.0", features = ["full"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

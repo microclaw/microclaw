@@ -7,7 +7,7 @@ import styles from './index.module.css';
 import {getHomeMessages} from '../home-i18n';
 
 const PATH_COMMANDS = {
-  sdk: 'microclaw-sdk = { version = "0.25.0", features = ["full"] }',
+  sdk: 'microclaw-sdk = { version = "0.26.0", features = ["full"] }',
   code: 'curl -fsSL https://microclaw.org/install-mccode.sh | bash && mccode setup',
   server: {
     macos: 'curl -fsSL https://microclaw.org/install.sh | bash',
@@ -107,7 +107,7 @@ function HomepageHeader() {
         <div className={styles.heroContent}>
           <div className={styles.heroLead}>
             <div className={styles.eyebrow}>{messages.eyebrow}</div>
-            <Link className={styles.releasePill} href="https://github.com/microclaw/microclaw/releases/tag/v0.25.0">
+            <Link className={styles.releasePill} href="https://github.com/microclaw/microclaw/releases/tag/v0.26.0">
               {messages.release} <span aria-hidden="true">→</span>
             </Link>
             <Heading as="h1" className={styles.heroTitle}>

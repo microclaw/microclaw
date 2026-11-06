@@ -14,7 +14,7 @@ MicroClaw ships three products on one execution model. MicroClaw Server is the s
 
 ## Active priorities
 
-- Use MicroClaw Code 0.25 (themes, queue and steer, layered settings,
+- Use MicroClaw Code 0.26 (themes, queue and steer, layered settings,
   permission rules, hooks, approvals in chat) with real models and fix what
   that finds; grow `mccode eval` with longer sessions and cases replayed from
   this repository's bug-fix history, so token use can be measured.

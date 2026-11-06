@@ -91,7 +91,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.25.0**，这是 MicroClaw Code 的交互与配置版本：TUI 有了主题、Markdown 和语法高亮的 diff、侧栏、排队或引导两种发送方式、模糊补全弹窗、全文浏览和按块审查；分层设置支持 `allow` / `ask` / `deny` 权限规则和兼容 Claude Code 的 hooks，并在引擎内强制执行；通过配对的 Server 把审批卡片推送到 Telegram、Discord、Slack 和飞书；每轮结束的回执、`/goal`、`/btw` 和 `/configure`。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.25.0)。
+最新版本为 **v0.26.0**：MicroClaw Code 与 Server 完全分开。它的所有数据都在 `~/.mccode`，只读取 `MCCODE_*` 环境变量和自己的模型配置，可以单独安装、配置和卸载（升级后运行一次 `mccode setup`）。0.25 的 Code 功能也都在：主题、排队或引导发送、按块审查、支持 `allow` / `ask` / `deny` 规则的分层设置、兼容 Claude Code 的 hooks，以及在聊天里审批。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.26.0)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -140,7 +140,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.25.0", features = ["full"] }
+microclaw-sdk = { version = "0.26.0", features = ["full"] }
 ```
 
 ```rust

@@ -6,6 +6,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.26.0 - 2026-11-06
+
+MicroClaw Code becomes a fully separate product from the MicroClaw Server.
+After upgrading, run `mccode setup` (or add a model profile to
+`~/.mccode/settings.yaml`); an old `~/.microclaw/code` is not read.
+
 ### Changed
 
 - **MicroClaw Code is fully separate from the MicroClaw Server.** Its home
@@ -22,6 +28,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   (macOS `/Library/Application Support/mccode/managed.yaml`, Windows
   `%ProgramData%\mccode\managed.yaml`). The OS sandbox hides `~/.mccode`
   from shell commands, like `~/.microclaw`.
+- Documentation and the `mccode config init` template keep role models on the
+  session's profile, and say that `model.roles.subagent` is not used yet.
 
 ## 0.25.0 - 2026-11-06
 

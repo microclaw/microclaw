@@ -93,7 +93,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.25.0**, the MicroClaw Code interaction and configuration release: themes, Markdown and syntax-highlighted diffs, a side panel, queue-or-steer input, fuzzy pop-ups, a transcript pager and hunk-level review in the TUI; layered settings with `allow` / `ask` / `deny` permission rules and Claude Code-compatible hooks enforced inside the engine; approval cards pushed to Telegram, Discord, Slack and Feishu through a paired Server; per-turn receipts, `/goal`, `/btw` and `/configure`. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.25.0).
+The latest release is **v0.26.0**: MicroClaw Code becomes fully separate from the Server. It keeps everything in `~/.mccode`, reads only `MCCODE_*` variables and its own model configuration, and is installed, configured and removed on its own (run `mccode setup` once after upgrading). It also carries the 0.25 Code features: themes, queue-or-steer input, hunk-level review, layered settings with `allow` / `ask` / `deny` rules, Claude Code-compatible hooks and approvals in chat. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.26.0).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -142,7 +142,7 @@ Worker support without pulling in the Server, Web console, or concrete channel a
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.25.0", features = ["full"] }
+microclaw-sdk = { version = "0.26.0", features = ["full"] }
 ```
 
 ```rust

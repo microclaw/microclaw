@@ -3649,7 +3649,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "aes 0.8.4",
  "agent-client-protocol",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-code"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -3743,7 +3743,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-code-core"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3767,7 +3767,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-core"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "once_cell",
  "regex",
@@ -3781,7 +3781,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-engine"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -3843,7 +3843,7 @@ dependencies = [
 
 [[package]]
 name = "microclaw-sdk"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "async-trait",
  "microclaw-core",
