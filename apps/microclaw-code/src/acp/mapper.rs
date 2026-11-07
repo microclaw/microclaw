@@ -57,6 +57,75 @@ fn read_small(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
+/// Undoes a unified diff (hunk headers and ` `/`-`/`+` lines, no file header)
+/// on `current`, giving the text before that edit. Each hunk is located by its
+/// content, starting at its header's line, so edits made since elsewhere in the
+/// file are kept on both sides. `None` when a hunk no longer matches.
+fn reverse_apply(current: &str, diff: &str) -> Option<String> {
+    let lines: Vec<&str> = current.split_inclusive('\n').collect();
+    let bare = |line: &str| line.strip_suffix('\n').unwrap_or(line).to_string();
+    let mut hunks: Vec<(usize, Vec<(char, &str)>)> = Vec::new();
+    for line in diff.lines() {
+        if let Some(header) = line.strip_prefix("@@ ") {
+            let start = header
+                .split_whitespace()
+                .find_map(|part| part.strip_prefix('+'))?
+                .split(',')
+                .next()?
+                .parse::<usize>()
+                .ok()?;
+            hunks.push((start.saturating_sub(1), Vec::new()));
+            continue;
+        }
+        let (_, body) = hunks.last_mut()?;
+        let mut chars = line.chars();
+        let sign = chars.next().unwrap_or(' ');
+        if !matches!(sign, ' ' | '-' | '+') {
+            return None;
+        }
+        body.push((sign, chars.as_str()));
+    }
+    let mut out = String::new();
+    let mut cursor = 0;
+    for (hint, body) in hunks {
+        let after: Vec<&str> = body
+            .iter()
+            .filter(|(sign, _)| *sign != '-')
+            .map(|(_, text)| *text)
+            .collect();
+        let matches = |at: usize| {
+            at + after.len() <= lines.len()
+                && after
+                    .iter()
+                    .enumerate()
+                    .all(|(k, text)| bare(lines[at + k]) == *text)
+        };
+        let at = if hint >= cursor && matches(hint) {
+            hint
+        } else {
+            (cursor..=lines.len()).find(|at| matches(*at))?
+        };
+        lines[cursor..at].iter().for_each(|line| out.push_str(line));
+        let mut i = at;
+        for (sign, text) in body {
+            match sign {
+                ' ' => {
+                    out.push_str(lines[i]);
+                    i += 1;
+                }
+                '+' => i += 1,
+                _ => {
+                    out.push_str(text);
+                    out.push('\n');
+                }
+            }
+        }
+        cursor = i;
+    }
+    lines[cursor..].iter().for_each(|line| out.push_str(line));
+    Some(out)
+}
+
 fn thought(text: String) -> SessionUpdate {
     SessionUpdate::AgentThoughtChunk(ContentChunk::new(text.into()))
 }
@@ -83,8 +152,6 @@ pub struct UpdateMapper {
     running: HashMap<String, String>,
     /// Call id by absolute path (for diffs).
     by_path: HashMap<PathBuf, String>,
-    /// File text before the edit, by absolute path.
-    before: HashMap<PathBuf, Option<String>>,
     /// Diffs shown so far, per call (an update replaces the whole content).
     diffs: HashMap<String, Vec<ToolCallContent>>,
     /// Calls whose content is richer than the result preview.
@@ -101,7 +168,6 @@ impl UpdateMapper {
             streamed: false,
             running: HashMap::new(),
             by_path: HashMap::new(),
-            before: HashMap::new(),
             diffs: HashMap::new(),
             rich: HashSet::new(),
             checks: 0,
@@ -122,10 +188,8 @@ impl UpdateMapper {
         self.running.get(tool).cloned()
     }
 
-    fn remember_before(&mut self, path: PathBuf, call_id: &str) {
-        self.by_path.insert(path.clone(), call_id.to_string());
-        let text = read_small(&path);
-        self.before.insert(path, text);
+    fn track_edit(&mut self, path: PathBuf, call_id: &str) {
+        self.by_path.insert(path, call_id.to_string());
     }
 
     pub fn map(&mut self, update: &Update) -> Vec<SessionUpdate> {
@@ -211,7 +275,7 @@ impl UpdateMapper {
                 if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
                     let abs = self.absolute(path);
                     if matches!(name.as_str(), "edit_file" | "write_file") {
-                        self.remember_before(abs.clone(), call_id);
+                        self.track_edit(abs.clone(), call_id);
                     }
                     let mut location = ToolCallLocation::new(abs);
                     if let Some(line) = input
@@ -231,7 +295,7 @@ impl UpdateMapper {
                 {
                     for path in patch_paths(patch) {
                         let abs = self.absolute(&path);
-                        self.remember_before(abs.clone(), call_id);
+                        self.track_edit(abs.clone(), call_id);
                         locations.push(ToolCallLocation::new(abs));
                     }
                 }
@@ -269,7 +333,12 @@ impl UpdateMapper {
                     ToolCallUpdateFields::new().content(vec![ToolCallContent::from(text)]),
                 ))]
             }
-            RuntimeEvent::FileDiff { path, diff, .. } => {
+            RuntimeEvent::FileDiff {
+                path,
+                diff,
+                truncated,
+                ..
+            } => {
                 let abs = self.absolute(path);
                 let Some(call_id) = self
                     .by_path
@@ -279,13 +348,20 @@ impl UpdateMapper {
                 else {
                     return Vec::new();
                 };
-                let after = read_small(&abs);
-                let content = match (self.before.get(&abs).cloned().flatten(), after) {
-                    (old, Some(new)) => {
+                // The text before the edit comes from undoing this edit's own
+                // diff on the file as it is now, so it does not depend on when
+                // this event is handled.
+                let texts = read_small(&abs).filter(|_| !truncated).and_then(|new| {
+                    let old = reverse_apply(&new, diff)?;
+                    Some(((!old.is_empty()).then_some(old), new))
+                });
+                let content = match texts {
+                    Some((old, new)) => {
                         ToolCallContent::from(Diff::new(abs.clone(), new).old_text(old))
                     }
-                    // Deleted, or too large to attach: show the unified diff.
-                    _ => ToolCallContent::from(format!("{path}\n```diff\n{diff}\n```")),
+                    // Deleted, too large, truncated or no longer matching:
+                    // show the unified diff.
+                    None => ToolCallContent::from(format!("{path}\n```diff\n{diff}\n```")),
                 };
                 self.rich.insert(call_id.clone());
                 let list = self.diffs.entry(call_id.clone()).or_default();
@@ -407,6 +483,111 @@ mod tests {
         Update::Runtime(RuntimeEventEnvelope::new("r", seq, event))
     }
 
+    /// A `FileDiff` event shaped like the engine's (`microclaw-core::diff`).
+    fn file_diff(path: &str, old: &str, new: &str) -> Update {
+        let diff = similar::TextDiff::from_lines(old, new);
+        let mut lines = Vec::new();
+        for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+            lines.push(hunk.header().to_string());
+            for change in hunk.iter_changes() {
+                let sign = match change.tag() {
+                    similar::ChangeTag::Insert => "+",
+                    similar::ChangeTag::Delete => "-",
+                    similar::ChangeTag::Equal => " ",
+                };
+                let value = change.value();
+                lines.push(format!(
+                    "{sign}{}",
+                    value.strip_suffix('\n').unwrap_or(value)
+                ));
+            }
+        }
+        runtime(
+            9,
+            RuntimeEvent::FileDiff {
+                path: path.into(),
+                diff: lines.join("\n"),
+                added: 0,
+                removed: 0,
+                truncated: false,
+            },
+        )
+    }
+
+    fn only_diff(updates: &[SessionUpdate]) -> &Diff {
+        let SessionUpdate::ToolCallUpdate(update) = &updates[0] else {
+            panic!("expected an update")
+        };
+        let content = update.fields.content.as_ref().unwrap();
+        let ToolCallContent::Diff(d) = content.last().unwrap() else {
+            panic!("expected a diff, got {content:?}")
+        };
+        d
+    }
+
+    fn start_edit(mapper: &mut UpdateMapper, call_id: &str, path: &str) {
+        mapper.map(&runtime(
+            1,
+            RuntimeEvent::ToolStart {
+                call_id: call_id.into(),
+                name: "edit_file".into(),
+                input: serde_json::json!({"path": path}),
+            },
+        ));
+    }
+
+    #[test]
+    fn diffs_do_not_depend_on_when_tool_start_is_handled() {
+        // Zed showed an empty diff when ToolStart arrived after the edit had
+        // already been written: the text "before" was read too late.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.py");
+        let v0 = "import a\n\n\ndef f():\n    return 1\n\n\ndef g():\n    return 2\n";
+        let v1 = v0.replace("import a", "import a, b");
+        let v2 = v1.replace(
+            "    return 2\n",
+            "    return 2\n\n\ndef h():\n    return 3\n",
+        );
+        std::fs::write(&path, &v2).unwrap();
+        let mut mapper = UpdateMapper::new(dir.path(), ClientSupport::default());
+        // Both edits already happened when their events are handled.
+        start_edit(&mut mapper, "c1", "t.py");
+        let first = mapper.map(&file_diff("t.py", v0, &v1));
+        let d = only_diff(&first);
+        assert_eq!(d.new_text, v2);
+        let old = d.old_text.as_deref().unwrap();
+        assert_eq!(
+            old,
+            v2.replace("import a, b", "import a"),
+            "only this edit differs"
+        );
+        start_edit(&mut mapper, "c2", "t.py");
+        let second = mapper.map(&file_diff("t.py", &v1, &v2));
+        assert_eq!(only_diff(&second).old_text.as_deref(), Some(v1.as_str()));
+    }
+
+    #[test]
+    fn new_files_and_stale_diffs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("n.txt"), "hello\nworld\n").unwrap();
+        let mut mapper = UpdateMapper::new(dir.path(), ClientSupport::default());
+        start_edit(&mut mapper, "c1", "n.txt");
+        let created = mapper.map(&file_diff("n.txt", "", "hello\nworld\n"));
+        assert_eq!(
+            only_diff(&created).old_text,
+            None,
+            "a new file has no old text"
+        );
+        // A diff that no longer matches the file falls back to the diff text.
+        start_edit(&mut mapper, "c2", "n.txt");
+        let stale = mapper.map(&file_diff("n.txt", "x\n", "y\n"));
+        let SessionUpdate::ToolCallUpdate(update) = &stale[0] else {
+            panic!("expected an update")
+        };
+        let content = update.fields.content.as_ref().unwrap();
+        assert!(matches!(content.last(), Some(ToolCallContent::Content(_))));
+    }
+
     #[test]
     fn edits_become_diffs_with_old_and_new_text() {
         let dir = tempfile::tempdir().unwrap();
@@ -425,16 +606,7 @@ mod tests {
         };
         assert_eq!(call.locations[0].path, dir.path().join("a.txt"));
         std::fs::write(dir.path().join("a.txt"), "new\n").unwrap();
-        let diff = mapper.map(&runtime(
-            2,
-            RuntimeEvent::FileDiff {
-                path: "a.txt".into(),
-                diff: "-old\n+new".into(),
-                added: 1,
-                removed: 1,
-                truncated: false,
-            },
-        ));
+        let diff = mapper.map(&file_diff("a.txt", "old\n", "new\n"));
         let SessionUpdate::ToolCallUpdate(update) = &diff[0] else {
             panic!("expected an update")
         };

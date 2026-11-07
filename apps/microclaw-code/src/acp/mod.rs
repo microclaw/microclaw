@@ -321,6 +321,39 @@ fn config_options(project: &ProjectEngine, mode: Mode, model: &str) -> Vec<Sessi
 }
 
 /// A short thread title from the first prompt.
+/// What names a thread: the typed text, or the attached files' names when the
+/// prompt is only attachments (Zed sends a file added with "+" that way).
+fn prompt_label(blocks: &[ContentBlock]) -> String {
+    let typed: Vec<&str> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let typed = typed.join("\n");
+    if !typed.trim().is_empty() {
+        return typed;
+    }
+    let names: Vec<String> = blocks
+        .iter()
+        .filter_map(|block| {
+            let uri = match block {
+                ContentBlock::ResourceLink(link) => &link.uri,
+                ContentBlock::Resource(resource) => match &resource.resource {
+                    EmbeddedResourceResource::TextResourceContents(text) => &text.uri,
+                    _ => return None,
+                },
+                ContentBlock::Image(_) => return Some("image".to_string()),
+                _ => return None,
+            };
+            let path = uri.trim_end_matches('/');
+            Some(path.rsplit('/').next().unwrap_or(path).to_string())
+        })
+        .collect();
+    names.join(", ")
+}
+
 fn title_of(prompt: &str) -> String {
     let line = prompt
         .lines()
@@ -624,19 +657,23 @@ impl Agent {
     }
 
     fn list(&self, request: ListSessionsRequest) -> Result<Value, Error> {
-        let cwd = match request.cwd {
-            Some(cwd) => cwd,
-            None => std::env::current_dir().map_err(internal)?,
-        };
-        let root = launch::trusted_project(&cwd).map(|p| p.root).unwrap_or(cwd);
         let index = SessionIndex::load(SessionIndex::default_path());
-        let sessions = index
-            .for_project(&root)
+        // `cwd` is an optional filter: without it (Zed's "Import Threads")
+        // every project's sessions are listed, each with its own directory.
+        let records = match request.cwd {
+            Some(cwd) => {
+                let root = launch::trusted_project(&cwd).map(|p| p.root).unwrap_or(cwd);
+                index.for_project(&root)
+            }
+            None => index.all(),
+        };
+        let sessions = records
             .into_iter()
             .filter(|r| r.turns > 0 || !r.title.is_empty())
             .take(100)
             .map(|r| {
-                let mut info = SessionInfo::new(SessionId::new(r.id.clone()), root.clone())
+                let cwd = std::path::PathBuf::from(&r.project);
+                let mut info = SessionInfo::new(SessionId::new(r.id.clone()), cwd)
                     .updated_at(r.updated_at.clone());
                 if !r.title.is_empty() {
                     info = info.title(r.title.clone());
@@ -739,6 +776,7 @@ impl Agent {
     async fn prompt(&self, request: PromptRequest) -> Result<Value, Error> {
         let id = request.session_id.0.to_string();
         let text = flatten_prompt(&request.prompt);
+        let label = prompt_label(&request.prompt);
         if text.trim().is_empty() {
             return Err(invalid("the prompt is empty"));
         }
@@ -764,12 +802,12 @@ impl Agent {
         };
         code.settings.mode = mode;
         if !command {
-            let _ = SessionIndex::load(SessionIndex::default_path()).touch(&id, &text);
+            let _ = SessionIndex::load(SessionIndex::default_path()).touch(&id, &label);
         }
         if !titled {
             self.notify(
                 &id,
-                SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title_of(&text))),
+                SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title_of(&label))),
             );
         }
         let result = match parsed {
@@ -968,6 +1006,7 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol_schema::v1::{EmbeddedResource, TextResourceContents};
     use microclaw_sdk::{RuntimeApprovalOption, RuntimeApprovalOptionKind};
 
     #[test]
@@ -1009,5 +1048,22 @@ mod tests {
         assert_eq!(flatten_prompt(&[ContentBlock::from("fix it")]), "fix it");
         assert_eq!(title_of("\n  Fix the parser\nmore"), "Fix the parser");
         assert!(title_of(&"x".repeat(80)).ends_with('…'));
+    }
+
+    #[test]
+    fn attachment_only_prompts_are_named_after_the_files() {
+        let file = |uri: &str| {
+            ContentBlock::Resource(EmbeddedResource::new(
+                EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(
+                    "do the task",
+                    uri,
+                )),
+            ))
+        };
+        let only_file = [file("file:///work/proj/variance-task.md")];
+        assert_eq!(prompt_label(&only_file), "variance-task.md");
+        assert!(flatten_prompt(&only_file).contains("do the task"));
+        let typed = [ContentBlock::from("Fix it"), file("file:///work/a.py")];
+        assert_eq!(prompt_label(&typed), "Fix it");
     }
 }
