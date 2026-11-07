@@ -75,7 +75,7 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/compact [focus]` | Summarize older messages now; the optional focus says what the summary must keep. |
 | `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
 | `/handoff <next task>` | Start a new session from a summary of this one focused on the next task; this session stays as it is. |
-| `/export [file]` | Write this session as Markdown (also `mccode export --session <id> [--out file]`). |
+| `/export [file]` | Write this session as Markdown (also `mccode export [--out file]` for the latest session, or `mccode --session <id> export`). |
 | `/fork` | Continue in a copy of the conversation; the original session is kept. |
 
 After a turn that changed files, ran checks or fetched pages, a summary card
@@ -94,7 +94,7 @@ system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
 
 - They can read the machine, except credential directories (`~/.ssh`,
   `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`,
-  `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.microclaw`).
+  `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.microclaw`, `~/.mccode`).
 - They can write only the repository, the temp directory and common tool
   caches (`~/.cache`, `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.gradle`, `~/go`, …),
   so builds and tests keep working.
@@ -105,7 +105,8 @@ system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
 - On Linux without a working `bwrap`, **Landlock** is used instead: writes are
   confined the same way (and outgoing TCP is blocked on kernels with Landlock
   ABI 4+), but credential directories stay readable, so commands keep asking.
-  `MCCODE_LOCAL_SANDBOX=bubblewrap|landlock|none` overrides the choice.
+  `MCCODE_LOCAL_SANDBOX=landlock` forces Landlock and `MCCODE_LOCAL_SANDBOX=none`
+  turns the OS sandbox off; any other value (or none) detects the best one.
 
 `--review-commands` has the model annotate every approval with a one-line
 verdict; a command it calls `DANGEROUS` asks you even in `auto` mode.
@@ -358,8 +359,8 @@ mccode review "error handling" > review.md
 - `-p` prints the final answer (or, with `--json`, one runtime event per
   line) and exits with `0` done, `1` failed / cancelled / checks still
   failing, `2` approval pending.
-- `--trust` trusts the project for this run so its checks execute; without
-  it an untrusted project runs no checks.
+- `--trust` trusts the project (saved, like `mccode trust`) so its checks
+  execute; without it an untrusted project runs no checks.
 - `--no-verify` skips checks, `--no-network` turns off network access for
   shell commands, `--sandbox off` disables the OS sandbox.
 

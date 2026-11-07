@@ -77,8 +77,8 @@ Needs the Rust toolchain:
 cargo install --git https://github.com/microclaw/microclaw microclaw-code
 ```
 
-The installers need a release that ships `mccode` archives; when a release
-does not have one yet, they print this command instead.
+Releases before 0.25.0 have no `mccode` archives; asked for one of those, the
+installers print this command instead.
 
 ### Update and uninstall
 
@@ -119,14 +119,23 @@ mccode doctor
 
 ## Use it in Zed (recommended)
 
-1. Install [Zed](https://zed.dev) (macOS, Linux, Windows).
+1. Install Zed, a free, open-source editor. Download it from
+   [zed.dev/download](https://zed.dev/download), or use your package manager:
+
+   ```sh
+   brew install --cask zed                     # macOS (12 or later)
+   curl -f https://zed.dev/install.sh | sh     # Linux (needs a Vulkan 1.3 driver)
+   winget install -e --id ZedIndustries.Zed    # Windows (10 version 1903 or later, 64-bit)
+   ```
+
 2. Find where `mccode` is installed:
 
    ```sh
    which mccode     # for example /Users/you/.local/bin/mccode
    ```
 
-3. In Zed, run `zed: open settings` and add MicroClaw Code as an agent,
+3. In Zed, open the command palette (Cmd+Shift+P on macOS, Ctrl+Shift+P
+   elsewhere), run `zed: open settings` and add MicroClaw Code as an agent,
    using that path:
 
    ```json
@@ -144,6 +153,12 @@ mccode doctor
 4. Open your repository in Zed, open the Agent Panel, click **+** and choose
    **MicroClaw Code**. Type a task, mention files with `@`, and approve
    commands on the cards that appear.
+
+The Zed integration described in these docs (mode and model pickers, real
+diffs, permission cards, thread history) needs `mccode` 0.27.0 or later;
+check with `mccode --version` and update with `mccode update`. Until 0.27.0 is
+released, install the current version from source (`cargo install --git
+https://github.com/microclaw/microclaw microclaw-code`).
 
 For trusting a project, the options above, what each part of the panel
 shows and troubleshooting, see [Use with Zed](./code-editors).

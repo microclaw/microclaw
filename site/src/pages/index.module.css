@@ -295,6 +295,20 @@
     background 160ms ease;
 }
 
+.pathExtra {
+  display: inline-block;
+  margin-top: 0.75rem;
+  color: var(--path-accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.pathExtra:hover {
+  color: #ffffff;
+  opacity: 1;
+}
+
 .pathAction {
   display: flex;
   align-items: center;

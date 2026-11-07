@@ -12,7 +12,7 @@ application. It exposes stable Agent, Run, event, control, Skill, and Worker
 contracts while keeping Server, Web, channel adapters, and desktop UI code out
 of your dependency graph.
 
-:::info Current distribution
+:::info[Current distribution]
 The supported public crates are available on crates.io at `0.26.0`:
 `microclaw-core`, `microclaw-engine`, and `microclaw-sdk`.
 :::

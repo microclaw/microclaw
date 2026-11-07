@@ -27,10 +27,36 @@ terminal interface. Install `mccode` and run `mccode setup` first (see
 
 Zed runs external agents through ACP and shows them in its Agent Panel.
 
-### 1. Add MicroClaw Code as an agent
+:::note[Version]
+This guide describes `mccode` 0.27.0 and later. Check with `mccode --version`
+and update with `mccode update`. Until 0.27.0 is released, install the
+current version from source:
+`cargo install --git https://github.com/microclaw/microclaw microclaw-code`.
+:::
 
-Find the installed binary with `which mccode`, then open Zed's settings
-(`zed: open settings`, or `~/.config/zed/settings.json`) and add:
+### 1. Install Zed
+
+Zed is a free, open-source editor for macOS, Linux and Windows. Download it
+from [zed.dev/download](https://zed.dev/download), or install it from a
+terminal:
+
+| System | Command | Requirements |
+|---|---|---|
+| macOS | `brew install --cask zed` | macOS 12 or later |
+| Linux | `curl -f https://zed.dev/install.sh \| sh` | x86_64 or aarch64, Vulkan 1.3 driver |
+| Windows | `winget install -e --id ZedIndustries.Zed` | Windows 10 version 1903 or later, 64-bit |
+
+MicroClaw Code needs no Zed account: it uses your own model configuration.
+
+### 2. Add MicroClaw Code as an agent
+
+Find the installed binary with `which mccode` (on Windows,
+`where.exe mccode`), then open Zed's settings and add the entry below. Either
+run `zed: open settings` from the command palette (Cmd+Shift+P on macOS,
+Ctrl+Shift+P elsewhere), or run `agent: open settings`, go to **External
+Agents** and choose **Add Agent → Add Custom Agent**, which opens the same
+file with an empty entry. The settings file is `~/.config/zed/settings.json`
+on macOS and Linux.
 
 ```json
 {
@@ -46,7 +72,9 @@ Find the installed binary with `which mccode`, then open Zed's settings
 ```
 
 - Use the full path: Zed started from the Dock or the desktop does not read
-  your shell profile, so a bare `mccode` is often not found.
+  your shell profile, so a bare `mccode` is often not found. On Windows write
+  it with escaped backslashes, for example
+  `"C:\\Users\\you\\.local\\bin\\mccode.exe"`.
 - Older Zed releases do not know `"type"`; leave that line out there.
 - Global options go **before** `acp`:
 
@@ -60,7 +88,7 @@ Find the installed binary with `which mccode`, then open Zed's settings
   `"MCCODE_HOME": "/path/to/another/home"` or an API key referenced
   by your configuration.
 
-### 2. Start a thread
+### 3. Start a thread
 
 1. Open a folder that is (inside) a git repository.
 2. Open the Agent Panel, click **+** and choose **MicroClaw Code**.

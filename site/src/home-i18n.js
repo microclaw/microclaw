@@ -27,6 +27,8 @@ const en = {
       description: 'A coding agent for Zed\'s Agent Panel and your terminal. It edits your project with reviewable diffs and verifies its work with your own checks.',
       benefits: ['Recommended in Zed: diffs, approval cards, modes, and models', 'Full-screen terminal UI and scriptable -p mode', 'Automatic build, lint, and test verification'],
       commandLabel: 'Install, then add it to Zed',
+      extraLabel: 'No Zed yet? Download it free',
+      extraHref: 'https://zed.dev/download',
       action: 'Get started in Zed',
     },
     server: {
@@ -97,7 +99,7 @@ const translations = {
     systemLabels: {macos: 'macOS', windows: 'Windows', linux: 'Linux'},
     paths: {
       sdk: {badge: '集成开发', title: 'Rust SDK', audience: '适合 Rust 产品与平台团队', description: '把完整 Agent Engine，或仅稳定的执行生命周期契约，嵌入自己的应用。', benefits: ['Agent、Skills、事件与控制', '本地与认证远程 Worker', '不依赖 Server、渠道或桌面 UI'], commandLabel: '加入 Cargo.toml', action: '开始集成'},
-      code: {badge: '面向开发者', title: 'MicroClaw Code', audience: '适合在自己的仓库里写代码', description: '在 Zed 的 Agent 面板和终端里使用的编码 Agent：以可审阅的 Diff 修改项目，并用项目自己的检查命令验证改动。', benefits: ['推荐在 Zed 中使用：Diff、审批卡片、模式与模型切换', '全屏终端界面与可脚本化的 -p 模式', '自动构建、lint 与测试验证'], commandLabel: '安装后添加到 Zed', action: '在 Zed 中开始使用'},
+      code: {badge: '面向开发者', title: 'MicroClaw Code', audience: '适合在自己的仓库里写代码', description: '在 Zed 的 Agent 面板和终端里使用的编码 Agent：以可审阅的 Diff 修改项目，并用项目自己的检查命令验证改动。', benefits: ['推荐在 Zed 中使用：Diff、审批卡片、模式与模型切换', '全屏终端界面与可脚本化的 -p 模式', '自动构建、lint 与测试验证'], commandLabel: '安装后添加到 Zed', extraLabel: '还没有 Zed？免费下载', extraHref: 'https://zed.dev/download', action: '在 Zed 中开始使用'},
       server: {badge: '持续在线', title: 'MicroClaw Server', audience: '适合服务、聊天渠道与自动化', description: '运行持久化智能体服务，承载聊天渠道、Web 与 Agent API、调度和后台任务。', benefits: ['支持 macOS、Linux 与 Windows', 'Web 控制台与多渠道适配器', '调度、恢复与可靠投递'], commandLabel: '安装 Server', action: '部署 Server'},
     },
     proof: [['架构', 'Server、Code 与嵌入式应用共享同一 Engine'], ['记忆', 'AGENTS.md 与可观测的 SQLite 结构化记忆'], ['执行', '工具循环、有界 Subagent、调度和后台任务'], ['扩展', '技能目录与 MCP 工具联邦']], productsTitle: '三个使用入口，一套执行模型', productsText: '直接运行 MicroClaw，或者嵌入自己的产品，底层智能体行为始终一致。', products: [['MicroClaw Server', '持续运行', '承载聊天渠道、Web 与智能体 API、调度、后台任务和远程自动化。', '支持 macOS、Linux 和 Windows。', '/docs/quickstart'], ['MicroClaw Code', 'Zed 与终端里的编码 Agent', '在 Zed 的 Agent 面板或全屏终端界面里对仓库编码：Diff、审批、plan 模式与自动验证。', '预览版；提供 macOS、Linux、Windows 安装包。', '/docs/code'], ['microclaw-sdk', 'Rust 库', '无需引入 Server 或 UI，即可嵌入 Agent、Skills、有序事件、控制以及本地或远程 Worker。', '支持 Rust 1.93+，提供 minimal、standard、full 和 remote-worker feature。', '/docs/sdk']], productAction: '了解这个入口', whyTitle: '为什么团队选择 MicroClaw', whyText: '以运行时为中心，让渠道、模型和工具变化时核心逻辑依然稳定。',

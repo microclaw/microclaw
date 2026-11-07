@@ -69,10 +69,15 @@ curl -fsSL https://microclaw.org/install-mccode.sh | bash   # macOS, Linux
 mccode setup
 ```
 
-Then use it in [Zed](https://zed.dev), the recommended editor: add it as an
-agent in Zed's settings (`which mccode` gives the path) and pick **MicroClaw
-Code** in the Agent Panel. The [Zed guide](https://microclaw.org/docs/code-editors)
-has the details.
+Then use it in [Zed](https://zed.dev), the recommended editor. Zed is free for
+macOS, Linux, and Windows: [download it](https://zed.dev/download) or run
+`brew install --cask zed` (macOS), `curl -f https://zed.dev/install.sh | sh`
+(Linux), or `winget install -e --id ZedIndustries.Zed` (Windows). Add MicroClaw
+Code as an agent in Zed's settings (`which mccode` gives the path) and pick
+**MicroClaw Code** in the Agent Panel. The
+[Zed guide](https://microclaw.org/docs/code-editors) has the details; it needs
+`mccode` 0.27.0 or later (until that release, install from source:
+`cargo install --git https://github.com/microclaw/microclaw microclaw-code`).
 
 ```json
 "agent_servers": {

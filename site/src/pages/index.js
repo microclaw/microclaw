@@ -145,6 +145,11 @@ function HomepageHeader() {
                     {copiedPath === path.id ? messages.copied : messages.copy}
                   </button>
                 </div>
+                {path.extraHref && (
+                  <a className={styles.pathExtra} href={path.extraHref} target="_blank" rel="noopener noreferrer">
+                    {path.extraLabel} <span aria-hidden="true">↗</span>
+                  </a>
+                )}
                 <Link className={styles.pathAction} to={path.href}>
                   {path.action} <span aria-hidden="true">→</span>
                 </Link>
