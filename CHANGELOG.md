@@ -34,6 +34,14 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   is now rebuilt from the edit's own diff.
 - A prompt that is only an attached file (Zed's "+" menu) names the thread
   after the file instead of its absolute path.
+- `/config` and `/config get` in the terminal UI mask API keys like
+  `mccode config show` does; before, they printed them in full.
+- Docs: `mccode export` takes `--session` before the subcommand, `--trust`
+  saves the trust decision, the sandbox also hides `~/.mccode`,
+  `MCCODE_LOCAL_SANDBOX` accepts `landlock` or `none`, "always allow this
+  command" rules live in `~/.mccode/allow-rules.json`, chat notifications
+  need their event in `notify.events`, and admonitions on the website render
+  again (Docusaurus v4 syntax).
 
 ### Changed
 
@@ -45,6 +53,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   MicroClaw Code (Agent Panel through `mccode acp`), with the terminal
   interface as the alternative; the editors page is now "Use with Zed" and
   comes first in the Code docs.
+- The Code docs, READMEs and the website's Code card now help you get Zed
+  first: a download link, the Homebrew, install-script and winget commands
+  with system requirements, the "Add Custom Agent" route in Zed's agent
+  settings, and a note that the Zed integration needs `mccode` 0.27.0 or later.
 
 ## 0.26.0 - 2026-11-06
 

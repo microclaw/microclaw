@@ -68,7 +68,7 @@ curl -fsSL https://microclaw.org/install-mccode.sh | bash   # macOS、Linux
 mccode setup
 ```
 
-然后推荐在 [Zed](https://zed.dev) 里使用：在 Zed 设置中把它加为 Agent（路径用 `which mccode` 查），再在 Agent 面板里选择 **MicroClaw Code**。详见 [Zed 指南](https://microclaw.org/docs/code-editors)。
+然后推荐在 [Zed](https://zed.dev) 里使用。Zed 免费，支持 macOS、Linux 和 Windows：可以[直接下载](https://zed.dev/download)，或运行 `brew install --cask zed`（macOS）、`curl -f https://zed.dev/install.sh | sh`（Linux）、`winget install -e --id ZedIndustries.Zed`（Windows）。在 Zed 设置中把 MicroClaw Code 加为 Agent（路径用 `which mccode` 查），再在 Agent 面板里选择 **MicroClaw Code**。详见 [Zed 指南](https://microclaw.org/docs/code-editors)；需要 `mccode` 0.27.0 或更高版本（该版本发布前，可从源码安装：`cargo install --git https://github.com/microclaw/microclaw microclaw-code`）。
 
 ```json
 "agent_servers": {

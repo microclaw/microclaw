@@ -1474,17 +1474,7 @@ fn config_command(action: &ConfigAction, project: &Project) -> anyhow::Result<Ex
             let loaded = code_settings::load(root, project.trusted);
             match code_settings::get(&loaded, key) {
                 Some(mut value) => {
-                    if key.ends_with("api_key") {
-                        if let serde_yaml::Value::String(_) = value {
-                            let mut wrapped = serde_yaml::Mapping::new();
-                            wrapped.insert("api_key".into(), value);
-                            let mut wrapped = serde_yaml::Value::Mapping(wrapped);
-                            code_settings::redact_secrets(&mut wrapped);
-                            value = wrapped["api_key"].clone();
-                        }
-                    } else {
-                        code_settings::redact_secrets(&mut value);
-                    }
+                    code_settings::redact_value_of(key, &mut value);
                     print!("{}", serde_yaml::to_string(&value)?);
                     if let Some(layer) = loaded.source_of(key) {
                         eprintln!("(from {})", layer.name());

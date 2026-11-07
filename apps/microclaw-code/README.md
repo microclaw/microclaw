@@ -22,8 +22,13 @@ mccode
 mccode update                              # later: install the latest release (checksum-verified)
 ```
 
-To use it in Zed, add it to Zed's settings (`zed: open settings`) with the
-path from `which mccode`, then choose **MicroClaw Code** in the Agent Panel:
+To use it in Zed (free for macOS, Linux and Windows:
+[download](https://zed.dev/download), `brew install --cask zed`,
+`curl -f https://zed.dev/install.sh | sh` or
+`winget install -e --id ZedIndustries.Zed`), add it to Zed's settings
+(`zed: open settings`) with the path from `which mccode`, then choose
+**MicroClaw Code** in the Agent Panel (needs `mccode` 0.27.0 or later; until
+that release, install from source with the `cargo install` line above):
 
 ```json
 {
@@ -78,7 +83,7 @@ In the TUI (all keys can be rebound in `tui.keymap`; `/keys` lists them):
 | `!` at the start | run a shell command yourself; its output goes into the next prompt |
 | Ctrl+V | attach an image from the clipboard |
 | Ctrl+T | the whole transcript, with search |
-| Ctrl+O, click | expand the selected tool call |
+| Ctrl+O, click | expand / collapse all tool output (or click one) |
 | Esc Esc | pick an earlier turn to rewind the files to |
 | F2 | review changes hunk by hunk: revert one, or comment and send the comments as a prompt |
 | Ctrl+B | show or hide the side panel (plan, checks, changes, sub-agents) |
@@ -92,7 +97,7 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | Command | What it does |
 |---|---|
 | `/undo` | Restore the files to how they were before the last turn that changed them. The state you leave is checkpointed too. |
-| `/rewind [id]` | List workspace checkpoints, or restore one. |
+| `/rewind [id]` | Pick an earlier turn of this session to restore the files to, or restore checkpoint `id`. |
 | `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
 | `/model [name\|reset]` | Show or switch the model for this session (a picker without a name). |
 | `/cost` | Requests and input/output tokens of this session, per model. |
@@ -122,7 +127,7 @@ shared), local (`.microclaw/settings.local.yaml`, kept out of git) and
 managed (set by an administrator). They hold the model and provider profiles
 (a profile can replace the configuration file), per-role models, permission
 rules, hooks, sandbox and network options, the theme and other TUI options,
-and chat notifications. `mccode config show|get|set|unset|paths|doctor|init|schema|edit`
+and chat notifications. `mccode config show|get|set|unset|paths|doctor|init|schema|edit|migrate`
 manages them, and `mccode import claude|codex|opencode` brings settings over
 from other agents.
 
@@ -150,7 +155,7 @@ system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
 
 - They can read the machine, except credential directories (`~/.ssh`,
   `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`,
-  `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.microclaw`).
+  `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.microclaw`, `~/.mccode`).
 - They can write only the repository, the temp directory and common tool
   caches (`~/.cache`, `~/.cargo`, `~/.rustup`, `~/.npm`, `~/.gradle`, `~/go`, …),
   so builds and tests keep working.
@@ -161,7 +166,8 @@ system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
 - On Linux without a working `bwrap`, **Landlock** is used instead: writes are
   confined the same way (and outgoing TCP is blocked on kernels with Landlock
   ABI 4+), but credential directories stay readable, so commands keep asking.
-  `MCCODE_LOCAL_SANDBOX=bubblewrap|landlock|none` overrides the choice.
+  `MCCODE_LOCAL_SANDBOX=landlock` forces Landlock and `MCCODE_LOCAL_SANDBOX=none`
+  turns the OS sandbox off; any other value (or none) detects the best one.
 
 `--review-commands` has the model annotate every approval with a one-line
 verdict; a command it calls `DANGEROUS` asks you even in `auto` mode.
