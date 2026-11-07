@@ -6,6 +6,35 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+### Added
+
+- MicroClaw Code in Zed (`mccode acp`) now speaks ACP protocol v1 with schema
+  1.15: mode and model selectors (session config options), slash commands
+  (`/review`, `/compact`, `/undo`, `/cost`, `/context`, `/help` and custom
+  commands), the context and cost indicator, real file diffs with old and new
+  text, absolute paths so Zed can follow the agent, project checks as their
+  own tool cards, thread titles and history (`session/list`, resume, close),
+  notices and compaction updates, and a sign-in prompt that runs
+  `mccode setup` in a terminal when no model is configured.
+- `scripts/acp_registry_entry.py` writes the ACP Registry entry for a release
+  (`packaging/acp-registry/`).
+
+### Fixed
+
+- `mccode acp` and `mccode mcp-server` use model profiles from
+  `settings.yaml`; before, they required a configuration file and stopped at
+  startup without one. They also apply `permissions.default_mode`,
+  `disabled_modes` and the project's compaction settings.
+- `mccode config show` and `config get` no longer print API keys; they show
+  `sk-…abcd`.
+
+### Changed
+
+- Engine setup for every Code front end lives in
+  `microclaw_code_core::launch`.
+- `docs/schema/code-settings.v1.json` is written with sorted keys, so it is
+  the same whichever crates share the build.
+
 ## 0.26.0 - 2026-11-06
 
 MicroClaw Code becomes a fully separate product from the MicroClaw Server.

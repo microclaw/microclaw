@@ -27,6 +27,7 @@ use microclaw_code_core::driver::{
     CALLER_CHANNEL, CodeSession, Control, SandboxInfo, SessionSettings, compile_always_ask,
 };
 use microclaw_code_core::home;
+use microclaw_code_core::launch;
 use microclaw_code_core::project::{self, Mode, Project};
 use microclaw_code_core::sessions::SessionIndex;
 use microclaw_code_core::settings as code_settings;
@@ -694,7 +695,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     };
     let config_path = match home::resolve_config(cli.config.as_deref()) {
         Ok((path, _)) => path,
-        Err(_) if profile_model.is_some() => PathBuf::new(),
+        // ACP and the MCP server start without one and report it per
+        // session (an editor shows its sign-in flow).
+        Err(_) if profile_model.is_some() || acp => PathBuf::new(),
         Err(e) => return Err(e),
     };
     if let Some(m) = &profile_model
@@ -748,10 +751,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
     }
 
-    if acp && config_path.as_os_str().is_empty() {
-        anyhow::bail!(
-            "acp, mcp-server and eval need a MicroClaw configuration file; run `mccode setup`"
-        );
+    if matches!(cli.command, Some(Command::Eval { .. })) && config_path.as_os_str().is_empty() {
+        anyhow::bail!("eval needs a MicroClaw configuration file; run `mccode setup`");
     }
     if acp {
         let mode = cli
@@ -765,9 +766,14 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .transpose()?;
         let options = acp::AcpOptions {
             config_path,
+            engine: launch::EngineOptions {
+                explicit_config: cli.config.clone(),
+                sandbox: sandbox_choice.clone(),
+                review_commands: cli.review_commands,
+                max_concurrent_runs: 4,
+            },
             sandbox: sandbox_choice,
             sandbox_info: sandbox,
-            review_commands: cli.review_commands,
             verify: !cli.no_verify,
             max_fix_rounds: cli.max_fix_rounds,
             default_mode: mode,
@@ -805,8 +811,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if !cli.json {
         eprintln!("{}", style.dim("Starting the Agent Engine…"));
     }
-    let (gate, gate_events) = build_gate(&project, &settings_doc, &session_id);
-    let role_setup = role_setup(
+    let (gate_tx, gate_events) = tokio::sync::mpsc::unbounded_channel();
+    let gate = launch::tool_gate(&project.root, &settings_doc, &session_id, Some(gate_tx));
+    let role_setup = launch::role_setup(
         &settings_doc,
         profile_model.as_ref().map(|m| m.profile.as_str()),
     );
@@ -816,27 +823,22 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         notices.push(warning.clone());
     }
-    let mut builder = match &profile_model {
-        Some(m) => {
-            let mut runtime =
-                microclaw_sdk::FullRuntimeConfig::new(&m.provider, &m.model, &m.api_key);
-            if let Some(url) = &m.base_url {
-                runtime = runtime.base_url(url);
-            }
-            MicroClaw::configure(runtime)
-        }
-        None => MicroClaw::builder(&config_path),
-    }
-    .tool_gate(std::sync::Arc::new(gate.clone()))
-    .summary_model(role_setup.summary.clone())
-    .caller_channel(CALLER_CHANNEL)
-    .workspace(&project.root)
-    .data_dir(home::data_dir())
-    .max_concurrent_runs(1)
-    .shell_sandbox(sandbox_choice)
-    .compact_instructions(project.config.compact_instructions.clone())
-    .context_tools(cli.context_tools || project.config.context_tools == Some(true))
-    .project_agents_dir(project.agents_dir());
+    let model_source = match &profile_model {
+        Some(m) => launch::ModelSource::Profile(m.clone()),
+        None => launch::ModelSource::ConfigFile(config_path.clone()),
+    };
+    let mut builder = model_source
+        .builder()
+        .tool_gate(std::sync::Arc::new(gate.clone()))
+        .summary_model(role_setup.summary.clone())
+        .caller_channel(CALLER_CHANNEL)
+        .workspace(&project.root)
+        .data_dir(home::data_dir())
+        .max_concurrent_runs(1)
+        .shell_sandbox(sandbox_choice)
+        .compact_instructions(project.config.compact_instructions.clone())
+        .context_tools(cli.context_tools || project.config.context_tools == Some(true))
+        .project_agents_dir(project.agents_dir());
     if cli.review_commands {
         builder = builder.command_reviewer(None);
     }
@@ -942,7 +944,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 remote,
                 gate_events: Some(gate_events),
                 on_settings_reload: Some(Box::new(move |root, loaded| {
-                    let (rules, hooks) = gate_parts(root, &loaded.settings, &reload_session);
+                    let (rules, hooks) =
+                        launch::gate_parts(root, &loaded.settings, &reload_session);
                     reload_gate.update(rules, hooks);
                 })),
             };
@@ -1460,7 +1463,9 @@ fn config_command(action: &ConfigAction, project: &Project) -> anyhow::Result<Ex
     match action {
         ConfigAction::Show => {
             let loaded = code_settings::load(root, project.trusted);
-            print!("{}", serde_yaml::to_string(&loaded.settings)?);
+            let mut value = serde_yaml::to_value(&loaded.settings)?;
+            code_settings::redact_secrets(&mut value);
+            print!("{}", serde_yaml::to_string(&value)?);
             for w in &loaded.warnings {
                 eprintln!("warning: {w}");
             }
@@ -1468,7 +1473,18 @@ fn config_command(action: &ConfigAction, project: &Project) -> anyhow::Result<Ex
         ConfigAction::Get { key } => {
             let loaded = code_settings::load(root, project.trusted);
             match code_settings::get(&loaded, key) {
-                Some(value) => {
+                Some(mut value) => {
+                    if key.ends_with("api_key") {
+                        if let serde_yaml::Value::String(_) = value {
+                            let mut wrapped = serde_yaml::Mapping::new();
+                            wrapped.insert("api_key".into(), value);
+                            let mut wrapped = serde_yaml::Value::Mapping(wrapped);
+                            code_settings::redact_secrets(&mut wrapped);
+                            value = wrapped["api_key"].clone();
+                        }
+                    } else {
+                        code_settings::redact_secrets(&mut value);
+                    }
                     print!("{}", serde_yaml::to_string(&value)?);
                     if let Some(layer) = loaded.source_of(key) {
                         eprintln!("(from {})", layer.name());
@@ -1617,96 +1633,7 @@ fn import_command(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Permission rules and hooks for the tool gate from merged settings.
-pub(crate) fn gate_parts(
-    root: &std::path::Path,
-    settings: &code_settings::CodeSettings,
-    session_id: &str,
-) -> (
-    microclaw_code_core::rules::PermissionRules,
-    std::sync::Arc<microclaw_code_core::user_hooks::UserHooks>,
-) {
-    use microclaw_code_core::rules::{Effect, PermissionRules};
-    let network_default = match settings.sandbox.network {
-        Some(code_settings::NetworkMode::Ask) => Some(Effect::Ask),
-        Some(code_settings::NetworkMode::Off) => Some(Effect::Deny),
-        _ => None,
-    };
-    let rules = PermissionRules::from_config(&settings.permissions, root)
-        .with_network(network_default, &settings.sandbox.allow_domains);
-    let hooks = std::sync::Arc::new(microclaw_code_core::user_hooks::UserHooks::new(
-        settings.hooks.clone(),
-        root.to_path_buf(),
-        session_id.to_string(),
-    ));
-    (rules, hooks)
-}
-
-fn build_gate(
-    project: &Project,
-    settings: &code_settings::CodeSettings,
-    session_id: &str,
-) -> (
-    microclaw_code_core::gate::CodeToolGate,
-    tokio::sync::mpsc::UnboundedReceiver<microclaw_code_core::gate::GateEvent>,
-) {
-    let (rules, hooks) = gate_parts(&project.root, settings, session_id);
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let gate = microclaw_code_core::gate::CodeToolGate::new(rules, hooks, project.root.clone())
-        .with_events(tx);
-    (gate, rx)
-}
-
 /// Apply `sandbox.*` settings unless the command line chose.
-/// Settings, tool gate and role models for an engine serving `root`
-/// (ACP / MCP server, one gate per project).
-pub(crate) fn project_gate(
-    root: &std::path::Path,
-) -> (
-    code_settings::CodeSettings,
-    microclaw_code_core::gate::CodeToolGate,
-) {
-    let trust = TrustStore::load(TrustStore::default_path());
-    let trusted = Project::discover(root, |r, hash| trust.is_trusted(r, hash))
-        .map(|p| p.trusted)
-        .unwrap_or(false);
-    let loaded = code_settings::load(root, trusted);
-    let (rules, hooks) = gate_parts(root, &loaded.settings, "editor");
-    let gate = microclaw_code_core::gate::CodeToolGate::new(rules, hooks, root.to_path_buf());
-    (loaded.settings, gate)
-}
-
-/// Per-role models resolved for a session on `active_profile` (`None`: the
-/// MicroClaw configuration file).
-pub(crate) struct RoleSetup {
-    pub roles: microclaw_code_core::driver::RoleModels,
-    pub summary: Option<String>,
-    pub warnings: Vec<String>,
-}
-
-pub(crate) fn role_setup(
-    settings: &code_settings::CodeSettings,
-    active_profile: Option<&str>,
-) -> RoleSetup {
-    let mut warnings = Vec::new();
-    let mut get = |role: &str| {
-        code_settings::role_model_for(settings, role, active_profile).unwrap_or_else(|e| {
-            warnings.push(e);
-            None
-        })
-    };
-    let roles = microclaw_code_core::driver::RoleModels {
-        plan: get("plan"),
-        review: get("review"),
-    };
-    let summary = get("summary");
-    RoleSetup {
-        roles,
-        summary,
-        warnings,
-    }
-}
-
 fn settings_sandbox(
     choice: ShellSandbox,
     cli: &Cli,

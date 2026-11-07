@@ -64,24 +64,41 @@ and add:
    sent along with the prompt.
 
 Each Zed thread is a MicroClaw Code session in the project of the folder Zed
-opened. Reopening a thread from the history loads the session and replays its
-messages.
+opened. The thread is named after your first message, appears in Zed's thread
+history, and reopening it loads the session and replays its messages. Threads
+started in Zed and sessions started in the terminal are the same sessions
+(`mccode sessions` lists both).
+
+If no model is configured yet, Zed asks you to sign in: choose **Set up
+MicroClaw Code** and Zed runs `mccode setup` in a terminal. Afterwards start
+the thread again.
 
 ### What you see
 
-- **Tool calls**: reads, searches, edits and commands appear as tool cards
-  with their status; file edits show their diff.
+- **Mode and model**: the selectors under the message box switch between
+  *Plan* (read-only, proposes a plan), *Ask* (edits apply, commands ask) and
+  *Auto* (commands run, destructive ones still ask), and between the models of
+  the session's provider (your settings profile's models and the known models
+  of the same provider). Zed remembers the model you pick.
+- **Tool calls**: reads, searches and commands appear as tool cards with their
+  status and output; cards carry absolute paths, so Zed can follow the agent.
+- **Edits**: each edit shows a real diff of the file (old and new text), which
+  Zed renders like its own agent's edits.
+- **Checks**: in trusted projects the project's checks run after a change and
+  appear as their own cards (`Check tests: …`) with the result; failures go
+  back to the agent for a fix round, as in the terminal.
 - **Plan**: the agent's todo list is shown as Zed's plan view and updates as
   steps complete.
 - **Permission requests**: when a command needs approval, Zed shows the
   options *Allow once*, *Always allow the tool*, *Always allow this command
   in this project* (single simple commands such as `cargo test`) and
   *Reject*. The agent waits for your answer and continues in the same run.
-- **Modes**: the mode selector offers *Plan* (read-only, proposes a plan),
-  *Ask* (edits apply, commands ask) and *Auto* (commands run, destructive
-  ones still ask). It is the same as Shift+Tab in the terminal.
-- **Verification**: in trusted projects the project's checks run after a
-  change and failures go back to the agent, as in the terminal.
+- **Context**: Zed's context indicator shows how much of the model's context
+  window the session uses (and the estimated cost when the model's price is
+  known).
+- **Commands**: type `/` for `/review [focus]`, `/compact [focus]`, `/undo`,
+  `/cost`, `/context` and `/help`, plus your custom commands
+  (`~/.mccode/commands`, `.microclaw/commands` in trusted projects).
 - **Stop**: Zed's stop button cancels the run.
 
 ### Trust
@@ -105,7 +122,8 @@ If the file changes later (for example after a pull), trust it again.
   configuration and starts the engine once.
 - "command not found" or the agent never starts: use the absolute path in
   `command`.
-- No model configured: run `mccode setup`, or pass `--config <PATH>` in
+- No model configured: run `mccode setup` (or use Zed's sign-in prompt), add
+  a profile to `~/.mccode/settings.yaml`, or pass `--config <PATH>` in
   `args`.
 
 ## Other ACP editors
