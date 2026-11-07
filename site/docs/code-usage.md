@@ -1,7 +1,7 @@
 ---
 id: code-usage
 title: Using MicroClaw Code
-sidebar_label: Using mccode
+sidebar_label: Terminal and features
 ---
 
 # Using MicroClaw Code
@@ -9,7 +9,9 @@ sidebar_label: Using mccode
 This page covers the day-to-day use of `mccode`: the terminal interface,
 permission modes and approvals, the shell sandbox, project trust,
 verification, sessions, scripting and evaluation. Install and first steps
-are in [Overview and install](./code).
+are in [Overview and install](./code). Modes, approvals, the sandbox, trust,
+verification and sessions work the same in Zed; the Zed panel itself is
+described in [Use with Zed](./code-editors).
 
 ## Use
 
@@ -378,6 +380,6 @@ history. Results include duration, requests and tokens.
 
 ## See also
 
-- [Editors and other agents](./code-editors)
+- [Use with Zed](./code-editors)
 - [Run tasks on a MicroClaw Server](./code-remote)
 - [The MicroClaw Code proposal](https://github.com/microclaw/microclaw/blob/main/docs/roadmap/microclaw-code-proposal-cn.md)

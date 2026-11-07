@@ -30,14 +30,14 @@
   <a href="#文档">文档</a>
 </p>
 
-MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，三个产品共享同一套 Agent Engine。**MicroClaw Server**（`microclaw`）持续运行，承载聊天渠道、Web、API、调度和自动化；**MicroClaw Code**（`mccode`）是终端里的编码 Agent，直接在你的仓库里工作，并用项目自己的检查命令验证改动；其他 Rust 应用可以通过 **`microclaw-sdk`** 使用同一套渠道无关 Agent Engine、工具、安全策略、记忆、技能和运行时事件。
+MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，三个产品共享同一套 Agent Engine。**MicroClaw Server**（`microclaw`）持续运行，承载聊天渠道、Web、API、调度和自动化；**MicroClaw Code**（`mccode`）是可在 [Zed](https://zed.dev) 和终端里使用的编码 Agent，直接在你的仓库里工作，并用项目自己的检查命令验证改动；其他 Rust 应用可以通过 **`microclaw-sdk`** 使用同一套渠道无关 Agent Engine、工具、安全策略、记忆、技能和运行时事件。
 
 它面向的不只是一次问答，而是能够持续完成的工作：多步工具调用、可恢复会话、可靠投递、持久记忆、定时任务和受治理的扩展能力都运行在同一个系统中。
 
 | 使用入口 | 适用场景 | 当前支持 |
 |---|---|---|
 | MicroClaw Server | 常驻智能体、聊天渠道、Web/API、定时任务与远程自动化 | macOS、Linux 和 Windows |
-| MicroClaw Code（`mccode`） | 在本地仓库里写代码：全屏 TUI、plan/ask/auto 模式、Diff、审批、自动构建/lint 验证 | 预览版；macOS、Linux、Windows 均可从源码构建 |
+| MicroClaw Code（`mccode`） | 在本地仓库里写代码，推荐在 Zed 的 Agent 面板中使用，也可用全屏终端界面：plan/ask/auto 模式、Diff、审批、自动构建/lint/测试验证 | 预览版；提供 macOS、Linux、Windows 安装包 |
 | `microclaw-sdk` | 在 Rust 应用中嵌入同一套 Agent Engine、Skills、事件、控制与 Worker | Rust 1.93+；提供 `minimal`、`standard`、`full` 与 `remote-worker` feature |
 
 有关本地任务闭环、平台支持等级、原生设置、安全边界和打包方式，请阅读
@@ -56,18 +56,27 @@ MicroClaw 是一个用 Rust 编写、可自行托管的智能体平台，三个�
 
 | 我希望…… | 从这里开始 |
 |---|---|
-| 在终端或 Zed 里对本地仓库写代码 | 按下方步骤安装 MicroClaw Code |
+| 在 Zed（推荐）或终端里对本地仓库写代码 | 按下方步骤安装 MicroClaw Code |
 | 运行一个长期在线的智能体服务 | 安装下方的 MicroClaw Server |
 | 为现有 Rust 应用加入智能体能力 | 阅读 [SDK 快速接入](site/docs/sdk-quickstart.md) |
 
-安装 MicroClaw Code（预览版），配置一次模型，然后在任意仓库里运行：
+安装 MicroClaw Code（预览版），配置一次模型：
 
 ```sh
 curl -fsSL https://microclaw.org/install-mccode.sh | bash   # macOS、Linux
 # Windows：iwr https://microclaw.org/install-mccode.ps1 -UseBasicParsing | iex
 mccode setup
-cd path/to/your/repo && mccode
 ```
+
+然后推荐在 [Zed](https://zed.dev) 里使用：在 Zed 设置中把它加为 Agent（路径用 `which mccode` 查），再在 Agent 面板里选择 **MicroClaw Code**。详见 [Zed 指南](https://microclaw.org/docs/code-editors)。
+
+```json
+"agent_servers": {
+  "MicroClaw Code": { "type": "custom", "command": "/path/to/mccode", "args": ["acp"] }
+}
+```
+
+也可以在终端里使用：`cd path/to/your/repo && mccode`。
 
 如需运行 MicroClaw Server，在 macOS 或 Linux 上安装：
 
@@ -130,7 +139,7 @@ Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装
   <img src="docs/assets/readme/microclaw-architecture.svg" alt="MicroClaw 架构概览" width="96%" />
 </p>
 
-Server 渠道适配器只负责输入转换和结果投递；MicroClaw Code 通过 `microclaw-sdk` 消费同一套运行时事件，并在终端界面中呈现。两个产品都不维护独立的 agent loop，也不重复实现 provider 逻辑。
+Server 渠道适配器只负责输入转换和结果投递；MicroClaw Code 通过 `microclaw-sdk` 消费同一套运行时事件，并在 Zed（通过 ACP）或终端界面中呈现。两个产品都不维护独立的 agent loop，也不重复实现 provider 逻辑。
 
 ## 在 Rust 中嵌入 MicroClaw
 
@@ -191,7 +200,7 @@ Anthropic 使用原生 provider 通路。OpenAI、OpenAI Codex、OpenRouter、Ol
 
 预编译 Linux 二进制对 glibc 和 OpenSSL 有版本要求。旧发行版安装前请先阅读[快速上手指南](docs/getting-started.md)。
 
-MicroClaw Server 支持 macOS、Linux 和 Windows。MicroClaw Code 为预览版，从源码构建。
+MicroClaw Server 支持 macOS、Linux 和 Windows。MicroClaw Code 为预览版，三个平台都有安装包。
 
 ## 文档
 

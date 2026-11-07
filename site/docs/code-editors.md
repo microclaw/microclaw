@@ -1,13 +1,18 @@
 ---
 id: code-editors
-title: Editors and other agents
-sidebar_label: Editors (Zed) and agents
+title: Use with Zed
+sidebar_label: Use with Zed
 ---
 
-# Editors and other agents
+# Use with Zed
 
-`mccode` speaks two protocols on stdio, so other programs can use it without
-the terminal interface:
+[Zed](https://zed.dev) is the recommended way to use MicroClaw Code. Zed runs
+it in its Agent Panel, next to Zed's own agent, and shows its edits as diffs
+you can review in the editor. The terminal interface stays available for the
+same sessions.
+
+Besides Zed, `mccode` speaks two protocols on stdio, so other programs can use
+it without the terminal interface:
 
 | Command | Protocol | For |
 |---|---|---|
@@ -24,15 +29,15 @@ Zed runs external agents through ACP and shows them in its Agent Panel.
 
 ### 1. Add MicroClaw Code as an agent
 
-Open Zed's settings (`zed: open settings`, or `~/.config/zed/settings.json`)
-and add:
+Find the installed binary with `which mccode`, then open Zed's settings
+(`zed: open settings`, or `~/.config/zed/settings.json`) and add:
 
 ```json
 {
   "agent_servers": {
     "MicroClaw Code": {
       "type": "custom",
-      "command": "mccode",
+      "command": "/Users/you/.local/bin/mccode",
       "args": ["acp"],
       "env": {}
     }
@@ -40,10 +45,9 @@ and add:
 }
 ```
 
+- Use the full path: Zed started from the Dock or the desktop does not read
+  your shell profile, so a bare `mccode` is often not found.
 - Older Zed releases do not know `"type"`; leave that line out there.
-- Zed starts the command without your shell profile. If `mccode` is not on
-  the `PATH` Zed sees, give the full path, for example
-  `"command": "/Users/you/.local/bin/mccode"` (find it with `which mccode`).
 - Global options go **before** `acp`:
 
   ```json
@@ -60,14 +64,17 @@ and add:
 
 1. Open a folder that is (inside) a git repository.
 2. Open the Agent Panel, click **+** and choose **MicroClaw Code**.
-3. Type a task. Mention files with `@` as in Zed's own agent; their content is
-   sent along with the prompt.
+3. Type a task. Mention files with `@` as in Zed's own agent, or add files,
+   symbols, images or the branch diff with the **+** button under the message
+   box; their content is sent along with the prompt.
 
 Each Zed thread is a MicroClaw Code session in the project of the folder Zed
-opened. The thread is named after your first message, appears in Zed's thread
-history, and reopening it loads the session and replays its messages. Threads
-started in Zed and sessions started in the terminal are the same sessions
-(`mccode sessions` lists both).
+opened. The thread is named after your first message (or the attached file
+when you typed nothing), appears in Zed's thread history, and reopening it
+loads the session and replays its messages. Threads started in Zed and
+sessions started in the terminal are the same sessions (`mccode sessions`
+lists both); **Import Threads** in Zed's thread list brings in sessions you
+started in the terminal or in other projects.
 
 If no model is configured yet, Zed asks you to sign in: choose **Set up
 MicroClaw Code** and Zed runs `mccode setup` in a terminal. Afterwards start
@@ -89,13 +96,15 @@ the thread again.
   back to the agent for a fix round, as in the terminal.
 - **Plan**: the agent's todo list is shown as Zed's plan view and updates as
   steps complete.
-- **Permission requests**: when a command needs approval, Zed shows the
-  options *Allow once*, *Always allow the tool*, *Always allow this command
-  in this project* (single simple commands such as `cargo test`) and
-  *Reject*. The agent waits for your answer and continues in the same run.
-- **Context**: Zed's context indicator shows how much of the model's context
-  window the session uses (and the estimated cost when the model's price is
-  known).
+- **Permission requests**: when a command needs approval, Zed shows a card
+  with the command and the options *Approve once*, *Always allow* the tool in
+  this thread, *Always allow this command in this project* (single simple
+  commands such as `cargo test`) and *Deny*. The agent waits for your answer
+  and continues in the same run.
+- **Context**: the ring next to the mode picker shows how much of the model's
+  context window the session uses; hover it for the numbers (for example
+  `1% · 14k / 1M`). `/cost` reports requests and tokens, and the estimated
+  cost when the model's price is known.
 - **Commands**: type `/` for `/review [focus]`, `/compact [focus]`, `/undo`,
   `/cost`, `/context` and `/help`, plus your custom commands
   (`~/.mccode/commands`, `.microclaw/commands` in trusted projects).

@@ -30,14 +30,14 @@
   <a href="#documentation">Documentation</a>
 </p>
 
-MicroClaw is a self-hosted Rust agent platform with three products that share one Agent Engine. **MicroClaw Server** (`microclaw`) runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Code** (`mccode`) is a terminal coding agent that works directly in your repository and verifies its edits with your project's own checks. **`microclaw-sdk`** lets other Rust applications run the same channel-independent Agent Engine, tools, policy, memory, skills, and runtime events.
+MicroClaw is a self-hosted Rust agent platform with three products that share one Agent Engine. **MicroClaw Server** (`microclaw`) runs continuously for chat channels, Web, APIs, scheduling, and automation. **MicroClaw Code** (`mccode`) is a coding agent for [Zed](https://zed.dev) and the terminal that works directly in your repository and verifies its edits with your project's own checks. **`microclaw-sdk`** lets other Rust applications run the same channel-independent Agent Engine, tools, policy, memory, skills, and runtime events.
 
 It is designed for work that lasts longer than one request: multi-step tool use, resumable sessions, durable delivery, persistent memory, scheduled tasks, and governed extensions all run in the same runtime.
 
 | Entry point | Best for | Availability |
 |---|---|---|
 | MicroClaw Server | Always-on agents, chat channels, Web/API access, scheduled work, and remote automation | macOS, Linux, and Windows |
-| MicroClaw Code (`mccode`) | Coding in a local repository: full-screen TUI, plan/ask/auto modes, diffs, approvals, automatic build/lint verification | Preview; macOS, Linux, and Windows from source |
+| MicroClaw Code (`mccode`) | Coding in a local repository, best in Zed's Agent Panel or in a full-screen terminal UI: plan/ask/auto modes, diffs, approvals, automatic build/lint/test verification | Preview; installers for macOS, Linux, and Windows |
 | `microclaw-sdk` | Embedding the same Agent Engine, Skills, events, controls, and Workers in a Rust application | Rust 1.93+; `minimal`, `standard`, `full`, and `remote-worker` feature sets |
 
 Read the [MicroClaw Code guide](apps/microclaw-code/README.md) for the
@@ -57,19 +57,30 @@ Choose the path that matches what you are building:
 
 | I want to… | Start here |
 |---|---|
-| Code in a local repository from the terminal or Zed | Install MicroClaw Code below |
+| Code in a local repository from Zed (recommended) or the terminal | Install MicroClaw Code below |
 | Run an always-on agent service | Install MicroClaw Server below |
 | Add agents to an existing Rust application | Follow the [SDK quickstart](site/docs/sdk-quickstart.md) |
 
-Install MicroClaw Code (preview), configure a model once, and run it in any
-repository:
+Install MicroClaw Code (preview) and configure a model once:
 
 ```sh
 curl -fsSL https://microclaw.org/install-mccode.sh | bash   # macOS, Linux
 # Windows: iwr https://microclaw.org/install-mccode.ps1 -UseBasicParsing | iex
 mccode setup
-cd path/to/your/repo && mccode
 ```
+
+Then use it in [Zed](https://zed.dev), the recommended editor: add it as an
+agent in Zed's settings (`which mccode` gives the path) and pick **MicroClaw
+Code** in the Agent Panel. The [Zed guide](https://microclaw.org/docs/code-editors)
+has the details.
+
+```json
+"agent_servers": {
+  "MicroClaw Code": { "type": "custom", "command": "/path/to/mccode", "args": ["acp"] }
+}
+```
+
+Or run it in the terminal: `cd path/to/your/repo && mccode`.
 
 To run MicroClaw Server, install on macOS or Linux:
 
@@ -132,7 +143,7 @@ Every message follows the same flow:
   <img src="docs/assets/readme/microclaw-architecture.svg" alt="MicroClaw architecture overview" width="96%" />
 </p>
 
-Server channel adapters translate ingress and delivery events only. MicroClaw Code consumes the same runtime events through `microclaw-sdk` and renders them in its terminal UI. Neither product carries a separate agent loop or provider implementation.
+Server channel adapters translate ingress and delivery events only. MicroClaw Code consumes the same runtime events through `microclaw-sdk` and renders them in Zed (over ACP) or its terminal UI. Neither product carries a separate agent loop or provider implementation.
 
 ## Embed MicroClaw in Rust
 
@@ -195,7 +206,7 @@ Anthropic has a native provider path. OpenAI, OpenAI Codex, OpenRouter, Ollama, 
 
 The prebuilt Linux binary has glibc and OpenSSL requirements. Read [Getting started](docs/getting-started.md) before installing on an older distribution.
 
-MicroClaw Server is supported on macOS, Linux, and Windows. MicroClaw Code is a preview built from source.
+MicroClaw Server is supported on macOS, Linux, and Windows. MicroClaw Code is a preview with installers for the same three platforms.
 
 ## Documentation
 
