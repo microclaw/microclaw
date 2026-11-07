@@ -9,10 +9,18 @@ sidebar_label: Overview and install
 MicroClaw Code is a coding agent for your own repository. You describe a
 change; it reads the code, edits files (showing every diff), runs commands
 and your project's checks, and fixes what fails. It runs on your machine,
-with your toolchain, in your terminal or your editor.
+with your toolchain.
 
-- **Full-screen terminal UI** with streamed replies, coloured diffs, plans
-  and approval dialogs, or **`mccode -p`** for scripts and CI.
+**We recommend using it in [Zed](https://zed.dev)**: MicroClaw Code appears
+in Zed's Agent Panel next to Zed's own agent, with diffs you can review in the
+editor, approval cards, mode and model pickers and a context meter. The
+same agent also runs in your terminal, with a full-screen interface or
+`mccode -p` for scripts and CI. Both use the same sessions and settings.
+
+- **In Zed** through the Agent Client Protocol: edits as real diffs, checks
+  as cards, `/` commands, thread history ([set up](./code-editors)).
+- **In the terminal**: a full-screen UI with streamed replies, coloured
+  diffs, plans and approval dialogs, or **`mccode -p`** for scripts and CI.
 - **Three permission modes**: `plan` (read-only, proposes a plan), `ask`
   (edits apply, shell commands ask first), `auto` (commands run, destructive
   ones still ask).
@@ -21,9 +29,9 @@ with your toolchain, in your terminal or your editor.
 - **Safety by default**: shell commands run in the operating system's
   sandbox, edits are checkpointed (`/undo`), and project settings only take
   effect after you trust the project.
-- **Works with your editor and other agents**: Zed (and any Agent Client
-  Protocol client) through [`mccode acp`](./code-editors), Claude Code,
-  Codex, Cursor and other MCP clients through `mccode mcp-server`.
+- **Works with other agents too**: any Agent Client Protocol editor through
+  [`mccode acp`](./code-editors), and Claude Code, Codex, Cursor and other
+  MCP clients through `mccode mcp-server`.
 - **One engine**: the same Agent Engine as MicroClaw Server and the Rust SDK,
   so tools, memory, Skills and model providers behave the same everywhere.
 
@@ -109,7 +117,38 @@ Check everything with:
 mccode doctor
 ```
 
-## First session
+## Use it in Zed (recommended)
+
+1. Install [Zed](https://zed.dev) (macOS, Linux, Windows).
+2. Find where `mccode` is installed:
+
+   ```sh
+   which mccode     # for example /Users/you/.local/bin/mccode
+   ```
+
+3. In Zed, run `zed: open settings` and add MicroClaw Code as an agent,
+   using that path:
+
+   ```json
+   {
+     "agent_servers": {
+       "MicroClaw Code": {
+         "type": "custom",
+         "command": "/Users/you/.local/bin/mccode",
+         "args": ["acp"]
+       }
+     }
+   }
+   ```
+
+4. Open your repository in Zed, open the Agent Panel, click **+** and choose
+   **MicroClaw Code**. Type a task, mention files with `@`, and approve
+   commands on the cards that appear.
+
+For trusting a project, the options above, what each part of the panel
+shows and troubleshooting, see [Use with Zed](./code-editors).
+
+## In the terminal
 
 ```sh
 cd path/to/your/repo
@@ -152,8 +191,8 @@ configuration, data or environment variables. Pairing with a Server
 
 ## Next
 
+- [Use with Zed](./code-editors): the full Zed guide, other ACP editors, and
+  MCP clients such as Claude Code, Codex and Cursor.
 - [Using MicroClaw Code](./code-usage): modes, approvals, the sandbox,
   verification, sessions, scripting and evaluation.
-- [Editors and other agents](./code-editors): Zed and other ACP editors, and
-  MCP clients such as Claude Code, Codex and Cursor.
 - [Run tasks on a MicroClaw Server](./code-remote).

@@ -1,8 +1,9 @@
 # MicroClaw Code (`mccode`)
 
-MicroClaw Code is a terminal coding agent. It opens the repository that
-contains the current directory and runs the MicroClaw Agent Engine in it: a
-full-screen TUI for interactive work, or `-p` for one non-interactive task.
+MicroClaw Code is a coding agent for your repository. It opens the repository
+that contains the current directory and runs the MicroClaw Agent Engine in it.
+Use it in [Zed](https://zed.dev)'s Agent Panel (recommended, through `mccode
+acp`), in a full-screen TUI, or with `-p` for one non-interactive task.
 It reaches the engine only through the public `microclaw-sdk`; turn logic
 (approvals, verification, fix rounds) lives in `crates/microclaw-code-core`.
 
@@ -20,6 +21,20 @@ cd path/to/your/repo
 mccode
 mccode update                              # later: install the latest release (checksum-verified)
 ```
+
+To use it in Zed, add it to Zed's settings (`zed: open settings`) with the
+path from `which mccode`, then choose **MicroClaw Code** in the Agent Panel:
+
+```json
+{
+  "agent_servers": {
+    "MicroClaw Code": { "type": "custom", "command": "/path/to/mccode", "args": ["acp"] }
+  }
+}
+```
+
+The [Zed guide](https://microclaw.org/docs/code-editors) covers modes,
+approvals, trust and troubleshooting.
 
 `mccode setup` writes `~/.mccode/config.yaml`; a model profile in
 `~/.mccode/settings.yaml` works too. Otherwise pass `--config <PATH>` or set
@@ -251,7 +266,7 @@ before the subcommand (`mccode --mode auto acp`). Only projects you already
 trusted (TUI, `mccode trust`) honour `.microclaw/project.yaml` here.
 
 Step-by-step setup for Zed, Claude Code, Codex and Cursor:
-[Editors and other agents](https://microclaw.org/docs/code-editors).
+[Use with Zed](https://microclaw.org/docs/code-editors).
 
 The agent can also drive interactive programs: start a REPL or debugger with
 `bash` `run_in_background`, then send it input with `bash_input` (stdin, no

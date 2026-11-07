@@ -41,6 +41,10 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   `microclaw_code_core::launch`.
 - `docs/schema/code-settings.v1.json` is written with sorted keys, so it is
   the same whichever crates share the build.
+- The website, docs and READMEs recommend Zed as the main way to use
+  MicroClaw Code (Agent Panel through `mccode acp`), with the terminal
+  interface as the alternative; the editors page is now "Use with Zed" and
+  comes first in the Code docs.
 
 ## 0.26.0 - 2026-11-06
 
