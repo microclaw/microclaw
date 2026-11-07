@@ -6,6 +6,12 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
 
 ## Unreleased
 
+## 0.27.0 - 2026-11-07
+
+MicroClaw Code becomes a first-class agent in Zed (`mccode acp`), and the
+website and docs now recommend Zed as the main way to use it, with the
+terminal interface as the alternative.
+
 ### Added
 
 - MicroClaw Code in Zed (`mccode acp`) now speaks ACP protocol v1 with schema

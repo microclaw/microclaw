@@ -68,7 +68,7 @@ curl -fsSL https://microclaw.org/install-mccode.sh | bash   # macOS、Linux
 mccode setup
 ```
 
-然后推荐在 [Zed](https://zed.dev) 里使用。Zed 免费，支持 macOS、Linux 和 Windows：可以[直接下载](https://zed.dev/download)，或运行 `brew install --cask zed`（macOS）、`curl -f https://zed.dev/install.sh | sh`（Linux）、`winget install -e --id ZedIndustries.Zed`（Windows）。在 Zed 设置中把 MicroClaw Code 加为 Agent（路径用 `which mccode` 查），再在 Agent 面板里选择 **MicroClaw Code**。详见 [Zed 指南](https://microclaw.org/docs/code-editors)；需要 `mccode` 0.27.0 或更高版本（该版本发布前，可从源码安装：`cargo install --git https://github.com/microclaw/microclaw microclaw-code`）。
+然后推荐在 [Zed](https://zed.dev) 里使用。Zed 免费，支持 macOS、Linux 和 Windows：可以[直接下载](https://zed.dev/download)，或运行 `brew install --cask zed`（macOS）、`curl -f https://zed.dev/install.sh | sh`（Linux）、`winget install -e --id ZedIndustries.Zed`（Windows）。在 Zed 设置中把 MicroClaw Code 加为 Agent（路径用 `which mccode` 查），再在 Agent 面板里选择 **MicroClaw Code**。详见 [Zed 指南](https://microclaw.org/docs/code-editors)；需要 `mccode` 0.27.0 或更高版本。
 
 ```json
 "agent_servers": {
@@ -100,7 +100,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.26.0**：MicroClaw Code 与 Server 完全分开。它的所有数据都在 `~/.mccode`，只读取 `MCCODE_*` 环境变量和自己的模型配置，可以单独安装、配置和卸载（升级后运行一次 `mccode setup`）。0.25 的 Code 功能也都在：主题、排队或引导发送、按块审查、支持 `allow` / `ask` / `deny` 规则的分层设置、兼容 Claude Code 的 hooks，以及在聊天里审批。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.26.0)。
+最新版本为 **v0.27.0**：MicroClaw Code 在 [Zed](https://zed.dev) 里用起来更顺手了。在 Zed 的 Agent 面板里有模式和模型切换、每次修改的真实 Diff、审批卡片、作为独立卡片显示的项目检查、`/` 命令、上下文用量圆环，以及可导入终端会话的线程历史。终端界面的 `/config` 不再显示完整 API key；文档改为优先推荐 Zed。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.27.0)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -149,7 +149,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.26.0", features = ["full"] }
+microclaw-sdk = { version = "0.27.0", features = ["full"] }
 ```
 
 ```rust

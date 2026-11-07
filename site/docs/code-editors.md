@@ -29,9 +29,7 @@ Zed runs external agents through ACP and shows them in its Agent Panel.
 
 :::note[Version]
 This guide describes `mccode` 0.27.0 and later. Check with `mccode --version`
-and update with `mccode update`. Until 0.27.0 is released, install the
-current version from source:
-`cargo install --git https://github.com/microclaw/microclaw microclaw-code`.
+and update with `mccode update` (or `brew upgrade mccode`).
 :::
 
 ### 1. Install Zed
