@@ -1728,6 +1728,21 @@ pub fn redact_secrets(value: &mut serde_yaml::Value) {
     }
 }
 
+/// Masks the value of `key` (a dotted settings key) before it is shown: the
+/// value itself when the key names an `api_key`, otherwise any `api_key`
+/// inside it.
+pub fn redact_value_of(key: &str, value: &mut serde_yaml::Value) {
+    if key.rsplit('.').next() == Some("api_key") {
+        if let serde_yaml::Value::String(text) = value
+            && !text.is_empty()
+        {
+            *text = mask_secret(text);
+        }
+    } else {
+        redact_secrets(value);
+    }
+}
+
 /// `sk-…ab12`: enough to recognise a key, not to use it.
 fn mask_secret(secret: &str) -> String {
     let chars: Vec<char> = secret.chars().collect();
@@ -2345,6 +2360,26 @@ mod tests {
             text.contains("sk-…cdef") && text.contains("DS_KEY"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_single_key_is_masked_by_its_name() {
+        let mut key = serde_yaml::Value::from("sk-0123456789abcdef");
+        redact_value_of("model.profiles.ds.api_key", &mut key);
+        assert_eq!(key, serde_yaml::Value::from("sk-…cdef"));
+
+        let mut profile: serde_yaml::Value = serde_yaml::from_str(
+            "api_key: sk-0123456789abcdef
+model: m
+",
+        )
+        .unwrap();
+        redact_value_of("model.profiles.ds", &mut profile);
+        assert_eq!(profile["api_key"], serde_yaml::Value::from("sk-…cdef"));
+
+        let mut env = serde_yaml::Value::from("DS_KEY");
+        redact_value_of("model.profiles.ds.api_key_env", &mut env);
+        assert_eq!(env, serde_yaml::Value::from("DS_KEY"));
     }
 
     #[test]

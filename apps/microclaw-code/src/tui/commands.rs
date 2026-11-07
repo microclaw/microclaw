@@ -799,7 +799,9 @@ impl App {
         let loaded = settings::load(&project.root, project.trusted);
         match args.first().map(String::as_str) {
             None | Some("show") => {
-                let yaml = serde_yaml::to_string(&loaded.settings).unwrap_or_default();
+                let mut value = serde_yaml::to_value(&loaded.settings).unwrap_or_default();
+                settings::redact_secrets(&mut value);
+                let yaml = serde_yaml::to_string(&value).unwrap_or_default();
                 let mut text = String::from("effective settings (sources: /config get <key>):\n");
                 text.push_str(yaml.trim_end());
                 for w in &loaded.warnings {
@@ -810,7 +812,10 @@ impl App {
             Some("get") if args.len() >= 2 => {
                 let key = &args[1];
                 let value = settings::get(&loaded, key)
-                    .map(|v| serde_yaml::to_string(&v).unwrap_or_default())
+                    .map(|mut v| {
+                        settings::redact_value_of(key, &mut v);
+                        serde_yaml::to_string(&v).unwrap_or_default()
+                    })
                     .unwrap_or_else(|| "(unset)".into());
                 let source = loaded
                     .source_of(key)
