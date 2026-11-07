@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use microclaw_code_core::driver::{CodeSession, SessionSettings, TurnReport};
+use microclaw_code_core::launch;
 use microclaw_code_core::project::{Mode, Project};
 use microclaw_code_core::sessions::SessionIndex;
 use microclaw_code_core::trust::TrustStore;
@@ -31,8 +32,8 @@ struct Server {
     gates: HashMap<
         PathBuf,
         (
-            microclaw_code_core::settings::CodeSettings,
             microclaw_code_core::gate::CodeToolGate,
+            microclaw_code_core::driver::RoleModels,
         ),
     >,
 }
@@ -112,27 +113,15 @@ impl Server {
         if let Some(engine) = self.engines.get(root) {
             return Ok(engine.clone());
         }
-        let (code_settings, gate) = crate::project_gate(root);
-        self.gates
-            .insert(root.to_path_buf(), (code_settings.clone(), gate.clone()));
-        let mut builder = MicroClaw::builder(&self.options.config_path)
-            .tool_gate(std::sync::Arc::new(gate))
-            .summary_model({
-                let setup = crate::role_setup(&code_settings, None);
-                for warning in &setup.warnings {
-                    eprintln!("mccode: {warning}");
-                }
-                setup.summary
-            })
-            .caller_channel(microclaw_code_core::driver::CALLER_CHANNEL)
-            .workspace(root)
-            .data_dir(microclaw_code_core::home::data_dir())
-            .max_concurrent_runs(2)
-            .shell_sandbox(self.options.sandbox.clone());
-        if self.options.review_commands {
-            builder = builder.command_reviewer(None);
+        let mut options = self.options.engine.clone();
+        options.max_concurrent_runs = 2;
+        let built = launch::project_engine(root, &options, "editor").await?;
+        for warning in &built.warnings {
+            eprintln!("mccode: {warning}");
         }
-        let engine = builder.build().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.gates
+            .insert(root.to_path_buf(), (built.gate, built.roles));
+        let engine = built.engine;
         self.engines.insert(root.to_path_buf(), engine.clone());
         Ok(engine)
     }
@@ -177,9 +166,9 @@ impl Server {
         let engine = self.engine(&project.root).await?;
         let root = project.root.clone();
         let mut session = CodeSession::new(engine, project, id, settings);
-        if let Some((code_settings, gate)) = self.gates.get(&root) {
+        if let Some((gate, roles)) = self.gates.get(&root) {
             session.set_tool_gate(gate.clone());
-            session.set_role_models(crate::role_setup(code_settings, None).roles);
+            session.set_role_models(roles.clone());
         }
         Ok(session)
     }

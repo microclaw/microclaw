@@ -21,6 +21,7 @@ pub mod git;
 pub mod home;
 pub mod images;
 pub mod import;
+pub mod launch;
 pub mod lsp;
 pub mod presets;
 pub mod project;

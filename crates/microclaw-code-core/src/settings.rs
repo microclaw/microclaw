@@ -1677,12 +1677,66 @@ fn remove_path(node: &mut Value, parts: &[String]) -> bool {
 
 /// The JSON Schema of the settings file (published at [`SCHEMA_ID`], checked
 /// in as `docs/schema/code-settings.v1.json`).
+fn sorted_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k, sorted_keys(v)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted_keys).collect())
+        }
+        other => other,
+    }
+}
+
 pub fn json_schema() -> String {
     let mut schema = schemars::schema_for!(CodeSettings);
     schema.insert("$id".into(), serde_json::Value::from(SCHEMA_ID));
+    // Sorted keys: the output must not depend on whether another crate in
+    // the build enables serde_json's `preserve_order`.
+    let schema = sorted_keys(serde_json::to_value(&schema).expect("schema serializes"));
     let mut text = serde_json::to_string_pretty(&schema).expect("schema serializes");
     text.push('\n');
     text
+}
+
+/// Masks secrets (`api_key` values) in a settings value before it is shown.
+pub fn redact_secrets(value: &mut serde_yaml::Value) {
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            for (key, item) in map.iter_mut() {
+                if key.as_str() == Some("api_key")
+                    && let serde_yaml::Value::String(text) = item
+                    && !text.is_empty()
+                {
+                    *text = mask_secret(text);
+                } else {
+                    redact_secrets(item);
+                }
+            }
+        }
+        serde_yaml::Value::Sequence(items) => items.iter_mut().for_each(redact_secrets),
+        serde_yaml::Value::Tagged(tagged) => redact_secrets(&mut tagged.value),
+        _ => {}
+    }
+}
+
+/// `sk-…ab12`: enough to recognise a key, not to use it.
+fn mask_secret(secret: &str) -> String {
+    let chars: Vec<char> = secret.chars().collect();
+    if chars.len() <= 8 {
+        return "****".into();
+    }
+    let head: String = chars[..3].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 // ---------------------------------------------------------------------------
@@ -2275,6 +2329,21 @@ mod tests {
             !git(&["check-ignore", "-q", ".microclaw/settings.yaml"])
                 .status
                 .success()
+        );
+    }
+
+    #[test]
+    fn secrets_are_masked_for_display() {
+        let mut value: serde_yaml::Value = serde_yaml::from_str(
+            "model:\n  profiles:\n    ds:\n      api_key: sk-0123456789abcdef\n      api_key_env: DS_KEY\n",
+        )
+        .unwrap();
+        redact_secrets(&mut value);
+        let text = serde_yaml::to_string(&value).unwrap();
+        assert!(!text.contains("0123456789"), "{text}");
+        assert!(
+            text.contains("sk-…cdef") && text.contains("DS_KEY"),
+            "{text}"
         );
     }
 
