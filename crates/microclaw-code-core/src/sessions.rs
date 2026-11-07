@@ -121,6 +121,13 @@ impl SessionIndex {
         records
     }
 
+    /// Every session of every project, most recent first.
+    pub fn all(&self) -> Vec<SessionRecord> {
+        let mut records = self.records.clone();
+        records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        records
+    }
+
     pub fn get(&self, id: &str) -> Option<&SessionRecord> {
         self.records.iter().find(|r| r.id == id)
     }
@@ -150,5 +157,10 @@ mod tests {
         assert_eq!(listed[0].turns, 2);
         assert_eq!(listed[1].id, b.id);
         assert!(a.id.starts_with("code-"));
+
+        let everything = reloaded.all();
+        assert_eq!(everything.len(), 3, "all() spans every project");
+        assert_eq!(everything[0].id, a.id, "most recently used first");
+        assert!(everything.iter().any(|r| r.project == "/repo/other"));
     }
 }

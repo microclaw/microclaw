@@ -27,6 +27,8 @@ The format is loosely based on Keep a Changelog. Dates use UTC.
   `disabled_modes` and the project's compaction settings.
 - `mccode config show` and `config get` no longer print API keys; they show
   `sk-…abcd`.
+- `mccode acp` lists every project's sessions when `session/list` has no
+  `cwd`, so Zed's "Import Threads" finds them; before, it returned none.
 
 ### Changed
 

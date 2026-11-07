@@ -624,19 +624,23 @@ impl Agent {
     }
 
     fn list(&self, request: ListSessionsRequest) -> Result<Value, Error> {
-        let cwd = match request.cwd {
-            Some(cwd) => cwd,
-            None => std::env::current_dir().map_err(internal)?,
-        };
-        let root = launch::trusted_project(&cwd).map(|p| p.root).unwrap_or(cwd);
         let index = SessionIndex::load(SessionIndex::default_path());
-        let sessions = index
-            .for_project(&root)
+        // `cwd` is an optional filter: without it (Zed's "Import Threads")
+        // every project's sessions are listed, each with its own directory.
+        let records = match request.cwd {
+            Some(cwd) => {
+                let root = launch::trusted_project(&cwd).map(|p| p.root).unwrap_or(cwd);
+                index.for_project(&root)
+            }
+            None => index.all(),
+        };
+        let sessions = records
             .into_iter()
             .filter(|r| r.turns > 0 || !r.title.is_empty())
             .take(100)
             .map(|r| {
-                let mut info = SessionInfo::new(SessionId::new(r.id.clone()), root.clone())
+                let cwd = std::path::PathBuf::from(&r.project);
+                let mut info = SessionInfo::new(SessionId::new(r.id.clone()), cwd)
                     .updated_at(r.updated_at.clone());
                 if !r.title.is_empty() {
                     info = info.title(r.title.clone());
