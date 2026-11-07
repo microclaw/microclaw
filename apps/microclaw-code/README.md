@@ -27,8 +27,7 @@ To use it in Zed (free for macOS, Linux and Windows:
 `curl -f https://zed.dev/install.sh | sh` or
 `winget install -e --id ZedIndustries.Zed`), add it to Zed's settings
 (`zed: open settings`) with the path from `which mccode`, then choose
-**MicroClaw Code** in the Agent Panel (needs `mccode` 0.27.0 or later; until
-that release, install from source with the `cargo install` line above):
+**MicroClaw Code** in the Agent Panel (needs `mccode` 0.27.0 or later):
 
 ```json
 {

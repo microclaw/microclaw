@@ -50,7 +50,7 @@ release, verifies it against the release's `SHA256SUMS.txt`, and installs it
 to `/usr/local/bin` (or `~/.local/bin` when that is not writable). Options:
 
 ```sh
-curl -fsSL https://microclaw.org/install-mccode.sh | bash -s -- --version 0.26.0
+curl -fsSL https://microclaw.org/install-mccode.sh | bash -s -- --version 0.27.0
 curl -fsSL https://microclaw.org/install-mccode.sh | bash -s -- --dir ~/bin
 ```
 
@@ -156,9 +156,7 @@ mccode doctor
 
 The Zed integration described in these docs (mode and model pickers, real
 diffs, permission cards, thread history) needs `mccode` 0.27.0 or later;
-check with `mccode --version` and update with `mccode update`. Until 0.27.0 is
-released, install the current version from source (`cargo install --git
-https://github.com/microclaw/microclaw microclaw-code`).
+check with `mccode --version` and update with `mccode update`.
 
 For trusting a project, the options above, what each part of the panel
 shows and troubleshooting, see [Use with Zed](./code-editors).

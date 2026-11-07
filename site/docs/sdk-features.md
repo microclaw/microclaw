@@ -15,7 +15,7 @@ the same public run protocol.
 ### Complete embedded Agent Engine
 
 ```toml
-microclaw-sdk = { version = "0.26.0", features = ["full"] }
+microclaw-sdk = { version = "0.27.0", features = ["full"] }
 ```
 
 Use this for providers, tools, memory, Skills, MCP, hooks, Subagents, and Worker
@@ -25,7 +25,7 @@ transport in one host.
 
 ```toml
 microclaw-sdk = {
-  version = "0.26.0",
+  version = "0.27.0",
   default-features = false,
   features = ["minimal"]
 }
@@ -43,7 +43,7 @@ enables the Engine's `document-tools` feature.
 
 ```toml
 microclaw-sdk = {
-  version = "0.26.0",
+  version = "0.27.0",
   default-features = false,
   features = ["standard", "remote-worker"]
 }
