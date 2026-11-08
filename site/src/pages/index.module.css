@@ -57,26 +57,7 @@
   text-transform: uppercase;
 }
 
-.releasePill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  margin-left: 0.75rem;
-  padding: 0.38rem 0.75rem;
-  border: 1px solid rgba(187, 154, 247, 0.34);
-  border-radius: 999px;
-  color: #d7c4ff;
-  background: rgba(187, 154, 247, 0.1);
-  font-size: 0.8rem;
-  font-weight: 700;
-  text-decoration: none;
-}
 
-.releasePill:hover {
-  color: #ffffff;
-  border-color: rgba(187, 154, 247, 0.7);
-  text-decoration: none;
-}
 
 .heroTitle {
   margin-top: 1.2rem;
@@ -1132,15 +1113,7 @@
   color: #a9c4cf;
 }
 
-.releasePill {
-  border-color: rgba(210, 174, 139, 0.34);
-  color: #d9b995;
-  background: rgba(180, 122, 77, 0.08);
-}
 
-.releasePill:hover {
-  border-color: #d9b995;
-}
 
 .heroTitle {
   color: #f2f1eb;
@@ -1262,8 +1235,7 @@
     text-align: left;
   }
 
-  .eyebrow,
-  .releasePill {
+  .eyebrow {
     margin: 0 0.45rem 0.55rem 0;
   }
 

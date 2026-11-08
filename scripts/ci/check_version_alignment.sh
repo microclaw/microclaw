@@ -43,7 +43,6 @@ done
 sdk_doc_snippets=(
   "README.md:1"
   "README_CN.md:1"
-  "site/src/pages/index.js:1"
   "site/docs/sdk-quickstart.md:1"
   "site/docs/sdk-features.md:3"
   "site/docs/sdk-workers.md:1"
@@ -60,7 +59,7 @@ for snippet in "${sdk_doc_snippets[@]}"; do
   fi
 done
 
-for file in README.md README_CN.md site/src/pages/index.js site/src/home-i18n.js site/docs/overview.md; do
+for file in README.md README_CN.md site/docs/overview.md; do
   if ! grep -Fq "v$release_version" "$file"; then
     echo "$file does not identify v$release_version as the current release" >&2
     exit 1
