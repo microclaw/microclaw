@@ -52,3 +52,6 @@ cost:
 checkpoints:
   label: Checkpoints
   permalink: /checkpoints
+code:
+  label: MicroClaw Code
+  permalink: /code
