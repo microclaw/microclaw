@@ -145,10 +145,10 @@ const config = {
       // Replace with your project's social card
       image: 'img/social-card.png',
       colorMode: {
-        // Visitors with an OS preference still get it (respectPrefersColorScheme).
-        // This only decides what someone with no preference sees first.
+        // Everyone starts on the bright theme; the navbar toggle still switches
+        // to dark and the choice is remembered.
         defaultMode: 'light',
-        respectPrefersColorScheme: true,
+        respectPrefersColorScheme: false,
       },
       navbar: {
         title: 'MicroClaw',
@@ -176,7 +176,7 @@ const config = {
         ],
       },
       footer: {
-        style: 'dark',
+        style: 'light',
         links: [
           {
             title: 'Docs',

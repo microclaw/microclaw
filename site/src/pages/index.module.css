@@ -1288,3 +1288,196 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Sunny light theme: a morning-sky hero (warm sunlight top right, a little
+   sky blue on the left), white cards and cream bands. Each product path keeps
+   one accent; text stays dark ink for contrast. Dark theme rules above are
+   unchanged. */
+:global([data-theme='light']) .hero {
+  color: var(--mc-ink);
+  background:
+    radial-gradient(circle at 86% -6%, rgba(255, 196, 77, 0.55), transparent 30rem),
+    radial-gradient(circle at 6% 18%, rgba(125, 200, 245, 0.3), transparent 30rem),
+    linear-gradient(180deg, #fff6df 0%, #fffaf0 55%, #fffdf8 100%);
+}
+
+:global([data-theme='light']) .heroBackdrop {
+  background: radial-gradient(circle at 50% 110%, rgba(255, 214, 140, 0.35), transparent 40rem);
+}
+
+:global([data-theme='light']) .heroPattern {
+  background-image:
+    linear-gradient(rgba(176, 124, 38, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(176, 124, 38, 0.07) 1px, transparent 1px);
+  opacity: 0.6;
+}
+
+:global([data-theme='light']) .eyebrow {
+  border-color: rgba(246, 166, 35, 0.45);
+  background: rgba(255, 214, 140, 0.35);
+  color: var(--mc-sun-ink);
+}
+
+:global([data-theme='light']) .heroTitle {
+  color: var(--mc-ink);
+}
+
+:global([data-theme='light']) .heroSubtitle {
+  color: #2d3440;
+}
+
+:global([data-theme='light']) .heroSubtext {
+  color: var(--mc-muted);
+}
+
+:global([data-theme='light']) .heroMetaRow span {
+  background: rgba(255, 255, 255, 0.75);
+  border-color: var(--mc-hairline);
+  color: var(--mc-muted);
+}
+
+:global([data-theme='light']) .pathCard {
+  --path-accent: #0a6fa8;
+  --path-accent-rgb: 10, 111, 168;
+  border-color: rgba(var(--path-accent-rgb), 0.22);
+  background: #ffffff;
+  box-shadow:
+    inset 0 4px 0 rgba(var(--path-accent-rgb), 0.85),
+    0 18px 42px rgba(176, 124, 38, 0.12);
+}
+
+:global([data-theme='light']) .pathCardWork {
+  --path-accent: #0f7a5f;
+  --path-accent-rgb: 15, 122, 95;
+}
+
+:global([data-theme='light']) .pathCardServer {
+  --path-accent: #a2510a;
+  --path-accent-rgb: 162, 81, 10;
+}
+
+:global([data-theme='light']) .pathCard h2 {
+  color: var(--mc-ink);
+}
+
+:global([data-theme='light']) .pathDescription {
+  color: var(--mc-muted);
+}
+
+:global([data-theme='light']) .pathBenefits li {
+  color: #2d3440;
+}
+
+:global([data-theme='light']) .pathCommandLabel {
+  color: #646c7b;
+}
+
+:global([data-theme='light']) .pathCommandRow code {
+  border-color: rgba(var(--path-accent-rgb), 0.2);
+  background: #f7f9fc;
+  color: var(--mc-ink);
+}
+
+:global([data-theme='light']) .pathCommandRow button {
+  background: rgba(var(--path-accent-rgb), 0.08);
+}
+
+:global([data-theme='light']) .pathExtra {
+  opacity: 1;
+}
+
+:global([data-theme='light']) .pathExtra:hover,
+:global([data-theme='light']) .pathAction:hover {
+  color: var(--mc-ink);
+}
+
+@media (hover: hover) {
+  :global([data-theme='light']) .pathCard:hover,
+  :global([data-theme='light']) .pathCard:focus-within {
+    border-color: rgba(var(--path-accent-rgb), 0.45);
+    box-shadow:
+      inset 0 4px 0 rgba(var(--path-accent-rgb), 0.95),
+      0 26px 52px rgba(176, 124, 38, 0.18);
+  }
+}
+
+:global([data-theme='light']) .proofStrip {
+  background: var(--mc-surface-alt);
+  border-color: var(--mc-hairline);
+  color: #2d3440;
+}
+
+:global([data-theme='light']) .proofLabel {
+  color: var(--mc-sun-ink);
+}
+
+:global([data-theme='light']) .productCardHeader span {
+  background: rgba(10, 111, 168, 0.09);
+  color: #0a6fa8;
+}
+
+:global([data-theme='light']) .stepCard span {
+  color: var(--mc-sun-ink);
+}
+
+:global([data-theme='light']) .useCaseCard {
+  background: linear-gradient(150deg, #ffffff, #fff7e8);
+}
+
+:global([data-theme='light']) .archMap {
+  background: linear-gradient(180deg, #f3f9fd, #fffaf0);
+  color: var(--mc-ink);
+}
+
+:global([data-theme='light']) .archEntry {
+  background: #ffffff;
+}
+
+:global([data-theme='light']) .archEntry strong,
+:global([data-theme='light']) .archEngine strong {
+  color: var(--mc-ink);
+}
+
+:global([data-theme='light']) .archConnector {
+  color: #646c7b;
+}
+
+:global([data-theme='light']) .archConnector span {
+  background: #d8cdb6;
+}
+
+:global([data-theme='light']) .archEngine {
+  background: linear-gradient(145deg, #e6f4fc, #fff1d2);
+}
+
+:global([data-theme='light']) .archEngine p {
+  color: var(--mc-muted);
+}
+
+:global([data-theme='light']) .archCapabilityGrid span {
+  background: #ffffff;
+  color: #2d3440;
+}
+
+:global([data-theme='light']) .ctaCard {
+  background:
+    radial-gradient(circle at 92% 0%, rgba(255, 196, 77, 0.6), transparent 22rem),
+    linear-gradient(135deg, #e3f3fd 0%, #fff4dc 60%, #ffe6b8 100%);
+  border-color: rgba(246, 166, 35, 0.35);
+  color: var(--mc-ink);
+  box-shadow: 0 22px 44px rgba(176, 124, 38, 0.16);
+}
+
+:global([data-theme='light']) .ctaCard p {
+  color: #3d4654;
+}
+
+:global([data-theme='light']) .ctaCard :global(.button--secondary) {
+  background: #ffffff;
+  border-color: var(--mc-hairline);
+  color: var(--mc-ink);
+}
+
+:global([data-theme='light']) .inlineLink {
+  color: #0a6fa8;
+}

@@ -1,35 +1,38 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
 :root {
-  --ifm-color-primary: #315f78;
-  --ifm-color-primary-dark: #2b556b;
-  --ifm-color-primary-darker: #274f64;
-  --ifm-color-primary-darkest: #1f414f;
-  --ifm-color-primary-light: #3a6d88;
-  --ifm-color-primary-lighter: #427690;
-  --ifm-color-primary-lightest: #638fa4;
+  /* Sunny light theme: warm white page, sky-blue actions, amber highlights. */
+  --ifm-color-primary: #0a6fa8;
+  --ifm-color-primary-dark: #096497;
+  --ifm-color-primary-darker: #085f8f;
+  --ifm-color-primary-darkest: #064e76;
+  --ifm-color-primary-light: #0b7ab9;
+  --ifm-color-primary-lighter: #0c80c1;
+  --ifm-color-primary-lightest: #2b95d2;
   --ifm-font-family-base: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --ifm-heading-font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --ifm-font-family-monospace: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
   --ifm-code-font-size: 92%;
-  --ifm-font-color-base: #353936;
-  --ifm-heading-color: #171a18;
-  --ifm-link-color: #315f78;
-  --ifm-link-hover-color: #234b60;
-  --ifm-toc-border-color: #d9d8d1;
+  --ifm-font-color-base: #2d3440;
+  --ifm-heading-color: #19202b;
+  --ifm-link-color: #0a6fa8;
+  --ifm-link-hover-color: #075a89;
+  --ifm-toc-border-color: #eadfca;
   --ifm-navbar-shadow: none;
-  --ifm-background-color: #f7f6f1;
-  --ifm-footer-background-color: #171a18;
-  --docusaurus-highlighted-code-line-bg: rgba(49, 95, 120, 0.1);
+  --ifm-background-color: #fffdf8;
+  --ifm-footer-background-color: #fff3d6;
+  --docusaurus-highlighted-code-line-bg: rgba(10, 111, 168, 0.1);
 
-  /* Keep a faint tint on the page so white cards still separate from it. */
-  --mc-surface: #f7f6f1;
-  --mc-surface-alt: #efeee8;
-  --mc-card: #fffefa;
-  --mc-ink: #171a18;
-  --mc-muted: #656a66;
-  --mc-hairline: #d9d8d1;
-  --mc-card-shadow: 0 12px 30px rgba(33, 38, 34, 0.07);
+  /* A warm cream band separates sections; cards are plain white. */
+  --mc-surface: #fffdf8;
+  --mc-surface-alt: #fff6e4;
+  --mc-card: #ffffff;
+  --mc-ink: #19202b;
+  --mc-muted: #586272;
+  --mc-hairline: #eee2c9;
+  --mc-card-shadow: 0 14px 34px rgba(176, 124, 38, 0.1);
+  --mc-sun: #f6a623;
+  --mc-sun-ink: #a2510a;
   --mc-blue: #6f98ad;
   --mc-cyan: #76a59b;
   --mc-violet: #8c8297;
@@ -73,8 +76,8 @@ body {
 }
 
 ::selection {
-  color: #ffffff;
-  background: #315f78;
+  color: #19202b;
+  background: #ffd98a;
 }
 
 [data-theme='dark'] ::selection {
@@ -148,7 +151,7 @@ a {
 }
 
 .menu__link--active:not(.menu__link--sublist) {
-  background: rgba(49, 95, 120, 0.1);
+  background: rgba(10, 111, 168, 0.1);
 }
 
 [data-theme='dark'] .menu__link--active:not(.menu__link--sublist) {
@@ -171,8 +174,8 @@ a {
 }
 
 blockquote {
-  border-left-color: var(--ifm-color-primary);
-  background: rgba(49, 95, 120, 0.06);
+  border-left-color: var(--mc-sun);
+  background: rgba(246, 166, 35, 0.08);
   padding: 0.8rem 1rem;
 }
 
@@ -181,7 +184,7 @@ hr {
 }
 
 * {
-  scrollbar-color: #87918b transparent;
+  scrollbar-color: #c9b791 transparent;
   scrollbar-width: thin;
 }
 
