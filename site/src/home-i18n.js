@@ -2,7 +2,6 @@ const en = {
   tagline: 'One embeddable Rust agent core for Server, MicroClaw Code, and your own apps.',
   description: 'MicroClaw combines an always-on Server, the MicroClaw Code coding agent for Zed and the terminal, and a reusable Rust SDK on one Agent Engine.',
   eyebrow: 'RUST AGENT RUNTIME',
-  release: 'v0.27.0 is available',
   heroTitle: 'One Rust Agent Engine. Run it—or embed it.',
   heroText: 'Use MicroClaw as an always-on Server, as a coding agent in Zed or your terminal, or as an SDK inside your own Rust product. Every path shares the same tools, memory, Skills, policy, and run lifecycle.',
   start: 'Start in 5 Minutes', sdkCta: 'Embed the SDK', github: 'View GitHub', meta: ['Server + Code', 'Embeddable SDK', 'SQLite Persistence'],
@@ -17,7 +16,7 @@ const en = {
       audience: 'For Rust product and platform teams',
       description: 'Embed the complete Agent Engine—or only its stable lifecycle contracts—inside your own application.',
       benefits: ['Agents, Skills, events, and controls', 'Local and authenticated remote Workers', 'No Server, channel, or desktop UI dependency'],
-      commandLabel: 'Add to Cargo.toml',
+      commandLabel: 'Add to your Rust project',
       action: 'Start integrating',
     },
     code: {
@@ -94,11 +93,11 @@ const en = {
 const translations = {
   en,
   'zh-CN': {
-    tagline: '一套可嵌入的 Rust 智能体内核，同时驱动 Server、MicroClaw Code 和你的应用。', description: 'MicroClaw 以同一套 Agent Engine 连接常驻 Server、可在 Zed 与终端中使用的编码 Agent MicroClaw Code，以及可复用的 Rust SDK。', eyebrow: 'RUST 智能体运行时', release: 'v0.27.0 已发布', heroTitle: '一套 Rust Agent Engine：直接运行，也可以嵌入。', heroText: '把 MicroClaw 用作常驻 Server、Zed 或终端里的编码 Agent，或者自己 Rust 产品里的 SDK；三条路径共享工具、记忆、Skills、安全策略和执行生命周期。', start: '5 分钟开始', sdkCta: '嵌入 SDK', github: '查看 GitHub', meta: ['Server + Code', '可嵌入 SDK', 'SQLite 持久化'], quickstart: '快速开始', copy: '复制', copied: '已复制',
+    tagline: '一套可嵌入的 Rust 智能体内核，同时驱动 Server、MicroClaw Code 和你的应用。', description: 'MicroClaw 以同一套 Agent Engine 连接常驻 Server、可在 Zed 与终端中使用的编码 Agent MicroClaw Code，以及可复用的 Rust SDK。', eyebrow: 'RUST 智能体运行时', heroTitle: '一套 Rust Agent Engine：直接运行，也可以嵌入。', heroText: '把 MicroClaw 用作常驻 Server、Zed 或终端里的编码 Agent，或者自己 Rust 产品里的 SDK；三条路径共享工具、记忆、Skills、安全策略和执行生命周期。', start: '5 分钟开始', sdkCta: '嵌入 SDK', github: '查看 GitHub', meta: ['Server + Code', '可嵌入 SDK', 'SQLite 持久化'], quickstart: '快速开始', copy: '复制', copied: '已复制',
     installLabels: {code: 'MicroClaw Code', script: 'Server 安装脚本', brew: 'Server Homebrew', cargo: 'Cargo', powershell: 'PowerShell 脚本'}, installHints: {code: '安装 mccode 编程智能体（macOS、Linux；Windows 用 install-mccode.ps1），然后选择模型', macScript: '在 macOS 上安装 MicroClaw Server', brew: '通过 Homebrew 安装 MicroClaw Server', source: '使用 Rust 工具链从源码构建 Server', windowsScript: '在 Windows 上安装 MicroClaw Server', linuxScript: '在 Linux 上安装 MicroClaw Server'},
     systemLabels: {macos: 'macOS', windows: 'Windows', linux: 'Linux'},
     paths: {
-      sdk: {badge: '集成开发', title: 'Rust SDK', audience: '适合 Rust 产品与平台团队', description: '把完整 Agent Engine，或仅稳定的执行生命周期契约，嵌入自己的应用。', benefits: ['Agent、Skills、事件与控制', '本地与认证远程 Worker', '不依赖 Server、渠道或桌面 UI'], commandLabel: '加入 Cargo.toml', action: '开始集成'},
+      sdk: {badge: '集成开发', title: 'Rust SDK', audience: '适合 Rust 产品与平台团队', description: '把完整 Agent Engine，或仅稳定的执行生命周期契约，嵌入自己的应用。', benefits: ['Agent、Skills、事件与控制', '本地与认证远程 Worker', '不依赖 Server、渠道或桌面 UI'], commandLabel: '加入你的 Rust 项目', action: '开始集成'},
       code: {badge: '面向开发者', title: 'MicroClaw Code', audience: '适合在自己的仓库里写代码', description: '在 Zed 的 Agent 面板和终端里使用的编码 Agent：以可审阅的 Diff 修改项目，并用项目自己的检查命令验证改动。', benefits: ['推荐在 Zed 中使用：Diff、审批卡片、模式与模型切换', '全屏终端界面与可脚本化的 -p 模式', '自动构建、lint 与测试验证'], commandLabel: '安装后添加到 Zed', extraLabel: '还没有 Zed？免费下载', extraHref: 'https://zed.dev/download', action: '在 Zed 中开始使用'},
       server: {badge: '持续在线', title: 'MicroClaw Server', audience: '适合服务、聊天渠道与自动化', description: '运行持久化智能体服务，承载聊天渠道、Web 与 Agent API、调度和后台任务。', benefits: ['支持 macOS、Linux 与 Windows', 'Web 控制台与多渠道适配器', '调度、恢复与可靠投递'], commandLabel: '安装 Server', action: '部署 Server'},
     },
