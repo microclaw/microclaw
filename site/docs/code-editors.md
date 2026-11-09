@@ -131,9 +131,22 @@ the thread again.
   context window the session uses; hover it for the numbers (for example
   `1% · 14k / 1M`). `/cost` reports requests and tokens, and the estimated
   cost when the model's price is known.
-- **Commands**: type `/` for `/review [focus]`, `/compact [focus]`, `/undo`,
-  `/cost`, `/context` and `/help`, plus your custom commands
-  (`~/.mccode/commands`, `.microclaw/commands` in trusted projects).
+- **Commands**: type `/` for these, plus your custom commands
+  (`~/.mccode/commands`, `.microclaw/commands` in trusted projects):
+  - `/goal [--until <command>] [--rounds N] <objective>`: keep working,
+    round after round, in one run until the goal is met (see
+    [Code usage](./code-usage)); the stop button ends it;
+  - `/review [focus]`, `/check [names]`, `/diff [full]`: review, run the
+    project's checks, or show the uncommitted changes;
+  - `/btw <question>`: a side question that does not enter the conversation;
+  - `/undo`, `/rewind [N]`: undo the last turn's file changes, or list the
+    turns and restore files to before turn N;
+  - `/compact [focus]`, `/cost`, `/context`, `/status`: context, usage and
+    what the session runs with;
+  - `/export [path]`, `/init`, `/help`: write the conversation as Markdown,
+    write `.microclaw/project.yaml`, list the commands.
+
+  Trust stays a terminal decision (`mccode trust`, below).
 - **Stop**: Zed's stop button cancels the run.
 
 ### Trust

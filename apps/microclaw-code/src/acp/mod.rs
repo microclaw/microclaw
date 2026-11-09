@@ -40,7 +40,8 @@ use agent_client_protocol_schema::v1::{
 };
 use microclaw_code_core::commands::CustomCommand;
 use microclaw_code_core::driver::{
-    CodeSession, Control, HistoryEntry, PendingApproval, SandboxInfo, SessionSettings, Update,
+    CodeSession, Control, HistoryEntry, PendingApproval, SandboxInfo, SessionSettings, TurnReport,
+    Update,
 };
 use microclaw_code_core::launch::{self, ModelSource, ProjectEngine};
 use microclaw_code_core::project::Mode;
@@ -799,7 +800,7 @@ impl Agent {
     async fn prompt(&self, request: PromptRequest) -> Result<Value, Error> {
         let id = request.session_id.0.to_string();
         let text = flatten_prompt(&request.prompt);
-        let label = prompt_label(&request.prompt);
+        let mut label = prompt_label(&request.prompt);
         if text.trim().is_empty() {
             return Err(invalid("the prompt is empty"));
         }
@@ -810,8 +811,15 @@ impl Agent {
             .map(|s| s.custom.clone())
             .ok_or_else(|| not_found(&id))?;
         let parsed = commands::parse(&text, &custom);
-        // Built-in commands neither name the thread nor count as a turn.
-        let command = matches!(parsed, Parsed::Builtin(..));
+        // A goal's thread is named after its objective, not the flags.
+        if let Parsed::Builtin(Builtin::Goal, args) = &parsed
+            && let Ok(spec) = microclaw_code_core::goal::GoalSpec::parse(args, 1)
+        {
+            label = format!("Goal: {}", spec.objective);
+        }
+        // Built-in commands neither name the thread nor count as a turn;
+        // `/goal` does both, since it is work.
+        let command = matches!(parsed, Parsed::Builtin(b, _) if b != Builtin::Goal);
         let (mut code, mode, root, titled) = {
             let mut sessions = self.sessions.borrow_mut();
             let s = sessions.get_mut(&id).ok_or_else(|| not_found(&id))?;
@@ -838,19 +846,21 @@ impl Agent {
                 let focus = (!focus.is_empty()).then_some(focus);
                 self.run_turn(&id, &root, code, TurnKind::Review(focus))
                     .await
+                    .map(|(code, stop, _)| (code, stop))
             }
+            Parsed::Builtin(Builtin::Goal, args) => self.run_goal(&id, &root, code, &args).await,
             Parsed::Builtin(builtin, args) => {
                 self.builtin(&id, &mut code, builtin, &args, &custom).await;
                 Ok((code, StopReason::EndTurn))
             }
-            Parsed::Prompt(prompt) => {
-                self.run_turn(&id, &root, code, TurnKind::Prompt(prompt))
-                    .await
-            }
-            Parsed::Plain => {
-                self.run_turn(&id, &root, code, TurnKind::Prompt(text))
-                    .await
-            }
+            Parsed::Prompt(prompt) => self
+                .run_turn(&id, &root, code, TurnKind::Prompt(prompt))
+                .await
+                .map(|(code, stop, _)| (code, stop)),
+            Parsed::Plain => self
+                .run_turn(&id, &root, code, TurnKind::Prompt(text))
+                .await
+                .map(|(code, stop, _)| (code, stop)),
         };
         let (code, stop) = result?;
         self.send_usage(&id, &code).await;
@@ -920,9 +930,171 @@ impl Agent {
                 Err(e) => format!("Context usage is not available: {e}"),
             },
             Builtin::Help => commands::help(custom),
-            Builtin::Review => unreachable!("review runs as a turn"),
+            Builtin::Btw if args.is_empty() => "Usage: `/btw <question>`".to_string(),
+            Builtin::Btw => match code.side_asker().ask(args).await {
+                Ok(answer) => answer,
+                Err(e) => format!("Could not answer: {e}"),
+            },
+            Builtin::Diff => git_diff(&code.project.root, args == "full"),
+            Builtin::Check => self.run_checks(id, code, args).await,
+            Builtin::Rewind => rewind(code, args).await,
+            Builtin::Status => status(code).await,
+            Builtin::Export => {
+                let path = if args.is_empty() {
+                    code.project
+                        .root
+                        .join(format!("mccode-{}.md", code.session_id))
+                } else {
+                    code.project.root.join(args)
+                };
+                match code
+                    .export_markdown()
+                    .and_then(|text| std::fs::write(&path, text).map_err(Into::into))
+                {
+                    Ok(()) => format!("Wrote {}.", path.display()),
+                    Err(e) => format!("Could not export: {e}"),
+                }
+            }
+            Builtin::Init => {
+                let path = code.project.config_path();
+                if path.exists() {
+                    format!("{} already exists.", path.display())
+                } else {
+                    let template = microclaw_code_core::project::config_template(&code.project);
+                    match std::fs::create_dir_all(path.parent().unwrap_or(&code.project.root))
+                        .and_then(|_| std::fs::write(&path, template))
+                    {
+                        Ok(()) => format!(
+                            "Wrote {}. Run `mccode trust` in the project to apply it.",
+                            path.display()
+                        ),
+                        Err(e) => format!("Could not write {}: {e}", path.display()),
+                    }
+                }
+            }
+            Builtin::Review | Builtin::Goal => unreachable!("runs as a turn"),
         };
         self.say(id, text);
+    }
+
+    /// `/check [names]`: run the project's checks one by one, stopping at
+    /// the first failure.
+    async fn run_checks(&self, id: &str, code: &CodeSession, args: &str) -> String {
+        let names: Vec<&str> = args.split_whitespace().collect();
+        let checks: Vec<_> = code
+            .project
+            .checks
+            .iter()
+            .filter(|c| {
+                names.is_empty() || names.contains(&"all") || names.contains(&c.name.as_str())
+            })
+            .cloned()
+            .collect();
+        if checks.is_empty() {
+            return if code.project.checks.is_empty() {
+                "This project has no checks. `/init` writes .microclaw/project.yaml with the \
+                 detected ones."
+                    .to_string()
+            } else {
+                format!(
+                    "No check is named {}. Checks: {}.",
+                    names.join(", "),
+                    code.project
+                        .checks
+                        .iter()
+                        .map(|c| format!("`{}`", c.name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+        }
+        let mut lines = Vec::new();
+        for check in checks {
+            self.say(id, format!("Running `{}`…\n", check.run));
+            let outcome = microclaw_code_core::verify::run_check(&code.project.root, &check).await;
+            lines.push(format!(
+                "- `{}` {} in {:.1}s",
+                check.name,
+                outcome.status_label(),
+                outcome.duration.as_secs_f64()
+            ));
+            if !outcome.success {
+                lines.push(format!(
+                    "\n```\n{}\n```",
+                    microclaw_code_core::verify::tail(outcome.output.trim_end(), 3_000)
+                ));
+                break;
+            }
+        }
+        format!("\n{}", lines.join("\n"))
+    }
+
+    /// `/goal`: run rounds until the goal is reached or stops, all within
+    /// this one prompt. Cancelling the prompt stops the goal.
+    async fn run_goal(
+        &self,
+        id: &str,
+        root: &Path,
+        mut code: CodeSession,
+        args: &str,
+    ) -> Result<(CodeSession, StopReason), Error> {
+        use microclaw_code_core::goal::{self, DEFAULT_MAX_ROUNDS, Goal, GoalSpec};
+        let mut goal = match GoalSpec::parse(args, DEFAULT_MAX_ROUNDS) {
+            Ok(spec) => Goal::new(spec),
+            Err(e) => {
+                self.say(id, e);
+                return Ok((code, StopReason::EndTurn));
+            }
+        };
+        // Cancels that arrive between rounds (while `--until` runs).
+        let (cancel_tx, mut cancel_rx) = mpsc::unbounded_channel();
+        loop {
+            self.say(
+                id,
+                format!(
+                    "{}**Goal: {}** · {}\n\n",
+                    if goal.round > 1 { "\n\n" } else { "" },
+                    goal.spec.objective,
+                    goal.progress()
+                ),
+            );
+            let (next, stop, report) = self
+                .run_turn(id, root, code, TurnKind::Prompt(goal.prompt()))
+                .await?;
+            code = next;
+            let Some(report) = report else {
+                return Ok((code, stop));
+            };
+            if let Some(s) = self.sessions.borrow_mut().get_mut(id) {
+                s.controls = Some(cancel_tx.clone());
+            }
+            let mut until = None;
+            if let Some(command) = goal.spec.until.clone()
+                && !report.cancelled
+                && !report.failed
+            {
+                self.say(id, format!("\n\nRunning `{command}`…"));
+                tokio::select! {
+                    outcome = goal::run_until(root, &command) => {
+                        self.say(id, format!(" {}.", outcome.status_label()));
+                        until = Some(outcome);
+                    }
+                    _ = cancel_rx.recv() => {
+                        self.say(id, "\n\nGoal stopped.");
+                        return Ok((code, StopReason::Cancelled));
+                    }
+                }
+            }
+            if cancel_rx.try_recv().is_ok() {
+                self.say(id, "\n\nGoal stopped.");
+                return Ok((code, StopReason::Cancelled));
+            }
+            let verdict = goal.judge(&report, until);
+            if verdict.is_final() {
+                self.say(id, format!("\n\n{}", goal.summary(&verdict)));
+                return Ok((code, stop));
+            }
+        }
     }
 
     async fn run_turn(
@@ -931,7 +1103,7 @@ impl Agent {
         root: &Path,
         mut code: CodeSession,
         kind: TurnKind,
-    ) -> Result<(CodeSession, StopReason), Error> {
+    ) -> Result<(CodeSession, StopReason, Option<TurnReport>), Error> {
         let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
         let (controls_tx, mut controls_rx) = mpsc::unbounded_channel();
         if let Some(s) = self.sessions.borrow_mut().get_mut(id) {
@@ -969,20 +1141,20 @@ impl Agent {
                 self.notify(id, mapped);
             }
         }
-        let stop = match report {
-            Ok(report) if report.cancelled => StopReason::Cancelled,
+        let (stop, report) = match report {
+            Ok(report) if report.cancelled => (StopReason::Cancelled, Some(report)),
             Ok(report) => {
                 if report.budget_exhausted {
                     self.say(id, "\n\nThe session's token budget is used up.");
                 }
-                StopReason::EndTurn
+                (StopReason::EndTurn, Some(report))
             }
             Err(e) => {
                 self.say(id, format!("\n\nError: {e}"));
-                StopReason::EndTurn
+                (StopReason::EndTurn, None)
             }
         };
-        Ok((code, stop))
+        Ok((code, stop, report))
     }
 
     fn ask_permission(
@@ -1013,6 +1185,120 @@ impl Agent {
             let _ = controls.send(control);
         });
     }
+}
+
+/// `/diff`: `git diff --stat` (or the whole diff) as a code block.
+fn git_diff(root: &Path, full: bool) -> String {
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(root)
+        .args(["--no-pager", "diff", "--no-color"]);
+    if !full {
+        cmd.arg("--stat");
+    }
+    match cmd.output() {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+            if text.is_empty() {
+                "No uncommitted changes.".to_string()
+            } else {
+                format!("```{}\n{text}\n```", if full { "diff" } else { "" })
+            }
+        }
+        Ok(out) => format!(
+            "git diff failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => format!("git diff failed: {e}"),
+    }
+}
+
+/// `/rewind`: list this session's turns, or `/rewind N` restores files to
+/// before turn N (the current state is checkpointed first).
+async fn rewind(code: &mut CodeSession, args: &str) -> String {
+    let turns = code.turn_checkpoints().to_vec();
+    if turns.is_empty() {
+        return "No earlier turns in this session to rewind to.".to_string();
+    }
+    if args.is_empty() {
+        let mut text =
+            String::from("Turns in this session (`/rewind N` restores files to before turn N):\n");
+        for (n, (_, prompt)) in turns.iter().enumerate() {
+            text.push_str(&format!("{}. {}\n", n + 1, title_of(prompt)));
+        }
+        return text;
+    }
+    let Some((checkpoint, prompt)) = args
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|i| turns.get(i))
+    else {
+        return format!(
+            "Pick a turn from 1 to {}; `/rewind` lists them.",
+            turns.len()
+        );
+    };
+    match code.rewind(&checkpoint.commit).await {
+        Ok(()) => format!(
+            "Restored files to before “{}”. The conversation is unchanged.",
+            title_of(prompt)
+        ),
+        Err(e) => format!("Could not rewind: {e}"),
+    }
+}
+
+/// `/status`: what this session runs with.
+async fn status(code: &CodeSession) -> String {
+    let project = &code.project;
+    let model = code
+        .model()
+        .await
+        .unwrap_or_else(|e| format!("unknown ({e})"));
+    let checks = if project.checks.is_empty() {
+        "none".to_string()
+    } else {
+        project
+            .checks
+            .iter()
+            .map(|c| format!("`{}`{}", c.name, if c.auto { " (auto)" } else { "" }))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut text = format!(
+        "- Project: {}\n- Trusted: {}\n- Mode: {} · model: {}\n- Checks: {} · auto-verify: {} · fix rounds: {}\n- {}\n- Session: {}",
+        project.root.display(),
+        if project.trusted {
+            "yes"
+        } else {
+            "no (`mccode trust` in a terminal)"
+        },
+        code.settings.mode.as_str(),
+        model,
+        checks,
+        if code.settings.verify && project.verify_enabled() {
+            "on"
+        } else {
+            "off"
+        },
+        code.settings.max_fix_rounds,
+        match &code.settings.sandbox {
+            Some(sandbox) => crate::tui::sandbox_label(sandbox),
+            None => "shell sandbox: off".into(),
+        },
+        code.session_id,
+    );
+    let loaded = microclaw_code_core::settings::load(&project.root, project.trusted);
+    text.push_str("\n- Settings files:");
+    for (layer, path, ok) in &loaded.layers {
+        text.push_str(&format!(
+            "\n  - {} {} `{}`",
+            layer.name(),
+            if *ok { "✓" } else { "·" },
+            path.display()
+        ));
+    }
+    text
 }
 
 #[cfg(test)]

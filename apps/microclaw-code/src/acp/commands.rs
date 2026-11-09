@@ -12,20 +12,52 @@ use microclaw_code_core::commands::CustomCommand;
 /// A built-in command the agent runs itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Builtin {
+    Goal,
     Review,
+    Btw,
+    Check,
+    Diff,
     Compact,
     Undo,
+    Rewind,
     Cost,
     Context,
+    Status,
+    Export,
+    Init,
     Help,
 }
 
 const BUILTINS: &[(Builtin, &str, &str, Option<&str>)] = &[
     (
+        Builtin::Goal,
+        "goal",
+        "Keep working, round after round, until the goal is met",
+        Some("[--until <command>] [--rounds N] objective"),
+    ),
+    (
         Builtin::Review,
         "review",
         "Review the uncommitted changes (read-only)",
         Some("what to focus on (optional)"),
+    ),
+    (
+        Builtin::Btw,
+        "btw",
+        "Ask a side question without adding it to the conversation",
+        Some("question"),
+    ),
+    (
+        Builtin::Check,
+        "check",
+        "Run the project's checks (all, or the ones named)",
+        Some("check names (optional)"),
+    ),
+    (
+        Builtin::Diff,
+        "diff",
+        "Show the uncommitted changes (`full` for the whole diff)",
+        Some("full (optional)"),
     ),
     (
         Builtin::Compact,
@@ -40,6 +72,12 @@ const BUILTINS: &[(Builtin, &str, &str, Option<&str>)] = &[
         None,
     ),
     (
+        Builtin::Rewind,
+        "rewind",
+        "List this session's turns, or restore files to before turn N",
+        Some("turn number (optional)"),
+    ),
+    (
         Builtin::Cost,
         "cost",
         "Tokens and estimated cost of this session",
@@ -49,6 +87,24 @@ const BUILTINS: &[(Builtin, &str, &str, Option<&str>)] = &[
         Builtin::Context,
         "context",
         "How full the context window is",
+        None,
+    ),
+    (
+        Builtin::Status,
+        "status",
+        "Project, trust, checks, sandbox and settings files",
+        None,
+    ),
+    (
+        Builtin::Export,
+        "export",
+        "Write this conversation as Markdown",
+        Some("file path (optional)"),
+    ),
+    (
+        Builtin::Init,
+        "init",
+        "Write .microclaw/project.yaml with the detected checks",
         None,
     ),
     (Builtin::Help, "help", "List the commands", None),
@@ -146,6 +202,14 @@ mod tests {
         assert_eq!(
             parse("/fix 42", &custom),
             Parsed::Prompt("Fix issue 42".into())
+        );
+        assert_eq!(
+            parse("/goal --until \"cargo test\" fix it", &custom),
+            Parsed::Builtin(Builtin::Goal, "--until \"cargo test\" fix it".into())
+        );
+        assert_eq!(
+            parse("/rewind 2", &custom),
+            Parsed::Builtin(Builtin::Rewind, "2".into())
         );
         assert_eq!(parse("/unknown", &custom), Parsed::Plain);
         assert_eq!(parse("fix the bug", &custom), Parsed::Plain);

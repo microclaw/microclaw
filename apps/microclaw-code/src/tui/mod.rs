@@ -104,14 +104,9 @@ pub struct RunningTurn {
     agent_turn: bool,
 }
 
-/// `/goal`: keep working until the checks pass and the agent says so.
-pub struct Goal {
-    pub objective: String,
-    pub round: u32,
-    pub max_rounds: u32,
-}
-
-pub const GOAL_DONE_MARKER: &str = "GOAL COMPLETE";
+/// Where a goal turn leaves its `--until` outcome for `on_turn_finished`.
+type UntilSlot =
+    std::sync::Arc<std::sync::Mutex<Option<microclaw_code_core::verify::CheckOutcome>>>;
 
 pub struct App {
     session: Option<CodeSession>,
@@ -145,7 +140,9 @@ pub struct App {
     pub shell_running: bool,
     /// Context from `!commands` added to the next prompt.
     shell_context: Vec<String>,
-    pub goal: Option<Goal>,
+    /// `/goal` in progress (shared loop in `microclaw_code_core::goal`).
+    pub goal: Option<microclaw_code_core::goal::Goal>,
+    goal_until: UntilSlot,
     pub settings: CodeSettings,
     pub theme: Theme,
     pub keymap: keymap::Keymap,
@@ -350,6 +347,7 @@ pub async fn run(
         shell_running: false,
         shell_context: Vec::new(),
         goal: None,
+        goal_until: UntilSlot::default(),
         render: RenderOptions {
             diff_style: tui
                 .diff
@@ -998,24 +996,15 @@ impl App {
                             }
                         }
                         if let Some(goal) = &mut self.goal {
-                            let done = report.final_text.contains(GOAL_DONE_MARKER)
-                                && report.checks_passed != Some(false);
-                            if done {
-                                self.transcript.notice(
-                                    format!("goal reached in {} round(s)", goal.round),
-                                    Tone::Success,
-                                );
-                                self.goal = None;
-                            } else if !ok {
-                                self.goal = None;
-                            } else if goal.round >= goal.max_rounds {
-                                self.transcript.notice(
-                                    format!(
-                                        "goal not reached after {} rounds; stopping",
-                                        goal.round
-                                    ),
-                                    Tone::Warning,
-                                );
+                            let until = self.goal_until.lock().ok().and_then(|mut s| s.take());
+                            let verdict = goal.judge(&report, until);
+                            if verdict.is_final() {
+                                let tone = if verdict.is_reached() {
+                                    Tone::Success
+                                } else {
+                                    Tone::Warning
+                                };
+                                self.transcript.notice(goal.summary(&verdict), tone);
                                 self.goal = None;
                             } else {
                                 next_goal_round = true;
@@ -1090,17 +1079,11 @@ impl App {
     }
 
     fn continue_goal(&mut self) {
-        let Some(goal) = &mut self.goal else {
+        let Some(goal) = &self.goal else {
             return;
         };
-        goal.round += 1;
-        let prompt = format!(
-            "Continue working toward the goal: {}\n\nThis is round {} of at most {}. \
-             When the goal is fully achieved and the project's checks pass, end your reply with \
-             the line `{GOAL_DONE_MARKER}`. If you are blocked, explain why instead.",
-            goal.objective, goal.round, goal.max_rounds
-        );
-        let label = format!("goal round {}/{}", goal.round, goal.max_rounds);
+        let prompt = goal.prompt();
+        let label = format!("goal {}", goal.progress());
         self.start_turn(prompt, Some(label));
     }
 
@@ -1128,8 +1111,25 @@ impl App {
         let (controls_tx, mut controls_rx) = mpsc::unbounded_channel();
         let updates = self.updates_tx.clone();
         let plan = self.mode == Mode::Plan;
+        // A goal with `--until` runs its command after each completed round.
+        let until = self
+            .goal
+            .as_ref()
+            .and_then(|g| g.spec.until.clone())
+            .map(|command| (command, self.goal_until.clone()));
         let handle = tokio::spawn(async move {
             let report = session.turn(&prompt, &updates, &mut controls_rx).await;
+            if let (Some((command, slot)), Ok(r)) = (until, &report)
+                && !r.cancelled
+                && !r.failed
+            {
+                let _ = updates.send(Update::Notice(format!("goal: running `{command}`")));
+                let outcome =
+                    microclaw_code_core::goal::run_until(&session.project.root, &command).await;
+                if let Ok(mut slot) = slot.lock() {
+                    *slot = Some(outcome);
+                }
+            }
             (session, report)
         });
         self.running = Some(RunningTurn {

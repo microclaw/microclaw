@@ -5,6 +5,7 @@
 //!   and the per-user trust decisions that gate it;
 //! - [`allow`]: per-project command allow rules (`always allow cargo test`);
 //! - [`verify`] / [`git`]: running project checks and detecting changes;
+//! - [`goal`]: the `/goal` loop shared by every front end;
 //! - [`sessions`]: the per-project session index;
 //! - [`remote`]: handing a task to a paired MicroClaw Server;
 //! - [`driver`]: one user turn — agent run, approvals, verification and the
@@ -18,6 +19,7 @@ pub mod commands;
 pub mod driver;
 pub mod gate;
 pub mod git;
+pub mod goal;
 pub mod home;
 pub mod images;
 pub mod import;

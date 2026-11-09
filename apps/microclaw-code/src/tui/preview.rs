@@ -199,6 +199,7 @@ fn demo_app(theme: &str) -> App {
         shell_running: false,
         shell_context: Vec::new(),
         goal: None,
+        goal_until: Default::default(),
         settings: CodeSettings::default(),
         theme,
         keymap: keymap::Keymap::default(),

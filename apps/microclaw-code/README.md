@@ -104,7 +104,7 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/context` | How full the context window is: tokens used, the automatic-compaction point, and where the tokens go. |
 | `/handoff <next task>` | Start a new session from a summary of this one focused on the next task. |
 | `/fork` | Continue in a copy of the conversation; the original session is kept. |
-| `/goal <condition>` | Keep working, turn after turn, until the condition holds and the checks pass. |
+| `/goal [--until <cmd>] [--rounds N] <objective>` | Keep working, round after round, until the goal is met: with `--until`, when that command succeeds; otherwise when the agent ends with `GOAL COMPLETE` and the checks pass. Stops when the agent reports `GOAL BLOCKED`, after two rounds without file changes, or at the round limit (8). Also in Zed and as `mccode -p "/goal …"`. |
 | `/btw <question>` | Ask a side question in a copy of the session; the main conversation is not changed. |
 | `/changes` | Review the changes (same as F2). |
 | `/theme [name]` | Pick a theme, with a live preview. |
