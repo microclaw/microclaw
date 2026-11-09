@@ -4,6 +4,42 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## 0.28.0 - 2026-11-09
+
+The Matrix channel is removed, and security advisories are fixed. Matrix
+went because its SDK pinned a vulnerable SQLite for every product built
+from this repository, and nothing showed that anyone used it.
+
+### Removed
+
+- **The Matrix channel** (`channel-matrix`), the `full` Cargo feature and
+  the `microclaw-full` release archives, Homebrew formula, `install.sh
+  --full` and `install.ps1 -Full` variant. The full variant differed from
+  the default build only by Matrix. A `channels.matrix` block in an existing
+  config is ignored with a warning. In the Homebrew tap, `microclaw-full`
+  now renames to `microclaw`, so `brew update` moves existing installs over.
+  `--full` and `-Full` are still accepted by the install scripts and only
+  print a notice.
+
+### Security
+
+- `rusqlite` 0.41 (from 0.40), which bundles SQLite 3.54.1 through
+  `libsqlite3-sys` 0.39.1, for RUSTSEC-2026-0459 (CVE-2026-119375): SQLite
+  before 3.54.0 could return uninitialized page-cache memory for a database
+  opened with a crafted `-wal` file. Every product bundles SQLite, so all
+  were affected; the Matrix SDK's pin on `rusqlite` 0.40 blocked the
+  upgrade until the channel was removed. Six `cargo deny` exceptions that
+  only applied to Matrix's dependencies are gone too.
+
+- `rmcp` 3.9 (from 1.8) for RUSTSEC-2026-0462: the MCP Streamable HTTP
+  client read response bodies with no size limit, so a malicious or
+  compromised MCP server could exhaust memory, even during `initialize`.
+  Successful JSON bodies are now capped at 16 MiB and error bodies at
+  64 KiB. Affects the Server, MicroClaw Code and the SDK wherever HTTP MCP
+  servers are configured.
+- `openssl` 0.10.82 (from 0.10.76) for RUSTSEC-2026-0463, an out-of-bounds
+  write in `aes::unwrap_key`; it reaches the build through `native-tls`.
+
 ## 0.27.1 - 2026-11-09
 
 Fixes found by testing MicroClaw Code 0.27.0 in Zed and in the terminal

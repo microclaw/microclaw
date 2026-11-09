@@ -105,23 +105,6 @@ export const DYNAMIC_CHANNELS: DynChannelDef[] = [
     ],
   },
   {
-    name: 'matrix',
-    title: 'Matrix',
-    icon: '🧩',
-    steps: [
-      'Prepare a Matrix bot account on your homeserver.',
-      'Get homeserver URL, bot user ID, and access token.',
-      'Invite the bot to target rooms/chats.',
-    ],
-    hint: 'Required: homeserver_url, access_token, bot_user_id.',
-    fields: [
-      { yamlKey: 'homeserver_url', label: 'matrix_homeserver_url', placeholder: 'https://matrix.org', description: 'Matrix homeserver URL.', secret: false },
-      { yamlKey: 'access_token', label: 'matrix_access_token', placeholder: 'syt_xxx', description: 'Matrix access token for the bot account.', secret: true },
-      { yamlKey: 'bot_user_id', label: 'matrix_bot_user_id', placeholder: '@bot:example.org', description: 'Matrix bot user ID.', secret: false },
-      { yamlKey: 'bot_username', label: 'matrix_bot_username', placeholder: 'matrix_bot_name', description: 'Optional Matrix-specific bot username override.', secret: false },
-    ],
-  },
-  {
     name: 'whatsapp',
     title: 'WhatsApp',
     icon: '🟢',

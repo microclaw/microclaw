@@ -3,7 +3,6 @@ set -euo pipefail
 
 REPO="${MICROCLAW_REPO:-microclaw/microclaw}"
 BIN_NAME="microclaw"
-VARIANT="${MICROCLAW_VARIANT:-default}"
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 SKIP_RUN="${MICROCLAW_INSTALL_SKIP_RUN:-0}"
 
@@ -21,14 +20,10 @@ need_cmd() {
 
 print_help() {
   cat <<'EOF'
-Usage: install.sh [--full] [--skip-run]
+Usage: install.sh [--skip-run]
 
 Options:
-  --full       Install the full variant (includes Matrix channel + MCP support).
   --skip-run   Do not auto-run microclaw after install.
-
-Environment variables:
-  MICROCLAW_VARIANT   Set to "full" as an alternative to --full.
 EOF
 }
 
@@ -36,7 +31,8 @@ parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --full)
-        VARIANT="full"
+        # The full variant (Matrix channel) was removed in 0.28.0.
+        log "--full is no longer needed: there is one MicroClaw build"
         ;;
       --skip-run)
         SKIP_RUN=1
@@ -121,18 +117,12 @@ download_release_json() {
 extract_asset_url() {
   # Match assets like:
   #   microclaw-0.0.5-aarch64-apple-darwin.tar.gz
-  #   microclaw-full-0.0.5-aarch64-apple-darwin.tar.gz
   local release_json="$1"
   local os="$2"
   local arch="$3"
-  local variant="$4"
   local os_regex arch_regex asset_prefix
 
-  if [ "$variant" = "full" ]; then
-    asset_prefix="${BIN_NAME}-full"
-  else
-    asset_prefix="${BIN_NAME}"
-  fi
+  asset_prefix="${BIN_NAME}"
 
   case "$os" in
     darwin) os_regex="apple-darwin|darwin" ;;
@@ -208,8 +198,7 @@ install_from_archive() {
   fi
 
   local bin_path
-  # Full variant archives contain "microclaw-full" binary; fall back to "microclaw".
-  bin_path="$(find "$tmpdir" -type f \( -name "${BIN_NAME}-full" -o -name "$BIN_NAME" \) | head -n1)"
+  bin_path="$(find "$tmpdir" -type f -name "$BIN_NAME" | head -n1)"
   if [ -z "$bin_path" ]; then
     err "Could not find '$BIN_NAME' in archive"
     return 1
@@ -248,13 +237,9 @@ main() {
     had_existing_bin=1
   fi
 
-  if [ "$VARIANT" = "full" ]; then
-    log "Installing ${BIN_NAME} (full variant) for ${os}/${arch}..."
-  else
-    log "Installing ${BIN_NAME} for ${os}/${arch}..."
-  fi
+  log "Installing ${BIN_NAME} for ${os}/${arch}..."
   release_json="$(download_release_json)"
-  asset_url="$(extract_asset_url "$release_json" "$os" "$arch" "$VARIANT" || true)"
+  asset_url="$(extract_asset_url "$release_json" "$os" "$arch" || true)"
   if [ -z "$asset_url" ]; then
     err "No prebuilt binary found for ${os}/${arch} in the latest GitHub release."
     err "Use a separate install method instead:"

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use http::{HeaderName, HeaderValue};
-use rmcp::model::{CallToolRequestParams, ClientInfo, ProtocolVersion, RawContent};
+use rmcp::model::{CallToolRequestParams, ClientConfig, ContentBlock, ProtocolVersion};
 use rmcp::transport::child_process::ConfigureCommandExt;
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
@@ -229,8 +229,8 @@ impl FixedWindowRateLimiter {
 // --- rmcp peer wrapper ---
 
 enum McpPeer {
-    Stdio(rmcp::service::RunningService<rmcp::RoleClient, ClientInfo>),
-    Http(rmcp::service::RunningService<rmcp::RoleClient, ClientInfo>),
+    Stdio(rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>),
+    Http(rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>),
 }
 
 impl McpPeer {
@@ -516,7 +516,7 @@ impl McpServer {
 
         let mut output = String::new();
         for item in &result.content {
-            if let RawContent::Text(text_content) = &item.raw {
+            if let ContentBlock::Text(text_content) = item {
                 if !output.is_empty() {
                     output.push('\n');
                 }
@@ -759,8 +759,8 @@ fn load_config_from_path(path: &Path) -> Option<McpConfig> {
     }
 }
 
-fn build_client_info(requested_protocol: Option<String>) -> ClientInfo {
-    let mut info = ClientInfo::default();
+fn build_client_info(requested_protocol: Option<String>) -> ClientConfig {
+    let mut info = ClientConfig::default();
     if let Some(protocol_version) = requested_protocol {
         let parsed = serde_json::from_value::<ProtocolVersion>(serde_json::json!(protocol_version))
             .unwrap_or_else(|_| ProtocolVersion::default());

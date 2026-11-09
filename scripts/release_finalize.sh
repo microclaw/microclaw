@@ -239,9 +239,7 @@ homebrew_macos_asset_name() {
   local version="$1"
   local arch="$2"
   local variant="${3:-default}"
-  if [ "$variant" = "full" ]; then
-    echo "microclaw-full-${version}-${arch}-apple-darwin.tar.gz"
-  elif [ "$variant" = "mccode" ]; then
+  if [ "$variant" = "mccode" ]; then
     echo "mccode-${version}-${arch}-apple-darwin.tar.gz"
   else
     echo "microclaw-${version}-${arch}-apple-darwin.tar.gz"
@@ -365,8 +363,6 @@ fi
 
 HOMEBREW_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64")"
 HOMEBREW_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64")"
-HOMEBREW_FULL_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64" "full")"
-HOMEBREW_FULL_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64" "full")"
 HOMEBREW_MCCODE_ARM64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "aarch64" "mccode")"
 HOMEBREW_MCCODE_X86_64_TARBALL_NAME="$(homebrew_macos_asset_name "$NEW_VERSION" "x86_64" "mccode")"
 
@@ -375,14 +371,6 @@ if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL
 fi
 
 if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBALL_NAME"; then
-  exit 1
-fi
-
-if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_ARM64_TARBALL_NAME"; then
-  exit 1
-fi
-
-if ! wait_for_release_asset_ready "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_X86_64_TARBALL_NAME"; then
   exit 1
 fi
 
@@ -395,12 +383,8 @@ done
 
 HOMEBREW_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_ARM64_TARBALL_NAME")"
 HOMEBREW_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_X86_64_TARBALL_NAME")"
-HOMEBREW_FULL_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_ARM64_TARBALL_NAME")"
-HOMEBREW_FULL_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_FULL_X86_64_TARBALL_NAME")"
 echo "Official Homebrew arm64 SHA256: $HOMEBREW_ARM64_SHA256"
 echo "Official Homebrew x86_64 SHA256: $HOMEBREW_X86_64_SHA256"
-echo "Official Homebrew full arm64 SHA256: $HOMEBREW_FULL_ARM64_SHA256"
-echo "Official Homebrew full x86_64 SHA256: $HOMEBREW_FULL_X86_64_SHA256"
 HOMEBREW_MCCODE_ARM64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_MCCODE_ARM64_TARBALL_NAME")"
 HOMEBREW_MCCODE_X86_64_SHA256="$(release_asset_sha256 "$GITHUB_REPO" "$TAG" "$HOMEBREW_MCCODE_X86_64_TARBALL_NAME")"
 echo "Official Homebrew mccode arm64 SHA256: $HOMEBREW_MCCODE_ARM64_SHA256"
@@ -441,32 +425,17 @@ class Microclaw < Formula
 end
 RUBY
 
+# The full variant (Matrix channel) was removed in 0.28.0. Retire its formula
+# and let `brew update` migrate existing installs to microclaw.
 FORMULA_FULL_PATH="$(dirname "$FORMULA_PATH")/microclaw-full.rb"
-cat > "$FORMULA_FULL_PATH" << RUBY
-class MicroclawFull < Formula
-  desc "Agentic AI assistant (full variant with Matrix channel + MCP support)"
-  homepage "https://github.com/$GITHUB_REPO"
-  license "MIT"
-
-  on_macos do
-    if Hardware::CPU.arm?
-      url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$HOMEBREW_FULL_ARM64_TARBALL_NAME"
-      sha256 "$HOMEBREW_FULL_ARM64_SHA256"
-    else
-      url "https://github.com/$GITHUB_REPO/releases/download/$TAG/$HOMEBREW_FULL_X86_64_TARBALL_NAME"
-      sha256 "$HOMEBREW_FULL_X86_64_SHA256"
-    end
-  end
-
-  def install
-    bin.install "microclaw-full" => "microclaw"
-  end
-
-  test do
-    assert_match "MicroClaw", shell_output("#{bin}/microclaw help")
-  end
-end
-RUBY
+if [ -f "$FORMULA_FULL_PATH" ]; then
+  git rm -q -- "$FORMULA_FULL_PATH"
+fi
+cat > formula_renames.json << 'JSON'
+{
+  "microclaw-full": "microclaw"
+}
+JSON
 
 FORMULA_MCCODE_PATH="$(dirname "$FORMULA_PATH")/mccode.rb"
 cat > "$FORMULA_MCCODE_PATH" << RUBY
@@ -495,7 +464,7 @@ class Mccode < Formula
 end
 RUBY
 
-git add -- "$FORMULA_PATH" "$FORMULA_FULL_PATH" "$FORMULA_MCCODE_PATH"
+git add -- "$FORMULA_PATH" "$FORMULA_MCCODE_PATH" formula_renames.json
 # The tap publishes formulas only.
 if [ -d Casks ] && [ -n "$(ls -A Casks 2>/dev/null)" ]; then
   git rm -q -r -- Casks
@@ -508,6 +477,6 @@ echo "Done! Released $TAG and updated Homebrew tap."
 echo ""
 echo "Users can install with:"
 echo "  brew tap microclaw/tap"
-echo "  brew install microclaw          # default (lightweight)"
-echo "  brew install microclaw-full     # full (Matrix + MCP)"
+echo "  brew install microclaw"
+echo "  brew install mccode"
 

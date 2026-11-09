@@ -398,16 +398,10 @@ If either switch is off, MicroClaw degrades gracefully to keyword retrieval + Ja
 
 ### Build examples
 
-Default build (all channels except Matrix, MCP included, no sqlite-vec):
+Default build (every channel, MCP included, no sqlite-vec):
 
 ```sh
 cargo build --release
-```
-
-Full build (adds Matrix channel):
-
-```sh
-cargo build --release --features full
 ```
 
 Enable sqlite-vec explicitly:

@@ -23,7 +23,7 @@ codegen-units = 1
 
 [package]
 name = "microclaw"
-version = "0.27.1"
+version = "0.28.0"
 publish = false
 edition = "2021"
 license = "MIT"
@@ -34,18 +34,16 @@ default = ["embedded-web-ui"]
 embedded-web-ui = []
 sqlite-vec = ["microclaw-engine/sqlite-vec"]
 journald = ["microclaw-engine/journald"]
-channel-matrix = ["dep:matrix-sdk"]
-full = ["channel-matrix"]
 
 [dependencies]
-microclaw-core = { version = "0.27.1", path = "crates/microclaw-core" }
-microclaw-engine = { version = "0.27.1", path = "crates/microclaw-engine", features = ["test-support"] }
+microclaw-core = { version = "0.28.0", path = "crates/microclaw-core" }
+microclaw-engine = { version = "0.28.0", path = "crates/microclaw-engine", features = ["test-support"] }
 teloxide = { version = "0.17", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
-rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
@@ -83,10 +81,9 @@ argon2 = "0.5"
 opentelemetry-proto = { version = "0.28", features = ["gen-tonic-messages"] }
 opentelemetry-semantic-conventions = { version = "0.30", features = ["semconv_experimental"] }
 prost = "0.13"
-matrix-sdk = { version = "0.19.1", optional = true, default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "rustls-aws-lc-rs", "sqlite", "bundled-sqlite"] }
 clap = { version = "4.6", features = ["derive"] }
 http = "1"
-rmcp = { version = "1.7", features = [
+rmcp = { version = "3.9", features = [
     "client",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",

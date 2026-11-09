@@ -5,13 +5,6 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-# Temporary exceptions for rustls-webpki advisories while the
-# upstream rustls/tokio-tungstenite/serenity dependency chain catches up.
-#
-# RUSTSEC-2024-0388: `derivative` is unmaintained — pulled only transitively via
-#   matrix-sdk-indexeddb; no first-party use.
-# RUSTSEC-2026-0097: `rand` unsound with a custom logger using `rand::rng()` —
-#   transitive via the Matrix/OTLP stacks; not how we use rand.
 # RUSTSEC-2026-0173: `proc-macro-error2` is unmaintained — compile-time-only
 #   proc macro pulled transitively via teloxide -> aquamarine; no runtime code.
 #
@@ -41,16 +34,7 @@ yanked = "deny"
 #   serde_yaml 0.9 (itself archived upstream), which the config
 #   and engine still parse with. Moving to a maintained YAML crate is a
 #   separate migration; the advisory is informational (no vulnerability).
-#
-# RUSTSEC-2026-0319: `anymap2` is unmaintained (replacement: anymap3) —
-#   transitive via matrix-sdk 0.19 only (non-default `channel-matrix`); no
-#   first-party use and no safe upgrade until matrix-sdk drops it.
 ignore = [
-  "RUSTSEC-2026-0049",
-  "RUSTSEC-2026-0098",
-  "RUSTSEC-2026-0099",
-  "RUSTSEC-2024-0388",
-  "RUSTSEC-2026-0097",
   "RUSTSEC-2026-0173",
   "RUSTSEC-2024-0320",
   "RUSTSEC-2024-0436",
@@ -59,13 +43,12 @@ ignore = [
   "RUSTSEC-2026-0195",
   "RUSTSEC-2026-0192",
   "RUSTSEC-2026-0206",
-  "RUSTSEC-2026-0319",
   "RUSTSEC-2024-0449",
 ]
 
 [bans]
 # The current graph includes several unavoidable duplicate transitive versions
-# across Matrix, Telegram, and OTLP stacks; keep bans focused on actual risks.
+# across the Telegram and OTLP stacks; keep bans focused on actual risks.
 multiple-versions = "allow"
 wildcards = "deny"
 deny = []

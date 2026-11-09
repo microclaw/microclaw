@@ -68,7 +68,7 @@ This is not the same as fully decomposing the whole product into many independen
 
 ### Per-chat turn queue
 
-`ChatTurnQueue` is shared by every channel adapter (Telegram, Discord, Slack, Feishu, Matrix, Web). Messages that arrive while a turn is active are coalesced into the running turn (via mid-turn injection) or queued for the next turn, with a configurable upper bound. This replaced the ad-hoc per-channel locks that previously existed in only some adapters.
+`ChatTurnQueue` is shared by every channel adapter (Telegram, Discord, Slack, Feishu, Web). Messages that arrive while a turn is active are coalesced into the running turn (via mid-turn injection) or queued for the next turn, with a configurable upper bound. This replaced the ad-hoc per-channel locks that previously existed in only some adapters.
 
 ### Intra-turn tool waves
 
@@ -80,7 +80,7 @@ When a user sends a follow-up while a turn is mid-flight, `enable_mid_turn_injec
 
 ### Non-web channel injection acks
 
-Telegram, Discord, Slack, Matrix, Feishu, and WeChat used to drain `AgentEvent`s only after the agent loop returned, which meant a user who sent a follow-up mid-turn saw nothing until the turn ended. The shared helper in `src/channels/event_tap.rs` now consumes events concurrently with the agent loop on every channel adapter, so a `MidTurnInjection` event triggers an immediate ack message on the channel where the follow-up was sent. Controlled by the `mid_turn_injection_echo` config flag (default `true`); has no effect when `enable_mid_turn_injection` is `false`. Feishu's existing in-place progress message picks up the ack as an extra line; the other channels post a small standalone ack.
+Telegram, Discord, Slack, Feishu, and WeChat used to drain `AgentEvent`s only after the agent loop returned, which meant a user who sent a follow-up mid-turn saw nothing until the turn ended. The shared helper in `src/channels/event_tap.rs` now consumes events concurrently with the agent loop on every channel adapter, so a `MidTurnInjection` event triggers an immediate ack message on the channel where the follow-up was sent. Controlled by the `mid_turn_injection_echo` config flag (default `true`); has no effect when `enable_mid_turn_injection` is `false`. Feishu's existing in-place progress message picks up the ack as an extra line; the other channels post a small standalone ack.
 
 ## Limits that still matter
 
@@ -120,7 +120,7 @@ Issue #307 was kept open as an umbrella for the broader concurrency direction. T
 | Safer parallelism within a single turn | Shipped | `src/tool_executor.rs`, PR #320 |
 | Mid-turn responsiveness (the nanobot midturn suggestion) | Shipped, default on | `src/agent_engine.rs` mid-turn injection, PR #330 |
 | Stronger parent/child contracts for orchestration-heavy subagent flows | Shipped | `subagents_orchestrate`, `subagents_focus`, `subagents_send` in `src/tools/subagents.rs` |
-| Richer progress events outside the web channel | Shipped: concurrent event tap + mid-turn injection ack on Telegram, Discord, Slack, Matrix, Feishu, WeChat; opt-in progress heartbeats (edit-in-place "⏳ Working…") on Telegram, Discord, Slack (`src/channels/event_tap.rs`). Feishu/Matrix/WeChat heartbeats deferred. | `docs/roadmap/non-web-channel-progress-events-plan.md` |
+| Richer progress events outside the web channel | Shipped: concurrent event tap + mid-turn injection ack on Telegram, Discord, Slack, Feishu, WeChat; opt-in progress heartbeats (edit-in-place "⏳ Working…") on Telegram, Discord, Slack (`src/channels/event_tap.rs`). Feishu/Matrix/WeChat heartbeats deferred. | `docs/roadmap/non-web-channel-progress-events-plan.md` |
 | Deeper thread-bound routing and fan-out/fan-in for subagents | Partially in place via subagent orchestrate; further work folded into the progress-events plan above | same plan doc |
 
 With the first three bullets shipped and the remaining work tracked under a focused plan doc, the umbrella issue can be closed. New concurrency work should land against the focused tracker rather than re-opening the umbrella.

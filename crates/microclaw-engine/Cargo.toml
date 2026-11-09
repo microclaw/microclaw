@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-engine"
-version = "0.27.1"
+version = "0.28.0"
 edition = "2021"
 license.workspace = true
 authors.workspace = true
@@ -19,12 +19,12 @@ sqlite-vec = ["dep:sqlite-vec"]
 journald = ["dep:tracing-journald"]
 
 [dependencies]
-microclaw-core = { version = "0.27.1", path = "../microclaw-core", features = ["http-errors", "sqlite-errors"] }
+microclaw-core = { version = "0.28.0", path = "../microclaw-core", features = ["http-errors", "sqlite-errors"] }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
 reqwest = { version = "0.12", features = ["json", "blocking", "stream", "multipart"] }
-rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
@@ -60,7 +60,7 @@ opentelemetry-otlp = { version = "0.30", features = ["http-proto", "trace", "met
 opentelemetry-appender-tracing = "0.30"
 opentelemetry-semantic-conventions = { version = "0.30", features = ["semconv_experimental"] }
 prost = "0.13"
-rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3.9", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 shellexpand = "3.1.2"
 yaml-edit = "0.2.0"
 pulldown-cmark = { version = "0.12", default-features = false }

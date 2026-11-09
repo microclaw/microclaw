@@ -8,7 +8,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $BinName = 'microclaw.exe'
-$Variant = if ($Full.IsPresent -or $env:MICROCLAW_VARIANT -eq 'full') { 'full' } else { 'default' }
 $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 $skipRunFromEnv = $false
 if ($env:MICROCLAW_INSTALL_SKIP_RUN) {
@@ -29,12 +28,8 @@ function Resolve-Arch {
   }
 }
 
-function Select-AssetUrl([object]$release, [string]$arch, [string]$variant) {
-  if ($variant -eq 'full') {
-    $prefix = 'microclaw-full'
-  } else {
-    $prefix = 'microclaw'
-  }
+function Select-AssetUrl([object]$release, [string]$arch) {
+  $prefix = 'microclaw'
   $patterns = @(
     "$prefix-[0-9]+\.[0-9]+\.[0-9]+-$arch-windows-msvc\.zip$",
     "$prefix-[0-9]+\.[0-9]+\.[0-9]+-.*$arch.*windows.*\.zip$"
@@ -100,14 +95,14 @@ function Wait-ForProcessExit([int]$ProcessId) {
 }
 
 $arch = Resolve-Arch
-if ($Variant -eq 'full') {
-  Write-Info "Installing microclaw (full variant) for windows/$arch..."
-} else {
-  Write-Info "Installing microclaw for windows/$arch..."
+if ($Full.IsPresent) {
+  # The full variant (Matrix channel) was removed in 0.28.0.
+  Write-Info "-Full is no longer needed: there is one MicroClaw build"
 }
+Write-Info "Installing microclaw for windows/$arch..."
 
 $release = Invoke-RestMethod -Uri $ApiUrl -Headers @{ 'User-Agent' = 'microclaw-install-script' }
-$assetUrl = Select-AssetUrl -release $release -arch $arch -variant $Variant
+$assetUrl = Select-AssetUrl -release $release -arch $arch
 if (-not $assetUrl) {
   throw "No prebuilt binary found for windows/$arch in the latest GitHub release."
 }
@@ -120,11 +115,7 @@ try {
   Invoke-WebRequest -Uri $assetUrl -OutFile $archivePath
 
   Expand-Archive -Path $archivePath -DestinationPath $tmpDir.FullName -Force
-  # Full variant archives contain "microclaw-full.exe"; fall back to "microclaw.exe".
-  $bin = Get-ChildItem -Path $tmpDir.FullName -Filter 'microclaw-full.exe' -Recurse | Select-Object -First 1
-  if (-not $bin) {
-    $bin = Get-ChildItem -Path $tmpDir.FullName -Filter $BinName -Recurse | Select-Object -First 1
-  }
+  $bin = Get-ChildItem -Path $tmpDir.FullName -Filter $BinName -Recurse | Select-Object -First 1
   if (-not $bin) {
     throw "Could not find $BinName in archive"
   }

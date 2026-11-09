@@ -43,7 +43,7 @@ max_tool_iterations: 100
 # user_message_language: en
 # Inject pending messages into the active agent loop between iterations (mid-turn injection)
 enable_mid_turn_injection: true
-# On non-web channels (Telegram, Discord, Slack, Feishu, Matrix, WeChat),
+# On non-web channels (Telegram, Discord, Slack, Feishu, WeChat),
 # send a small ack message when a mid-turn injection happens so the user
 # sees their follow-up was received instead of waiting for the turn to end.
 mid_turn_injection_echo: true
@@ -338,14 +338,6 @@ channels:
   #   # webhook_path: "/feishu/events"
   #   # verification_token: ""
   #   # encrypt_key: ""
-  # matrix:
-  #   enabled: false
-  #   homeserver_url: "https://matrix.org"
-  #   access_token: "syt_xxx"
-  #   bot_user_id: "@microclaw:matrix.org"
-  #   # allowed_room_ids: ["!roomid:matrix.org"]
-  #   # allowed_user_ids: ["@alice:matrix.org"]   # DM sender allowlist (empty = allow all DMs)
-  #   # mention_required: true
   # whatsapp:
   #   enabled: false
   #   access_token: "EAA..."

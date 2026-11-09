@@ -28,8 +28,6 @@ use crate::http_client::llm_user_agent;
 use microclaw_core::error::MicroClawError;
 use microclaw_core::text::floor_char_boundary;
 
-#[cfg(feature = "channel-matrix")]
-use crate::channels::matrix;
 use crate::channels::{
     dingtalk, email, feishu, imessage, irc, nostr, qq, signal, slack, weixin, whatsapp,
 };
