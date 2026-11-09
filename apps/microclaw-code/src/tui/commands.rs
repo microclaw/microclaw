@@ -1061,7 +1061,11 @@ impl App {
                 });
             }
         }
-        for preset in microclaw_code_core::presets::all() {
+        // Family ids such as `claude-sonnet` or `qwen` are not model names.
+        for preset in microclaw_code_core::presets::all()
+            .iter()
+            .filter(|p| p.model_name)
+        {
             entries.push(Entry {
                 label: preset.id.to_string(),
                 detail: format!(

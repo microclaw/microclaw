@@ -190,6 +190,29 @@ fn flatten_prompt(blocks: &[ContentBlock]) -> String {
     parts.join("\n\n")
 }
 
+/// The tool call a permission request is about. A call that is already on
+/// screen keeps its own title (the command, the file), because the client
+/// applies these fields to the call and keeps them after the answer; only an
+/// approval with no visible call gets an "Allow <tool>?" title.
+fn permission_call(running: Option<String>, approval: &PendingApproval) -> ToolCallUpdate {
+    let mut fields = ToolCallUpdateFields::new();
+    let call_id = match running {
+        Some(call_id) => call_id,
+        None => {
+            fields = fields.title(format!("Allow {}?", approval.tool));
+            approval.approval_id.clone()
+        }
+    };
+    if let Some(preview) = &approval.preview {
+        let mut text = format!("```\n{preview}\n```");
+        if let Some(advisory) = &approval.advisory {
+            text.push_str(&format!("\n{advisory}"));
+        }
+        fields = fields.content(vec![ToolCallContent::from(text)]);
+    }
+    ToolCallUpdate::new(call_id, fields)
+}
+
 fn permission_options(approval: &PendingApproval) -> Vec<PermissionOption> {
     approval
         .options
@@ -284,8 +307,8 @@ fn model_choices(project: &ProjectEngine, current: &str) -> Vec<(String, String)
     }
     if let Some(provider) = microclaw_code_core::presets::lookup(current).map(|p| p.provider) {
         for preset in microclaw_code_core::presets::all() {
-            // Family ids such as `deepseek` or `claude` are not model names.
-            if preset.provider == provider && preset.id.contains('-') {
+            // Family ids such as `claude-sonnet` or `deepseek` are not model names.
+            if preset.provider == provider && preset.model_name {
                 push(preset.id.to_string(), &mut out);
             }
         }
@@ -969,20 +992,9 @@ impl Agent {
         approval: &PendingApproval,
         controls: mpsc::UnboundedSender<Control>,
     ) {
-        let call_id = mapper
-            .running_call(&approval.tool)
-            .unwrap_or_else(|| approval.approval_id.clone());
-        let mut fields = ToolCallUpdateFields::new().title(format!("Allow {}?", approval.tool));
-        if let Some(preview) = &approval.preview {
-            let mut text = format!("```\n{preview}\n```");
-            if let Some(advisory) = &approval.advisory {
-                text.push_str(&format!("\n{advisory}"));
-            }
-            fields = fields.content(vec![ToolCallContent::from(text)]);
-        }
         let request = RequestPermissionRequest::new(
             SessionId::new(id.to_string()),
-            ToolCallUpdate::new(call_id, fields),
+            permission_call(mapper.running_call(&approval.tool), approval),
             permission_options(approval),
         );
         let conn = self.conn.clone();
@@ -1041,6 +1053,20 @@ mod tests {
                 ("3".to_string(), PermissionOptionKind::RejectOnce),
             ]
         );
+    }
+
+    #[test]
+    fn a_permission_request_keeps_the_title_of_a_visible_call() {
+        let approval = PendingApproval::from_event("a", "bash", Some("cargo test"), &[], None);
+        // Zed keeps the fields of the request after the answer, so a call on
+        // screen must keep its command as the title.
+        let on_screen = permission_call(Some("toolu_1".into()), &approval);
+        assert_eq!(on_screen.tool_call_id.0.as_ref(), "toolu_1");
+        assert_eq!(on_screen.fields.title, None);
+        assert!(on_screen.fields.content.is_some());
+        let unseen = permission_call(None, &approval);
+        assert_eq!(unseen.tool_call_id.0.as_ref(), "a");
+        assert_eq!(unseen.fields.title.as_deref(), Some("Allow bash?"));
     }
 
     #[test]

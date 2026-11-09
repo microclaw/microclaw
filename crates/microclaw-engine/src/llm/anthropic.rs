@@ -304,8 +304,20 @@ pub(crate) fn process_anthropic_stream_event(
             {
                 *stop_reason = Some(reason.to_string());
             }
+            // The final usage repeats the input counts in newer API versions;
+            // older ones send only `output_tokens`, which must not wipe the
+            // input counts from `message_start`.
             if let Some(u) = v.get("usage") {
-                *usage = usage_from_json(u);
+                match usage_from_json(u) {
+                    Some(full) => *usage = Some(full),
+                    None => {
+                        if let (Some(current), Some(output)) =
+                            (usage.as_mut(), u.get("output_tokens").and_then(json_u64))
+                        {
+                            current.output_tokens = u32::try_from(output).unwrap_or(u32::MAX);
+                        }
+                    }
+                }
             }
         }
         "message_start" => {
@@ -315,6 +327,16 @@ pub(crate) fn process_anthropic_stream_event(
         }
         _ => {}
     }
+}
+
+/// Anthropic's `input_tokens` leaves out the prompt-cache reads and writes;
+/// add them so `input_tokens` is the whole prompt, as with OpenAI-compatible
+/// providers (see [`usage_from_json`]).
+pub(crate) fn count_cached_input(usage: &mut Usage) {
+    usage.input_tokens = usage
+        .input_tokens
+        .saturating_add(usage.cache_read_input_tokens)
+        .saturating_add(usage.cache_creation_input_tokens);
 }
 
 #[derive(Debug, Deserialize)]
@@ -393,9 +415,12 @@ impl LlmProvider for AnthropicProvider {
 
             if status.is_success() {
                 let body = response.text().await?;
-                let parsed: MessagesResponse = serde_json::from_str(&body).map_err(|e| {
+                let mut parsed: MessagesResponse = serde_json::from_str(&body).map_err(|e| {
                     MicroClawError::LlmApi(format!("Failed to parse response: {e}\nBody: {body}"))
                 })?;
+                if let Some(usage) = parsed.usage.as_mut() {
+                    count_cached_input(usage);
+                }
                 return Ok(parsed);
             }
 
@@ -478,6 +503,79 @@ mod tests {
     use super::*;
     #[allow(unused_imports)]
     use crate::llm::test_prelude::*;
+
+    fn feed(events: &[serde_json::Value]) -> Option<Usage> {
+        let mut stop = None;
+        let mut usage = None;
+        let mut texts = std::collections::HashMap::new();
+        let mut tools = std::collections::HashMap::new();
+        let mut order = Vec::new();
+        for event in events {
+            process_anthropic_stream_event(
+                &event.to_string(),
+                None,
+                &mut stop,
+                &mut usage,
+                &mut texts,
+                &mut tools,
+                &mut order,
+            );
+        }
+        usage
+    }
+
+    #[test]
+    fn stream_usage_counts_cached_prompt_tokens_as_input() {
+        let usage = feed(&[
+            serde_json::json!({"type": "message_start", "message": {"usage": {
+                "input_tokens": 14,
+                "cache_read_input_tokens": 9000,
+                "cache_creation_input_tokens": 500,
+                "output_tokens": 1
+            }}}),
+            serde_json::json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 120}}),
+        ])
+        .expect("usage");
+        assert_eq!(usage.input_tokens, 9514);
+        assert_eq!(usage.output_tokens, 120);
+        assert_eq!(usage.cache_read_input_tokens, 9000);
+    }
+
+    #[test]
+    fn stream_usage_takes_a_full_final_usage() {
+        let usage = feed(&[
+            serde_json::json!({"type": "message_start", "message": {"usage": {
+                "input_tokens": 14, "output_tokens": 1
+            }}}),
+            serde_json::json!({"type": "message_delta", "usage": {
+                "input_tokens": 14,
+                "cache_read_input_tokens": 9000,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 120
+            }}),
+        ])
+        .expect("usage");
+        assert_eq!(usage.input_tokens, 9014);
+        assert_eq!(usage.output_tokens, 120);
+    }
+
+    #[test]
+    fn non_streamed_usage_counts_cached_prompt_tokens_as_input() {
+        let mut parsed: MessagesResponse = serde_json::from_value(serde_json::json!({
+            "content": [],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 300,
+                "cache_creation_input_tokens": 40
+            }
+        }))
+        .unwrap();
+        count_cached_input(parsed.usage.as_mut().unwrap());
+        assert_eq!(parsed.usage.unwrap().input_tokens, 350);
+    }
 
     #[test]
     fn test_resolve_anthropic_messages_url_defaults() {

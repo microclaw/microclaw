@@ -4,7 +4,35 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
-## Unreleased
+## 0.27.1 - 2026-11-09
+
+Fixes found by testing MicroClaw Code 0.27.0 in Zed and in the terminal
+with Anthropic's `claude-opus-5`, including image prompts.
+
+### Fixed
+
+- **Anthropic usage left out prompt-cache tokens** (all products).
+  Anthropic's `input_tokens` excludes cache reads and writes, so with
+  prompt caching a request counted only a few input tokens. Token counts
+  and costs were too low, `/context` and the context meter showed 0%, and
+  mid-turn context-pressure compaction measured the wrong number. Cache
+  reads and writes now count as input, streamed and not, as they already
+  did for OpenAI-compatible providers. A final `message_delta` that carries
+  only `output_tokens` no longer drops the input count.
+- MicroClaw Code's model pickers (Zed's model selector and the TUI
+  `/model` list) offered preset family names such as `claude-sonnet`,
+  `claude-opus` and `claude-1m`. These are not model names, and choosing
+  one failed with `not_found_error`. The pickers now offer only presets
+  that are real model names (`ModelPreset::model_name`).
+- In Zed, a shell command that needed approval kept the title
+  "Allow bash?" after the answer. The permission request now keeps the
+  call's own title, the command; only an approval with no visible call is
+  titled "Allow <tool>?".
+- A failed run in `mccode acp`, such as an unknown model or a provider
+  error, was reported as a thought or an info notice, so the turn looked
+  empty. It is now part of the reply ("Error: …").
+- Tool titles in `mccode acp` are Markdown code spans, so a path like
+  `calc/__init__.py` no longer renders as bold "init".
 
 ## 0.27.0 - 2026-11-07
 

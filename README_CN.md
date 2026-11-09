@@ -100,7 +100,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.27.0**：MicroClaw Code 在 [Zed](https://zed.dev) 里用起来更顺手了。在 Zed 的 Agent 面板里有模式和模型切换、每次修改的真实 Diff、审批卡片、作为独立卡片显示的项目检查、`/` 命令、上下文用量圆环，以及可导入终端会话的线程历史。终端界面的 `/config` 不再显示完整 API key；文档改为优先推荐 Zed。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.27.0)。
+最新版本为 **v0.27.1**，是 v0.27.0 的修复版本：Anthropic 的 token 统计现在包含提示缓存，用量、费用和上下文圆环都准确了，上下文压缩也会按时触发；在 Zed 里，模型选择器只列出真实的模型名，批准过的命令保留原标题，运行出错会显示在回复里。v0.27.0 让 MicroClaw Code 在 [Zed](https://zed.dev) 里用起来更顺手：Agent 面板里有模式和模型切换、每次修改的真实 Diff、审批卡片、作为独立卡片显示的项目检查、`/` 命令、上下文用量圆环，以及可导入终端会话的线程历史。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.27.1)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -149,7 +149,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.27.0", features = ["full"] }
+microclaw-sdk = { version = "0.27.1", features = ["full"] }
 ```
 
 ```rust
