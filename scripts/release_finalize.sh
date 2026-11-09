@@ -425,7 +425,7 @@ class Microclaw < Formula
 end
 RUBY
 
-# The full variant (Matrix channel) was removed in 0.27.2. Retire its formula
+# The full variant (Matrix channel) was removed in 0.28.0. Retire its formula
 # and let `brew update` migrate existing installs to microclaw.
 FORMULA_FULL_PATH="$(dirname "$FORMULA_PATH")/microclaw-full.rb"
 if [ -f "$FORMULA_FULL_PATH" ]; then

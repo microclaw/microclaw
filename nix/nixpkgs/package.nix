@@ -22,7 +22,7 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "microclaw";
-  version = "0.27.2";
+  version = "0.28.0";
 
   __structuredAttrs = true;
 

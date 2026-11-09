@@ -142,7 +142,7 @@ brew tap microclaw/tap
 brew install microclaw
 ```
 
-The `microclaw-full` formula was retired in 0.27.2, when the Matrix channel
+The `microclaw-full` formula was retired in 0.28.0, when the Matrix channel
 was removed; `brew update` moves existing installs to `microclaw`.
 
 ## Docker image

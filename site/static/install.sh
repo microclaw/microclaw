@@ -31,7 +31,7 @@ parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --full)
-        # The full variant (Matrix channel) was removed in 0.27.2.
+        # The full variant (Matrix channel) was removed in 0.28.0.
         log "--full is no longer needed: there is one MicroClaw build"
         ;;
       --skip-run)

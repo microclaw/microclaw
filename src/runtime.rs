@@ -43,11 +43,11 @@ use microclaw_engine::observability::metrics::OtlpMetricExporter;
 use microclaw_engine::observability::traces::OtlpTraceExporter;
 use microclaw_engine::storage::db::Database;
 
-/// The Matrix channel was removed in 0.27.2; say so instead of ignoring the
+/// The Matrix channel was removed in 0.28.0; say so instead of ignoring the
 /// block silently.
 fn warn_removed_matrix(config: &Config) {
     if config.channels.contains_key("matrix") {
-        warn!("channels.matrix is ignored: the Matrix channel was removed in MicroClaw 0.27.2");
+        warn!("channels.matrix is ignored: the Matrix channel was removed in MicroClaw 0.28.0");
     }
 }
 

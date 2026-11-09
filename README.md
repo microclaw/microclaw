@@ -108,7 +108,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.27.2**, a security release: SQLite is upgraded for RUSTSEC-2026-0459 and `rmcp` for RUSTSEC-2026-0462, and the Matrix channel and the `microclaw-full` build are removed. v0.27.1 fixed Anthropic token counts (prompt-cache tokens now count as input) and Zed details: real model names only, approved commands keep their titles, run errors appear in the reply. v0.27.0 made MicroClaw Code at home in [Zed](https://zed.dev). See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.27.2).
+The latest release is **v0.28.0**. It removes the Matrix channel and the `microclaw-full` build, and fixes security advisories: SQLite is upgraded for RUSTSEC-2026-0459 and `rmcp` for RUSTSEC-2026-0462. v0.27.1 fixed Anthropic token counts (prompt-cache tokens now count as input) and Zed details: real model names only, approved commands keep their titles, run errors appear in the reply. v0.27.0 made MicroClaw Code at home in [Zed](https://zed.dev). See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.28.0).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -157,7 +157,7 @@ Worker support without pulling in the Server, Web console, or concrete channel a
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.27.2", features = ["full"] }
+microclaw-sdk = { version = "0.28.0", features = ["full"] }
 ```
 
 ```rust

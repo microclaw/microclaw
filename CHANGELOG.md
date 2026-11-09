@@ -4,11 +4,11 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
-## 0.27.2 - 2026-11-09
+## 0.28.0 - 2026-11-09
 
-Security fixes, and the Matrix channel is removed: its SDK pinned an
-SQLite version with a known vulnerability for every product built from
-this repository, and nothing showed that anyone used it.
+The Matrix channel is removed, and security advisories are fixed. Matrix
+went because its SDK pinned a vulnerable SQLite for every product built
+from this repository, and nothing showed that anyone used it.
 
 ### Removed
 

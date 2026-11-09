@@ -96,7 +96,7 @@ function Wait-ForProcessExit([int]$ProcessId) {
 
 $arch = Resolve-Arch
 if ($Full.IsPresent) {
-  # The full variant (Matrix channel) was removed in 0.27.2.
+  # The full variant (Matrix channel) was removed in 0.28.0.
   Write-Info "-Full is no longer needed: there is one MicroClaw build"
 }
 Write-Info "Installing microclaw for windows/$arch..."
