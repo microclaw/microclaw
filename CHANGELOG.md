@@ -4,7 +4,7 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
-## Unreleased
+## 0.27.1 - 2026-11-09
 
 Fixes found by testing MicroClaw Code 0.27.0 in Zed and in the terminal
 with Anthropic's `claude-opus-5`, including image prompts.

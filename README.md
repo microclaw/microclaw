@@ -108,7 +108,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.27.0**: MicroClaw Code is at home in [Zed](https://zed.dev). In Zed's Agent Panel it has mode and model pickers, real diffs of every edit, approval cards, project checks as their own cards, `/` commands, a context meter and thread history that imports terminal sessions. The terminal UI masks API keys in `/config`, and the docs now recommend Zed first. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.27.0).
+The latest release is **v0.27.1**, a fix release for v0.27.0. Anthropic token counts now include prompt-cache tokens, so usage, cost and the context meter are right and compaction starts on time. In Zed, the model picker lists only real model names, approved commands keep their titles, and run errors appear in the reply. v0.27.0 made MicroClaw Code at home in [Zed](https://zed.dev): in Zed's Agent Panel it has mode and model pickers, real diffs of every edit, approval cards, project checks as their own cards, `/` commands, a context meter and thread history that imports terminal sessions. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.27.1).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -157,7 +157,7 @@ Worker support without pulling in the Server, Web console, or concrete channel a
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.27.0", features = ["full"] }
+microclaw-sdk = { version = "0.27.1", features = ["full"] }
 ```
 
 ```rust
