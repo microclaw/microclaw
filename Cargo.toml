@@ -86,7 +86,7 @@ prost = "0.13"
 matrix-sdk = { version = "0.19.1", optional = true, default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "rustls-aws-lc-rs", "sqlite", "bundled-sqlite"] }
 clap = { version = "4.6", features = ["derive"] }
 http = "1"
-rmcp = { version = "1.7", features = [
+rmcp = { version = "3.9", features = [
     "client",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",

@@ -4,6 +4,19 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Security
+
+- `rmcp` 3.9 (from 1.8) for RUSTSEC-2026-0462: the MCP Streamable HTTP
+  client read response bodies with no size limit, so a malicious or
+  compromised MCP server could exhaust memory, even during `initialize`.
+  Successful JSON bodies are now capped at 16 MiB and error bodies at
+  64 KiB. Affects the Server, MicroClaw Code and the SDK wherever HTTP MCP
+  servers are configured.
+- `openssl` 0.10.82 (from 0.10.76) for RUSTSEC-2026-0463, an out-of-bounds
+  write in `aes::unwrap_key`; it reaches the build through `native-tls`.
+
 ## 0.27.1 - 2026-11-09
 
 Fixes found by testing MicroClaw Code 0.27.0 in Zed and in the terminal
