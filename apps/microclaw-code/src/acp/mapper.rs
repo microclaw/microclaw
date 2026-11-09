@@ -126,6 +126,19 @@ fn reverse_apply(current: &str, diff: &str) -> Option<String> {
     Some(out)
 }
 
+/// `text` as a Markdown code span, with a fence longer than any backtick run
+/// inside it.
+fn code_span(text: &str) -> String {
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest + 1);
+    let pad = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{pad}{text}{pad}{fence}")
+}
+
 fn thought(text: String) -> SessionUpdate {
     SessionUpdate::AgentThoughtChunk(ContentChunk::new(text.into()))
 }
@@ -207,9 +220,16 @@ impl UpdateMapper {
                 self.checks += 1;
                 let id = format!("check-{}", self.checks);
                 vec![SessionUpdate::ToolCall(
-                    ToolCall::new(id, format!("Check `{}`: {}", check.name, check.run))
-                        .kind(ToolKind::Execute)
-                        .status(ToolCallStatus::InProgress),
+                    ToolCall::new(
+                        id,
+                        format!(
+                            "Check {}: {}",
+                            code_span(&check.name),
+                            code_span(&check.run)
+                        ),
+                    )
+                    .kind(ToolKind::Execute)
+                    .status(ToolCallStatus::InProgress),
                 )]
             }
             Update::CheckFinished(outcome) => {
@@ -242,6 +262,12 @@ impl UpdateMapper {
                 "\n\nCheck `{}` still fails after the fix rounds ({}).",
                 outcome.check.name,
                 outcome.status_label()
+            ))],
+            // A failed run (an unknown model, a provider error) must be seen:
+            // as a notice or a thought a client may show it folded or not at all.
+            Update::Notice(text) if text.starts_with("error: ") => vec![message(format!(
+                "\n\nError: {}",
+                text.trim_start_matches("error: ")
             ))],
             Update::Notice(text) if self.support.notices => {
                 let (title, detail) = match text.split_once('\n') {
@@ -303,9 +329,10 @@ impl UpdateMapper {
                 let title = if summary.is_empty() {
                     name.clone()
                 } else if name == "bash" {
-                    format!("`{summary}`")
+                    code_span(&summary)
                 } else {
-                    format!("{name}: {summary}")
+                    // Clients render titles as Markdown: `__init__.py` would turn bold.
+                    format!("{name}: {}", code_span(&summary))
                 };
                 let mut call = ToolCall::new(call_id.clone(), title)
                     .kind(tool_kind(name))
@@ -695,13 +722,57 @@ mod tests {
             auto: true,
             timeout_secs: None,
         };
-        assert!(matches!(
-            mapper.map(&Update::CheckStarted(check))[..],
-            [SessionUpdate::ToolCall(_)]
-        ));
+        let started = mapper.map(&Update::CheckStarted(check));
+        let [SessionUpdate::ToolCall(call)] = &started[..] else {
+            panic!("{started:?}");
+        };
+        assert_eq!(call.title, "Check `tests`: `cargo test`");
         assert_eq!(
             patch_paths("*** Begin Patch\n*** Update File: src/a.rs\n@@\n*** Add File: b.rs\n"),
             vec!["src/a.rs", "b.rs"]
         );
+    }
+
+    #[test]
+    fn run_errors_are_messages_whatever_the_client_supports() {
+        for support in [
+            ClientSupport::default(),
+            ClientSupport {
+                notices: true,
+                compaction: true,
+            },
+        ] {
+            let mut mapper = UpdateMapper::new("/repo", support);
+            let out = mapper.map(&Update::Notice(
+                "error: LLM API error: not_found_error: model: claude-sonnet".into(),
+            ));
+            let [SessionUpdate::AgentMessageChunk(chunk)] = &out[..] else {
+                panic!("{out:?}");
+            };
+            let ContentBlock::Text(text) = &chunk.content else {
+                panic!("{chunk:?}");
+            };
+            assert!(text.text.contains("Error: LLM API error"), "{}", text.text);
+        }
+    }
+
+    #[test]
+    fn tool_titles_are_code_spans() {
+        let mut mapper = UpdateMapper::new("/repo", ClientSupport::default());
+        let title = |out: Vec<SessionUpdate>| match &out[..] {
+            [SessionUpdate::ToolCall(call)] => call.title.clone(),
+            other => panic!("{other:?}"),
+        };
+        let read = mapper.map(&runtime(
+            1,
+            RuntimeEvent::ToolStart {
+                call_id: "r".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "calc/__init__.py"}),
+            },
+        ));
+        assert_eq!(title(read), "read_file: `calc/__init__.py`");
+        assert_eq!(code_span("a `b` c"), "``a `b` c``");
+        assert_eq!(code_span("`x"), "`` `x ``");
     }
 }

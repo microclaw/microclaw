@@ -30,6 +30,10 @@ pub struct ModelPreset {
     pub image_input: bool,
     /// Has a reasoning / thinking mode.
     pub reasoning: bool,
+    /// The id is itself a model name the provider accepts (`deepseek-v4-pro`,
+    /// `gpt-5`), so a model picker may offer it. Family presets such as
+    /// `claude-sonnet` or `qwen` only describe the names that contain them.
+    pub model_name: bool,
     pub notes: &'static str,
 }
 
@@ -52,8 +56,32 @@ const fn preset(
         output_price_per_mtok: None,
         image_input,
         reasoning,
+        model_name: false,
         notes,
     }
+}
+
+/// A preset whose id is also a model name (see [`ModelPreset::model_name`]).
+const fn model(
+    id: &'static str,
+    patterns: &'static [&'static str],
+    provider: &'static str,
+    context_window: u32,
+    image_input: bool,
+    reasoning: bool,
+    notes: &'static str,
+) -> ModelPreset {
+    let mut preset = preset(
+        id,
+        patterns,
+        provider,
+        context_window,
+        image_input,
+        reasoning,
+        notes,
+    );
+    preset.model_name = true;
+    preset
 }
 
 /// Presets in match order: specific families before general ones (the
@@ -105,7 +133,7 @@ static PRESETS: &[ModelPreset] = &[
         true,
         "Other Claude models",
     ),
-    preset(
+    model(
         "gpt-5",
         &["gpt-5*"],
         "openai",
@@ -114,7 +142,7 @@ static PRESETS: &[ModelPreset] = &[
         true,
         "Includes gpt-5.x and gpt-5-codex",
     ),
-    preset(
+    model(
         "gpt-4.1",
         &["gpt-4.1*"],
         "openai",
@@ -123,9 +151,9 @@ static PRESETS: &[ModelPreset] = &[
         false,
         "",
     ),
-    preset("gpt-4o", &["gpt-4o*"], "openai", 128_000, true, false, ""),
-    preset("o4-mini", &["o4-mini*"], "openai", 200_000, true, true, ""),
-    preset("o3", &["o3", "o3-*"], "openai", 200_000, true, true, ""),
+    model("gpt-4o", &["gpt-4o*"], "openai", 128_000, true, false, ""),
+    model("o4-mini", &["o4-mini*"], "openai", 200_000, true, true, ""),
+    model("o3", &["o3", "o3-*"], "openai", 200_000, true, true, ""),
     preset(
         "codex",
         &["*codex*"],
@@ -136,7 +164,7 @@ static PRESETS: &[ModelPreset] = &[
         "",
     ),
     preset("gemini", &["*gemini*"], "google", 1_000_000, true, true, ""),
-    preset(
+    model(
         "deepseek-v4-flash",
         &["deepseek-v4*flash*"],
         "deepseek",
@@ -145,7 +173,7 @@ static PRESETS: &[ModelPreset] = &[
         true,
         "DeepSeek V4 Flash (fast, cheaper tier)",
     ),
-    preset(
+    model(
         "deepseek-v4-pro",
         &["deepseek-v4*"],
         "deepseek",
@@ -154,7 +182,7 @@ static PRESETS: &[ModelPreset] = &[
         true,
         "DeepSeek V4 / V4.1 Pro",
     ),
-    preset(
+    model(
         "deepseek-flash",
         &["deepseek-flash*"],
         "deepseek",
@@ -163,7 +191,7 @@ static PRESETS: &[ModelPreset] = &[
         true,
         "Alias of the current DeepSeek Flash model",
     ),
-    preset(
+    model(
         "deepseek-reasoner",
         &["deepseek-reasoner*", "deepseek-r1*"],
         "deepseek",
@@ -217,7 +245,7 @@ static PRESETS: &[ModelPreset] = &[
         false,
         "",
     ),
-    preset(
+    model(
         "glm-4.6",
         &["*glm-4.6*"],
         "zhipu",
@@ -235,7 +263,7 @@ static PRESETS: &[ModelPreset] = &[
         false,
         "GLM family, e.g. glm-4.7",
     ),
-    preset("grok-4", &["*grok-4*"], "xai", 256_000, false, true, ""),
+    model("grok-4", &["*grok-4*"], "xai", 256_000, false, true, ""),
     preset("grok", &["*grok*"], "xai", 128_000, false, false, ""),
     preset(
         "minimax",
@@ -419,5 +447,30 @@ mod tests {
         assert!(all().iter().all(|p| p.input_price_per_mtok.is_none()
             && p.output_price_per_mtok.is_none()
             && p.context_window > 0));
+    }
+
+    #[test]
+    fn only_real_model_names_are_offered() {
+        let offered: Vec<_> = all()
+            .iter()
+            .filter(|p| p.model_name)
+            .map(|p| p.id)
+            .collect();
+        for family in [
+            "claude-1m",
+            "claude-opus",
+            "claude-sonnet",
+            "claude-haiku",
+            "claude",
+        ] {
+            assert!(!offered.contains(&family), "{family}");
+        }
+        for name in ["deepseek-v4-pro", "deepseek-flash", "gpt-5", "o3"] {
+            assert!(offered.contains(&name), "{name}");
+        }
+        // A model name is one of the names its own preset matches.
+        for p in all().iter().filter(|p| p.model_name) {
+            assert_eq!(lookup(p.id).map(|found| found.id), Some(p.id), "{}", p.id);
+        }
     }
 }

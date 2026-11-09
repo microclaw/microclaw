@@ -19,11 +19,13 @@ pub(crate) fn usage_from_json(v: &serde_json::Value) -> Option<Usage> {
         .or_else(|| v.get("completion_tokens").and_then(json_u64))
         .unwrap_or(0);
     // Cache accounting: OpenAI-compatible providers nest it under
-    // `prompt_tokens_details`/`input_tokens_details`, Anthropic-style providers
-    // report it as top-level fields.
-    let cache_read = v
-        .get("cache_read_input_tokens")
-        .and_then(json_u64)
+    // `prompt_tokens_details`/`input_tokens_details` and count it inside
+    // `prompt_tokens`; Anthropic-style providers report it as top-level fields
+    // that `input_tokens` leaves out, so those are added to the input here.
+    // `input_tokens` is then the whole prompt either way, which is what token
+    // budgets, context pressure and usage reports need.
+    let anthropic_read = v.get("cache_read_input_tokens").and_then(json_u64);
+    let cache_read = anthropic_read
         .or_else(|| {
             v.get("prompt_tokens_details")
                 .and_then(|d| d.get("cached_tokens"))
@@ -39,6 +41,9 @@ pub(crate) fn usage_from_json(v: &serde_json::Value) -> Option<Usage> {
         .get("cache_creation_input_tokens")
         .and_then(json_u64)
         .unwrap_or(0);
+    let input = input
+        .saturating_add(anthropic_read.unwrap_or(0))
+        .saturating_add(cache_creation);
     Some(Usage {
         input_tokens: u32::try_from(input).unwrap_or(u32::MAX),
         output_tokens: u32::try_from(output).unwrap_or(u32::MAX),
@@ -399,6 +404,20 @@ mod tests {
         let usage = usage_from_json(&v).expect("usage should parse");
         assert_eq!(usage.cache_read_input_tokens, 70);
         assert_eq!(usage.cache_creation_input_tokens, 30);
+        // Anthropic leaves cache reads and writes out of `input_tokens`;
+        // the whole prompt is 100 + 70 + 30.
+        assert_eq!(usage.input_tokens, 200);
+    }
+
+    #[test]
+    fn test_usage_from_json_keeps_openai_cached_tokens_inside_the_prompt() {
+        let v = json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "prompt_tokens_details": { "cached_tokens": 64 }
+        });
+        let usage = usage_from_json(&v).expect("usage should parse");
+        assert_eq!(usage.input_tokens, 100);
     }
 
     #[test]
