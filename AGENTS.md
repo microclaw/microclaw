@@ -46,7 +46,7 @@ The repository pins Rust in `rust-toolchain.toml`. Use that toolchain rather tha
 - `a2a.rs`, `acp.rs`, `acp_subagent.rs`: agent-to-agent protocols and subagent execution
 - `hooks.rs`: hook discovery, policy, runtime, and CLI
 - `web.rs`, `web/`: web routes, auth, sessions, streaming, tasks, skills, governance, metrics, and WebSockets
-- `channels/`: Telegram, Discord, Slack, Feishu, WeChat, DingTalk, QQ, WhatsApp, Signal, Matrix, IRC, Nostr, iMessage, and email adapters
+- `channels/`: Telegram, Discord, Slack, Feishu, WeChat, DingTalk, QQ, WhatsApp, Signal, IRC, Nostr, iMessage, and email adapters
 
 ### Workspace crates (`crates/`)
 
@@ -153,7 +153,7 @@ npm --prefix web run build
 node scripts/generate_docs_artifacts.mjs --check --no-website
 ```
 
-Useful focused forms include `cargo test <test_name>`, `cargo test -p <crate>`, and `cargo check -p <crate>`. Matrix support is feature-gated; use `--all-features` or `--features channel-matrix` when changing it.
+Useful focused forms include `cargo test <test_name>`, `cargo test -p <crate>`, and `cargo check -p <crate>`.
 
 For documentation-only changes, at minimum verify local links, commands, file paths, generated-doc drift, and parity between `README.md` and `README_CN.md` where the content is shared.
 

@@ -57,9 +57,6 @@ fn infer_channel_from_chat_type(chat_type: &str) -> Option<&'static str> {
     if chat_type.starts_with("feishu_") {
         return Some("feishu");
     }
-    if chat_type.starts_with("matrix_") {
-        return Some("matrix");
-    }
     if chat_type.starts_with("whatsapp_") {
         return Some("whatsapp");
     }

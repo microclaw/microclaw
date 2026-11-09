@@ -208,9 +208,9 @@ discord:
         let mut config = test_config();
         config.clawhub.agent_tools_enabled = false;
         config.channels.insert(
-            "matrix".into(),
+            "slack".into(),
             serde_yaml::from_str(
-                "enabled: true\nhomeserver_url: http://127.0.0.1:8008\naccess_token: tok\nbot_user_id: '@bot:localhost'\n",
+                "enabled: true\napi_base_url: http://127.0.0.1:8008\nbot_token: tok\n",
             )
             .unwrap(),
         );

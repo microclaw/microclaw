@@ -136,7 +136,7 @@ write_ai_disclosure() {
 write_template_body() {
   local template
   if $INIT_MODE; then
-    echo "Adds [MicroClaw](https://github.com/microclaw/microclaw), a self-hosted Rust chat agent that runs on Telegram, Discord, Slack, Feishu/Lark, Matrix and its own built-in web UI. It supports tool execution, scheduled tasks and persistent memory."
+    echo "Adds [MicroClaw](https://github.com/microclaw/microclaw), a self-hosted Rust chat agent that runs on Telegram, Discord, Slack, Feishu/Lark and its own built-in web UI. It supports tool execution, scheduled tasks and persistent memory."
   else
     echo "Updates [MicroClaw](https://github.com/microclaw/microclaw) from ${OLD_VERSION} to ${VERSION}."
   fi

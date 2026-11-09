@@ -31,11 +31,6 @@ expected=(
   "microclaw-${release_version}-x86_64-apple-darwin.tar.gz"
   "microclaw-${release_version}-x86_64-linux-gnu.tar.gz"
   "microclaw-${release_version}-x86_64-windows-msvc.zip"
-  "microclaw-full-${release_version}-aarch64-apple-darwin.tar.gz"
-  "microclaw-full-${release_version}-aarch64-linux-gnu.tar.gz"
-  "microclaw-full-${release_version}-x86_64-apple-darwin.tar.gz"
-  "microclaw-full-${release_version}-x86_64-linux-gnu.tar.gz"
-  "microclaw-full-${release_version}-x86_64-windows-msvc.zip"
   "reliability-scorecard-${release_tag}.json"
   "reliability-scorecard-${release_tag}.md"
 )

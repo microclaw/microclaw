@@ -13,24 +13,12 @@ This guide covers installation, first-time configuration, startup, and the most 
 curl -fsSL https://microclaw.org/install.sh | bash
 ```
 
-Install the full build, which adds Matrix support:
-
-```sh
-curl -fsSL https://microclaw.org/install.sh | bash -s -- --full
-```
-
 The script downloads the matching prebuilt release asset. It does not fall back to Homebrew or Cargo.
 
 ### Windows PowerShell installer
 
 ```powershell
 iwr https://microclaw.org/install.ps1 -UseBasicParsing | iex
-```
-
-Install the full build:
-
-```powershell
-& ([scriptblock]::Create((iwr https://microclaw.org/install.ps1 -UseBasicParsing).Content)) -Full
 ```
 
 ### Homebrew on macOS
@@ -41,8 +29,6 @@ Install MicroClaw Server:
 brew tap microclaw/tap
 brew install microclaw
 ```
-
-Use `brew install microclaw-full` when Matrix support is required.
 
 ### MicroClaw Code
 
@@ -67,14 +53,13 @@ cd microclaw
 cargo build --release
 ```
 
-Build optional variants when needed:
+Build with optional features when needed:
 
 ```sh
-cargo build --release --features full
 cargo build --release --features sqlite-vec
 ```
 
-`full` currently enables Matrix. `sqlite-vec` enables semantic-memory vector indexing.
+`sqlite-vec` enables semantic-memory vector indexing.
 
 ### Linux compatibility
 

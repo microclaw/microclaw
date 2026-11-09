@@ -610,10 +610,7 @@ pub(crate) fn collect_enabled_channel_endpoints(value: &serde_yaml::Value, out: 
             continue;
         };
         let key = key.to_ascii_lowercase();
-        let is_endpoint_key = key.contains("url")
-            || key.contains("endpoint")
-            || key == "homeserver"
-            || key == "homeserver_url";
+        let is_endpoint_key = key.contains("url") || key.contains("endpoint");
         if is_endpoint_key {
             if let Some(endpoint) = value
                 .as_str()
@@ -1317,7 +1314,6 @@ impl Config {
             ),
             ("slack", self.channels.contains_key("slack")),
             ("feishu", self.channels.contains_key("feishu")),
-            ("matrix", self.channels.contains_key("matrix")),
             ("irc", self.channels.contains_key("irc")),
             ("web", self.web_enabled || self.channels.contains_key("web")),
         ];
@@ -3007,22 +3003,6 @@ channels:
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
         assert!(config.channel_enabled("irc"));
-    }
-
-    #[test]
-    fn test_post_deserialize_matrix_only() {
-        let yaml = r##"
-api_key: key
-channels:
-  matrix:
-    enabled: true
-    homeserver_url: "https://matrix.example.com"
-    access_token: "syt_xxx"
-    bot_user_id: "@microclaw:example.com"
-"##;
-        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
-        config.post_deserialize().unwrap();
-        assert!(config.channel_enabled("matrix"));
     }
 
     #[test]

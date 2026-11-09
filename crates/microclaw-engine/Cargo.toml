@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-engine"
-version = "0.27.1"
+version = "0.27.2"
 edition = "2021"
 license.workspace = true
 authors.workspace = true
@@ -19,12 +19,12 @@ sqlite-vec = ["dep:sqlite-vec"]
 journald = ["dep:tracing-journald"]
 
 [dependencies]
-microclaw-core = { version = "0.27.1", path = "../microclaw-core", features = ["http-errors", "sqlite-errors"] }
+microclaw-core = { version = "0.27.2", path = "../microclaw-core", features = ["http-errors", "sqlite-errors"] }
 tokio = { version = "1", features = ["full"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
 reqwest = { version = "0.12", features = ["json", "blocking", "stream", "multipart"] }
-rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

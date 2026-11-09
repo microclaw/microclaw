@@ -138,7 +138,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flavor: [default, full]
+        flavor: [default]
         target:
           - label: linux-x86_64
             # Pinned: the binaries link against the runner's glibc, and the
@@ -217,13 +217,9 @@ jobs:
           if [ "${{ matrix.target.cross }}" = "true" ]; then
             TARGET_ARGS=(--target "${{ matrix.target.target_triple }}")
           fi
-          if [ "${{ matrix.flavor }}" = "full" ]; then
-            cargo build --release --features full "${TARGET_ARGS[@]}"
-          else
-            cargo build --release "${TARGET_ARGS[@]}"
-            # MicroClaw Code ships as its own archive (mccode-<version>-<target>).
-            cargo build --release -p microclaw-code "${TARGET_ARGS[@]}"
-          fi
+          cargo build --release "${TARGET_ARGS[@]}"
+          # MicroClaw Code ships as its own archive (mccode-<version>-<target>).
+          cargo build --release -p microclaw-code "${TARGET_ARGS[@]}"
           if [ "${{ matrix.target.cross }}" = "true" ]; then
             # Packaging reads target/release.
             mkdir -p target/release
@@ -254,21 +250,13 @@ jobs:
             fi
           done
 
-      - name: Prepare packaged binary name (Unix)
-        if: matrix.target.archive_ext == 'tar.gz'
-        shell: bash
-        run: |
-          if [ "${{ matrix.flavor }}" = "full" ]; then
-            cp "target/release/${{ matrix.target.bin }}" "target/release/microclaw-full"
-          fi
-
       - name: Check glibc floor (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           # Release binaries must run on glibc 2.39 (Ubuntu 24.04, Debian 13).
           floor="2.39"
-          for bin in target/release/microclaw target/release/microclaw-full target/release/mccode; do
+          for bin in target/release/microclaw target/release/mccode; do
             [ -f "$bin" ] || continue
             needed="$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n1)"
             echo "$bin needs glibc ${needed}"
@@ -283,50 +271,24 @@ jobs:
         shell: bash
         run: |
           RELEASE_VERSION="${RELEASE_TAG#v}"
-          if [ "${{ matrix.flavor }}" = "full" ]; then
-            ASSET_PREFIX="microclaw-full"
-            PACKAGED_BIN="microclaw-full"
-          else
-            ASSET_PREFIX="microclaw"
-            PACKAGED_BIN="${{ matrix.target.bin }}"
-          fi
-          ASSET_NAME="${ASSET_PREFIX}-${RELEASE_VERSION}-${{ matrix.target.asset_triple }}.tar.gz"
-          tar -czf "$ASSET_NAME" -C target/release "${PACKAGED_BIN}"
+          ASSET_NAME="microclaw-${RELEASE_VERSION}-${{ matrix.target.asset_triple }}.tar.gz"
+          tar -czf "$ASSET_NAME" -C target/release "${{ matrix.target.bin }}"
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
-          if [ "${{ matrix.flavor }}" = "default" ]; then
-            MCCODE_ASSET="mccode-${RELEASE_VERSION}-${{ matrix.target.asset_triple }}.tar.gz"
-            tar -czf "$MCCODE_ASSET" -C target/release mccode
-            echo "MCCODE_ASSET=$MCCODE_ASSET" >> "$GITHUB_ENV"
-          fi
-
-      - name: Prepare packaged binary name (Windows)
-        if: matrix.target.archive_ext == 'zip'
-        shell: pwsh
-        run: |
-          if ("${{ matrix.flavor }}" -eq "full") {
-            Copy-Item "target/release/${{ matrix.target.bin }}" "target/release/microclaw-full.exe" -Force
-          }
+          MCCODE_ASSET="mccode-${RELEASE_VERSION}-${{ matrix.target.asset_triple }}.tar.gz"
+          tar -czf "$MCCODE_ASSET" -C target/release mccode
+          echo "MCCODE_ASSET=$MCCODE_ASSET" >> "$GITHUB_ENV"
 
       - name: Package archive (Windows)
         if: matrix.target.archive_ext == 'zip'
         shell: pwsh
         run: |
           $releaseVersion = $env:RELEASE_TAG -replace '^v', ''
-          if ("${{ matrix.flavor }}" -eq "full") {
-            $assetPrefix = "microclaw-full"
-            $packagedBin = "microclaw-full.exe"
-          } else {
-            $assetPrefix = "microclaw"
-            $packagedBin = "${{ matrix.target.bin }}"
-          }
-          $assetName = "${assetPrefix}-${releaseVersion}-${{ matrix.target.asset_triple }}.zip"
-          Compress-Archive -Path "target/release/${packagedBin}" -DestinationPath $assetName -Force
+          $assetName = "microclaw-${releaseVersion}-${{ matrix.target.asset_triple }}.zip"
+          Compress-Archive -Path "target/release/${{ matrix.target.bin }}" -DestinationPath $assetName -Force
           "ASSET_NAME=$assetName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          if ("${{ matrix.flavor }}" -eq "default") {
-            $mccodeAsset = "mccode-${releaseVersion}-${{ matrix.target.asset_triple }}.zip"
-            Compress-Archive -Path "target/release/mccode.exe" -DestinationPath $mccodeAsset -Force
-            "MCCODE_ASSET=$mccodeAsset" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          }
+          $mccodeAsset = "mccode-${releaseVersion}-${{ matrix.target.asset_triple }}.zip"
+          Compress-Archive -Path "target/release/mccode.exe" -DestinationPath $mccodeAsset -Force
+          "MCCODE_ASSET=$mccodeAsset" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
@@ -336,7 +298,6 @@ jobs:
           if-no-files-found: error
 
       - name: Upload MicroClaw Code artifact
-        if: matrix.flavor == 'default'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target.label }}-mccode

@@ -108,7 +108,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.27.1**, a fix release for v0.27.0. Anthropic token counts now include prompt-cache tokens, so usage, cost and the context meter are right and compaction starts on time. In Zed, the model picker lists only real model names, approved commands keep their titles, and run errors appear in the reply. v0.27.0 made MicroClaw Code at home in [Zed](https://zed.dev): in Zed's Agent Panel it has mode and model pickers, real diffs of every edit, approval cards, project checks as their own cards, `/` commands, a context meter and thread history that imports terminal sessions. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.27.1).
+The latest release is **v0.27.2**, a security release: SQLite is upgraded for RUSTSEC-2026-0459 and `rmcp` for RUSTSEC-2026-0462, and the Matrix channel and the `microclaw-full` build are removed. v0.27.1 fixed Anthropic token counts (prompt-cache tokens now count as input) and Zed details: real model names only, approved commands keep their titles, run errors appear in the reply. v0.27.0 made MicroClaw Code at home in [Zed](https://zed.dev). See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.27.2).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -157,7 +157,7 @@ Worker support without pulling in the Server, Web console, or concrete channel a
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.27.1", features = ["full"] }
+microclaw-sdk = { version = "0.27.2", features = ["full"] }
 ```
 
 ```rust
@@ -194,7 +194,7 @@ the [SDK quickstart](site/docs/sdk-quickstart.md), [concept guide](site/docs/sdk
 
 ### Channels and providers
 
-The runtime includes adapters for Telegram, Discord, Slack, Feishu/Lark, WeChat, DingTalk, QQ, WhatsApp, Signal, Matrix, IRC, Nostr, iMessage, email, and Web. Matrix is enabled by the `full` feature; availability and setup requirements vary by platform.
+The runtime includes adapters for Telegram, Discord, Slack, Feishu/Lark, WeChat, DingTalk, QQ, WhatsApp, Signal, IRC, Nostr, iMessage, email, and Web. Availability and setup requirements vary by platform.
 
 Anthropic has a native provider path. OpenAI, OpenAI Codex, OpenRouter, Ollama, Google, DeepSeek, local servers, and many other services use the shared OpenAI-compatible path. The [generated provider matrix](docs/generated/provider-matrix.md) is the source of truth for current IDs, protocols, defaults, and models.
 

@@ -78,10 +78,8 @@ RUST_LOG=microclaw=debug cargo run -- start
 ## Build
 
 ```sh
-cargo build                              # default (all channels except Matrix, MCP included)
-cargo build --features full              # all integrations (adds Matrix)
+cargo build                              # every channel, MCP included
 cargo build --release                    # release mode
-cargo build --release --features full    # release mode with all integrations
 cargo run -- start
 ```
 

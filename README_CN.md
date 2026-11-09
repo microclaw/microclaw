@@ -100,7 +100,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.27.1**，是 v0.27.0 的修复版本：Anthropic 的 token 统计现在包含提示缓存，用量、费用和上下文圆环都准确了，上下文压缩也会按时触发；在 Zed 里，模型选择器只列出真实的模型名，批准过的命令保留原标题，运行出错会显示在回复里。v0.27.0 让 MicroClaw Code 在 [Zed](https://zed.dev) 里用起来更顺手：Agent 面板里有模式和模型切换、每次修改的真实 Diff、审批卡片、作为独立卡片显示的项目检查、`/` 命令、上下文用量圆环，以及可导入终端会话的线程历史。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.27.1)。
+最新版本为 **v0.27.2**，是一个安全更新：升级 SQLite 修复 RUSTSEC-2026-0459，升级 `rmcp` 修复 RUSTSEC-2026-0462，并移除了 Matrix 通道和 `microclaw-full` 版本。v0.27.1 修正了 Anthropic 的 token 统计（提示缓存现在计入输入），并修好了 Zed 里的几处问题：只列真实模型名、批准过的命令保留原标题、运行出错显示在回复里。v0.27.0 让 MicroClaw Code 在 [Zed](https://zed.dev) 里用起来更顺手。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.27.2)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -149,7 +149,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.27.1", features = ["full"] }
+microclaw-sdk = { version = "0.27.2", features = ["full"] }
 ```
 
 ```rust
@@ -184,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### 渠道与模型提供商
 
-运行时包含 Telegram、Discord、Slack、飞书/Lark、微信、钉钉、QQ、WhatsApp、Signal、Matrix、IRC、Nostr、iMessage、电子邮件和 Web 等适配器。Matrix 由 `full` feature 启用；不同平台的可用性和设置要求有所不同。
+运行时包含 Telegram、Discord、Slack、飞书/Lark、微信、钉钉、QQ、WhatsApp、Signal、IRC、Nostr、iMessage、电子邮件和 Web 等适配器。不同平台的可用性和设置要求有所不同。
 
 Anthropic 使用原生 provider 通路。OpenAI、OpenAI Codex、OpenRouter、Ollama、Google、DeepSeek、本地推理服务等通过统一的 OpenAI-compatible 通路接入。当前 provider ID、协议、默认地址和模型请以[自动生成的 provider 矩阵](docs/generated/provider-matrix.md)为准。
 
