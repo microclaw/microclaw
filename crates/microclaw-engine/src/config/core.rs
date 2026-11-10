@@ -442,7 +442,7 @@ pub struct Config {
     pub web_fetch_validation: WebContentValidationConfig,
     #[serde(default)]
     pub web_fetch_url_validation: WebFetchUrlValidationConfig,
-    /// Pluggable web-search backend (duckduckgo | searxng | brave | tavily | keenable).
+    /// Pluggable web-search backend (duckduckgo | searxng | brave | tavily | keenable | specstream).
     /// Defaults to DuckDuckGo, preserving historical behavior.
     #[serde(default)]
     pub web_search: SearchProviderConfig,
