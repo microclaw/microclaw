@@ -13,7 +13,7 @@ use microclaw_code_core::verify;
 use super::dialogs::{Dialog, Picker, PickerKind};
 use super::popup::Entry;
 use super::transcript::{Item, Tone};
-use super::{App, Goal, RunningTurn, sandbox_label};
+use super::{App, RunningTurn, sandbox_label};
 use crate::format;
 
 pub const SLASH_COMMANDS: &[(&str, &str)] = &[
@@ -22,7 +22,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/plan", "switch to plan mode, optionally with a task"),
     (
         "/goal",
-        "keep working until the goal is met and checks pass: /goal <objective>",
+        "keep working until the goal is met: /goal [--until <cmd>] [--rounds N] <objective>",
     ),
     (
         "/btw",
@@ -431,12 +431,21 @@ impl App {
             "/goal" if rest.is_empty() => match &self.goal {
                 Some(g) => self.transcript.notice(
                     format!(
-                        "goal: {} (round {}/{}) · /goal stop ends it",
-                        g.objective, g.round, g.max_rounds
+                        "goal: {} ({}{}) · /goal stop ends it",
+                        g.spec.objective,
+                        g.progress(),
+                        g.spec
+                            .until
+                            .as_deref()
+                            .map(|u| format!(", until `{u}` succeeds"))
+                            .unwrap_or_default()
                     ),
                     Tone::Info,
                 ),
-                None => self.hint = Some("usage: /goal <objective>".into()),
+                None => {
+                    self.hint =
+                        Some("usage: /goal [--until <command>] [--rounds N] <objective>".into())
+                }
             },
             "/goal" if rest == "stop" || rest == "clear" => {
                 self.goal = None;
@@ -444,17 +453,17 @@ impl App {
             }
             "/goal" if busy => self.busy_hint(),
             "/goal" => {
-                self.goal = Some(Goal {
-                    objective: rest.clone(),
-                    round: 1,
-                    max_rounds: 8,
-                });
-                let prompt = format!(
-                    "Goal: {rest}\n\nWork toward this goal. When it is fully achieved and the project's checks pass, \
-                     end your reply with the line `{}`. If you are blocked, explain why instead.",
-                    super::GOAL_DONE_MARKER
-                );
-                self.start_turn(prompt, Some(format!("goal: {rest}")));
+                use microclaw_code_core::goal::{DEFAULT_MAX_ROUNDS, Goal, GoalSpec};
+                match GoalSpec::parse(&rest, DEFAULT_MAX_ROUNDS) {
+                    Ok(spec) => {
+                        let goal = Goal::new(spec);
+                        let prompt = goal.prompt();
+                        let label = format!("goal: {}", goal.spec.objective);
+                        self.goal = Some(goal);
+                        self.start_turn(prompt, Some(label));
+                    }
+                    Err(e) => self.hint = Some(e),
+                }
             }
             "/configure" if rest.is_empty() => {
                 self.hint = Some("usage: /configure <what to change>".into())

@@ -4,6 +4,28 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Added
+
+- **`/goal` in Zed and in `mccode -p`**, sharing one loop with the terminal
+  UI (`microclaw-code-core::goal`). `--until <command>` makes a command the
+  judge: the goal is reached only when it succeeds, it runs after every
+  round, and its failing output goes into the next round. `--rounds N`
+  sets the limit (default 8). In Zed one prompt runs every round and the
+  stop button ends the goal; `mccode -p "/goal …"` exits 1 when the goal
+  was not reached, and `--json` adds a `goal` object to the result.
+- MicroClaw Code in Zed gains `/btw`, `/check`, `/diff`, `/rewind [N]`,
+  `/status`, `/export` and `/init`, so the common terminal commands work
+  there too. Trust stays a terminal decision (`mccode trust`).
+
+### Changed
+
+- `/goal` is stricter: `GOAL COMPLETE` counts only as the reply's last
+  line, a reply ending in `GOAL BLOCKED: <reason>` stops the goal and says
+  why, and two rounds in a row that change no files stop it as stalled
+  instead of using up the remaining rounds.
+
 ## 0.28.0 - 2026-11-09
 
 The Matrix channel is removed, and security advisories are fixed. Matrix

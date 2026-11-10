@@ -59,7 +59,7 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 
 | Command | What it does |
 |---|---|
-| `/goal <objective>` | Keep working, turn after turn (at most 8), until the agent reports the goal met and the project's checks pass. `/goal stop` ends it. |
+| `/goal [--until <command>] [--rounds N] <objective>` | Keep working, round after round, until the goal is met. The agent ends a reply with `GOAL COMPLETE` (counted only as its last line) when it is done, or with `GOAL BLOCKED: <reason>` when it needs you. With `--until`, the goal is reached only when that command succeeds; it runs after every round and its failing output goes into the next one. Without it, the agent's word counts once the project's checks pass. It also stops after two rounds in a row that changed no files, at the round limit (8 by default), or when a turn fails or is cancelled. `/goal` shows progress and `/goal stop` ends it. Also in Zed and with `-p` (see below). |
 | `/btw <question>` | Answer a side question in a throwaway copy of the conversation, even while a turn runs; the main session is not changed. |
 | `/changes` (F2) | Review the uncommitted changes file by file: revert a single hunk (a backup patch goes to `.git/microclaw/reverted/`), mark files reviewed, and leave comments that become a prompt for the agent. |
 | `/undo` | Restore the files to how they were before the last turn that changed them. The state you leave is checkpointed too. |
@@ -145,6 +145,15 @@ In `-p` mode an approval that needs a person ends the run with exit code 2;
 resume it with `mccode --session <id> -p 1` (approve once) or `-p 3` (deny).
 Exit codes: `0` done, `1` failed / cancelled / checks still failing, `2`
 approval pending.
+
+`mccode -p "/goal [--until <command>] [--rounds N] <objective>"` runs a goal
+without a person: every round prints as usual, the last line says how it
+ended, and the exit code is `1` when the goal was not reached. With `--json`
+the result line carries `"goal": {"reached", "rounds", "summary"}`.
+
+```sh
+mccode -p "/goal --until 'cargo test' make the parser accept trailing commas" --mode auto
+```
 
 ## Project trust
 

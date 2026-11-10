@@ -904,7 +904,16 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     );
                     let prompt =
                         microclaw_code_core::commands::expand(&commands, &prompt).unwrap_or(prompt);
-                    PrintTask::Prompt(prompt.trim().to_string())
+                    match goal_args(&prompt) {
+                        Some(args) => PrintTask::Goal(
+                            microclaw_code_core::goal::GoalSpec::parse(
+                                args,
+                                microclaw_code_core::goal::DEFAULT_MAX_ROUNDS,
+                            )
+                            .map_err(|e| anyhow::anyhow!(e))?,
+                        ),
+                        None => PrintTask::Prompt(prompt.trim().to_string()),
+                    }
                 }
             };
             print_mode(session, &mut index, task, cli.json, style).await
@@ -987,6 +996,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 /// What a non-interactive run does.
 enum PrintTask {
     Prompt(String),
+    /// `/goal …`: rounds until the goal is reached or stops.
+    Goal(microclaw_code_core::goal::GoalSpec),
     Review(Option<String>),
     ReviewPr {
         number: u64,
@@ -1004,6 +1015,7 @@ async fn print_mode(
 ) -> anyhow::Result<ExitCode> {
     let label = match &task {
         PrintTask::Prompt(prompt) => prompt.clone(),
+        PrintTask::Goal(spec) => format!("/goal {}", spec.objective),
         PrintTask::Review(focus) => format!("/review {}", focus.as_deref().unwrap_or("")),
         PrintTask::ReviewPr { number, .. } => format!("/review --pr {number}"),
     };
@@ -1017,8 +1029,15 @@ async fn print_mode(
     let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();
     let (controls_tx, mut controls_rx) = mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
+        let mut goal_result = None;
         let report = match task {
             PrintTask::Prompt(prompt) => session.turn(&prompt, &updates_tx, &mut controls_rx).await,
+            PrintTask::Goal(spec) => {
+                let (report, outcome) =
+                    run_goal(&mut session, spec, &updates_tx, &mut controls_rx).await;
+                goal_result = outcome;
+                report
+            }
             PrintTask::Review(focus) => {
                 session
                     .review(focus.as_deref(), &updates_tx, &mut controls_rx)
@@ -1039,13 +1058,13 @@ async fn print_mode(
                 }
             }
         };
-        (session, report)
+        (session, report, goal_result)
     });
     tokio::pin!(task);
     let mut printer = Printer::new(style, json);
     let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
     let mut interrupted = false;
-    let (session, report) = loop {
+    let (session, report, goal_result) = loop {
         tokio::select! {
             Some(update) = updates_rx.recv() => printer.update(&update, &mut out, &mut err),
             _ = tokio::signal::ctrl_c() => {
@@ -1130,10 +1149,80 @@ async fn print_mode(
                 "changed_files": report.changed_files,
                 "checks_passed": report.checks_passed,
                 "approval_pending": report.approval_pending.is_some(),
+                "goal": goal_result.as_ref().map(|g| serde_json::json!({
+                    "reached": g.reached,
+                    "rounds": g.rounds,
+                    "summary": g.summary,
+                })),
             })
         );
     }
-    Ok(ExitCode::from(report.exit_code()))
+    let exit = match &goal_result {
+        // A goal that is not reached fails the run, even when its last turn
+        // was clean.
+        Some(g) if !g.reached && report.exit_code() == 0 => 1,
+        _ => report.exit_code(),
+    };
+    Ok(ExitCode::from(exit))
+}
+
+/// How a `-p` goal ended.
+struct GoalResult {
+    reached: bool,
+    rounds: u32,
+    summary: String,
+}
+
+/// The arguments of a `/goal …` prompt.
+fn goal_args(prompt: &str) -> Option<&str> {
+    let rest = prompt.trim_start().strip_prefix("/goal")?;
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim())
+}
+
+/// `-p "/goal …"`: run rounds until the goal is reached or stops. Returns
+/// the last turn's report and, once the goal was judged, how it ended.
+async fn run_goal(
+    session: &mut CodeSession,
+    spec: microclaw_code_core::goal::GoalSpec,
+    updates: &mpsc::UnboundedSender<microclaw_code_core::driver::Update>,
+    controls: &mut mpsc::UnboundedReceiver<Control>,
+) -> (
+    anyhow::Result<microclaw_code_core::driver::TurnReport>,
+    Option<GoalResult>,
+) {
+    use microclaw_code_core::driver::Update;
+    use microclaw_code_core::goal::{self, Goal};
+    let mut goal = Goal::new(spec);
+    loop {
+        let _ = updates.send(Update::Notice(format!(
+            "goal {}: {}",
+            goal.progress(),
+            goal.spec.objective
+        )));
+        let report = match session.turn(&goal.prompt(), updates, controls).await {
+            Ok(report) => report,
+            Err(e) => return (Err(e), None),
+        };
+        let mut until = None;
+        if let Some(command) = goal.spec.until.clone()
+            && !report.cancelled
+            && !report.failed
+        {
+            let _ = updates.send(Update::Notice(format!("goal: running `{command}`")));
+            until = Some(goal::run_until(&session.project.root, &command).await);
+        }
+        let verdict = goal.judge(&report, until);
+        if verdict.is_final() {
+            let summary = goal.summary(&verdict);
+            let _ = updates.send(Update::Notice(summary.clone()));
+            let result = GoalResult {
+                reached: verdict.is_reached(),
+                rounds: goal.round,
+                summary,
+            };
+            return (Ok(report), Some(result));
+        }
+    }
 }
 
 fn print_info(project: &Project, trust: &TrustStore, style: Style) {

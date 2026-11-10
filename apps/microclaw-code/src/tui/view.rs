@@ -426,13 +426,16 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(goal) = &app.goal {
         lines.push(title("GOAL"));
         lines.push(Line::from(Span::styled(
-            cut(&goal.objective, width),
+            cut(&goal.spec.objective, width),
             st(theme.text),
         )));
-        lines.push(Line::from(Span::styled(
-            format!("round {}/{}", goal.round, goal.max_rounds),
-            muted,
-        )));
+        lines.push(Line::from(Span::styled(goal.progress(), muted)));
+        if let Some(until) = &goal.spec.until {
+            lines.push(Line::from(Span::styled(
+                cut(&format!("until `{until}`"), width),
+                muted,
+            )));
+        }
         lines.push(Line::default());
     }
     if let Some(plan) = app.transcript.plan() {
