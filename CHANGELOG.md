@@ -4,7 +4,10 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
-## Unreleased
+## 0.29.0 - 2026-11-10
+
+`/goal` works everywhere MicroClaw Code runs: the terminal, Zed and
+`mccode -p`. Zed also gains the common terminal commands.
 
 ### Added
 
