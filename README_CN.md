@@ -100,7 +100,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.28.0**：移除了 Matrix 通道和 `microclaw-full` 版本，并修复了安全公告：升级 SQLite 修复 RUSTSEC-2026-0459，升级 `rmcp` 修复 RUSTSEC-2026-0462。v0.27.1 修正了 Anthropic 的 token 统计（提示缓存现在计入输入），并修好了 Zed 里的几处问题：只列真实模型名、批准过的命令保留原标题、运行出错显示在回复里。v0.27.0 让 MicroClaw Code 在 [Zed](https://zed.dev) 里用起来更顺手。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.28.0)。
+最新版本为 **v0.29.0**：`/goal` 除了终端，现在也能在 Zed 和 `mccode -p` 里用，`--until <命令>` 作为判定标准，`--rounds N` 设置轮数上限；Zed 新增 `/btw`、`/check`、`/diff`、`/rewind`、`/status`、`/export` 和 `/init`。v0.28.0 移除了 Matrix 通道和 `microclaw-full` 版本，并修复了安全公告（升级 SQLite 修复 RUSTSEC-2026-0459，升级 `rmcp` 修复 RUSTSEC-2026-0462）。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.29.0)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -149,7 +149,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.28.0", features = ["full"] }
+microclaw-sdk = { version = "0.29.0", features = ["full"] }
 ```
 
 ```rust
