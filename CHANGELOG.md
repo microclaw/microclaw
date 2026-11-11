@@ -4,6 +4,21 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## Unreleased
+
+### Fixed
+
+- **`openai-codex` no longer stops working when its OAuth token expires.**
+  The token from `~/.codex/auth.json` was read and refreshed only when the
+  provider was created at startup, so a long-running Server or `mccode`
+  session kept sending an expired token and every request failed with
+  HTTP 401 until a restart. The auth file is now read before every request,
+  the token is refreshed (and written back) five minutes before it expires,
+  and a 401 triggers one refresh and retry. Concurrent refreshes are
+  serialised, so a rotated refresh token is never used twice. The startup
+  refresh also used a blocking HTTP client inside the async runtime, which
+  could panic when the token had already expired.
+
 ## 0.29.0 - 2026-11-10
 
 `/goal` works everywhere MicroClaw Code runs: the terminal, Zed and

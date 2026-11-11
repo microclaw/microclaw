@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use crate::codex_auth::{
     codex_config_default_openai_base_url, is_openai_codex_provider, is_qwen_portal_provider,
-    refresh_openai_codex_auth_if_needed, resolve_openai_codex_auth, resolve_qwen_portal_auth,
+    openai_codex_auth_for_request, resolve_openai_codex_auth, resolve_qwen_portal_auth,
 };
 #[cfg(test)]
 use crate::config::WorkingDirIsolation;

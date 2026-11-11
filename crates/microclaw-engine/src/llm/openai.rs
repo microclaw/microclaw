@@ -176,8 +176,9 @@ impl OpenAiProvider {
         let configured_base = config.llm_base_url.as_deref().unwrap_or("");
         let base = resolve_openai_compat_base(&config.llm_provider, configured_base);
 
+        // Codex reads (and refreshes) its OAuth token again before every
+        // request; this one only seeds the key pool as a fallback.
         let (api_key, codex_account_id) = if is_openai_codex {
-            let _ = refresh_openai_codex_auth_if_needed();
             match resolve_openai_codex_auth("") {
                 Ok(auth) => (auth.bearer_token, auth.account_id),
                 Err(e) => {
@@ -1070,18 +1071,28 @@ impl OpenAiProvider {
 
         let mut retries = 0u32;
         let max_retries = 3;
+        // The token the server turned down, for one refresh-and-retry.
+        let mut rejected: Option<String> = None;
+        let mut reauthed = false;
 
         loop {
+            let (api_key, account_id) =
+                match openai_codex_auth_for_request(&self.http, rejected.as_deref()).await {
+                    Ok(auth) => (auth.bearer_token, auth.account_id),
+                    Err(e) => {
+                        warn!("{e}");
+                        (self.key_pool.current(), self.codex_account_id.clone())
+                    }
+                };
             let mut req = self
                 .http
                 .post(&self.responses_url)
                 .header("Content-Type", "application/json")
                 .json(&body);
-            let api_key = self.key_pool.current();
             if !api_key.trim().is_empty() {
                 req = req.header("Authorization", format!("Bearer {api_key}"));
             }
-            if let Some(account_id) = self.codex_account_id.as_deref() {
+            if let Some(account_id) = account_id.as_deref() {
                 if !account_id.trim().is_empty() {
                     req = req.header("ChatGPT-Account-ID", account_id);
                 }
@@ -1106,6 +1117,17 @@ impl OpenAiProvider {
                 let parsed = parse_openai_codex_response_payload(&text)?;
                 return Ok(translate_oai_responses_response(parsed));
             }
+
+            // An expired or revoked OAuth token: refresh it and retry once.
+            if status.as_u16() == 401 && !reauthed && !api_key.trim().is_empty() {
+                reauthed = true;
+                warn!(
+                    "OpenAI Codex rejected the access token (HTTP 401); refreshing it and retrying"
+                );
+                rejected = Some(api_key);
+                continue;
+            }
+            rejected = None;
 
             let rotated = is_key_rotation_status(status.as_u16())
                 && retries < max_retries
@@ -2003,6 +2025,96 @@ mod tests {
         set_output_token_limit(&mut body, 512, false);
         assert_eq!(body.get("max_completion_tokens"), None);
         assert_eq!(body["max_tokens"], 512);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn test_openai_codex_refreshes_token_and_retries_after_401() {
+        use crate::codex_auth::tests::{fake_jwt, serve_responses};
+        let _guard = env_lock();
+        let prev_access = std::env::var("OPENAI_CODEX_ACCESS_TOKEN").ok();
+        let prev_codex_home = std::env::var("CODEX_HOME").ok();
+        std::env::remove_var("OPENAI_CODEX_ACCESS_TOKEN");
+
+        // The LLM turns the first token down, then accepts the refreshed one.
+        let ok = r#"{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}"#;
+        let (llm_url, llm_requests) = serve_responses(vec![
+            (401, r#"{"error":{"message":"token expired"}}"#.into()),
+            (200, ok.into()),
+        ]);
+        let (token_url, token_requests) = serve_responses(vec![(
+            200,
+            r#"{"access_token":"refreshed-token","refresh_token":"refresh-2"}"#.into(),
+        )]);
+        *crate::codex_auth::TEST_CODEX_TOKEN_URL.lock().unwrap() = Some(token_url);
+
+        let codex_home = tempfile::tempdir().unwrap();
+        // Not expiring by `exp`: only the 401 shows it was revoked.
+        let first = fake_jwt(chrono::Utc::now().timestamp() + 3600);
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            format!(
+                "model_provider = \"test\"\n\n[model_providers.test]\nbase_url = \"{llm_url}\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            codex_home.path().join("auth.json"),
+            json!({"tokens": {"access_token": first, "refresh_token": "refresh-1", "account_id": "acct-1"}})
+                .to_string(),
+        )
+        .unwrap();
+        std::env::set_var("CODEX_HOME", codex_home.path());
+
+        let mut config = Config::test_defaults();
+        config.llm_provider = "openai-codex".into();
+        config.model = "gpt-5.3-codex".into();
+        let provider = OpenAiProvider::new(&config);
+        let messages = vec![Message {
+            role: "user".into(),
+            content: MessageContent::Text("hi".into()),
+        }];
+        let result = LlmProvider::send_message(&provider, "", messages, None).await;
+
+        *crate::codex_auth::TEST_CODEX_TOKEN_URL.lock().unwrap() = None;
+        match prev_access {
+            Some(prev) => std::env::set_var("OPENAI_CODEX_ACCESS_TOKEN", prev),
+            None => std::env::remove_var("OPENAI_CODEX_ACCESS_TOKEN"),
+        }
+        match prev_codex_home {
+            Some(prev) => std::env::set_var("CODEX_HOME", prev),
+            None => std::env::remove_var("CODEX_HOME"),
+        }
+
+        let resp = result.unwrap();
+        match &resp.content[0] {
+            ResponseContentBlock::Text { text } => assert_eq!(text, "ok"),
+            _ => panic!("Expected text block"),
+        }
+        let first_req = llm_requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        let second_req = llm_requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        let token_req = token_requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        let bearer = |req: &str| {
+            req.lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .starts_with("authorization:")
+                        .then(|| l.split_once(':').unwrap().1.trim().to_string())
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(bearer(&first_req), format!("Bearer {first}"));
+        assert_eq!(bearer(&second_req), "Bearer refreshed-token");
+        assert!(second_req
+            .to_ascii_lowercase()
+            .contains("chatgpt-account-id: acct-1"));
+        assert!(token_req.contains(r#""refresh_token":"refresh-1""#));
+        let saved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(codex_home.path().join("auth.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["tokens"]["access_token"], "refreshed-token");
+        assert_eq!(saved["tokens"]["refresh_token"], "refresh-2");
     }
 
     #[tokio::test]
