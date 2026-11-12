@@ -1,13 +1,13 @@
 [package]
 name = "microclaw-code-core"
-version = "0.30.0"
+version = "0.30.1"
 edition = "2024"
 license = "MIT"
 description = "UI-independent core of MicroClaw Code: project discovery, trust, verification and the turn driver"
 publish = false
 
 [dependencies]
-microclaw-sdk = { version = "0.30.0", path = "../microclaw-sdk", features = ["full"] }
+microclaw-sdk = { version = "0.30.1", path = "../microclaw-sdk", features = ["full"] }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"

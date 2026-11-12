@@ -4,6 +4,12 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## [0.30.1] - 2026-11-12
+
+### Changed
+
+- Updated public support links, contact details and project copyright to AtomSprout.
+
 ## 0.30.0 - 2026-11-11
 
 MicroClaw Code closes four everyday gaps found by comparing it with Claude
