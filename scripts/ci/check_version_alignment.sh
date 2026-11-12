@@ -30,6 +30,21 @@ for package in "${rust_packages[@]}"; do
   fi
 done
 
+# The desktop app is its own workspace; its manifest and bundle move too.
+desktop_version="$(cargo metadata --manifest-path apps/microclaw-code-desktop/Cargo.toml \
+  --no-deps --format-version 1 \
+  | jq -r '.packages[] | select(.name == "microclaw-code-desktop") | .version')"
+if [[ "$desktop_version" != "$release_version" ]]; then
+  echo "microclaw-code-desktop is $desktop_version; expected $release_version" >&2
+  exit 1
+fi
+plist_versions="$(grep -A1 -E 'CFBundle(ShortVersionString|Version)<' apps/microclaw-code-desktop/resources/Info.plist \
+  | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p' | sort -u)"
+if [[ "$plist_versions" != "$release_version" ]]; then
+  echo "apps/microclaw-code-desktop/resources/Info.plist is $plist_versions; expected $release_version" >&2
+  exit 1
+fi
+
 for package_json in web/package.json site/package.json; do
   version="$(jq -r '.version' "$package_json")"
   if [[ "$version" != "$release_version" ]]; then

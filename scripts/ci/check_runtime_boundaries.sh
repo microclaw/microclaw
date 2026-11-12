@@ -52,3 +52,21 @@ for forbidden in microclaw axum teloxide serenity; do
     exit 1
   fi
 done
+
+# The desktop app is a workspace of its own (GPUI); read its manifest
+# without resolving GPUI so this runs on every platform.
+desktop_deps="$(cargo metadata --manifest-path apps/microclaw-code-desktop/Cargo.toml \
+  --no-deps --format-version 1 \
+  | jq -r '.packages[] | select(.name == "microclaw-code-desktop") | .dependencies[] | select(.kind == null) | .name')"
+for required in microclaw-sdk microclaw-code-core; do
+  if ! printf '%s\n' "$desktop_deps" | grep -Fxq "$required"; then
+    printf 'microclaw-code-desktop must reach the engine through %s\n' "$required" >&2
+    exit 1
+  fi
+done
+for forbidden in microclaw microclaw-engine; do
+  if printf '%s\n' "$desktop_deps" | grep -Fxq "$forbidden"; then
+    printf 'microclaw-code-desktop must not depend on %s directly; extend microclaw-sdk or microclaw-code-core instead\n' "$forbidden" >&2
+    exit 1
+  fi
+done

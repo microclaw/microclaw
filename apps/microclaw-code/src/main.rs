@@ -74,6 +74,11 @@ struct Cli {
     #[arg(long)]
     trust: bool,
 
+    /// Drive the session even when another MicroClaw Code (the TUI, `-p` or
+    /// the desktop app) has it open; that one stops driving it.
+    #[arg(long)]
+    take_over: bool,
+
     /// MicroClaw configuration file with model credentials.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -348,7 +353,7 @@ enum AllowAction {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     // SAFETY: no other thread exists yet; the runtime is built below.
-    unsafe { isolate_engine_env(&home::code_home()) };
+    unsafe { microclaw_code_core::env::isolate_engine_env(&home::code_home()) };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -364,45 +369,6 @@ fn main() -> ExitCode {
         Err(error) => {
             eprintln!("mccode: {error:#}");
             ExitCode::from(1)
-        }
-    }
-}
-
-/// The Agent Engine reads a few `MICROCLAW_*` variables meant for the
-/// MicroClaw Server. MicroClaw Code is a separate product, so it replaces them
-/// with its own `MCCODE_*` values (or clears them) and a Server environment
-/// never changes how Code behaves.
-fn engine_env_overrides(
-    get: impl Fn(&str) -> Option<std::ffi::OsString>,
-    code_home: &std::path::Path,
-) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
-    let get = |var: &str| get(var).filter(|v| !v.is_empty());
-    vec![
-        ("MICROCLAW_CONFIG", None),
-        ("MICROCLAW_SKILLS_DIR", None),
-        ("MICROCLAW_OPENAI_API_KEY", None),
-        ("MICROCLAW_SANDBOX_MOUNT_ALLOWLIST", None),
-        (
-            "MICROCLAW_PATH_ALLOWLIST",
-            Some(
-                get("MCCODE_PATH_ALLOWLIST")
-                    .unwrap_or_else(|| code_home.join("sandbox-path-allowlist.txt").into()),
-            ),
-        ),
-        ("MICROCLAW_LOCAL_SANDBOX", get("MCCODE_LOCAL_SANDBOX")),
-    ]
-}
-
-/// # Safety
-/// Must run before any other thread is started.
-unsafe fn isolate_engine_env(code_home: &std::path::Path) {
-    for (var, value) in engine_env_overrides(|v| std::env::var_os(v), code_home) {
-        // SAFETY: the caller guarantees the process is single-threaded.
-        unsafe {
-            match value {
-                Some(value) => std::env::set_var(var, value),
-                None => std::env::remove_var(var),
-            }
         }
     }
 }
@@ -728,6 +694,21 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     } else {
         index.create(&project.root)?.id
     };
+    // One front end drives a session at a time (`export` only reads it).
+    let session_lock = if acp || export {
+        None
+    } else {
+        use microclaw_code_core::session_lock::{LockError, SessionLock};
+        let front_end = if interactive { "tui" } else { "print" };
+        match SessionLock::acquire(&home::code_home(), &session_id, front_end, cli.take_over) {
+            Ok(lock) => Some(lock),
+            Err(LockError::Held(holder)) => anyhow::bail!(
+                "session {session_id} is open in {}; continue it there, or pass --take-over",
+                holder.describe()
+            ),
+            Err(LockError::Io(_)) => None,
+        }
+    };
 
     let sandbox_choice = settings_sandbox(sandbox_choice(&cli)?, &cli, &settings_doc);
     let sandbox = match (&sandbox_choice, microclaw_sdk::local_sandbox()) {
@@ -964,6 +945,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         launch::gate_parts(root, &loaded.settings, &reload_session);
                     reload_gate.update(rules, hooks);
                 })),
+                session_lock,
             };
             let id = tui::run(
                 session,
@@ -1725,34 +1707,7 @@ fn settings_sandbox(
     cli: &Cli,
     settings: &code_settings::CodeSettings,
 ) -> ShellSandbox {
-    let explicit = cli.sandbox.is_some() || home::env_var("MCCODE_SANDBOX").is_some();
-    if !explicit && settings.sandbox.backend.as_deref() == Some("off") {
-        return ShellSandbox::Off;
-    }
-    match choice {
-        ShellSandbox::WorkspaceWrite {
-            network,
-            mut writable_roots,
-        } => {
-            let network = network
-                && !matches!(
-                    settings.sandbox.network,
-                    Some(code_settings::NetworkMode::Off | code_settings::NetworkMode::Ask)
-                );
-            for root in &settings.sandbox.writable_roots {
-                let path = match root.strip_prefix("~/") {
-                    Some(rest) => dirs_home().join(rest),
-                    None => PathBuf::from(root),
-                };
-                writable_roots.push(path);
-            }
-            ShellSandbox::WorkspaceWrite {
-                network,
-                writable_roots,
-            }
-        }
-        other => other,
-    }
+    launch::settings_sandbox(choice, cli.sandbox.is_some(), settings)
 }
 
 fn dirs_home() -> PathBuf {
@@ -1762,19 +1717,7 @@ fn dirs_home() -> PathBuf {
 }
 
 fn sandbox_choice(cli: &Cli) -> anyhow::Result<ShellSandbox> {
-    let raw = cli
-        .sandbox
-        .clone()
-        .or_else(|| home::env_var("MCCODE_SANDBOX").and_then(|v| v.into_string().ok()))
-        .unwrap_or_else(|| "workspace-write".into());
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "off" | "none" | "danger-full-access" => Ok(ShellSandbox::Off),
-        "workspace-write" | "workspace" | "on" => Ok(ShellSandbox::WorkspaceWrite {
-            network: !cli.no_network,
-            writable_roots: Vec::new(),
-        }),
-        other => anyhow::bail!("unknown sandbox mode '{other}' (expected workspace-write or off)"),
-    }
+    launch::sandbox_choice(cli.sandbox.as_deref(), cli.no_network)
 }
 
 async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<ExitCode> {
@@ -1871,9 +1814,10 @@ mod tests {
             var.starts_with("MICROCLAW_")
                 .then(|| std::ffi::OsString::from("/server"))
         };
-        let overrides: std::collections::HashMap<_, _> = engine_env_overrides(server_only, home)
-            .into_iter()
-            .collect();
+        let overrides: std::collections::HashMap<_, _> =
+            microclaw_code_core::env::engine_env_overrides(server_only, home)
+                .into_iter()
+                .collect();
         assert_eq!(overrides["MICROCLAW_CONFIG"], None);
         assert_eq!(overrides["MICROCLAW_SKILLS_DIR"], None);
         assert_eq!(overrides["MICROCLAW_LOCAL_SANDBOX"], None);
@@ -1888,7 +1832,9 @@ mod tests {
             _ => None,
         };
         let overrides: std::collections::HashMap<_, _> =
-            engine_env_overrides(code, home).into_iter().collect();
+            microclaw_code_core::env::engine_env_overrides(code, home)
+                .into_iter()
+                .collect();
         assert_eq!(
             overrides["MICROCLAW_PATH_ALLOWLIST"],
             Some("/mine.txt".into())

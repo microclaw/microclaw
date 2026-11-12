@@ -1,0 +1,43 @@
+[package]
+name = "microclaw-code-desktop"
+version = "0.30.0"
+edition = "2024"
+license = "MIT"
+description = "MicroClaw Code desktop app (macOS, GPUI): a front end of MicroClaw Code next to the mccode TUI"
+publish = false
+
+# A workspace of its own (like tests/sdk-consumer): GPUI's dependency tree is
+# large and macOS-first, so the root workspace's `cargo build` / `cargo test`
+# and the Linux/Windows CI jobs never compile it.
+[workspace]
+
+[[bin]]
+name = "microclaw-code-desktop"
+path = "src/main.rs"
+
+[dependencies]
+microclaw-code-core = { version = "0.30.0", path = "../../crates/microclaw-code-core" }
+microclaw-sdk = { version = "0.30.0", path = "../../crates/microclaw-sdk", features = ["full"] }
+gpui-kit = "=0.9.1"
+anyhow = "1"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+gpui-pre = { version = "=0.3.12", features = ["test-support"] }
+tempfile = "3"
+
+# Full debug info overflows the linker's compact unwind table with GPUI.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

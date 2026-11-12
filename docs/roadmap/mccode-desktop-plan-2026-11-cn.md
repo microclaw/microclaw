@@ -1,8 +1,10 @@
 # MicroClaw Code 桌面版（macOS，GPUI）计划
 
-状态：**提议（技术已定：Rust + GPUI）**
-更新：**2026-11-06**
-基线：**v0.26.0**
+状态：**M1 预览已实现（未签名；真实模型往返已验证；待合并，不进 0.31.0）；M2 未开始**
+更新：**2026-11-12**
+基线：**v0.30.0**（原计划基线 v0.26.0）
+
+> 进度见第 11 节“交付记录”。M1 作为 0.31 的并行轨道推进，不阻塞 0.31 主线（N5/N6/N7）。
 
 MicroClaw Code 目前只有命令行形态，包括全屏 TUI、`-p` / `--json`、`mccode acp` 和 `mccode mcp-server`。
 这份计划用 Rust + GPUI 给它加一个 macOS 桌面版。
@@ -322,3 +324,106 @@ apps/microclaw-code-desktop/
 1. **名称与分发**：App 名用 `MicroClaw Code.app`，cask 名用 `microclaw-code`，和 formula `mccode` 互相独立。这样可以吗？
 2. **节奏**：M0 放进 0.27 单独发版，技术验证不进 Release。这样可以吗？
 3. **签名**：M1 先在本地签名和公证，M2 再搬到 CI。这样可以吗？
+
+---
+
+## 11. 交付记录
+
+### 11.1 M0 实际情况（2026-11-12 核对）
+
+| 项 | 状态 |
+|---|---|
+| `code-core::launch` | 已完成（0.27–0.30 期间）。ACP、MCP 走 `launch::project_engine`；TUI / `-p` 仍在 `main.rs` 里自己装配引擎，但已经复用 `launch` 的 `tool_gate`、`role_setup`、`ModelSource` |
+| GPUI 技术验证分支 / crate | 不存在：仓库里没有 spike 分支，也没有桌面 crate。M1 直接在新 crate 里做，技术验证的结论并入下表 |
+| `isolate_engine_env` 移到 core | 随 M1 完成：`code-core::env`（`engine_env_overrides` / `isolate_engine_env`），mccode 改用它 |
+| 会话锁 | 随 M1 完成：`code-core::session_lock` |
+| 首次设置移到 core | 随 M1 完成：`code-core::setup`（`providers` / `resolve` / `write`），`mccode setup` 只剩交互提问 |
+| 沙箱选择移到 core | 随 M1 完成：`launch::sandbox_choice` / `settings_sandbox` / `sandbox_info`，mccode 和桌面版共用 |
+| `review`（`parse_diff` / `revert_hunk`）移到 core | 未做，留给 M2 的改动侧栏 |
+
+### 11.2 M1 交付内容
+
+新 crate `apps/microclaw-code-desktop/`（二进制 `microclaw-code-desktop`，bundle `MicroClaw Code.app` / `ai.microclaw.code`）：
+
+- **独立 workspace，独立工具链。** 有自己的 `Cargo.lock` 和 `rust-toolchain.toml`（1.98.1）：
+  `gpui-pre` 0.3.11 / 0.3.12 用到了 `Option::map_or_default`，需要 Rust 1.97+，根 workspace 仍是 1.96.1。
+  根 workspace 的 `cargo build` / `cargo test` 和 Linux、Windows CI 都不编译它。
+- **依赖**：`gpui-kit =0.9.1`（带出 `gpui-pre =0.3.12`、`gpui-component 0.9.1`），全部来自 crates.io；
+  引擎只经 `microclaw-sdk` 和 `microclaw-code-core`。`check_runtime_boundaries.sh` 用 `cargo metadata --no-deps`
+  检查这一点（不解析 GPUI，所以在 Linux 上也能跑），`check_version_alignment.sh` 加上了它的 `Cargo.toml` 和 `Info.plist`。
+- **分层**（第 2 节的要求，单文件都在 700 行以内）：
+  - `state.rs`：纯 reducer，`Update` → 对话条目（流式文本合并、工具调用状态、diff、审批卡、检查、回执），有单元测试；
+  - `service.rs`：每个项目一个 Tokio 服务，`launch::project_engine` 建引擎，`CodeSession::turn` 跑回合，
+    `Command` / `Event` 两个 channel 和界面通信；
+  - `views/`：`workspace`（侧栏：项目、会话）、`project`（标题栏、横幅、对话、输入框）、`transcript`（逐条渲染）、`onboarding`；
+  - `headless.rs`：`--smoke <dir> <prompt>`，不开窗口跑一轮，用于打包冒烟和脚本验证。
+- **功能**（对照第 6 节 M1 范围）：
+
+  | M1 项 | 状态 |
+  |---|---|
+  | 打开项目 | ⌘O / 侧栏按钮选目录；最近项目记在 `~/.mccode/desktop/state.json`；命令行参数可直接给目录 |
+  | 信任 | 未信任项目显示横幅，“Trust” 写入 `trusted-projects.json`（与 `mccode trust` 同一文件）并重建引擎 |
+  | 首次引导 | 没有模型配置时显示引导页（提供方、模型、key、base URL），经 `code-core::setup` 写 `~/.mccode/config.yaml` 后自动启动 |
+  | 会话列表 | 侧栏列出当前项目的会话（`sessions.json`，与 TUI 同一份）；⌘N 新会话；点击继续会话并显示历史 |
+  | 对话 | 流式 Markdown（`TextView`）、工具调用（状态、耗时、命令输出尾部）、文件 diff、检查与修复回合、每轮回执；虚拟列表（`MessageScroller`，跟随末尾） |
+  | 审批卡片 | `interactive: true`，与 TUI 同一条 SDK 路径：driver 发 `ApprovalRequested`，按钮发 `Control::Approve`（含“在本项目总是允许”选项）；回合中途回答，回合继续 |
+  | 模式切换 | 标题栏 plan / ask / auto（⇧⇥ 循环），遵守 `disabled_modes`；回合中切换从下一回合生效 |
+  | 模型切换 | 可搜索的下拉框：settings 里 profile 的模型 + 当前提供方的已知模型，走 `CodeSession::set_model` |
+  | 停止和引导 | ⌘. / Stop 发 `Control::Cancel`；回合进行中 ⌘⏎ / Guide 发 `Control::Steer` |
+  | 登录 shell 环境 | 启动时（任何线程之前）跑一次 `$SHELL -ilc`，合并 `PATH`、补齐缺失变量（`code-core::env::import_login_shell_env`，5 秒超时），然后照常 `isolate_engine_env` |
+  | 会话锁 | `~/.mccode/sessions/<id>.lock`（pid、前端、时间、token）。TUI、`-p` 和 App 都加锁；被占用时 App 显示只读横幅和“Take over”，mccode 报错并提示 `--take-over`；进程不在了的锁自动清理；被接管的一方在下一回合前发现并停下 |
+  | 退出 | ⌘Q 时等服务停下：取消进行中的回合、跑 `session_end` hook、释放锁，丢弃引擎（后台进程随 `ProcessRegistry` 结束） |
+  | 签名、公证后的 DMG | **未做**（见 11.4）。目前 `scripts/bundle.sh` 生成未签名（ad-hoc）的 `.app` |
+
+- **与 TUI 互通**：两边用同一个 `SessionIndex`、同一个引擎数据目录（`home::data_dir()`）和同样的会话 id，
+  App 里开的会话可以 `mccode --session <id>` 继续，TUI 的会话在 App 侧栏里点开继续。
+
+### 11.3 验证
+
+- 桌面 crate：`cargo clippy --all-targets -- -D warnings`、`cargo test`（9 个测试：reducer 5、回执 1、最近项目 1、
+  所有对话条目在 GPUI 测试平台上渲染 1、服务层端到端 1）、`cargo fmt --check`。CI 新增 `desktop-macos` job（macos-15）跑这些，
+  再打包一次 debug `.app`，并在空 `MCCODE_HOME` 下跑 `--smoke`（期望“需要设置”，退出码 2）。
+- **服务层端到端测试（模拟提供方）**：`service_tests.rs` 起一个本地 OpenAI 兼容服务（SSE），在临时 `MCCODE_HOME` 里写一个
+  settings profile 指向它，引擎照常由 `launch::project_engine` 构建，回合照常走 `CodeSession::turn`。按顺序覆盖：
+  1. 普通回合，流式回复进入对话；
+  2. 模型调用 `bash`，回合中出现审批卡，回答“允许一次”后命令在沙箱里执行、输出回到对话，模型继续回复；
+  3. 模型迟迟不回复时“停止”结束回合（回执含 stopped）；
+  4. 关闭服务后会话锁释放；
+  5. 另一个前端用同一个会话 id 打开（相当于 `mccode --session <id>`），历史、会话索引（标题、轮数）都在；
+  6. 此时 TUI 加锁被拒；TUI 接管后 App 发送会被拦下（`SessionLocked`），TUI 放手后 App 可以继续。
+- code-core 新增测试：会话锁 4 个（占用、接管、失效锁、id 不能逃出目录）、env 3 个、setup 2 个。
+- 实机：在本仓库启动 `.app`（从 `open` 启动，验证登录 shell 环境）、加锁、⌘Q 后锁被释放；
+  App 持有会话时 `mccode --session <id> -p` 被拒绝，加 `--take-over` 后可以继续。
+- 模型出错的路径：用当前配置（anthropic，key 无效）启动，引擎正常就绪，回合以 `authentication_error: invalid x-api-key`
+  结束，错误进入对话、回执为 failed，`--smoke` 退出码 1，锁随退出释放。
+- **真实模型往返（2026-11-12，DeepSeek `deepseek-v4-flash`）**：用一个单独的 `MCCODE_HOME`（临时目录，key 不进仓库），
+  在本仓库（`claude/desktop-m1-e59e05` worktree）跑，走 App 的服务层（`--smoke`，和窗口同一套 `service` / `CodeSession::turn`；
+  窗口本身没有用真实模型点过，见 11.4）。
+  1. **改代码 → 检查 → 修复**：临时加了一个不提交的 `.microclaw/project.yaml`，定义自动检查
+     `cargo check -p microclaw-code-core --all-targets`（这个仓库自动探测出的 `cargo check --all-targets` 只检查根 package），
+     并预先在 `setup.rs` 已有测试里埋了一处类型错误（`let count: u32 = all.len();`），保证检查一定失败、修复回合一定出现。
+     任务是“给 `setup.rs` 加 `is_popular` 和单元测试，不要自己跑 cargo”。过程：读文件 → 两次 `edit_file` → 检查 `core` 失败（exit 101，E0308）
+     → “fix round 1/2” 把失败交回 → 模型修掉那一行 → 检查通过，回执“changed setup.rs · checks passed”，用时约 1 分 46 秒。
+     之后单独跑 `cargo test -p microclaw-code-core setup::` 3 个测试通过。试验改动和临时 `project.yaml` 已还原，没有提交。
+  2. **App → TUI**：`mccode --session <App 的会话 id> -p "…你加了什么函数、修了哪一行"`，回答
+     “added `pub fn is_popular` … fixed `let count: u32 = all.len();` to `let count = all.len();`”，说明历史跟过去了。
+  3. **TUI → App**：`mccode -p "Remember the code word tangerine…"` 新建会话，再用 App `--smoke --session <id>` 问，
+     App 打开时显示“2 earlier messages”，回答 `tangerine`。
+  4. **回合中审批**：让模型用 bash 跑 `git rev-parse --abbrev-ref HEAD`，出现审批（ask 模式），回答“Approve once”后命令执行，
+     回复 `claude/desktop-m1-e59e05`。
+  5. 每次结束后锁都被释放（`sessions/` 下没有残留 `.lock`）。
+
+### 11.4 遗留（M1 之后）
+
+- **窗口里的真实模型操作**：真实模型往返走的是 App 的服务层（`--smoke`）；窗口里没有用真实模型手动点过一轮（这次会话无权操作窗口），发版前应补一次人工走查。
+- **签名、公证的 arm64 / x86_64 DMG**：没做。需要 Developer ID 身份和 notarytool 凭据，按第 7 节从旧 Work 的脚本（`89c5b4d8^`）改写，
+  作为 Release 附件；`scripts/bundle.sh` 只产出 ad-hoc 签名的 `.app`。
+- **视图层交互测试**：`gpui-kit` 0.9.1 的 `test-support` feature 在依赖解析时冲突（`gpui-fast` 精确锁定 `taffy =0.15.0`，
+  而 `gpui-pre` 已选 0.15.1），所以视图测试改用 `gpui-pre` 自己的 `test-support`，只覆盖渲染，没有模拟点击。
+  等 gpui-kit 修复后补上审批按钮、输入框的点击测试。
+- **一个窗口只跑一个项目**：切换项目会停掉上一个项目的引擎。多窗口放 M3。
+- **TUI 的 `/review` 渲染逻辑还在 TUI 里**（`parse_diff` / `revert_hunk` 未移到 core），M2 改动侧栏时一起做。
+- **TUI / `-p` 的引擎装配**仍在 `main.rs`（只是复用了 `launch` 的零件），没有完全收进 `launch::project_engine`。
+- 第 5 节里属于 M2 的部分：改动侧栏（按块撤回、undo、rewind）、检查和用量面板、设置界面、系统通知和 Dock 角标、命令面板、
+  图片拖入、自动更新、Homebrew cask。
+- debug 构建链接时 ld 报 `__eh_frame section too large`（只影响 debug 的异常展开性能），在 crate 里 `allow(linker_messages)`。
