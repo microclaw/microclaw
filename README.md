@@ -108,7 +108,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.29.1**. It fixes the `openai-codex` provider, which stopped working once its OAuth token expired: the token is now refreshed before it expires and after a 401. v0.29.0 brought `/goal` to Zed and `mccode -p` (`--until <command>` as the judge, `--rounds N` as the limit) and gave Zed `/btw`, `/check`, `/diff`, `/rewind`, `/status`, `/export` and `/init`. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.29.1).
+The latest release is **v0.30.0**. In MicroClaw Code, Ctrl+B moves a running command to the background and `/jobs` manages background work; `/rewind` takes the conversation back along with the files; sub-agents get their own model (`model.roles.subagent`) and can run as project agents with a `tools` list; and `permissions.reviewer: approve` lets the approval reviewer approve calls it rates SAFE. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.30.0).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -157,7 +157,7 @@ Worker support without pulling in the Server, Web console, or concrete channel a
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.29.1", features = ["full"] }
+microclaw-sdk = { version = "0.30.0", features = ["full"] }
 ```
 
 ```rust
