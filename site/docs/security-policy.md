@@ -20,7 +20,7 @@ If a vulnerability requires coordinated disclosure, maintainers may patch `main`
 
 Do not open a public GitHub issue for suspected security vulnerabilities.
 
-Report privately by email to `xnuapp@gmail.com` with:
+Report privately by email to `atomsprout@gmail.com` with:
 
 - affected version or commit SHA
 - impact summary

@@ -246,7 +246,7 @@ const config = {
             ],
           },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} MicroClaw.`,
+        copyright: `Copyright © ${new Date().getFullYear()} AtomSprout.`,
       },
       prism: {
         theme: prismThemes.github,
