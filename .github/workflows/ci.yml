@@ -125,6 +125,35 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
+  # The desktop app (GPUI) is its own workspace with its own toolchain
+  # (apps/microclaw-code-desktop/rust-toolchain.toml); macOS only.
+  desktop-macos:
+    name: Code desktop (macos-15)
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: apps/microclaw-code-desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/microclaw-code-desktop
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: scripts/bundle.sh debug
+      - name: Smoke (no model configured → setup needed, exit 2)
+        run: |
+          set +e
+          MCCODE_HOME="$RUNNER_TEMP/mccode-home" \
+            "target/debug/MicroClaw Code.app/Contents/MacOS/microclaw-code-desktop" --smoke "$GITHUB_WORKSPACE" "hello"
+          code=$?
+          test "$code" = 2
+
   web-e2e:
     name: Web UI Browser Smoke
     runs-on: ubuntu-latest

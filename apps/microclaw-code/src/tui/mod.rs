@@ -72,6 +72,9 @@ pub struct TuiOptions {
     /// Called after settings change (`/config set`, `/permissions add`) so
     /// the tool gate picks up new rules and hooks.
     pub on_settings_reload: Option<SettingsReload>,
+    /// The lock on the session the TUI starts with; it follows `/new`,
+    /// `/resume` and `/fork` at the next turn.
+    pub session_lock: Option<microclaw_code_core::session_lock::SessionLock>,
 }
 
 pub type SettingsReload =
@@ -110,6 +113,8 @@ type UntilSlot =
 
 pub struct App {
     session: Option<CodeSession>,
+    /// This front end drives the session (see `session_lock`).
+    session_lock: Option<microclaw_code_core::session_lock::SessionLock>,
     /// Background work of the current session; usable while a turn runs.
     jobs: Option<microclaw_code_core::driver::JobHandle>,
     pub running: Option<RunningTurn>,
@@ -330,6 +335,7 @@ pub async fn run(
         model: options.model.clone(),
         jobs: Some(session.job_handle()),
         session: None,
+        session_lock: options.session_lock,
         running: None,
         updates_tx,
         updates_rx,
@@ -1095,7 +1101,43 @@ impl App {
         self.start_turn(prompt, Some(label));
     }
 
+    /// Hold the lock of session `id`; `Err` names the front end that drives
+    /// it instead.
+    fn hold_session_lock(&mut self, id: &str) -> Result<(), String> {
+        use microclaw_code_core::session_lock::{LockError, SessionLock};
+        let home = microclaw_code_core::home::code_home();
+        if let Some(lock) = &self.session_lock
+            && lock.session_id() == id
+        {
+            return lock.check().map_err(|holder| {
+                format!(
+                    "{} took this session over; start another with /new or /resume, or restart mccode with --take-over",
+                    holder.describe()
+                )
+            });
+        }
+        match SessionLock::acquire(&home, id, "tui", false) {
+            Ok(lock) => {
+                self.session_lock = Some(lock);
+                Ok(())
+            }
+            Err(LockError::Held(holder)) => Err(format!(
+                "this session is open in {}; continue it there, or restart mccode with --session {id} --take-over",
+                holder.describe()
+            )),
+            // An unwritable lock never blocks work.
+            Err(LockError::Io(_)) => Ok(()),
+        }
+    }
+
     fn start_turn(&mut self, prompt: String, label: Option<String>) {
+        let Some(id) = self.session.as_ref().map(|s| s.session_id.clone()) else {
+            return;
+        };
+        if let Err(message) = self.hold_session_lock(&id) {
+            self.transcript.notice(message, Tone::Error);
+            return;
+        }
         let Some(mut session) = self.session.take() else {
             return;
         };

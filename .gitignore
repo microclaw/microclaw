@@ -1,5 +1,6 @@
 /target
 /tests/sdk-consumer/target
+/apps/microclaw-code-desktop/target
 microclaw.config.yaml
 microclaw.config.yaml.*
 microclaw.config.backups/

@@ -151,6 +151,78 @@ pub fn project_settings(root: &Path) -> code_settings::LoadedSettings {
     code_settings::load(root, trusted)
 }
 
+/// The shell sandbox chosen on the command line (`--sandbox`, else
+/// `MCCODE_SANDBOX`, else `workspace-write`).
+pub fn sandbox_choice(explicit: Option<&str>, no_network: bool) -> anyhow::Result<ShellSandbox> {
+    let raw = explicit
+        .map(str::to_string)
+        .or_else(|| crate::home::env_var("MCCODE_SANDBOX").and_then(|v| v.into_string().ok()))
+        .unwrap_or_else(|| "workspace-write".into());
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "none" | "danger-full-access" => Ok(ShellSandbox::Off),
+        "workspace-write" | "workspace" | "on" => Ok(ShellSandbox::WorkspaceWrite {
+            network: !no_network,
+            writable_roots: Vec::new(),
+        }),
+        other => anyhow::bail!("unknown sandbox mode '{other}' (expected workspace-write or off)"),
+    }
+}
+
+/// Apply `sandbox.*` settings to `choice`; `explicit` says the command line
+/// or `MCCODE_SANDBOX` chose, which `sandbox.backend: off` does not override.
+pub fn settings_sandbox(
+    choice: ShellSandbox,
+    explicit: bool,
+    settings: &CodeSettings,
+) -> ShellSandbox {
+    let explicit = explicit || crate::home::env_var("MCCODE_SANDBOX").is_some();
+    if !explicit && settings.sandbox.backend.as_deref() == Some("off") {
+        return ShellSandbox::Off;
+    }
+    match choice {
+        ShellSandbox::WorkspaceWrite {
+            network,
+            mut writable_roots,
+        } => {
+            let network = network
+                && !matches!(
+                    settings.sandbox.network,
+                    Some(NetworkMode::Off | NetworkMode::Ask)
+                );
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            for root in &settings.sandbox.writable_roots {
+                let path = match root.strip_prefix("~/") {
+                    Some(rest) => home.join(rest),
+                    None => PathBuf::from(root),
+                };
+                writable_roots.push(path);
+            }
+            ShellSandbox::WorkspaceWrite {
+                network,
+                writable_roots,
+            }
+        }
+        other => other,
+    }
+}
+
+/// The active OS sandbox for `choice` on this machine (`None`: off, or no
+/// mechanism available).
+pub fn sandbox_info(choice: &ShellSandbox) -> Option<crate::driver::SandboxInfo> {
+    match (choice, microclaw_sdk::local_sandbox()) {
+        (ShellSandbox::WorkspaceWrite { network, .. }, Some(mechanism)) => {
+            Some(crate::driver::SandboxInfo {
+                mechanism: mechanism.to_string(),
+                network: *network,
+                confines_reads: mechanism != "landlock",
+            })
+        }
+        _ => None,
+    }
+}
+
 /// How a long-lived front end (ACP, MCP server) builds one engine per
 /// project.
 #[derive(Debug, Clone)]

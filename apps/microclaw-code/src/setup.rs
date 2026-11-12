@@ -3,6 +3,7 @@
 use std::io::{BufRead, IsTerminal, Write};
 
 use microclaw_code_core::home::{self, ModelSettings};
+use microclaw_code_core::setup::{POPULAR, keyless};
 use microclaw_sdk::{ModelProvider, model_providers};
 
 /// Values given on the command line; missing ones are asked interactively.
@@ -13,26 +14,6 @@ pub struct SetupArgs {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
 }
-
-/// Providers that work without an API key.
-fn keyless(provider: &str) -> bool {
-    matches!(provider, "ollama" | "openai-codex" | "qwen-portal")
-}
-
-const POPULAR: &[&str] = &[
-    "anthropic",
-    "openai",
-    "openai-codex",
-    "deepseek",
-    "openrouter",
-    "google",
-    "moonshot",
-    "alibaba",
-    "zhipu",
-    "minimax",
-    "xai",
-    "ollama",
-];
 
 fn ask(prompt: &str, default: Option<&str>) -> anyhow::Result<String> {
     match default {

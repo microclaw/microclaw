@@ -17,6 +17,7 @@
 pub mod allow;
 pub mod commands;
 pub mod driver;
+pub mod env;
 pub mod gate;
 pub mod git;
 pub mod goal;
@@ -31,8 +32,10 @@ pub mod prompt;
 pub mod remote;
 pub mod remote_notify;
 pub mod rules;
+pub mod session_lock;
 pub mod sessions;
 pub mod settings;
+pub mod setup;
 pub mod trust;
 pub mod user_hooks;
 pub mod verify;
