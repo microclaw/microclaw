@@ -1,6 +1,6 @@
 # MicroClaw Code 桌面版（macOS，GPUI）计划
 
-状态：**M1 预览已实现（未签名；真实模型往返未验证；待合并）；M2 未开始**
+状态：**M1 预览已实现（未签名；真实模型往返已验证；待合并，不进 0.31.0）；M2 未开始**
 更新：**2026-11-12**
 基线：**v0.30.0**（原计划基线 v0.26.0）
 
@@ -396,12 +396,26 @@ apps/microclaw-code-desktop/
   App 持有会话时 `mccode --session <id> -p` 被拒绝，加 `--take-over` 后可以继续。
 - 模型出错的路径：用当前配置（anthropic，key 无效）启动，引擎正常就绪，回合以 `authentication_error: invalid x-api-key`
   结束，错误进入对话、回执为 failed，`--smoke` 退出码 1，锁随退出释放。
-- **真实模型往返：未验证。** 本机没有可用的模型配置（唯一的 anthropic key 无效），没有用真实模型跑“改代码 → 检查 → 修复”。
-  需要用户提供一个有效的 key 或 settings profile 后，用 `--smoke` 和 App 各跑一次，再把结果补到这里。
+- **真实模型往返（2026-11-12，DeepSeek `deepseek-v4-flash`）**：用一个单独的 `MCCODE_HOME`（临时目录，key 不进仓库），
+  在本仓库（`claude/desktop-m1-e59e05` worktree）跑，走 App 的服务层（`--smoke`，和窗口同一套 `service` / `CodeSession::turn`；
+  窗口本身没有用真实模型点过，见 11.4）。
+  1. **改代码 → 检查 → 修复**：临时加了一个不提交的 `.microclaw/project.yaml`，定义自动检查
+     `cargo check -p microclaw-code-core --all-targets`（这个仓库自动探测出的 `cargo check --all-targets` 只检查根 package），
+     并预先在 `setup.rs` 已有测试里埋了一处类型错误（`let count: u32 = all.len();`），保证检查一定失败、修复回合一定出现。
+     任务是“给 `setup.rs` 加 `is_popular` 和单元测试，不要自己跑 cargo”。过程：读文件 → 两次 `edit_file` → 检查 `core` 失败（exit 101，E0308）
+     → “fix round 1/2” 把失败交回 → 模型修掉那一行 → 检查通过，回执“changed setup.rs · checks passed”，用时约 1 分 46 秒。
+     之后单独跑 `cargo test -p microclaw-code-core setup::` 3 个测试通过。试验改动和临时 `project.yaml` 已还原，没有提交。
+  2. **App → TUI**：`mccode --session <App 的会话 id> -p "…你加了什么函数、修了哪一行"`，回答
+     “added `pub fn is_popular` … fixed `let count: u32 = all.len();` to `let count = all.len();`”，说明历史跟过去了。
+  3. **TUI → App**：`mccode -p "Remember the code word tangerine…"` 新建会话，再用 App `--smoke --session <id>` 问，
+     App 打开时显示“2 earlier messages”，回答 `tangerine`。
+  4. **回合中审批**：让模型用 bash 跑 `git rev-parse --abbrev-ref HEAD`，出现审批（ask 模式），回答“Approve once”后命令执行，
+     回复 `claude/desktop-m1-e59e05`。
+  5. 每次结束后锁都被释放（`sessions/` 下没有残留 `.lock`）。
 
 ### 11.4 遗留（M1 之后）
 
-- **真实模型往返**：未验证，等用户提供有效的模型 key（见 11.3）。这是 M1 完成标准里唯一没做的一项。
+- **窗口里的真实模型操作**：真实模型往返走的是 App 的服务层（`--smoke`）；窗口里没有用真实模型手动点过一轮（这次会话无权操作窗口），发版前应补一次人工走查。
 - **签名、公证的 arm64 / x86_64 DMG**：没做。需要 Developer ID 身份和 notarytool 凭据，按第 7 节从旧 Work 的脚本（`89c5b4d8^`）改写，
   作为 Release 附件；`scripts/bundle.sh` 只产出 ad-hoc 签名的 `.app`。
 - **视图层交互测试**：`gpui-kit` 0.9.1 的 `test-support` feature 在依赖解析时冲突（`gpui-fast` 精确锁定 `taffy =0.15.0`，
