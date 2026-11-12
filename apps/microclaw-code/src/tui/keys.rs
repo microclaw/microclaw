@@ -218,6 +218,13 @@ impl App {
             Action::Sidebar => {
                 self.show_sidebar = !self.show_sidebar;
             }
+            Action::Background => {
+                if self.running.is_some() {
+                    self.send(Control::Background);
+                } else {
+                    self.hint = Some("nothing is running · /jobs lists background work".into());
+                }
+            }
             Action::Clear => {
                 self.transcript.clear();
                 self.flushed = 0;
@@ -381,7 +388,7 @@ impl App {
         }
         self.dialog = Some(Dialog::Picker(super::dialogs::Picker::new(
             PickerKind::Timeline,
-            "Rewind · Enter restores files to before that turn and puts its prompt back · e only edits the prompt",
+            "Rewind · Enter: files + conversation · f: files only · c: conversation only · e: just edit the prompt",
             entries,
         )));
     }
@@ -600,12 +607,14 @@ impl App {
                 }
                 KeyCode::Enter => {
                     if let Some(entry) = p.current().cloned() {
-                        self.picker_chosen(p.kind, &entry, false);
+                        self.picker_chosen(p.kind, &entry, None);
                     }
                 }
-                KeyCode::Char('e') if p.kind == PickerKind::Timeline && p.filter.is_empty() => {
+                KeyCode::Char(c @ ('e' | 'f' | 'c'))
+                    if p.kind == PickerKind::Timeline && p.filter.is_empty() =>
+                {
                     if let Some(entry) = p.current().cloned() {
-                        self.picker_chosen(p.kind, &entry, true);
+                        self.picker_chosen(p.kind, &entry, Some(c));
                     }
                 }
                 KeyCode::Backspace => {

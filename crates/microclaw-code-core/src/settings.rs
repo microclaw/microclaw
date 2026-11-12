@@ -78,10 +78,10 @@ pub struct ModelRoles {
     /// Plan mode turns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
-    /// `/review` and `mccode review`.
+    /// `/review`, `mccode review` and the approval reviewer (`permissions.reviewer`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review: Option<String>,
-    /// Reserved for sub-agents and `explore`; not used yet (they run on the session's model).
+    /// Sub-agents (`sessions_spawn`) and `explore`; a project agent's own `model` wins.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent: Option<String>,
     /// Compaction summaries and handoffs.
@@ -134,6 +134,47 @@ pub struct PermissionsConfig {
     /// Managed only: modes users may not select (e.g. `[auto]`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled_modes: Vec<String>,
+    /// Approval reviewer: `off` (default), `advise` (a model rates each
+    /// approval; one it calls DANGEROUS asks you even in auto mode) or
+    /// `approve` (in ask mode it also approves the calls it rates SAFE).
+    /// Runs on `model.roles.review`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<ReviewerMode>,
+}
+
+/// What the approval reviewer may do (`permissions.reviewer`).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ReviewerMode {
+    /// No reviewer.
+    #[default]
+    Off,
+    /// Rate each approval; DANGEROUS always asks a person.
+    Advise,
+    /// Also approve, in ask mode, the calls it rates SAFE.
+    Approve,
+}
+
+impl ReviewerMode {
+    /// The mode in effect: the setting, or `advise` for `--review-commands`.
+    pub fn effective(setting: Option<ReviewerMode>, review_commands_flag: bool) -> ReviewerMode {
+        match setting {
+            Some(mode) if mode != ReviewerMode::Off => mode,
+            _ if review_commands_flag => ReviewerMode::Advise,
+            Some(mode) => mode,
+            None => ReviewerMode::Off,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewerMode::Off => "off",
+            ReviewerMode::Advise => "advise",
+            ReviewerMode::Approve => "approve",
+        }
+    }
 }
 
 impl PermissionsConfig {
@@ -1861,10 +1902,12 @@ model:
   # model name when there is exactly one profile.
   default: deepseek/deepseek-v4-pro
   # Roles switch the model within the session's profile; a role on another
-  # profile is skipped with a warning. `subagent` is not used yet.
+  # profile is skipped with a warning. `review` also runs the approval
+  # reviewer (permissions.reviewer); `subagent` runs sub-agents and explore.
   roles:
     plan: deepseek/deepseek-v4-pro
     review: deepseek/deepseek-v4-pro
+    # subagent: deepseek/deepseek-flash
     # summary: deepseek/deepseek-flash
   profiles:
     deepseek:
@@ -2499,6 +2542,25 @@ model: m
         );
         assert!(is_concatenated_key("hooks.pre_tool_use"));
         assert!(!is_concatenated_key("tui.status_line"));
+    }
+
+    #[test]
+    fn reviewer_setting_parses_and_the_flag_means_advise() {
+        let settings: CodeSettings =
+            serde_yaml::from_str("permissions:\n  reviewer: approve\n").unwrap();
+        assert_eq!(settings.permissions.reviewer, Some(ReviewerMode::Approve));
+        assert!(serde_yaml::from_str::<CodeSettings>("permissions:\n  reviewer: maybe\n").is_err());
+        assert_eq!(ReviewerMode::effective(None, false), ReviewerMode::Off);
+        assert_eq!(ReviewerMode::effective(None, true), ReviewerMode::Advise);
+        assert_eq!(
+            ReviewerMode::effective(Some(ReviewerMode::Off), true),
+            ReviewerMode::Advise
+        );
+        assert_eq!(
+            ReviewerMode::effective(Some(ReviewerMode::Approve), true),
+            ReviewerMode::Approve
+        );
+        assert_eq!(ReviewerMode::Approve.as_str(), "approve");
     }
 
     #[test]

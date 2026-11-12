@@ -24,6 +24,9 @@ pub struct BashTool {
     /// Background processes shared with `bash_output` / `bash_kill`; `None`
     /// disables `run_in_background`.
     processes: Option<Arc<super::background_process::ProcessRegistry>>,
+    /// Run foreground commands through `processes` so the user can move a
+    /// running one to the background (MicroClaw Code's Ctrl+B).
+    detachable_foreground: bool,
 }
 
 impl BashTool {
@@ -43,6 +46,90 @@ impl BashTool {
             dangerous_patterns: Vec::new(),
             rtk: None,
             processes: None,
+            detachable_foreground: false,
+        }
+    }
+
+    /// Run foreground commands so they can be moved to the background while
+    /// they run ([`super::background_process::ProcessRegistry::detach_foreground`]).
+    /// Needs a process registry; a container sandbox keeps the plain path.
+    pub fn with_detachable_foreground(mut self, enabled: bool) -> Self {
+        self.detachable_foreground = enabled;
+        self
+    }
+
+    /// The command line for a detachable foreground run, or `None` when
+    /// this command must take the plain path (no registry, or a container
+    /// sandbox that cannot run registry processes).
+    fn detachable_spec(
+        &self,
+        exec_command: &str,
+        working_dir: &Path,
+    ) -> Option<crate::internal::tool_runtime::command_runner::CommandSpec> {
+        if !self.detachable_foreground || self.processes.is_none() {
+            return None;
+        }
+        match &self.sandbox_router {
+            Some(router) if router.mode() != SandboxMode::Off => router
+                .local()
+                .map(|local| local.command_spec(exec_command, working_dir)),
+            _ => Some(crate::internal::tool_runtime::command_runner::shell_command(exec_command)),
+        }
+    }
+
+    /// Run a foreground command through the process registry. A command
+    /// the user moves to the background returns at once with its id.
+    async fn run_detachable(
+        &self,
+        session_key: &str,
+        command: &str,
+        spec: &crate::internal::tool_runtime::command_runner::CommandSpec,
+        working_dir: &Path,
+        env_files: &[PathBuf],
+        timeout_secs: u64,
+    ) -> Result<crate::internal::tool_runtime::sandbox::SandboxExecResult, ToolResult> {
+        use super::background_process::ForegroundOutcome;
+        let processes = self.processes.as_ref().expect("checked by detachable_spec");
+        let envs = load_env_files(env_files);
+        match processes
+            .run_foreground(
+                session_key,
+                command,
+                spec,
+                working_dir,
+                &envs,
+                std::time::Duration::from_secs(timeout_secs),
+            )
+            .await
+        {
+            Ok(ForegroundOutcome::Exited { code, output }) => {
+                Ok(crate::internal::tool_runtime::sandbox::SandboxExecResult {
+                    stdout: output,
+                    stderr: String::new(),
+                    exit_code: code,
+                })
+            }
+            Ok(ForegroundOutcome::Detached { id }) => {
+                info!("Moved foreground bash to the background as {id}: {command}");
+                Err(ToolResult::success(format!(
+                    "The user moved this command to the background while it was running; it continues as background process {id}: {command}\nRead its output with bash_output {{\"id\": \"{id}\"}} and stop it with bash_kill when you no longer need it. Carry on with other work meanwhile."
+                )))
+            }
+            Ok(ForegroundOutcome::TimedOut { output }) => {
+                let output = redact_env_secrets(&output, env_files);
+                let mut message = format!("Command timed out after {timeout_secs} seconds");
+                let tail = output.trim_end();
+                if !tail.is_empty() {
+                    let start = tail.len().saturating_sub(4_000);
+                    let start = (start..=tail.len())
+                        .find(|i| tail.is_char_boundary(*i))
+                        .unwrap_or(tail.len());
+                    message.push_str("\nOutput before the timeout:\n");
+                    message.push_str(&tail[start..]);
+                }
+                Err(ToolResult::error(message).with_error_type("timeout"))
+            }
+            Err(e) => Err(ToolResult::error(e).with_error_type("spawn_error")),
         }
     }
 
@@ -92,6 +179,62 @@ impl BashTool {
         self
     }
 
+    /// Turn a finished command's output into the tool result.
+    fn finish_output(
+        &self,
+        output: crate::internal::tool_runtime::sandbox::SandboxExecResult,
+        env_files_for_redact: &[PathBuf],
+    ) -> ToolResult {
+        let stdout = output.stdout;
+        let stderr = output.stderr;
+        let exit_code = output.exit_code;
+
+        let mut result_text = String::new();
+        if !stdout.is_empty() {
+            result_text.push_str(stdout.as_str());
+        }
+        if !stderr.is_empty() {
+            if !result_text.is_empty() {
+                result_text.push('\n');
+            }
+            result_text.push_str("STDERR:\n");
+            result_text.push_str(stderr.as_str());
+        }
+        if result_text.is_empty() {
+            result_text = format!("Command completed with exit code {exit_code}");
+        }
+
+        result_text = redact_env_secrets(&result_text, env_files_for_redact);
+
+        // A detachable foreground run combines stderr into stdout.
+        let error_text = if stderr.is_empty() { &stdout } else { &stderr };
+        if exit_code == 127
+            && error_text
+                .to_ascii_lowercase()
+                .contains("command not found")
+        {
+            if !result_text.ends_with('\n') {
+                result_text.push('\n');
+            }
+            result_text.push_str(command_not_found_hint(self.sandbox_router.as_ref()));
+        }
+
+        // Truncate very long output
+        if result_text.len() > 30000 {
+            let cutoff = floor_char_boundary(&result_text, 30000);
+            result_text.truncate(cutoff);
+            result_text.push_str("\n... (output truncated)");
+        }
+
+        if exit_code == 0 {
+            ToolResult::success(result_text).with_status_code(exit_code)
+        } else {
+            ToolResult::error(format!("Exit code {exit_code}\n{result_text}"))
+                .with_status_code(exit_code)
+                .with_error_type("process_exit")
+        }
+    }
+
     async fn start_background(
         &self,
         session_key: &str,
@@ -119,14 +262,7 @@ impl BashTool {
             )
             .with_error_type("execution_policy_blocked");
         }
-        let mut envs = std::collections::HashMap::new();
-        for env_file in env_files {
-            if let Ok(content) = std::fs::read_to_string(env_file) {
-                envs.extend(crate::internal::tool_runtime::env_file::parse_dotenv(
-                    &content,
-                ));
-            }
-        }
+        let envs = load_env_files(env_files);
         let Some(processes) = &self.processes else {
             return ToolResult::error(
                 "run_in_background is not available in this runtime; run the command in the foreground instead.".into(),
@@ -153,6 +289,18 @@ impl BashTool {
 }
 
 use crate::internal::tool_runtime::runtime::HIGH_RISK_APPROVED_KEY as BASH_HIGH_RISK_APPROVED_KEY;
+
+fn load_env_files(env_files: &[PathBuf]) -> std::collections::HashMap<String, String> {
+    let mut envs = std::collections::HashMap::new();
+    for env_file in env_files {
+        if let Ok(content) = std::fs::read_to_string(env_file) {
+            envs.extend(crate::internal::tool_runtime::env_file::parse_dotenv(
+                &content,
+            ));
+        }
+    }
+    envs
+}
 
 fn extract_env_files(input: &serde_json::Value) -> Vec<PathBuf> {
     super::auth_context_from_input(input)
@@ -436,6 +584,37 @@ impl Tool for BashTool {
                 .await;
         }
         let env_files_for_redact = env_files.clone();
+        if let Some(spec) = self.detachable_spec(&exec_command, &working_dir) {
+            let mut result = self
+                .run_detachable(
+                    &session_key,
+                    command,
+                    &spec,
+                    &working_dir,
+                    &env_files,
+                    timeout_secs,
+                )
+                .await;
+            if rtk_rewritten && matches!(&result, Ok(output) if output.exit_code == 127) {
+                info!("rtk not available in execution environment; retrying original command");
+                if let Some(spec) = self.detachable_spec(command, &working_dir) {
+                    result = self
+                        .run_detachable(
+                            &session_key,
+                            command,
+                            &spec,
+                            &working_dir,
+                            &env_files,
+                            timeout_secs,
+                        )
+                        .await;
+                }
+            }
+            return match result {
+                Ok(output) => self.finish_output(output, &env_files_for_redact),
+                Err(early) => early,
+            };
+        }
         let exec_opts = SandboxExecOptions {
             timeout: std::time::Duration::from_secs(timeout_secs),
             working_dir: Some(working_dir.clone()),
@@ -463,50 +642,7 @@ impl Tool for BashTool {
         }
 
         match result {
-            Ok(output) => {
-                let stdout = output.stdout;
-                let stderr = output.stderr;
-                let exit_code = output.exit_code;
-
-                let mut result_text = String::new();
-                if !stdout.is_empty() {
-                    result_text.push_str(stdout.as_str());
-                }
-                if !stderr.is_empty() {
-                    if !result_text.is_empty() {
-                        result_text.push('\n');
-                    }
-                    result_text.push_str("STDERR:\n");
-                    result_text.push_str(stderr.as_str());
-                }
-                if result_text.is_empty() {
-                    result_text = format!("Command completed with exit code {exit_code}");
-                }
-
-                result_text = redact_env_secrets(&result_text, &env_files_for_redact);
-
-                if exit_code == 127 && stderr.to_ascii_lowercase().contains("command not found") {
-                    if !result_text.ends_with('\n') {
-                        result_text.push('\n');
-                    }
-                    result_text.push_str(command_not_found_hint(self.sandbox_router.as_ref()));
-                }
-
-                // Truncate very long output
-                if result_text.len() > 30000 {
-                    let cutoff = floor_char_boundary(&result_text, 30000);
-                    result_text.truncate(cutoff);
-                    result_text.push_str("\n... (output truncated)");
-                }
-
-                if exit_code == 0 {
-                    ToolResult::success(result_text).with_status_code(exit_code)
-                } else {
-                    ToolResult::error(format!("Exit code {exit_code}\n{result_text}"))
-                        .with_status_code(exit_code)
-                        .with_error_type("process_exit")
-                }
-            }
+            Ok(output) => self.finish_output(output, &env_files_for_redact),
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("timed out after") {
@@ -648,6 +784,89 @@ mod tests {
         assert!(!result.is_error); // exit code is 0
         assert!(result.content.contains("STDERR"));
         assert!(result.content.contains("err"));
+    }
+
+    #[cfg(unix)]
+    fn detachable_tool(
+        dir: &std::path::Path,
+    ) -> (
+        BashTool,
+        Arc<crate::tools::background_process::ProcessRegistry>,
+    ) {
+        let registry = Arc::new(crate::tools::background_process::ProcessRegistry::default());
+        let tool = BashTool::new_with_isolation(dir.to_str().unwrap(), WorkingDirIsolation::Direct)
+            .with_process_registry(registry.clone())
+            .with_detachable_foreground(true);
+        (tool, registry)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detachable_foreground_reports_output_and_exit_codes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tool, _registry) = detachable_tool(dir.path());
+        let ok = tool
+            .execute(json!({"command": "echo hello; echo warn >&2"}))
+            .await;
+        assert!(!ok.is_error, "{}", ok.content);
+        assert!(
+            ok.content.contains("hello") && ok.content.contains("warn"),
+            "{}",
+            ok.content
+        );
+        let failed = tool.execute(json!({"command": "echo nope; exit 4"})).await;
+        assert!(failed.is_error);
+        assert_eq!(failed.status_code, Some(4));
+        assert!(
+            failed.content.starts_with("Exit code 4"),
+            "{}",
+            failed.content
+        );
+        let missing = tool
+            .execute(json!({"command": "definitely-not-a-command-xyz"}))
+            .await;
+        assert!(missing.is_error);
+        assert!(
+            missing.content.contains("command not found") || missing.content.contains("not found"),
+            "{}",
+            missing.content
+        );
+        let slow = tool
+            .execute(json!({"command": "echo partial; sleep 10", "timeout_secs": 1}))
+            .await;
+        assert!(slow.is_error);
+        assert!(
+            slow.content.contains("timed out") && slow.content.contains("partial"),
+            "{}",
+            slow.content
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detachable_foreground_command_can_move_to_the_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tool, registry) = detachable_tool(dir.path());
+        let tool = Arc::new(tool);
+        let run = {
+            let tool = tool.clone();
+            tokio::spawn(async move { tool.execute(json!({"command": "echo up; sleep 30"})).await })
+        };
+        let mut ids = Vec::new();
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            ids = registry.detach_foreground("shared");
+            if !ids.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(ids.len(), 1);
+        let result = run.await.unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains(&ids[0]), "{}", result.content);
+        assert!(result.content.contains("bash_output"), "{}", result.content);
+        assert_eq!(registry.jobs("shared").len(), 1);
+        registry.kill("shared", &ids[0]).await.unwrap();
     }
 
     #[tokio::test]

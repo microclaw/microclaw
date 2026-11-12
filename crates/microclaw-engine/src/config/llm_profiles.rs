@@ -81,9 +81,22 @@ pub struct AuxModels {
     /// approves or denies anything itself.
     #[serde(default)]
     pub approval_reviewer: Option<String>,
+    /// Model for sub-agents (`sessions_spawn` runs and `explore`). A
+    /// project agent's own `model` wins. Falls back to the main model when
+    /// unset or empty.
+    #[serde(default)]
+    pub subagent: Option<String>,
 }
 
 impl AuxModels {
+    /// The model sub-agents run on, falling back to `main`.
+    pub fn subagent_model<'a>(&'a self, main: &'a str) -> &'a str {
+        match self.subagent.as_deref() {
+            Some(m) if !m.trim().is_empty() => m.trim(),
+            _ => main,
+        }
+    }
+
     /// Resolve the model to use for context compaction, falling back to `main` when
     /// no auxiliary model is configured.
     pub fn compaction_model<'a>(&'a self, main: &'a str) -> &'a str {

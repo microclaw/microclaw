@@ -295,6 +295,11 @@ pub struct Config {
     /// `rewind_context`. Default: false.
     #[serde(default)]
     pub context_tools: bool,
+    /// Run foreground shell commands so the user can move a running one to
+    /// the background (MicroClaw Code's Ctrl+B). Set by embedders for coding
+    /// workspaces; never read from or written to the file.
+    #[serde(skip)]
+    pub detachable_foreground_commands: bool,
     /// Tell the model how full its context is on every request. Default:
     /// false (on in coding workspaces).
     #[serde(default)]
@@ -1082,6 +1087,7 @@ impl Config {
             project_agents_dir: None,
             tool_gate: Default::default(),
             context_tools: false,
+            detachable_foreground_commands: false,
             context_budget_hint: false,
             explore_tool: false,
             self_recheck: SelfRecheckConfig::default(),

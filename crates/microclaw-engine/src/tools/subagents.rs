@@ -385,6 +385,10 @@ struct RunSubAgentTaskParams {
     task: String,
     context: String,
     specialist: String,
+    /// A project agent (`.microclaw/agents/<name>.md`) to run as: its
+    /// prompt replaces the specialist persona and its `tools` narrow the
+    /// tool set.
+    agent: Option<crate::tools::explore::ProjectAgent>,
     exit_criteria: Vec<crate::completion_contract::ExitCriterion>,
     local_cancel: Arc<AtomicBool>,
 }
@@ -504,6 +508,7 @@ async fn run_sub_agent_task(
         task,
         context,
         specialist,
+        agent,
         exit_criteria,
         local_cancel,
     } = params;
@@ -598,12 +603,19 @@ async fn run_sub_agent_task(
     // return the final structured result as validated tool input (native
     // constrained decoding) rather than hand-written JSON text.
     let mut tool_defs = tools.definitions_for(&auth_context);
+    if let Some(agent) = &agent {
+        tool_defs.retain(|d| agent.allows(&d.name));
+    }
     tool_defs.push(submit_result_tool_definition());
 
     let profile = crate::tools::specialists::resolve_specialist(Some(specialist.as_str()));
+    let persona = match &agent {
+        Some(agent) => agent.prompt.as_str(),
+        None => profile.persona,
+    };
     let system_prompt = format!(
         "{persona}\n\nComplete the task thoroughly with tool use when needed.\nYou are a background worker: you have NO tools to message the chat, write memory, or schedule tasks (no `send_message`, `write_memory`, or `schedule` — do not look for them or stall when they are missing). `read_memory` and `structured_memory_search` are read-only lookups. Any durable facts you surface in `findings`/`final_answer` are persisted by the orchestrator automatically — just report them, don't try to save them yourself.\nFor long tasks, call `report_progress` at meaningful milestones with a one-line status so the user gets colleague-style updates while you work.\nIf a sub-problem falls outside your expertise, get a quick second opinion from the right specialist with `consult_specialist` (e.g. as a researcher, hand a draft to the writer; as a coder, ask the mathematician to check a formula) and weave their answer into your work — don't fake expertise you don't have. If a sub-problem is large enough to need its own run and you're allowed to spawn, delegate it with `sessions_spawn`; otherwise name the right specialist in next_actions.\nOutput contract (required): when the task is complete, call the `submit_result` tool exactly once with your structured result (summary, findings, artifacts, next_actions, final_answer). Prefer `submit_result` over writing the result as text. If you do answer in text instead, it MUST be a single JSON object with those same keys and nothing else.",
-        persona = profile.persona
+        persona = persona
     );
 
     let mut user_content = if context.is_empty() {
@@ -913,9 +925,13 @@ async fn run_sub_agent_task(
                             }),
                         );
                     }
-                    let result = tools
-                        .execute_with_auth(name, tool_input, &auth_context)
-                        .await;
+                    let result = if agent.as_ref().is_some_and(|a| !a.allows(name)) {
+                        ToolResult::error(format!("`{name}` is not in this agent's `tools` list"))
+                    } else {
+                        tools
+                            .execute_with_auth(name, tool_input, &auth_context)
+                            .await
+                    };
                     tool_results.push(ContentBlock::ToolResult {
                         tool_use_id: id.clone(),
                         content: result.content,
@@ -1182,14 +1198,22 @@ pub struct SessionsSpawnTool {
     config: Config,
     db: Arc<Database>,
     channel_registry: Arc<ChannelRegistry>,
+    /// Project agents offered as `agent` (trusted workspaces only).
+    agents: Vec<crate::tools::explore::ProjectAgent>,
 }
 
 impl SessionsSpawnTool {
     pub fn new(config: &Config, db: Arc<Database>, channel_registry: Arc<ChannelRegistry>) -> Self {
+        let agents = config
+            .project_agents_dir
+            .as_deref()
+            .map(|dir| crate::tools::explore::load_project_agents(std::path::Path::new(dir)))
+            .unwrap_or_default();
         Self {
             config: config.clone(),
             db,
             channel_registry,
+            agents,
         }
     }
 }
@@ -1201,7 +1225,7 @@ impl Tool for SessionsSpawnTool {
     }
 
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
+        let mut definition = ToolDefinition {
             name: "sessions_spawn".into(),
             description: format!(
                 "Spawn an asynchronous sub-agent run for long tasks. Returns immediately with a run id. Use subagents_list/subagents_info/subagents_kill to manage runs. Pick a `specialist` to route the work to a focused expert. Available specialists: {}.",
@@ -1252,7 +1276,39 @@ impl Tool for SessionsSpawnTool {
                 }),
                 &["task"],
             ),
+        };
+        if !self.agents.is_empty() {
+            if let Some(properties) = definition
+                .input_schema
+                .get_mut("properties")
+                .and_then(|p| p.as_object_mut())
+            {
+                properties.insert(
+                    "agent".into(),
+                    json!({
+                        "type": "string",
+                        "enum": self.agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+                        "description": "Project agent to run as (its own instructions, model and tools) instead of a specialist"
+                    }),
+                );
+            }
+            let list: Vec<String> = self
+                .agents
+                .iter()
+                .map(|a| {
+                    if a.description.is_empty() {
+                        a.name.clone()
+                    } else {
+                        format!("{} ({})", a.name, a.description)
+                    }
+                })
+                .collect();
+            definition.description.push_str(&format!(
+                " Project agents (pass as `agent`): {}.",
+                list.join("; ")
+            ));
         }
+        definition
     }
 
     async fn execute(&self, input: serde_json::Value) -> ToolResult {
@@ -1388,11 +1444,49 @@ impl Tool for SessionsSpawnTool {
             }
         }
 
+        let agent = match input.get("agent").and_then(|v| v.as_str()).map(str::trim) {
+            Some(name) if !name.is_empty() => match self.agents.iter().find(|a| a.name == name) {
+                Some(agent) => Some(agent.clone()),
+                None => {
+                    return ToolResult::error(format!(
+                        "Unknown project agent `{name}`{}",
+                        if self.agents.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                "; available: {}",
+                                self.agents
+                                    .iter()
+                                    .map(|a| a.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        }
+                    ))
+                }
+            },
+            _ => None,
+        };
+        if agent.is_some() && matches!(execution_runtime, SubagentExecutionRuntime::Acp) {
+            return ToolResult::error(
+                "Project agents run on the native runtime; drop `runtime: acp` or `agent`".into(),
+            );
+        }
+        let label = label.or_else(|| agent.as_ref().map(|a| a.name.clone()));
+
         let run_id = format!("subrun-{}", uuid::Uuid::new_v4());
         let (provider, model, acp_target) = match execution_runtime {
             SubagentExecutionRuntime::Native => (
                 self.config.llm_provider.clone(),
-                self.config.model.clone(),
+                agent
+                    .as_ref()
+                    .and_then(|a| a.model.clone())
+                    .unwrap_or_else(|| {
+                        self.config
+                            .aux_models
+                            .subagent_model(&self.config.model)
+                            .to_string()
+                    }),
                 None,
             ),
             SubagentExecutionRuntime::Acp => {
@@ -1419,6 +1513,7 @@ impl Tool for SessionsSpawnTool {
             }
         };
 
+        let subagent_model = model.clone();
         let run_id_for_insert = run_id.clone();
         let task_for_insert = task.clone();
         let context_for_insert = context.clone();
@@ -1462,7 +1557,12 @@ impl Tool for SessionsSpawnTool {
         let runtime = subagent_runtime(&self.config);
         let local_cancel = runtime.register_run(&run_id);
         let db = self.db.clone();
-        let cfg = self.config.clone();
+        let mut cfg = self.config.clone();
+        if matches!(execution_runtime, SubagentExecutionRuntime::Native) {
+            // The sub-agent's provider uses `cfg.model` as its model.
+            cfg.model = subagent_model;
+        }
+        let agent_async = agent.clone();
         let run_id_async = run_id.clone();
         let task_async = task.clone();
         let context_async = context.clone();
@@ -1530,6 +1630,7 @@ impl Tool for SessionsSpawnTool {
                 task: task_async,
                 context: context_async,
                 specialist: specialist_async,
+                agent: agent_async,
                 exit_criteria: exit_criteria_async,
                 local_cancel,
             });
@@ -3039,6 +3140,66 @@ mod tests {
             parsed.get("runtime_target").and_then(|v| v.as_str()),
             Some("worker")
         );
+    }
+
+    #[tokio::test]
+    async fn sessions_spawn_offers_project_agents_and_uses_the_subagent_model() {
+        let agents = tempfile::tempdir().unwrap();
+        std::fs::write(
+            agents.path().join("reviewer.md"),
+            "---\ndescription: Reviews diffs\nmodel: agent-model\ntools: read, grep\n---\nYou review code.",
+        )
+        .unwrap();
+        let mut cfg = test_config();
+        cfg.project_agents_dir = Some(agents.path().to_string_lossy().into_owned());
+        cfg.aux_models.subagent = Some("cheap-model".into());
+        let db = test_db();
+        let tool = SessionsSpawnTool::new(&cfg, db.clone(), Arc::new(ChannelRegistry::new()));
+        let definition = tool.definition();
+        assert!(definition.description.contains("reviewer (Reviews diffs)"));
+        assert_eq!(
+            definition.input_schema["properties"]["agent"]["enum"],
+            json!(["reviewer"])
+        );
+
+        let unknown = tool
+            .execute(json!({
+                "task": "look",
+                "agent": "nobody",
+                "__microclaw_auth": {"caller_channel":"code", "caller_chat_id": 1}
+            }))
+            .await;
+        assert!(unknown.is_error);
+        assert!(
+            unknown.content.contains("available: reviewer"),
+            "{}",
+            unknown.content
+        );
+
+        let model_of = |result: &ToolResult| {
+            let parsed: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+            let run_id = parsed["run_id"].as_str().unwrap().to_string();
+            db.get_subagent_run(&run_id, 1).unwrap().unwrap().model
+        };
+        let plain = tool
+            .execute(json!({
+                "task": "look",
+                "__microclaw_auth": {"caller_channel":"code", "caller_chat_id": 1}
+            }))
+            .await;
+        assert!(!plain.is_error, "{}", plain.content);
+        assert_eq!(model_of(&plain), "cheap-model");
+        let as_agent = tool
+            .execute(json!({
+                "task": "review",
+                "agent": "reviewer",
+                "__microclaw_auth": {"caller_channel":"code", "caller_chat_id": 1}
+            }))
+            .await;
+        assert!(!as_agent.is_error, "{}", as_agent.content);
+        assert_eq!(model_of(&as_agent), "agent-model");
+        let parsed: serde_json::Value = serde_json::from_str(&as_agent.content).unwrap();
+        assert_eq!(parsed["label"], json!("reviewer"));
     }
 
     #[tokio::test]

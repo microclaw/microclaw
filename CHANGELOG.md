@@ -4,6 +4,60 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## 0.30.0 - 2026-11-11
+
+MicroClaw Code closes four everyday gaps found by comparing it with Claude
+Code, Codex CLI and OpenCode
+(`docs/roadmap/mccode-competitive-plan-2026-11-cn.md`, N1–N4).
+
+### Added
+
+- **Ctrl+B moves a running shell command to the background.** The agent's
+  `bash` call returns at once with the process id and the agent carries
+  on; it reads the output later with `bash_output` and stops it with
+  `bash_kill`. `/jobs` (terminal and Zed) lists background commands and
+  sub-agent runs, `/jobs <id>` shows the latest output and `/jobs kill <id>`
+  stops one, also while a turn runs. Foreground commands in a workspace now
+  run through the process registry for this (stdout and stderr arrive
+  interleaved, as in a terminal); a cancelled run still stops its command.
+  SDK: `MicroClaw::background_running_commands`, `background_jobs`,
+  `background_job_output`, `kill_background_job`.
+- **`/rewind` also rewinds the conversation.** Going back to before a turn
+  restores its files and cuts the conversation back to where it stood when
+  the turn started, so the agent no longer remembers work that was undone.
+  The timeline (Esc Esc) takes Enter for both, `f` for files only, `c` for
+  the conversation only and `e` to just edit the prompt; `/rewind <id>
+  files|chat|both` and Zed's `/rewind N [files|chat]` do the same. After a
+  files-only rewind, `/undo` or a conversation-only rewind, the next prompt
+  tells the agent that the files and the conversation may disagree. The
+  whole conversation is archived before it is cut, and a conversation that
+  was compacted since the turn is left as it is. SDK:
+  `MicroClaw::session_mark` and `rewind_session`.
+- **Sub-agents get their own model, and project agents can run as
+  sub-agents.** `model.roles.subagent` (engine `aux_models.subagent`, SDK
+  `MicroClawBuilder::subagent_model`) now sets the model of `sessions_spawn`
+  runs and `explore`. `sessions_spawn` takes `agent: <name>` to run a task
+  as a project agent from `.microclaw/agents/<name>.md` with its own
+  instructions and `model`. A new `tools:` front-matter field (tool names
+  or `read`, `write`, `edit`, `shell`, `search`, `web`) narrows the tools
+  such an agent may use, for `explore` as well; it can never widen them.
+- **The approval reviewer can approve.** `permissions.reviewer: approve`
+  lets the reviewer model approve, in ask mode, the high-risk calls it
+  rates SAFE (shell commands, writes outside the project, web fetches, MCP
+  tools); everything else still asks you, destructive commands and `ask`
+  rules always do, and a failed review asks too. The turn's receipt lists
+  what the reviewer approved and why. `advise` is the former
+  `--review-commands` behaviour (the flag still selects it), and the
+  reviewer now runs on `model.roles.review`.
+
+### Changed
+
+- The side panel moves from Ctrl+B to Ctrl+] (Ctrl+5 in terminals without
+  the kitty keyboard protocol); rebind `app.sidebar` / `app.background` in
+  `tui.keymap` to change either.
+- The approval reviewer's prompt says that a SAFE verdict may let a call run
+  without asking a person, so it keeps SAFE for clearly harmless calls.
+
 ## 0.29.1 - 2026-11-11
 
 ### Fixed

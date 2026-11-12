@@ -20,6 +20,7 @@ pub enum Builtin {
     Compact,
     Undo,
     Rewind,
+    Jobs,
     Cost,
     Context,
     Status,
@@ -74,8 +75,14 @@ const BUILTINS: &[(Builtin, &str, &str, Option<&str>)] = &[
     (
         Builtin::Rewind,
         "rewind",
-        "List this session's turns, or restore files to before turn N",
-        Some("turn number (optional)"),
+        "List this session's turns, or go back to before turn N (files and conversation; add `files` or `chat` for one)",
+        Some("turn number and files|chat (optional)"),
+    ),
+    (
+        Builtin::Jobs,
+        "jobs",
+        "Background commands and sub-agents; `/jobs <id>` shows output, `/jobs kill <id>` stops one",
+        Some("id, or kill id (optional)"),
     ),
     (
         Builtin::Cost,

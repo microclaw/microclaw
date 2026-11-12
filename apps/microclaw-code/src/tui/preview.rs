@@ -173,6 +173,7 @@ fn demo_app(theme: &str) -> App {
     let (theme, _) = crate::ui::theme::resolve(theme, None, Some(true));
     App {
         session: None,
+        jobs: None,
         running: None,
         updates_tx,
         updates_rx,

@@ -216,6 +216,33 @@ pub struct DelegatedTask {
     pub cancel_requested: bool,
 }
 
+/// A point in a session's conversation ([`MicroClaw::session_mark`]).
+/// Valid within the process that took it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionMark {
+    messages: usize,
+    fingerprint: u64,
+}
+
+impl SessionMark {
+    /// Messages in the conversation at that point.
+    pub fn messages(&self) -> usize {
+        self.messages
+    }
+}
+
+/// A shell command running (or finished) in the background of a session:
+/// started with `run_in_background`, or moved there by the user while it ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundJob {
+    pub id: String,
+    pub command: String,
+    /// RFC 3339.
+    pub started_at: String,
+    /// `None` while the command runs.
+    pub exit_code: Option<i32>,
+}
+
 /// Lifecycle state for a task delegated by the Main Agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -558,6 +585,42 @@ impl MicroClaw {
             .map_err(|error| SdkError::Runtime(error.to_string()))
     }
 
+    /// The current end of a session's conversation. Pass it to
+    /// [`Self::rewind_session`] later to drop everything said after it.
+    #[cfg(feature = "full")]
+    pub async fn session_mark(&self, session: impl AsRef<str>) -> Result<SessionMark, SdkError> {
+        self.engine()?
+            .session_mark(session.as_ref())
+            .await
+            .map(|mark| SessionMark {
+                messages: mark.messages,
+                fingerprint: mark.fingerprint,
+            })
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Cut a session's conversation back to a [`SessionMark`] (the whole
+    /// conversation is archived first). Fails when the conversation was
+    /// compacted since the mark. Returns how many messages were removed.
+    #[cfg(feature = "full")]
+    pub async fn rewind_session(
+        &self,
+        session: impl AsRef<str>,
+        mark: &SessionMark,
+    ) -> Result<usize, SdkError> {
+        self.engine()?
+            .rewind_session_to(
+                &self.caller_channel,
+                session.as_ref(),
+                &microclaw_engine::headless::SessionMark {
+                    messages: mark.messages,
+                    fingerprint: mark.fingerprint,
+                },
+            )
+            .await
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
     /// Restore the workspace to a checkpoint. The current state is
     /// checkpointed first and returned, so the restore can be undone.
     #[cfg(feature = "full")]
@@ -710,6 +773,72 @@ impl MicroClaw {
             .map_err(|error| SdkError::Runtime(error.to_string()))
     }
 
+    /// Background shell commands of a session, oldest first.
+    #[cfg(feature = "full")]
+    pub fn background_jobs(
+        &self,
+        session: impl AsRef<str>,
+    ) -> Result<Vec<BackgroundJob>, SdkError> {
+        self.engine()?
+            .background_jobs(&self.caller_channel, session.as_ref())
+            .map(|jobs| {
+                jobs.into_iter()
+                    .map(|job| BackgroundJob {
+                        id: job.id,
+                        command: job.command,
+                        started_at: job.started_at.to_rfc3339(),
+                        exit_code: job.exit_code,
+                    })
+                    .collect()
+            })
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Move the shell commands a session is running in the foreground to
+    /// the background; the agent gets their ids and carries on. Returns the
+    /// ids (empty when no command was running). Works while a run is in
+    /// progress; needs a workspace runtime ([`MicroClawBuilder::workspace`]).
+    #[cfg(feature = "full")]
+    pub fn background_running_commands(
+        &self,
+        session: impl AsRef<str>,
+    ) -> Result<Vec<String>, SdkError> {
+        self.engine()?
+            .detach_foreground_commands(&self.caller_channel, session.as_ref())
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// The last `max_bytes` of a background command's output.
+    #[cfg(feature = "full")]
+    pub fn background_job_output(
+        &self,
+        session: impl AsRef<str>,
+        id: impl AsRef<str>,
+        max_bytes: usize,
+    ) -> Result<String, SdkError> {
+        self.engine()?
+            .background_job_output(
+                &self.caller_channel,
+                session.as_ref(),
+                id.as_ref(),
+                max_bytes,
+            )
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
+    /// Stop a background command. Returns its status line.
+    #[cfg(feature = "full")]
+    pub async fn kill_background_job(
+        &self,
+        session: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<String, SdkError> {
+        self.engine()?
+            .kill_background_job(&self.caller_channel, session.as_ref(), id.as_ref())
+            .await
+            .map_err(|error| SdkError::Runtime(error.to_string()))
+    }
+
     /// Cancel one active Subagent task owned by the named session.
     #[cfg(feature = "full")]
     pub fn cancel_delegated_task(
@@ -805,6 +934,7 @@ fn apply_workspace_context_defaults(config: &mut microclaw_engine::config::Confi
     }
     config.explore_tool = true;
     config.context_budget_hint = true;
+    config.detachable_foreground_commands = true;
     if config.tool_result_truncation_threshold_chars == 4_000 {
         config.tool_result_truncation_threshold_chars = 60_000;
         config.tool_result_truncation_head_chars = 40_000;
@@ -861,6 +991,7 @@ pub struct MicroClawBuilder {
     project_agents_dir: Option<PathBuf>,
     tool_gate: Option<Arc<dyn ToolGate>>,
     summary_model: Option<String>,
+    subagent_model: Option<String>,
 }
 
 #[cfg(feature = "full")]
@@ -882,6 +1013,7 @@ impl MicroClawBuilder {
             project_agents_dir: None,
             tool_gate: None,
             summary_model: None,
+            subagent_model: None,
         }
     }
 
@@ -902,6 +1034,7 @@ impl MicroClawBuilder {
             project_agents_dir: None,
             tool_gate: None,
             summary_model: None,
+            subagent_model: None,
         }
     }
 
@@ -922,6 +1055,7 @@ impl MicroClawBuilder {
             project_agents_dir: None,
             tool_gate: None,
             summary_model: None,
+            subagent_model: None,
         }
     }
 
@@ -1005,6 +1139,14 @@ impl MicroClawBuilder {
 
     /// Model for compaction summaries and handoffs (`None` keeps the
     /// configured one, which defaults to the main model).
+    /// Model for sub-agents (`sessions_spawn` runs and `explore`) on the
+    /// same provider; `None` uses the main model. A project agent's own
+    /// `model` still wins.
+    pub fn subagent_model(mut self, model: Option<String>) -> Self {
+        self.subagent_model = model.filter(|m| !m.trim().is_empty());
+        self
+    }
+
     pub fn summary_model(mut self, model: Option<String>) -> Self {
         self.summary_model = model.filter(|m| !m.trim().is_empty());
         self
@@ -1045,6 +1187,9 @@ impl MicroClawBuilder {
         }
         if let Some(dir) = self.project_agents_dir {
             config.project_agents_dir = Some(dir.to_string_lossy().into_owned());
+        }
+        if let Some(model) = self.subagent_model {
+            config.aux_models.subagent = Some(model);
         }
         if let Some(model) = self.summary_model {
             config.aux_models.compaction = Some(model);

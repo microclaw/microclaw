@@ -37,7 +37,7 @@ In the TUI:
 | `!` (empty input) | shell mode: run a command yourself; its output goes to the agent with your next message |
 | Shift+Tab | cycle mode: plan → ask → auto |
 | Esc / Ctrl+C | stop the running agent |
-| Esc Esc | rewind: pick an earlier turn, restore its files and edit its prompt |
+| Esc Esc | rewind: pick an earlier turn and go back to before it (files and conversation; `f` files only, `c` conversation only, `e` just edit its prompt) |
 | Ctrl+P | command palette |
 | Ctrl+R | search earlier prompts (history is kept per project) |
 | Ctrl+G | edit the prompt in `$EDITOR` |
@@ -45,7 +45,8 @@ In the TUI:
 | Ctrl+O | expand / collapse all tool output and diffs (or click one) |
 | Ctrl+T | the whole transcript in a pager with `/` search |
 | F2 | review the uncommitted changes hunk by hunk |
-| Ctrl+B | show / hide the side panel |
+| Ctrl+B | move the running shell command to the background (the agent carries on; `/jobs` lists it) |
+| Ctrl+] | show / hide the side panel |
 | PgUp / PgDn, mouse wheel, End | scroll the transcript |
 | Ctrl+C twice, Ctrl+D, `/exit` | quit |
 
@@ -63,7 +64,8 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | `/btw <question>` | Answer a side question in a throwaway copy of the conversation, even while a turn runs; the main session is not changed. |
 | `/changes` (F2) | Review the uncommitted changes file by file: revert a single hunk (a backup patch goes to `.git/microclaw/reverted/`), mark files reviewed, and leave comments that become a prompt for the agent. |
 | `/undo` | Restore the files to how they were before the last turn that changed them. The state you leave is checkpointed too. |
-| `/rewind [id]` | Pick an earlier turn (also Esc Esc) and restore its files, or restore a checkpoint by id. |
+| `/rewind [id [files\|chat\|both]]` | Pick an earlier turn (also Esc Esc) and go back to before it: the files are restored and the conversation is cut back to where it stood, so the agent no longer remembers the undone work. `files` or `chat` rewinds only one; after a files-only or chat-only rewind the agent is told the two may disagree. A conversation that was compacted since that turn cannot be cut back (the files still are). |
+| `/jobs [id \| kill id]` | Background work of this session: shell commands started with `run_in_background` or moved there with Ctrl+B, and sub-agent runs. `/jobs <id>` shows the latest output, `/jobs kill <id>` stops one. Works while a turn runs. |
 | `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
 | `/model [name\|reset]` | Pick (or switch to) a model for this session. |
 | `/theme [name]` | Pick a theme with live preview. |
@@ -108,8 +110,19 @@ system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
   `MCCODE_LOCAL_SANDBOX=landlock` forces Landlock and `MCCODE_LOCAL_SANDBOX=none`
   turns the OS sandbox off; any other value (or none) detects the best one.
 
-`--review-commands` has the model annotate every approval with a one-line
-verdict; a command it calls `DANGEROUS` asks you even in `auto` mode.
+**Approval reviewer.** `permissions.reviewer` has a model rate every call
+that needs approval with a one-line verdict (`SAFE`, `CAUTION` or
+`DANGEROUS`). It runs on `model.roles.review` (the session's model when
+unset).
+
+- `advise` (or `--review-commands`): you see the verdict on the approval
+  card, and a call it rates `DANGEROUS` asks you even in `auto` mode.
+- `approve`: in `ask` mode it also approves the calls it rates `SAFE`
+  (commands, writes outside the project, web fetches, MCP tools), and the
+  turn's receipt lists them with the reviewer's reason. Everything else
+  still asks you: the reviewer can approve but never deny, destructive
+  commands always ask, and so do `ask` rules and hooks. If the reviewer call
+  fails, you are asked.
 
 This is defence in depth: the approval rules above still apply. Turn it off
 with `--sandbox off` (or `MCCODE_SANDBOX=off`). If the machine has no
@@ -245,9 +258,17 @@ can add focused helpers in `.microclaw/agents/<name>.md`:
 ---
 description: Knows the storage layer and its migrations
 model: claude-haiku-4-5   # optional
+tools: read, search, web  # optional: narrows the tools it may use
 ---
 You explain how the database code in crates/storage works. …
 ```
+
+The same agents can run as sub-agents: `sessions_spawn` takes `agent: <name>`
+and runs the task in the background with that agent's instructions, model and
+tools. `tools` only ever narrows what the caller could use (plan mode stays
+read-only); it accepts tool names and the short names `read`, `write`, `edit`,
+`shell`, `search` and `web`. Sub-agents and `explore` run on
+`model.roles.subagent` when it is set, unless the agent names its own `model`.
 
 The model also sees how full its context is on every request, so it can
 delegate or wrap up before compaction is needed. With `--context-tools` (or

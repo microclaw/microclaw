@@ -1,6 +1,6 @@
 # mccode 对比 Claude Code、Codex CLI、OpenCode（2026-11）及下一阶段计划
 
-状态：**提议**
+状态：**进行中**（0.30 的 N1–N4 已实现，见第 10 节；0.31 待做）
 更新：**2026-11-11**
 基线：**mccode 0.29.1**
 前几份计划：[`mccode-next-plan-cn.md`](./mccode-next-plan-cn.md)（0.21–0.23，上下文引擎）、
@@ -294,3 +294,17 @@
   <https://opencode.ai/v2/docs/>（config、permissions、migrate-v1）、<https://zed.dev/acp/agent/opencode-v2>
 - mccode：`CHANGELOG.md`（0.20.0–0.29.1）、`crates/microclaw-code-core/src/{prompt,settings,launch,driver}.rs`、
   `apps/microclaw-code/src/tui/keymap.rs`、`crates/microclaw-engine/src/tools/{explore,background_process}.rs`
+
+---
+
+## 10. 0.30 交付情况
+
+第 8 节的前两个问题按建议执行：Ctrl+B 改为“转入后台”、侧栏移到 Ctrl+]；复核器只能放行或转人工。
+
+| 项 | 交付 | 和计划的差别 |
+|---|---|---|
+| N1 | Ctrl+B 把正在跑的前台命令转入后台，工具立即返回进程 id；`/jobs`（TUI 与 Zed）列出后台命令和子代理，`/jobs <id>` 看输出，`/jobs kill <id>` 结束，运行中也能用。工作区里的前台命令改走 `ProcessRegistry`（stdout、stderr 合并输出，取消运行仍会结束命令）。SDK：`background_running_commands`、`background_jobs`、`background_job_output`、`kill_background_job` | 子代理不需要“转入后台”：`sessions_spawn` 本来就是后台运行，`/jobs` 能列出和结束它；`explore` 是同步、只读、短任务，保持不变 |
+| N2 | `/rewind` 默认同时回退文件和对话；时间线里 Enter 两者、`f` 只回退文件、`c` 只回退对话、`e` 只编辑提示词；`/rewind <id> files\|chat\|both`、Zed `/rewind N [files\|chat]`。只回退一边（以及 `/undo`）后，下一条提示会告诉模型文件和对话可能不一致。对话截断前先归档；该轮之后发生过压缩时，对话保持不变并说明原因。SDK：`session_mark`、`rewind_session` | 检查点不记录消息条数，改为每轮开始时记一个“会话标记”（条数 + 前缀指纹），指纹不符就拒绝截断，避免压缩后截错位置 |
+| N3 | 接通 `model.roles.subagent`（引擎 `aux_models.subagent`、SDK `subagent_model`），`sessions_spawn` 和 `explore` 都用它；`sessions_spawn` 新增 `agent` 参数，按项目 agent 的提示词、`model` 运行；新增 front matter `tools:`，只能收窄工具集，`explore` 同样遵守 | 计划里写的 `sub_agent` 工具实际是 `sessions_spawn` |
+| N4 | `permissions.reviewer: off \| advise \| approve`；`approve` 在 ask 模式下自动放行复核模型判为 SAFE 的高风险调用（命令、工作区外写入、联网、MCP），其余转人工；破坏性命令、`ask` 规则、hooks、复核失败都转人工；回执列出复核放行的调用和理由；复核用 `model.roles.review`；`--review-commands` 等于 `advise` | 设置值从计划里的 `commands \| all` 改名为 `advise \| approve`，因为差别不在“复核哪些工具”（引擎一直复核所有高风险调用），而在“复核器能不能放行” |
+

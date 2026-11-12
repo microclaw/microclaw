@@ -14,7 +14,9 @@ use crate::driver::RoleModels;
 use crate::gate::{CodeToolGate, GateEvent};
 use crate::project::Project;
 use crate::rules::{Effect, PermissionRules};
-use crate::settings::{self as code_settings, CodeSettings, NetworkMode, ResolvedModel};
+use crate::settings::{
+    self as code_settings, CodeSettings, NetworkMode, ResolvedModel, ReviewerMode,
+};
 use crate::trust::TrustStore;
 use crate::user_hooks::UserHooks;
 
@@ -109,6 +111,8 @@ pub fn tool_gate(
 pub struct RoleSetup {
     pub roles: RoleModels,
     pub summary: Option<String>,
+    /// Sub-agents and `explore`.
+    pub subagent: Option<String>,
     pub warnings: Vec<String>,
 }
 
@@ -125,9 +129,11 @@ pub fn role_setup(settings: &CodeSettings, active_profile: Option<&str>) -> Role
         review: get("review"),
     };
     let summary = get("summary");
+    let subagent = get("subagent");
     RoleSetup {
         roles,
         summary,
+        subagent,
         warnings,
     }
 }
@@ -160,6 +166,8 @@ pub struct EngineOptions {
 pub struct ProjectEngine {
     pub engine: MicroClaw,
     pub settings: CodeSettings,
+    /// What the approval reviewer may do in sessions on this engine.
+    pub reviewer: ReviewerMode,
     pub gate: CodeToolGate,
     pub roles: RoleModels,
     pub model: ModelSource,
@@ -185,6 +193,7 @@ pub async fn project_engine(
         .builder()
         .tool_gate(Arc::new(gate.clone()))
         .summary_model(roles.summary.clone())
+        .subagent_model(roles.subagent.clone())
         .caller_channel(crate::driver::CALLER_CHANNEL)
         .workspace(root)
         .data_dir(crate::home::data_dir())
@@ -196,12 +205,14 @@ pub async fn project_engine(
             .compact_instructions(project.config.compact_instructions.clone())
             .context_tools(project.config.context_tools == Some(true));
     }
-    if options.review_commands {
-        builder = builder.command_reviewer(None);
+    let reviewer = ReviewerMode::effective(settings.permissions.reviewer, options.review_commands);
+    if reviewer != ReviewerMode::Off {
+        builder = builder.command_reviewer(roles.roles.review.clone());
     }
     let engine = builder.build().await.map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(ProjectEngine {
         engine,
+        reviewer,
         settings,
         gate,
         roles: roles.roles,
