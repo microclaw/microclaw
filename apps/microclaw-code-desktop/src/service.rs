@@ -83,6 +83,8 @@ pub enum Event {
     Update(Update),
     TurnFinished {
         receipt: Option<String>,
+        /// Not failed, stopped or left with failing checks.
+        ok: bool,
     },
     ModeChanged(Mode),
     ModelChanged(String),
@@ -582,17 +584,17 @@ impl Service {
 
     fn turn_done(&mut self, session: CodeSession, report: anyhow::Result<TurnReport>) {
         self.running = None;
-        let receipt = match &report {
-            Ok(report) => receipt(report),
+        let (receipt, ok) = match &report {
+            Ok(report) => (receipt(report), report.exit_code() == 0),
             Err(e) => {
                 self.emit(Event::Error(format!("{e:#}")));
-                None
+                (None, false)
             }
         };
         if let Some(engine) = &mut self.engine {
             engine.session = Some(session);
         }
-        self.emit(Event::TurnFinished { receipt });
+        self.emit(Event::TurnFinished { receipt, ok });
     }
 }
 

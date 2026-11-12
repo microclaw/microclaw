@@ -1,6 +1,6 @@
 # MicroClaw Code 桌面版（macOS，GPUI）计划
 
-状态：**M1 预览已实现（未签名，待合并）；M2 未开始**
+状态：**M1 预览已实现（未签名；真实模型往返未验证；待合并）；M2 未开始**
 更新：**2026-11-12**
 基线：**v0.30.0**（原计划基线 v0.26.0）
 
@@ -380,17 +380,28 @@ apps/microclaw-code-desktop/
 
 ### 11.3 验证
 
-- 桌面 crate：`cargo clippy --all-targets -- -D warnings`、`cargo test`（8 个测试：reducer 5、回执 1、最近项目 1、
-  所有对话条目在 GPUI 测试平台上渲染 1）、`cargo fmt --check`。CI 新增 `desktop-macos` job（macos-15）跑这些，
+- 桌面 crate：`cargo clippy --all-targets -- -D warnings`、`cargo test`（9 个测试：reducer 5、回执 1、最近项目 1、
+  所有对话条目在 GPUI 测试平台上渲染 1、服务层端到端 1）、`cargo fmt --check`。CI 新增 `desktop-macos` job（macos-15）跑这些，
   再打包一次 debug `.app`，并在空 `MCCODE_HOME` 下跑 `--smoke`（期望“需要设置”，退出码 2）。
+- **服务层端到端测试（模拟提供方）**：`service_tests.rs` 起一个本地 OpenAI 兼容服务（SSE），在临时 `MCCODE_HOME` 里写一个
+  settings profile 指向它，引擎照常由 `launch::project_engine` 构建，回合照常走 `CodeSession::turn`。按顺序覆盖：
+  1. 普通回合，流式回复进入对话；
+  2. 模型调用 `bash`，回合中出现审批卡，回答“允许一次”后命令在沙箱里执行、输出回到对话，模型继续回复；
+  3. 模型迟迟不回复时“停止”结束回合（回执含 stopped）；
+  4. 关闭服务后会话锁释放；
+  5. 另一个前端用同一个会话 id 打开（相当于 `mccode --session <id>`），历史、会话索引（标题、轮数）都在；
+  6. 此时 TUI 加锁被拒；TUI 接管后 App 发送会被拦下（`SessionLocked`），TUI 放手后 App 可以继续。
 - code-core 新增测试：会话锁 4 个（占用、接管、失效锁、id 不能逃出目录）、env 3 个、setup 2 个。
 - 实机：在本仓库启动 `.app`（从 `open` 启动，验证登录 shell 环境）、加锁、⌘Q 后锁被释放；
   App 持有会话时 `mccode --session <id> -p` 被拒绝，加 `--take-over` 后可以继续。
-- 真实模型：**未完成**。`~/.mccode` 里唯一配置的模型（anthropic）key 无效，整条链路（项目发现 → 引擎 → 会话 → `CodeSession::turn` → 错误回到界面）
-  已经跑通到提供方返回 `authentication_error`；换一个可用的提供方后，用 `--smoke` 和 App 各跑一次“改代码 → 检查 → 修复”，再补到这里。
+- 模型出错的路径：用当前配置（anthropic，key 无效）启动，引擎正常就绪，回合以 `authentication_error: invalid x-api-key`
+  结束，错误进入对话、回执为 failed，`--smoke` 退出码 1，锁随退出释放。
+- **真实模型往返：未验证。** 本机没有可用的模型配置（唯一的 anthropic key 无效），没有用真实模型跑“改代码 → 检查 → 修复”。
+  需要用户提供一个有效的 key 或 settings profile 后，用 `--smoke` 和 App 各跑一次，再把结果补到这里。
 
 ### 11.4 遗留（M1 之后）
 
+- **真实模型往返**：未验证，等用户提供有效的模型 key（见 11.3）。这是 M1 完成标准里唯一没做的一项。
 - **签名、公证的 arm64 / x86_64 DMG**：没做。需要 Developer ID 身份和 notarytool 凭据，按第 7 节从旧 Work 的脚本（`89c5b4d8^`）改写，
   作为 Release 附件；`scripts/bundle.sh` 只产出 ad-hoc 签名的 `.app`。
 - **视图层交互测试**：`gpui-kit` 0.9.1 的 `test-support` feature 在依赖解析时冲突（`gpui-fast` 精确锁定 `taffy =0.15.0`，

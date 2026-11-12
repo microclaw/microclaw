@@ -87,7 +87,11 @@ pub fn run(
                         transcript.pending = None;
                     }
                 }
-                Event::TurnFinished { receipt } => {
+                Event::TurnFinished {
+                    receipt,
+                    ok: turn_ok,
+                } => {
+                    ok &= turn_ok;
                     transcript.finish_turn(receipt);
                     print_items(&transcript.items[shown..]);
                     break;

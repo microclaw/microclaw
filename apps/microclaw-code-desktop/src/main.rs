@@ -12,6 +12,8 @@
 
 mod headless;
 mod service;
+#[cfg(test)]
+mod service_tests;
 mod state;
 mod store;
 mod views;

@@ -240,7 +240,7 @@ impl ProjectView {
                     window.activate_window();
                 }
             }
-            Event::TurnFinished { receipt } => {
+            Event::TurnFinished { receipt, .. } => {
                 self.running = None;
                 self.transcript.finish_turn(receipt);
             }
