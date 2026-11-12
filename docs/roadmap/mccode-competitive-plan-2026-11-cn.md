@@ -310,11 +310,34 @@
 
 ## 11. 0.31 交付情况
 
-第 8 节后两个问题按建议执行：插件沿用 Claude Code 布局；桌面 M1 作为并行轨道另起分支推进，不在 0.31 主线里。
+第 8 节后两个问题按建议执行：插件沿用 Claude Code 布局；桌面 M1 作为并行轨道另起分支推进（#575），发版前按用户要求一并合入 0.31.0，以源码构建的预览形式提供。
 
 | 项 | 交付 | 和计划的差别 |
 |---|---|---|
 | N5 | 私有记忆 `~/.mccode/projects/<仓库名>-<哈希>/memory.md`，按主仓库定位（`--worktree` 任务共用）；两份记忆每轮都在系统提示词里（压缩后自然还在），提示词写明分工，用户说的偏好只写私有文件；写私有文件不触发“项目外写入”审批（显式 deny/ask 规则仍生效）；`/memory`、`/memory shared\|private\|show`；`mccode import claude` 导入同一仓库的 Claude Code 自动记忆，`mccode import codex` 导入 Codex memories 的列表项（含凭据的跳过） | Codex memories 按机器而不是按项目保存，导入后提示用户用 `/memory private` 检查 |
 | N6 | `mccode plugin add <owner/repo \| git URL \| 路径> [--plugin 名] [--project] [--yes]`、`list`、`update`、`enable`、`disable`、`remove`；读取 `.claude-plugin/plugin.json` 和默认目录，命令（`/名` 与 `/插件:名`）、agents、skills、hooks、MCP 服务都生效，`${CLAUDE_PLUGIN_ROOT}` 替换并作为 hook 环境变量；manifest 路径不能跳出插件目录；安装前列出全部 hook 和 MCP 命令并确认，更新新增命令时再确认；不支持的部分列为 skipped；卸载不留文件；`/plugins` 查看。引擎新增 `extra_agents_dirs`、`extra_skills_dirs`、`extra_mcp_configs`，SDK `plugin_sources` | marketplace 条目常指向另一个仓库（`git-subdir`、`github`、`url`），已支持跟随；用 `anthropics/claude-code` 实测安装 `commit-commands`、`security-guidance` 并完成 update / disable / remove。主题不在 Claude Code 插件格式里，未做 |
 | N7 | 引擎 `context_usage` 报告 `prompt_cache_ttl`（仅 Anthropic，5m 或 1h）；TUI 在上下文 ≥ 压缩预算一半、闲置达到 TTL 的 90% 且缓存未过期时后台压缩（`pre_compact` hook 的 trigger 为 `auto`），之后不再重复；`tui.idle_compact: false` 关闭 | 设置放在 `tui` 下，因为只有 TUI 有“闲置”；“回执里缓存写入量下降”需要真实 Anthropic 会话验证，本地 key 失效，尚未做 |
+
+### 真实模型测试（DeepSeek `deepseek-v4-flash`，`mccode -p` 与 pty 驱动的 TUI）
+
+| 测试 | 结果 |
+|---|---|
+| 基本编辑 + 自动检查 | 通过 |
+| N5 偏好只写私有记忆，新会话能答出 `cargo nextest run` | 通过 |
+| N6 无终端时不带 `--yes` 拒绝安装，带上后安装；`/greet`、`/kit:greet`、hook（`CLAUDE_PLUGIN_ROOT`）、skill、MCP 工具、`sessions_spawn` 插件 agent | 通过 |
+| N6 卸载后无残留，`/greet` 报未知命令 | 修复后通过 |
+| N4 reviewer 放行无害命令，`git push --force` 仍要人工审批 | 通过 |
+| N1 `run_in_background` + `bash_output`；TUI 里 Ctrl+B 转后台、`/jobs` | 通过 |
+| N2 `/rewind` 列出检查点、`/rewind <id> both` 还原文件，之后模型看到文件已不存在 | 通过 |
+| TUI `/memory show`、`/plugins` | 通过 |
+
+测试中发现并修复：
+
+- `glob` 的字面回退遍历没有上限，模型在 plan 模式下从家目录搜 `**/tidy*` 时卡了 3 小时。现在从模式的字面前缀开始走，最多 5 万个条目并提示收窄，放在 blocking 线程里。
+- plan 模式和只读 profile 没有 `activate_skill`，模型只能自己去猜 skill 文件位置。现在提供（它只读取说明）。
+- `-p "/未知命令"` 会发出空消息，现在直接报错。
+- 插件卸载后留下空的 `plugins/.generated`，现在清掉。
+- `<context_budget>` 行跟在工具结果后面时，模型把它当成注入到工具输出里的文字。系统提示词现在说明这一行来自 MicroClaw。
+
+N7 仍未用真实 Anthropic 会话验证（DeepSeek 没有缓存 TTL，本地 Anthropic key 失效）。
 

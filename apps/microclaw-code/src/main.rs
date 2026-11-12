@@ -1194,7 +1194,7 @@ struct GoalResult {
 /// `/name …` that is not a known command (`/goal` is handled separately).
 /// Paths such as `/tmp/x` are not commands.
 fn unknown_slash_command(prompt: &str) -> Option<&str> {
-    let token = prompt.trim_start().split_whitespace().next()?;
+    let token = prompt.split_whitespace().next()?;
     let name = token.strip_prefix('/')?;
     let is_command = !name.is_empty()
         && name

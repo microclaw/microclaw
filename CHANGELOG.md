@@ -41,6 +41,23 @@ compaction (`docs/roadmap/mccode-competitive-plan-2026-11-cn.md`, N5–N7).
   Anthropic only (the engine reports `prompt_cache_ttl` in
   `ContextUsage`); `tui.idle_compact: false` turns it off. `pre_compact`
   hooks see trigger `auto`.
+- **MicroClaw Code desktop app (preview, macOS).** A GPUI app in
+  `apps/microclaw-code-desktop` with onboarding, projects, sessions and a
+  streaming transcript over the same `~/.mccode` home and Agent Engine as
+  the terminal UI. Build it from source with `scripts/bundle.sh`; it is
+  not signed or shipped as a download yet.
+
+### Fixed
+
+- `glob` no longer scans the disk for hours: its fallback for hidden,
+  ignored and absolute paths walks from the pattern's literal prefix and
+  stops after 50,000 entries (saying so), off the async workers.
+- Plan mode and read-only profiles offer `activate_skill`, which only reads
+  a skill's instructions.
+- `mccode -p "/unknown"` reports the unknown command instead of sending an
+  empty turn.
+- The system prompt explains the `<context_budget>` line, which models
+  otherwise read as text injected into tool output.
 
 ## [0.30.2] - 2026-11-12
 
