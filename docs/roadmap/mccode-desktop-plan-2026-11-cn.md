@@ -386,7 +386,8 @@ apps/microclaw-code-desktop/
 - code-core 新增测试：会话锁 4 个（占用、接管、失效锁、id 不能逃出目录）、env 3 个、setup 2 个。
 - 实机：在本仓库启动 `.app`（从 `open` 启动，验证登录 shell 环境）、加锁、⌘Q 后锁被释放；
   App 持有会话时 `mccode --session <id> -p` 被拒绝，加 `--take-over` 后可以继续。
-- 真实模型：REAL_MODEL_EVIDENCE
+- 真实模型：**未完成**。`~/.mccode` 里唯一配置的模型（anthropic）key 无效，整条链路（项目发现 → 引擎 → 会话 → `CodeSession::turn` → 错误回到界面）
+  已经跑通到提供方返回 `authentication_error`；换一个可用的提供方后，用 `--smoke` 和 App 各跑一次“改代码 → 检查 → 修复”，再补到这里。
 
 ### 11.4 遗留（M1 之后）
 
