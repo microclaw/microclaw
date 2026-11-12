@@ -28,6 +28,8 @@ pub enum Action {
     CycleMode,
     /// Show / hide the side panel.
     Sidebar,
+    /// Move the running shell command to the background.
+    Background,
     /// Clear the screen.
     Clear,
     /// Review the working-tree changes hunk by hunk.
@@ -47,6 +49,7 @@ impl Action {
         Action::HistorySearch,
         Action::CycleMode,
         Action::Sidebar,
+        Action::Background,
         Action::Clear,
         Action::Changes,
         Action::PasteImage,
@@ -63,6 +66,7 @@ impl Action {
             Action::HistorySearch => "history.search",
             Action::CycleMode => "app.mode",
             Action::Sidebar => "app.sidebar",
+            Action::Background => "app.background",
             Action::Clear => "app.clear",
             Action::Changes => "app.changes",
             Action::PasteImage => "chat.paste_image",
@@ -80,6 +84,7 @@ impl Action {
             Action::HistorySearch => "search earlier prompts",
             Action::CycleMode => "switch mode (plan / ask / auto)",
             Action::Sidebar => "show / hide the side panel",
+            Action::Background => "move the running command to the background",
             Action::Clear => "clear the screen",
             Action::Changes => "review changes hunk by hunk",
             Action::PasteImage => "paste an image from the clipboard",
@@ -96,7 +101,9 @@ impl Action {
             Action::Editor => &["ctrl+g"],
             Action::HistorySearch => &["ctrl+r"],
             Action::CycleMode => &["shift+tab"],
-            Action::Sidebar => &["ctrl+b"],
+            // Ctrl+] arrives as Ctrl+5 without the kitty keyboard protocol.
+            Action::Sidebar => &["ctrl+]", "ctrl+5"],
+            Action::Background => &["ctrl+b"],
             Action::Clear => &["ctrl+l"],
             Action::Changes => &["f2"],
             Action::PasteImage => &["ctrl+v"],
@@ -322,6 +329,17 @@ mod tests {
             km.action(&ev(KeyCode::BackTab, KeyModifiers::SHIFT)),
             Some(Action::CycleMode)
         );
+        assert_eq!(
+            km.action(&ev(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            Some(Action::Background)
+        );
+        // Ctrl+] arrives as Ctrl+5 without the kitty keyboard protocol.
+        for code in [KeyCode::Char(']'), KeyCode::Char('5')] {
+            assert_eq!(
+                km.action(&ev(code, KeyModifiers::CONTROL)),
+                Some(Action::Sidebar)
+            );
+        }
         let mut cfg = BTreeMap::new();
         cfg.insert("chat.steer".to_string(), "alt+s".to_string());
         cfg.insert("app.sidebar".to_string(), "none".to_string());
@@ -338,7 +356,7 @@ mod tests {
             Some(Action::Steer)
         );
         assert_eq!(
-            km.action(&ev(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            km.action(&ev(KeyCode::Char(']'), KeyModifiers::CONTROL)),
             None
         );
         assert_eq!(km.label(Action::Steer).as_deref(), Some("Alt+S"));

@@ -110,6 +110,8 @@ type UntilSlot =
 
 pub struct App {
     session: Option<CodeSession>,
+    /// Background work of the current session; usable while a turn runs.
+    jobs: Option<microclaw_code_core::driver::JobHandle>,
     pub running: Option<RunningTurn>,
     updates_tx: UnboundedSender<Update>,
     updates_rx: UnboundedReceiver<Update>,
@@ -326,6 +328,7 @@ pub async fn run(
         branch: microclaw_code_core::git::branch(&project.root),
         session_label: session.session_id.clone(),
         model: options.model.clone(),
+        jobs: Some(session.job_handle()),
         session: None,
         running: None,
         updates_tx,
@@ -1015,6 +1018,7 @@ impl App {
                 }
                 self.session_label = session.session_id.clone();
                 session.report_context_percent(self.updates_tx.clone());
+                self.jobs = Some(session.job_handle());
                 self.session = Some(session);
             }
             Err(e) => {
@@ -1072,7 +1076,11 @@ impl App {
             "done".into()
         };
         // Skip receipts for turns that only talked.
-        if receipt.files.is_empty() && receipt.checks.is_empty() && receipt.domains.is_empty() {
+        if receipt.files.is_empty()
+            && receipt.checks.is_empty()
+            && receipt.domains.is_empty()
+            && receipt.reviewed.is_empty()
+        {
             return;
         }
         self.transcript.push(Item::Receipt(receipt));

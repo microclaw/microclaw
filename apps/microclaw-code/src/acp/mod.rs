@@ -40,8 +40,8 @@ use agent_client_protocol_schema::v1::{
 };
 use microclaw_code_core::commands::CustomCommand;
 use microclaw_code_core::driver::{
-    CodeSession, Control, HistoryEntry, PendingApproval, SandboxInfo, SessionSettings, TurnReport,
-    Update,
+    CodeSession, Control, HistoryEntry, PendingApproval, RewindScope, SandboxInfo, SessionSettings,
+    TurnReport, Update,
 };
 use microclaw_code_core::launch::{self, ModelSource, ProjectEngine};
 use microclaw_code_core::project::Mode;
@@ -599,6 +599,7 @@ impl Agent {
                 .unwrap_or_else(|| project.max_fix_rounds()),
             interactive: true,
             sandbox: self.options.sandbox_info.clone(),
+            reviewer: engine.reviewer,
         };
         let custom = microclaw_code_core::commands::load(
             &project,
@@ -938,6 +939,7 @@ impl Agent {
             Builtin::Diff => git_diff(&code.project.root, args == "full"),
             Builtin::Check => self.run_checks(id, code, args).await,
             Builtin::Rewind => rewind(code, args).await,
+            Builtin::Jobs => jobs(code.job_handle(), args).await,
             Builtin::Status => status(code).await,
             Builtin::Export => {
                 let path = if args.is_empty() {
@@ -1212,23 +1214,33 @@ fn git_diff(root: &Path, full: bool) -> String {
     }
 }
 
-/// `/rewind`: list this session's turns, or `/rewind N` restores files to
-/// before turn N (the current state is checkpointed first).
+/// `/rewind`: list this session's turns, or `/rewind N [files|chat|both]`
+/// goes back to before turn N (files and conversation by default; the
+/// current files are checkpointed first).
 async fn rewind(code: &mut CodeSession, args: &str) -> String {
     let turns = code.turn_checkpoints().to_vec();
     if turns.is_empty() {
         return "No earlier turns in this session to rewind to.".to_string();
     }
     if args.is_empty() {
-        let mut text =
-            String::from("Turns in this session (`/rewind N` restores files to before turn N):\n");
+        let mut text = String::from(
+            "Turns in this session (`/rewind N` goes back to before turn N; add `files` or `chat` to rewind only one):\n",
+        );
         for (n, (_, prompt)) in turns.iter().enumerate() {
             text.push_str(&format!("{}. {}\n", n + 1, title_of(prompt)));
         }
         return text;
     }
-    let Some((checkpoint, prompt)) = args
-        .trim()
+    let mut words = args.split_whitespace();
+    let turn = words.next().unwrap_or_default();
+    let scope = match words.next() {
+        None => RewindScope::Both,
+        Some(word) => match RewindScope::parse(word) {
+            Some(scope) => scope,
+            None => return "Usage: `/rewind N [files|chat|both]`".to_string(),
+        },
+    };
+    let Some((checkpoint, prompt)) = turn
         .parse::<usize>()
         .ok()
         .and_then(|n| n.checked_sub(1))
@@ -1239,12 +1251,47 @@ async fn rewind(code: &mut CodeSession, args: &str) -> String {
             turns.len()
         );
     };
-    match code.rewind(&checkpoint.commit).await {
-        Ok(()) => format!(
-            "Restored files to before “{}”. The conversation is unchanged.",
-            title_of(prompt)
-        ),
+    match code.rewind_to(&checkpoint.commit, scope).await {
+        Ok(rewound) => {
+            let mut text = rewound.summary(&title_of(prompt));
+            if let Some(first) = text.get(..1) {
+                text.replace_range(..1, &first.to_uppercase());
+            }
+            text.push('.');
+            text
+        }
         Err(e) => format!("Could not rewind: {e}"),
+    }
+}
+
+/// `/jobs`: background commands and sub-agents; `/jobs <id>` shows output,
+/// `/jobs kill <id>` stops one.
+async fn jobs(jobs: microclaw_code_core::driver::JobHandle, args: &str) -> String {
+    let words: Vec<&str> = args.split_whitespace().collect();
+    match words.as_slice() {
+        [] => {
+            let list = jobs.jobs();
+            if list.is_empty() {
+                return "No background work in this session.".to_string();
+            }
+            let mut text = String::from("Background work:\n\n```\n");
+            for line in list.lines() {
+                text.push_str(&line);
+                text.push('\n');
+            }
+            text.push_str("```\n`/jobs <id>` shows output · `/jobs kill <id>` stops it");
+            text
+        }
+        ["kill" | "stop", id] => match jobs.kill_job(id).await {
+            Ok(status) => status,
+            Err(e) => format!("Could not stop {id}: {e}"),
+        },
+        [id] => match jobs.job_output(id) {
+            Ok(text) if text.trim().is_empty() => format!("{id}: no output yet."),
+            Ok(text) => format!("`{id}`:\n\n```\n{}\n```", text.trim_end()),
+            Err(e) => e.to_string(),
+        },
+        _ => "Usage: `/jobs [<id> | kill <id>]`".to_string(),
     }
 }
 

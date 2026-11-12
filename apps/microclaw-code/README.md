@@ -83,9 +83,10 @@ In the TUI (all keys can be rebound in `tui.keymap`; `/keys` lists them):
 | Ctrl+V | attach an image from the clipboard |
 | Ctrl+T | the whole transcript, with search |
 | Ctrl+O, click | expand / collapse all tool output (or click one) |
-| Esc Esc | pick an earlier turn to rewind the files to |
+| Esc Esc | pick an earlier turn to go back to (files and conversation; `f` / `c` for one) |
 | F2 | review changes hunk by hunk: revert one, or comment and send the comments as a prompt |
-| Ctrl+B | show or hide the side panel (plan, checks, changes, sub-agents) |
+| Ctrl+B | move the running shell command to the background; `/jobs` lists it |
+| Ctrl+] | show or hide the side panel (plan, checks, changes, sub-agents) |
 | Esc / Ctrl+C | stop the running agent |
 | Ctrl+C twice, Ctrl+D, `/exit` | quit |
 
@@ -96,7 +97,8 @@ Commands: `/help`, `/mode [plan|ask|auto]`, `/plan [task]`, `/check [name|all]`,
 | Command | What it does |
 |---|---|
 | `/undo` | Restore the files to how they were before the last turn that changed them. The state you leave is checkpointed too. |
-| `/rewind [id]` | Pick an earlier turn of this session to restore the files to, or restore checkpoint `id`. |
+| `/rewind [id [files\|chat\|both]]` | Pick an earlier turn of this session and go back to before it: files and conversation, or only one of them. |
+| `/jobs [id \| kill id]` | Background commands and sub-agents: list them, show one's output, stop one. |
 | `/review [focus]` | Review the uncommitted changes (`git diff HEAD` plus untracked files) with read-only tools and report findings by severity. Also `mccode review [focus]` for scripts. |
 | `/model [name\|reset]` | Show or switch the model for this session (a picker without a name). |
 | `/cost` | Requests and input/output tokens of this session, per model. |
@@ -116,7 +118,7 @@ Each turn ends with a receipt: changed files, check results, sandbox and
 network use, tokens (and cost when the model's price is known) and the
 checkpoint to rewind to.
 
-Also: custom commands from `.microclaw/commands/*.md` and `~/.mccode/commands/*.md`, project memory in `.microclaw/memory.md`, project helper agents in `.microclaw/agents/*.md` for the `explore` tool, language-server diagnostics after edits, and `hooks` (`after_edit`, `after_turn`) in the project file; see the [usage guide](https://microclaw.org/docs/code-usage).
+Also: custom commands from `.microclaw/commands/*.md` and `~/.mccode/commands/*.md`, project memory in `.microclaw/memory.md`, project helper agents in `.microclaw/agents/*.md` for `explore` and sub-agents (with their own `model` and `tools`), language-server diagnostics after edits, and `hooks` (`after_edit`, `after_turn`) in the project file; see the [usage guide](https://microclaw.org/docs/code-usage).
 
 ## Settings, permission rules and hooks
 
@@ -168,8 +170,19 @@ system's sandbox by default: **bubblewrap** on Linux and **Seatbelt**
   `MCCODE_LOCAL_SANDBOX=landlock` forces Landlock and `MCCODE_LOCAL_SANDBOX=none`
   turns the OS sandbox off; any other value (or none) detects the best one.
 
-`--review-commands` has the model annotate every approval with a one-line
-verdict; a command it calls `DANGEROUS` asks you even in `auto` mode.
+**Approval reviewer.** `permissions.reviewer` has a model rate every call
+that needs approval with a one-line verdict (`SAFE`, `CAUTION` or
+`DANGEROUS`). It runs on `model.roles.review` (the session's model when
+unset).
+
+- `advise` (or `--review-commands`): you see the verdict on the approval
+  card, and a call it rates `DANGEROUS` asks you even in `auto` mode.
+- `approve`: in `ask` mode it also approves the calls it rates `SAFE`
+  (commands, writes outside the project, web fetches, MCP tools), and the
+  turn's receipt lists them with the reviewer's reason. Everything else
+  still asks you: the reviewer can approve but never deny, destructive
+  commands always ask, and so do `ask` rules and hooks. If the reviewer call
+  fails, you are asked.
 
 This is defence in depth: the approval rules above still apply. Turn it off
 with `--sandbox off` (or `MCCODE_SANDBOX=off`). If the machine has no

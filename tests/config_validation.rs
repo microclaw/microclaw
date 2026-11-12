@@ -55,6 +55,7 @@ fn minimal_config() -> Config {
         project_agents_dir: None,
         tool_gate: Default::default(),
         context_tools: false,
+        detachable_foreground_commands: false,
         context_budget_hint: false,
         explore_tool: false,
         self_recheck: microclaw::config::SelfRecheckConfig::default(),

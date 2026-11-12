@@ -101,8 +101,9 @@ struct Cli {
     #[arg(long)]
     no_network: bool,
 
-    /// Have the model review each command that needs approval; a command it
-    /// calls DANGEROUS asks you even in auto mode.
+    /// Have a model review each call that needs approval; one it calls
+    /// DANGEROUS asks you even in auto mode (`permissions.reviewer: advise`;
+    /// `approve` also lets it approve SAFE calls in ask mode).
     #[arg(long)]
     review_commands: bool,
 
@@ -831,6 +832,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         .builder()
         .tool_gate(std::sync::Arc::new(gate.clone()))
         .summary_model(role_setup.summary.clone())
+        .subagent_model(role_setup.subagent.clone())
         .caller_channel(CALLER_CHANNEL)
         .workspace(&project.root)
         .data_dir(home::data_dir())
@@ -839,8 +841,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         .compact_instructions(project.config.compact_instructions.clone())
         .context_tools(cli.context_tools || project.config.context_tools == Some(true))
         .project_agents_dir(project.agents_dir());
-    if cli.review_commands {
-        builder = builder.command_reviewer(None);
+    let reviewer = microclaw_code_core::settings::ReviewerMode::effective(
+        settings_doc.permissions.reviewer,
+        cli.review_commands,
+    );
+    if reviewer != microclaw_code_core::settings::ReviewerMode::Off {
+        builder = builder.command_reviewer(role_setup.roles.review.clone());
     }
     let microclaw = builder.build().await.map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -853,6 +859,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             .unwrap_or_else(|| project.max_fix_rounds()),
         interactive,
         sandbox,
+        reviewer,
     };
     let mut session = CodeSession::new(microclaw, project, session_id.clone(), settings);
     session.set_tool_gate(gate.clone());

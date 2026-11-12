@@ -223,6 +223,7 @@ async fn run_case(options: &EvalOptions, case_dir: &Path) -> CaseResult {
                 .unwrap_or_else(|| project.max_fix_rounds()),
             interactive: false,
             sandbox: options.sandbox_info.clone(),
+            reviewer: Default::default(),
         };
         let mut session = CodeSession::new(engine, project, session_id, settings);
         let (updates_tx, mut updates_rx) = mpsc::unbounded_channel();

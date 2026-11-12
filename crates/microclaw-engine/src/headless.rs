@@ -120,6 +120,27 @@ pub struct HeadlessUsage {
     pub by_model: Vec<(String, i64, i64, i64)>,
 }
 
+/// A point in a session's conversation, taken with
+/// [`HeadlessRuntime::session_mark`] and returned to with
+/// [`HeadlessRuntime::rewind_session_to`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionMark {
+    /// Messages in the conversation at that point.
+    pub messages: usize,
+    /// Fingerprint of those messages; a later compaction changes it.
+    pub fingerprint: u64,
+}
+
+/// Fingerprint of a conversation prefix (stable within one process).
+fn conversation_fingerprint(messages: &[serde_json::Value]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for message in messages {
+        message.to_string().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Result of compacting a session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadlessCompaction {
@@ -642,6 +663,74 @@ impl HeadlessRuntime {
         self.session_model(channel, session).await
     }
 
+    /// The current end of a session's conversation, to return to later with
+    /// [`Self::rewind_session_to`].
+    pub async fn session_mark(&self, session: &str) -> anyhow::Result<SessionMark> {
+        let Some(chat_id) = self.existing_session_chat_id(session).await? else {
+            return Ok(SessionMark {
+                messages: 0,
+                fingerprint: conversation_fingerprint(&[]),
+            });
+        };
+        let db = self.state.db.clone();
+        let json = call_blocking(db, move |db| db.load_session(chat_id)).await?;
+        let messages: Vec<serde_json::Value> = match json {
+            Some((json, _)) => serde_json::from_str(&json)?,
+            None => Vec::new(),
+        };
+        Ok(SessionMark {
+            messages: messages.len(),
+            fingerprint: conversation_fingerprint(&messages),
+        })
+    }
+
+    /// Cut a session's conversation back to `mark`, dropping everything
+    /// after it (the whole conversation is archived first). Fails when the
+    /// conversation no longer starts with what it held at the mark, for
+    /// example after a compaction. Returns how many messages were removed.
+    pub async fn rewind_session_to(
+        &self,
+        channel: &str,
+        session: &str,
+        mark: &SessionMark,
+    ) -> anyhow::Result<usize> {
+        let Some(chat_id) = self.existing_session_chat_id(session).await? else {
+            anyhow::bail!("session `{session}` has no conversation");
+        };
+        let db = self.state.db.clone();
+        let json = call_blocking(db, move |db| db.load_session(chat_id)).await?;
+        let mut values: Vec<serde_json::Value> = match json {
+            Some((json, _)) => serde_json::from_str(&json)?,
+            None => Vec::new(),
+        };
+        if values.len() < mark.messages
+            || conversation_fingerprint(&values[..mark.messages]) != mark.fingerprint
+        {
+            anyhow::bail!(
+                "the conversation was compacted or changed since that point, so it cannot be cut back there"
+            );
+        }
+        let removed = values.len() - mark.messages;
+        if removed == 0 {
+            return Ok(0);
+        }
+        if let Ok(messages) = serde_json::from_value::<Vec<microclaw_core::llm_types::Message>>(
+            serde_json::Value::Array(values.clone()),
+        ) {
+            crate::agent_engine::archive_conversation(
+                &self.state.config.data_dir,
+                channel,
+                chat_id,
+                &messages,
+            );
+        }
+        values.truncate(mark.messages);
+        let json = serde_json::to_string(&values)?;
+        let db = self.state.db.clone();
+        call_blocking(db, move |db| db.save_session(chat_id, &json)).await?;
+        Ok(removed)
+    }
+
     /// Summarize older messages of a session now (the same compaction a long
     /// session gets automatically, but always summarizing). `focus` steers
     /// what the summary keeps.
@@ -863,6 +952,92 @@ impl HeadlessRuntime {
             chat_id,
             run_id,
         )?)
+    }
+
+    /// The process-registry key of a named session, or `None` when the
+    /// session never ran (or this runtime has no process registry).
+    fn process_session(
+        &self,
+        caller_channel: &str,
+        session: &str,
+    ) -> anyhow::Result<
+        Option<(
+            std::sync::Arc<crate::tools::background_process::ProcessRegistry>,
+            String,
+        )>,
+    > {
+        let Some(processes) = self.state.tools.processes() else {
+            return Ok(None);
+        };
+        let external_chat_id = format!("headless:{}", session.trim());
+        let Some(chat_id) = self
+            .state
+            .db
+            .find_chat_id(HEADLESS_CHANNEL, &external_chat_id)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((
+            processes,
+            crate::tools::background_process::session_key_for(caller_channel, chat_id),
+        )))
+    }
+
+    /// Background shell processes of a session, oldest first.
+    pub fn background_jobs(
+        &self,
+        caller_channel: &str,
+        session: &str,
+    ) -> anyhow::Result<Vec<crate::tools::background_process::BackgroundJob>> {
+        Ok(self
+            .process_session(caller_channel, session)?
+            .map(|(processes, key)| processes.jobs(&key))
+            .unwrap_or_default())
+    }
+
+    /// Move the session's running foreground shell commands to the
+    /// background. Returns their ids.
+    pub fn detach_foreground_commands(
+        &self,
+        caller_channel: &str,
+        session: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        Ok(self
+            .process_session(caller_channel, session)?
+            .map(|(processes, key)| processes.detach_foreground(&key))
+            .unwrap_or_default())
+    }
+
+    /// The last `max_bytes` of a background process's output.
+    pub fn background_job_output(
+        &self,
+        caller_channel: &str,
+        session: &str,
+        id: &str,
+        max_bytes: usize,
+    ) -> anyhow::Result<String> {
+        let (processes, key) = self
+            .process_session(caller_channel, session)?
+            .ok_or_else(|| anyhow::anyhow!("no background processes in this session"))?;
+        processes
+            .output_tail(&key, id, max_bytes)
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Stop a background process. Returns its status line.
+    pub async fn kill_background_job(
+        &self,
+        caller_channel: &str,
+        session: &str,
+        id: &str,
+    ) -> anyhow::Result<String> {
+        let (processes, key) = self
+            .process_session(caller_channel, session)?
+            .ok_or_else(|| anyhow::anyhow!("no background processes in this session"))?;
+        processes
+            .kill(&key, id)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     /// Build a standalone runtime from a loaded product config.
@@ -1849,6 +2024,60 @@ mod tests {
             answer_text_approval("text-deny", "3").await,
             "saw text denial"
         );
+    }
+
+    #[tokio::test]
+    async fn rewinding_a_session_cuts_the_conversation_back_to_a_mark() {
+        let _guard = RUNTIME_TEST_LOCK.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime_with_fake_llm(directory.path());
+        let empty = runtime.session_mark("s").await.unwrap();
+        assert_eq!(empty.messages, 0);
+        runtime
+            .run(
+                HeadlessRunRequest::code("first".into(), Some("s".into()), "r1".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        let after_first = runtime.session_mark("s").await.unwrap();
+        assert!(after_first.messages >= 2);
+        runtime
+            .run(
+                HeadlessRunRequest::code("second".into(), Some("s".into()), "r2".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        let removed = runtime
+            .rewind_session_to(CODE_CHANNEL, "s", &after_first)
+            .await
+            .unwrap();
+        assert!(removed >= 2, "removed {removed}");
+        assert_eq!(runtime.session_mark("s").await.unwrap(), after_first);
+        // Rewinding to the same point again changes nothing.
+        assert_eq!(
+            runtime
+                .rewind_session_to(CODE_CHANNEL, "s", &after_first)
+                .await
+                .unwrap(),
+            0
+        );
+        // A mark whose prefix no longer matches (as after a compaction) is refused.
+        let stale = SessionMark {
+            messages: after_first.messages,
+            fingerprint: after_first.fingerprint ^ 1,
+        };
+        assert!(runtime
+            .rewind_session_to(CODE_CHANNEL, "s", &stale)
+            .await
+            .is_err());
+        // Back to the very start.
+        runtime
+            .rewind_session_to(CODE_CHANNEL, "s", &empty)
+            .await
+            .unwrap();
+        assert_eq!(runtime.session_mark("s").await.unwrap().messages, 0);
     }
 
     #[tokio::test]

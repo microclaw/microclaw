@@ -74,6 +74,8 @@ pub struct Receipt {
     pub sandbox: Option<String>,
     pub network: bool,
     pub domains: Vec<String>,
+    /// Calls the approval reviewer approved: `tool: reason`.
+    pub reviewed: Vec<String>,
     pub tokens_in: i64,
     pub tokens_out: i64,
     pub cost: Option<f64>,
@@ -148,6 +150,7 @@ struct TurnTally {
     files: BTreeMap<String, (usize, usize)>,
     checks: BTreeMap<String, bool>,
     domains: Vec<String>,
+    reviewed: Vec<String>,
     checkpoint: Option<String>,
 }
 
@@ -280,6 +283,7 @@ impl Transcript {
                 .collect(),
             checks: tally.checks.into_iter().collect(),
             domains: tally.domains,
+            reviewed: tally.reviewed,
             checkpoint: tally.checkpoint,
             duration: started.elapsed(),
             ..Receipt::default()
@@ -327,6 +331,17 @@ impl Transcript {
                         format!("auto-approved {tool}: runs in the sandbox without network"),
                         Tone::Info,
                     ),
+                    Some(rule)
+                        if rule.starts_with(microclaw_code_core::driver::REVIEWER_RULE_PREFIX) =>
+                    {
+                        let reason =
+                            &rule[microclaw_code_core::driver::REVIEWER_RULE_PREFIX.len()..];
+                        self.tally.reviewed.push(format!("{tool}: {reason}"));
+                        self.notice(
+                            format!("approved {tool} by the reviewer: {reason}"),
+                            Tone::Info,
+                        )
+                    }
                     Some(rule) => self.notice(
                         format!("auto-approved {tool}: allowed by rule `{rule}`"),
                         Tone::Info,
@@ -1199,6 +1214,13 @@ fn render_receipt(r: &Receipt, width: usize, theme: &Theme, out: &mut Vec<Line<'
         ));
     }
     rows.push(second);
+    // Approvals the reviewer gave instead of you.
+    if !r.reviewed.is_empty() {
+        rows.push(vec![Span::styled(
+            format!("reviewer approved {}", r.reviewed.join(" · ")),
+            st(theme.warning),
+        )]);
+    }
     // Cost.
     let mut third = vec![Span::styled(
         format!(

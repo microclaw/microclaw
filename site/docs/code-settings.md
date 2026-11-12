@@ -69,7 +69,8 @@ model:
   default: deepseek/deepseek-v4-pro      # <profile>/<model>
   roles:
     plan: deepseek/deepseek-v4-pro       # plan-mode turns
-    review: deepseek/deepseek-v4-pro     # /review and mccode review
+    review: deepseek/deepseek-v4-pro     # /review, mccode review, approval reviewer
+    subagent: deepseek-flash             # sub-agents and explore
     summary: deepseek-flash              # compaction summaries and handoffs
   profiles:
     deepseek:
@@ -80,6 +81,7 @@ model:
 
 permissions:
   default_mode: ask
+  reviewer: advise                       # off | advise | approve (see Code usage)
   allow:
     - bash(cargo test *)
     - bash(git status)
@@ -126,13 +128,18 @@ MicroClaw configuration file. If `model.default` names a profile (and
 API keys in environment variables (`api_key_env`), or put `api_key` in the
 user layer only; `mccode config doctor` warns about keys in project layers.
 
-`model.roles` picks models for kinds of work: `plan` for plan-mode turns,
-`review` for reviews, `summary` for compaction summaries and handoffs. A role
-switches the model within the session's provider, so it must name a model on
-the same profile (`ds/deepseek-v4-pro` when the session runs on `ds`) or a bare
-model name; a role on another profile is skipped with a warning. Unset roles
-use the session's model. `subagent` is accepted but not used yet: sub-agents
-and `explore` run on the session's model.
+`model.roles` picks models for kinds of work:
+
+- `plan` for plan-mode turns.
+- `review` for reviews and for the approval reviewer (`permissions.reviewer`).
+- `subagent` for sub-agents and `explore`. A project agent that sets its own
+  `model` keeps it.
+- `summary` for compaction summaries and handoffs.
+
+A role switches the model within the session's provider, so it must name a
+model on the same profile (`ds/deepseek-v4-pro` when the session runs on `ds`)
+or a bare model name; a role on another profile is skipped with a warning.
+Unset roles use the session's model.
 `/model` opens a picker with your profiles and the built-in presets, which
 list each model's context window.
 
@@ -267,7 +274,8 @@ Zellij and fullscreen otherwise. If a terminal cannot run inline mode,
 | `history.search` | Ctrl+R | search earlier prompts |
 | `app.palette` | Ctrl+P | command palette |
 | `app.mode` | Shift+Tab | plan → ask → auto |
-| `app.sidebar` | Ctrl+B | show / hide the side panel |
+| `app.sidebar` | Ctrl+] | show / hide the side panel |
+| `app.background` | Ctrl+B | move the running shell command to the background |
 | `app.changes` | F2 | review changes hunk by hunk |
 | `app.clear` | Ctrl+L | clear the screen |
 | `transcript.pager` | Ctrl+T | whole transcript with search |

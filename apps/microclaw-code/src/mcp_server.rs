@@ -34,6 +34,7 @@ struct Server {
         (
             microclaw_code_core::gate::CodeToolGate,
             microclaw_code_core::driver::RoleModels,
+            microclaw_code_core::settings::ReviewerMode,
         ),
     >,
 }
@@ -119,8 +120,10 @@ impl Server {
         for warning in &built.warnings {
             eprintln!("mccode: {warning}");
         }
-        self.gates
-            .insert(root.to_path_buf(), (built.gate, built.roles));
+        self.gates.insert(
+            root.to_path_buf(),
+            (built.gate, built.roles, built.reviewer),
+        );
         let engine = built.engine;
         self.engines.insert(root.to_path_buf(), engine.clone());
         Ok(engine)
@@ -162,13 +165,15 @@ impl Server {
                 .unwrap_or_else(|| project.max_fix_rounds()),
             interactive: false,
             sandbox: self.options.sandbox_info.clone(),
+            reviewer: Default::default(),
         };
         let engine = self.engine(&project.root).await?;
         let root = project.root.clone();
         let mut session = CodeSession::new(engine, project, id, settings);
-        if let Some((gate, roles)) = self.gates.get(&root) {
+        if let Some((gate, roles, reviewer)) = self.gates.get(&root) {
             session.set_tool_gate(gate.clone());
             session.set_role_models(roles.clone());
+            session.settings.reviewer = *reviewer;
         }
         Ok(session)
     }

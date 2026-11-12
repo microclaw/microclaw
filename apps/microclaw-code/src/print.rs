@@ -219,6 +219,14 @@ impl Printer {
                     Some(rule) if rule == microclaw_code_core::driver::SANDBOX_RULE => {
                         "runs in the sandbox without network".to_string()
                     }
+                    Some(rule)
+                        if rule.starts_with(microclaw_code_core::driver::REVIEWER_RULE_PREFIX) =>
+                    {
+                        format!(
+                            "the reviewer approved it: {}",
+                            &rule[microclaw_code_core::driver::REVIEWER_RULE_PREFIX.len()..]
+                        )
+                    }
                     Some(rule) => format!("allowed by rule `{rule}`"),
                     None => "auto mode".to_string(),
                 };

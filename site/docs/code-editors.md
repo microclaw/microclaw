@@ -139,8 +139,10 @@ the thread again.
   - `/review [focus]`, `/check [names]`, `/diff [full]`: review, run the
     project's checks, or show the uncommitted changes;
   - `/btw <question>`: a side question that does not enter the conversation;
-  - `/undo`, `/rewind [N]`: undo the last turn's file changes, or list the
-    turns and restore files to before turn N;
+  - `/undo`, `/rewind [N] [files|chat]`: undo the last turn's file changes,
+    or list the turns and go back to before turn N (files and conversation
+    unless you name one);
+  - `/jobs [id | kill id]`: background commands and sub-agents;
   - `/compact [focus]`, `/cost`, `/context`, `/status`: context, usage and
     what the session runs with;
   - `/export [path]`, `/init`, `/help`: write the conversation as Markdown,

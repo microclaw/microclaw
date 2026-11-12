@@ -220,6 +220,9 @@ pub enum Control {
     Cancel,
     /// Answer a pending approval with one of its option values.
     Approve(String),
+    /// Move the shell commands running in the foreground to the background;
+    /// the agent gets their ids and carries on (Ctrl+B).
+    Background,
 }
 
 /// Driver → front end.
@@ -265,6 +268,198 @@ pub enum Update {
     },
 }
 
+/// Lists and stops a session's background commands and sub-agent runs;
+/// usable while a turn runs (see [`CodeSession::job_handle`]).
+#[derive(Clone)]
+pub struct JobHandle {
+    microclaw: MicroClaw,
+    session_id: String,
+}
+
+impl JobHandle {
+    /// Move the commands running in the foreground to the background and
+    /// say what happened.
+    pub fn background_running(&self) -> String {
+        match self.microclaw.background_running_commands(&self.session_id) {
+            Ok(ids) if ids.is_empty() => "no command is running in the foreground".to_string(),
+            Ok(ids) => format!("moved to the background: {} (see /jobs)", ids.join(", ")),
+            Err(e) => format!("could not move the command to the background: {e}"),
+        }
+    }
+
+    /// Background shell commands and sub-agent runs of this session.
+    pub fn jobs(&self) -> Jobs {
+        let commands = self
+            .microclaw
+            .background_jobs(&self.session_id)
+            .unwrap_or_default();
+        let subagents = self
+            .microclaw
+            .delegated_tasks(&self.session_id, 20)
+            .unwrap_or_default();
+        Jobs {
+            commands,
+            subagents,
+        }
+    }
+
+    /// The last part of a background command's output, or a sub-agent run's
+    /// progress and result.
+    pub fn job_output(&self, id: &str) -> anyhow::Result<String> {
+        if id.starts_with("bg_") {
+            return self
+                .microclaw
+                .background_job_output(&self.session_id, id, 8_000)
+                .map_err(|e| anyhow::anyhow!("{e}"));
+        }
+        let task = self
+            .microclaw
+            .delegated_tasks(&self.session_id, 200)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .into_iter()
+            .find(|t| t.run_id == id || t.run_id.starts_with(id))
+            .ok_or_else(|| anyhow::anyhow!("no job `{id}` in this session"))?;
+        let mut text = format!("{} · {:?}\n{}", task.run_id, task.status, task.task);
+        for (label, value) in [
+            ("progress", &task.progress),
+            ("result", &task.result),
+            ("error", &task.error),
+        ] {
+            if let Some(value) = value.as_deref().filter(|v| !v.trim().is_empty()) {
+                text.push_str(&format!("\n\n{label}:\n{value}"));
+            }
+        }
+        Ok(text)
+    }
+
+    /// Stop a background command or a sub-agent run.
+    pub async fn kill_job(&self, id: &str) -> anyhow::Result<String> {
+        if id.starts_with("bg_") {
+            return self
+                .microclaw
+                .kill_background_job(&self.session_id, id)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"));
+        }
+        let run_id = self
+            .microclaw
+            .delegated_tasks(&self.session_id, 200)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .into_iter()
+            .map(|t| t.run_id)
+            .find(|run_id| run_id == id || run_id.starts_with(id))
+            .ok_or_else(|| anyhow::anyhow!("no job `{id}` in this session"))?;
+        match self
+            .microclaw
+            .cancel_delegated_task(&self.session_id, &run_id)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+        {
+            true => Ok(format!("stopping sub-agent {run_id}")),
+            false => Ok(format!("sub-agent {run_id} is not running")),
+        }
+    }
+}
+
+/// What `/rewind` goes back on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RewindScope {
+    /// Files and conversation.
+    #[default]
+    Both,
+    Files,
+    Conversation,
+}
+
+impl RewindScope {
+    fn files(self) -> bool {
+        matches!(self, RewindScope::Both | RewindScope::Files)
+    }
+
+    fn conversation(self) -> bool {
+        matches!(self, RewindScope::Both | RewindScope::Conversation)
+    }
+
+    /// `files`, `chat` / `conversation`, `both`.
+    pub fn parse(word: &str) -> Option<RewindScope> {
+        match word {
+            "both" | "all" => Some(RewindScope::Both),
+            "files" | "code" => Some(RewindScope::Files),
+            "chat" | "conversation" | "convo" => Some(RewindScope::Conversation),
+            _ => None,
+        }
+    }
+}
+
+/// What a rewind did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Rewound {
+    pub files: bool,
+    /// Messages dropped from the conversation, when it was cut back.
+    pub messages_removed: Option<usize>,
+    /// Why the conversation was left as it is, when it was asked for.
+    pub conversation_skipped: Option<String>,
+}
+
+impl Rewound {
+    /// One line for the user.
+    pub fn summary(&self, turn: &str) -> String {
+        let mut parts = Vec::new();
+        if self.files {
+            parts.push("restored the files".to_string());
+        }
+        if self.messages_removed.is_some() {
+            parts.push("cut the conversation back".to_string());
+        }
+        let mut text = if parts.is_empty() {
+            format!("nothing changed for “{turn}”")
+        } else {
+            format!("{} to before “{turn}”", parts.join(" and "))
+        };
+        if let Some(why) = &self.conversation_skipped {
+            text.push_str(&format!(" · conversation unchanged: {why}"));
+        }
+        text
+    }
+}
+
+const FILES_REWOUND_NOTE: &str = "[Note from MicroClaw Code: the user restored the files to an earlier checkpoint. Changes described later in this conversation may no longer be in the files; read them again before relying on them.]";
+const CONVERSATION_REWOUND_NOTE: &str = "[Note from MicroClaw Code: the user rewound this conversation to an earlier point but kept the files as they are, so they may contain changes this conversation does not mention; read them again before relying on them.]";
+
+/// Background work of a session (`/jobs`).
+#[derive(Debug, Clone, Default)]
+pub struct Jobs {
+    pub commands: Vec<microclaw_sdk::BackgroundJob>,
+    pub subagents: Vec<microclaw_sdk::DelegatedTask>,
+}
+
+impl Jobs {
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty() && self.subagents.is_empty()
+    }
+
+    /// One line per job, running ones first within each kind.
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for job in &self.commands {
+            let status = match job.exit_code {
+                None => "running".to_string(),
+                Some(code) => format!("exited {code}"),
+            };
+            lines.push(format!("{}  {status:<10}  {}", job.id, job.command));
+        }
+        for task in &self.subagents {
+            let label = task.label.as_deref().unwrap_or(task.task.as_str());
+            let label: String = label.chars().take(80).collect();
+            let short: String = task.run_id.chars().take(12).collect();
+            lines.push(format!(
+                "{short}  {:<10}  sub-agent: {label}",
+                format!("{:?}", task.status).to_lowercase()
+            ));
+        }
+        lines
+    }
+}
+
 /// Outcome of one user turn.
 #[derive(Debug, Clone, Default)]
 pub struct TurnReport {
@@ -308,6 +503,8 @@ pub struct SessionSettings {
     /// Stop before a request once the session used this many tokens
     /// (input + output, all models).
     pub max_session_tokens: Option<u64>,
+    /// What the approval reviewer may do (`permissions.reviewer`).
+    pub reviewer: crate::settings::ReviewerMode,
 }
 
 /// An active shell sandbox (shown to the user and the agent).
@@ -324,6 +521,29 @@ pub struct SandboxInfo {
 /// sandbox without network access.
 pub const SANDBOX_RULE: &str = "sandbox";
 
+/// `AutoApproved.rule` prefix for calls the approval reviewer approved; the
+/// reviewer's reason follows.
+pub const REVIEWER_RULE_PREFIX: &str = "reviewer: ";
+
+/// The reviewer's reason when its advisory rates the call SAFE.
+fn safe_verdict(advisory: Option<&str>) -> Option<String> {
+    let advisory = advisory?.trim();
+    let rest = advisory
+        .get(..4)
+        .filter(|head| head.eq_ignore_ascii_case("safe"))
+        .map(|_| &advisory[4..])?;
+    // `SAFE`, `SAFE:` or `SAFE -`, not `SAFEGUARD…`.
+    if rest.chars().next().is_some_and(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    let reason = rest.trim_start_matches([':', '-', '—', ' ']).trim();
+    Some(if reason.is_empty() {
+        "rated safe".to_string()
+    } else {
+        reason.to_string()
+    })
+}
+
 /// One MicroClaw Code session in one project.
 pub struct CodeSession {
     microclaw: MicroClaw,
@@ -337,6 +557,12 @@ pub struct CodeSession {
     /// Workspace checkpoints taken at the start of each turn, oldest first,
     /// with the turn's prompt.
     turn_checkpoints: Vec<(Checkpoint, String)>,
+    /// Where the conversation stood when each turn started, by checkpoint
+    /// commit (for rewinding the conversation too).
+    turn_marks: std::collections::HashMap<String, microclaw_sdk::SessionMark>,
+    /// Told to the model with the next prompt after a rewind or undo, so it
+    /// does not trust what the conversation says about the files.
+    rewind_note: Option<String>,
     /// Language servers, started on first use.
     lsp: Option<crate::lsp::LspPool>,
     /// Tool policy for the next run instead of the mode's (reviews).
@@ -453,6 +679,8 @@ impl CodeSession {
             allow_rules: AllowRules::load(AllowRules::default_path()),
             pending_approval: None,
             turn_checkpoints: Vec::new(),
+            turn_marks: std::collections::HashMap::new(),
+            rewind_note: None,
             lsp: None,
             policy_override: None,
             roles: RoleModels::default(),
@@ -593,6 +821,8 @@ impl CodeSession {
         self.session_id = session_id;
         self.pending_approval = None;
         self.turn_checkpoints.clear();
+        self.turn_marks.clear();
+        self.rewind_note = None;
         self.git_summary = crate::project::git_summary(&self.project.root);
     }
 
@@ -626,9 +856,69 @@ impl CodeSession {
                 .restore_checkpoint(&self.session_id, &checkpoint.commit)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
+            self.rewind_note = Some(FILES_REWOUND_NOTE.to_string());
             return Ok(Some((checkpoint, prompt)));
         }
         Ok(None)
+    }
+
+    /// Go back to before an earlier turn: restore its files, cut the
+    /// conversation back to where it stood, or both.
+    pub async fn rewind_to(&mut self, commit: &str, scope: RewindScope) -> anyhow::Result<Rewound> {
+        let mut rewound = Rewound::default();
+        if scope.files() {
+            self.rewind(commit).await?;
+            rewound.files = true;
+        }
+        if scope.conversation() {
+            match self.turn_marks.get(commit).copied() {
+                None => {
+                    rewound.conversation_skipped = Some(
+                        "this turn started before mccode began tracking it, so the conversation was left as it is"
+                            .into(),
+                    );
+                }
+                Some(mark) => match self.microclaw.rewind_session(&self.session_id, &mark).await {
+                    Ok(removed) => {
+                        rewound.messages_removed = Some(removed);
+                        // The rewound turn and the ones after it are gone.
+                        if let Some(at) = self
+                            .turn_checkpoints
+                            .iter()
+                            .position(|(c, _)| c.commit == commit)
+                        {
+                            for (c, _) in self.turn_checkpoints.drain(at..) {
+                                self.turn_marks.remove(&c.commit);
+                            }
+                        }
+                    }
+                    Err(e) => rewound.conversation_skipped = Some(e.to_string()),
+                },
+            }
+        }
+        let conversation = rewound.messages_removed.is_some();
+        self.rewind_note = match (rewound.files, conversation) {
+            (true, true) => None,
+            (true, false) => Some(FILES_REWOUND_NOTE.to_string()),
+            (false, true) => Some(CONVERSATION_REWOUND_NOTE.to_string()),
+            (false, false) => self.rewind_note.take(),
+        };
+        Ok(rewound)
+    }
+
+    /// A handle for listing and stopping this session's background work
+    /// while a turn runs (the session itself is busy then).
+    pub fn job_handle(&self) -> JobHandle {
+        JobHandle {
+            microclaw: self.microclaw.clone(),
+            session_id: self.session_id.clone(),
+        }
+    }
+
+    /// Move the commands running in the foreground to the background and
+    /// say what happened.
+    pub fn background_running(&self) -> String {
+        self.job_handle().background_running()
     }
 
     /// Recent workspace checkpoints, newest first.
@@ -768,6 +1058,8 @@ impl CodeSession {
         self.session_id = new_id;
         self.pending_approval = None;
         self.turn_checkpoints.clear();
+        self.turn_marks.clear();
+        self.rewind_note = None;
         if let Some(model) = model
             && self.model().await.ok().as_deref() != Some(model.as_str())
         {
@@ -944,6 +1236,15 @@ impl CodeSession {
         {
             return Gate::Auto { rule: Some(rule) };
         }
+        // The approval reviewer may approve what it rates SAFE; it never
+        // denies (anything else goes to a person).
+        if self.settings.reviewer == crate::settings::ReviewerMode::Approve
+            && let Some(reason) = safe_verdict(approval.advisory.as_deref())
+        {
+            return Gate::Auto {
+                rule: Some(format!("{REVIEWER_RULE_PREFIX}{reason}")),
+            };
+        }
         Gate::Ask
     }
 
@@ -1101,6 +1402,9 @@ impl CodeSession {
                         cancelled = true;
                         awaiting = None;
                         let _ = controller.cancel_confirmed().await;
+                    }
+                    Some(Control::Background) => {
+                        let _ = updates.send(Update::Notice(self.background_running()));
                     }
                     Some(Control::Steer(text)) => {
                         match controller.steer_confirmed(text.clone()).await {
@@ -1470,14 +1774,22 @@ impl CodeSession {
             )
             .await
         {
-            Ok(Some(checkpoint)) => self.turn_checkpoints.push((checkpoint, prompt.to_string())),
+            Ok(Some(checkpoint)) => {
+                if let Ok(mark) = self.microclaw.session_mark(&self.session_id).await {
+                    self.turn_marks.insert(checkpoint.commit.clone(), mark);
+                }
+                self.turn_checkpoints.push((checkpoint, prompt.to_string()));
+            }
             Ok(None) => {}
             Err(e) => {
                 let _ = updates.send(Update::Notice(format!("checkpoint skipped: {e}")));
             }
         }
         let before = crate::git::worktree_fingerprint(&self.project.root);
-        let mut next_prompt = prompt.to_string();
+        let mut next_prompt = match self.rewind_note.take() {
+            Some(note) => format!("{note}\n\n{prompt}"),
+            None => prompt.to_string(),
+        };
         let mut fix_round = 0u32;
         // Any new message (including a bare option value answering an
         // approval left pending by a non-interactive run) consumes the
@@ -1616,6 +1928,53 @@ impl CodeSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rewind_scope_parses_words_and_summaries_say_what_happened() {
+        assert_eq!(RewindScope::parse("files"), Some(RewindScope::Files));
+        assert_eq!(RewindScope::parse("chat"), Some(RewindScope::Conversation));
+        assert_eq!(RewindScope::parse("both"), Some(RewindScope::Both));
+        assert_eq!(RewindScope::parse("everything"), None);
+        assert!(RewindScope::Both.files() && RewindScope::Both.conversation());
+        assert!(!RewindScope::Files.conversation() && !RewindScope::Conversation.files());
+
+        let both = Rewound {
+            files: true,
+            messages_removed: Some(4),
+            conversation_skipped: None,
+        };
+        assert_eq!(
+            both.summary("fix the test"),
+            "restored the files and cut the conversation back to before “fix the test”"
+        );
+        let files_only = Rewound {
+            files: true,
+            messages_removed: None,
+            conversation_skipped: Some("it was compacted".into()),
+        };
+        assert_eq!(
+            files_only.summary("x"),
+            "restored the files to before “x” · conversation unchanged: it was compacted"
+        );
+    }
+
+    #[test]
+    fn jobs_list_commands_then_subagents() {
+        let jobs = Jobs {
+            commands: vec![microclaw_sdk::BackgroundJob {
+                id: "bg_1".into(),
+                command: "npm run dev".into(),
+                started_at: "2026-11-11T00:00:00Z".into(),
+                exit_code: None,
+            }],
+            subagents: Vec::new(),
+        };
+        assert!(!jobs.is_empty());
+        let lines = jobs.lines();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with("bg_1  running"), "{}", lines[0]);
+        assert!(Jobs::default().is_empty());
+    }
 
     #[test]
     fn always_ask_patterns_catch_destructive_commands() {
@@ -1761,6 +2120,7 @@ mod tests {
             max_fix_rounds: 0,
             interactive: true,
             sandbox,
+            reviewer: crate::settings::ReviewerMode::Approve,
         };
         let session = CodeSession::new(microclaw, project, "s".into(), settings)
             .with_allow_rules(AllowRules::load(dir.path().join("allow.json")));
@@ -1819,6 +2179,42 @@ mod tests {
         assert!(matches!(
             auto.gate(&bash("make", Some("CAUTION writes files"))),
             Gate::Auto { .. }
+        ));
+        // Ask mode with `reviewer: approve`: SAFE runs, anything else asks,
+        // and destructive commands ask whatever the reviewer says.
+        let (reviewed, _d6) = session(Mode::Ask, None);
+        assert!(matches!(
+            reviewed.gate(&bash("cargo test", Some("SAFE: runs the test suite"))),
+            Gate::Auto { rule: Some(ref r) } if r == "reviewer: runs the test suite"
+        ));
+        assert!(matches!(
+            reviewed.gate(&bash("cargo test", Some("CAUTION writes target/"))),
+            Gate::Ask
+        ));
+        assert!(matches!(
+            reviewed.gate(&bash("cargo test", Some("SAFEGUARD missing"))),
+            Gate::Ask
+        ));
+        assert!(matches!(
+            reviewed.gate(&bash("git push --force", Some("SAFE"))),
+            Gate::Ask
+        ));
+        let web = PendingApproval::from_event(
+            "id",
+            "web_fetch",
+            Some("https://docs.rs"),
+            &[],
+            Some("safe — reads public docs"),
+        );
+        assert!(matches!(
+            reviewed.gate(&web),
+            Gate::Auto { rule: Some(ref r) } if r == "reviewer: reads public docs"
+        ));
+        let mut advise_only = reviewed;
+        advise_only.settings.reviewer = crate::settings::ReviewerMode::Advise;
+        assert!(matches!(
+            advise_only.gate(&bash("cargo test", Some("SAFE"))),
+            Gate::Ask
         ));
     }
 }

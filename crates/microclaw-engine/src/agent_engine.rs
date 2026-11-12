@@ -1218,10 +1218,13 @@ pub(crate) fn approval_options(
     ]
 }
 
-const APPROVAL_REVIEWER_SYSTEM_PROMPT: &str = "You are a security reviewer annotating a \
-high-risk tool call that is waiting for human approval. Reply with exactly one line, at most \
-140 characters: a verdict word (SAFE, CAUTION, or DANGEROUS) followed by a short reason. You \
-cannot approve or deny anything; a human decides.";
+const APPROVAL_REVIEWER_SYSTEM_PROMPT: &str = "You are a security reviewer of a high-risk \
+tool call that is waiting for approval. Reply with exactly one line, at most 140 characters: a \
+verdict word (SAFE, CAUTION, or DANGEROUS) followed by a short reason. Say SAFE only when the \
+call is clearly harmless for the task: depending on the operator's settings a SAFE call may run \
+without asking a person. Say CAUTION when a person should look, and DANGEROUS when it could \
+destroy data, leak secrets or credentials, or reach outside the project. You cannot deny \
+anything; anything not SAFE goes to a person.";
 
 /// Opt-in aux-model advisory on a pending high-risk approval. Returns
 /// `None` unless `aux_models.approval_reviewer` is set (no fallback to the

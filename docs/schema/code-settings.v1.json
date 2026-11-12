@@ -149,14 +149,14 @@
           ]
         },
         "review": {
-          "description": "`/review` and `mccode review`.",
+          "description": "`/review`, `mccode review` and the approval reviewer (`permissions.reviewer`).",
           "type": [
             "string",
             "null"
           ]
         },
         "subagent": {
-          "description": "Reserved for sub-agents and `explore`; not used yet (they run on the session's model).",
+          "description": "Sub-agents (`sessions_spawn`) and `explore`; a project agent's own `model` wins.",
           "type": [
             "string",
             "null"
@@ -246,6 +246,17 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewerMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Approval reviewer: `off` (default), `advise` (a model rates each\napproval; one it calls DANGEROUS asks you even in auto mode) or\n`approve` (in ask mode it also approves the calls it rates SAFE).\nRuns on `model.roles.review`."
         }
       },
       "type": "object"
@@ -288,6 +299,26 @@
         }
       },
       "type": "object"
+    },
+    "ReviewerMode": {
+      "description": "What the approval reviewer may do (`permissions.reviewer`).",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "No reviewer.",
+          "type": "string"
+        },
+        {
+          "const": "advise",
+          "description": "Rate each approval; DANGEROUS always asks a person.",
+          "type": "string"
+        },
+        {
+          "const": "approve",
+          "description": "Also approve, in ask mode, the calls it rates SAFE.",
+          "type": "string"
+        }
+      ]
     },
     "SandboxConfig": {
       "additionalProperties": false,

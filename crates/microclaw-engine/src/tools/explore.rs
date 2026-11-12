@@ -9,7 +9,8 @@
 //!
 //! Project agents: a trusted workspace can define focused helpers in
 //! `.microclaw/agents/<name>.md` (front matter `description`, optional
-//! `model`; the body is the system prompt), selected with `agent`.
+//! `model` and `tools`; the body is the system prompt), selected with
+//! `agent` here and in `sessions_spawn`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,7 +41,50 @@ pub struct ProjectAgent {
     pub name: String,
     pub description: String,
     pub model: Option<String>,
+    /// Tools the agent may use (`tools:` in the front matter); empty means
+    /// the caller's usual set. It can only narrow that set.
+    pub tools: Vec<String>,
     pub prompt: String,
+}
+
+impl ProjectAgent {
+    /// Whether the agent may use `tool` (always true without a `tools` list).
+    pub fn allows(&self, tool: &str) -> bool {
+        self.tools.is_empty() || self.tools.iter().any(|t| t == tool)
+    }
+}
+
+/// Front-matter tool names to engine tool names (`read` → `read_file`).
+fn tool_names(spec: &str) -> Vec<String> {
+    let spec = spec.trim().trim_start_matches('[').trim_end_matches(']');
+    let mut tools = Vec::new();
+    for raw in spec.split(',') {
+        let name = raw.trim().trim_matches(['"', '\'']).to_ascii_lowercase();
+        let mapped: &[&str] = match name.as_str() {
+            "" => &[],
+            "read" => &["read_file"],
+            "write" => &["write_file"],
+            "edit" => &["edit_file", "apply_patch"],
+            "shell" | "bash" => &["bash", "bash_output", "bash_input", "bash_kill"],
+            "web" => &["web_fetch", "web_search"],
+            "search" => &["grep", "glob"],
+            other => {
+                tools.push(other.to_string());
+                continue;
+            }
+        };
+        tools.extend(mapped.iter().map(|s| s.to_string()));
+    }
+    tools.sort();
+    tools.dedup();
+    tools
+}
+
+/// Find a project agent by name in `dir`.
+pub fn find_project_agent(dir: Option<&str>, name: &str) -> Option<ProjectAgent> {
+    load_project_agents(Path::new(dir?))
+        .into_iter()
+        .find(|agent| agent.name == name)
 }
 
 /// Agents defined in `dir` (`<name>.md` with optional front matter).
@@ -66,6 +110,7 @@ pub fn load_project_agents(dir: &Path) -> Vec<ProjectAgent> {
 fn parse_agent(name: &str, text: &str) -> ProjectAgent {
     let mut description = String::new();
     let mut model = None;
+    let mut tools = Vec::new();
     let mut body = text;
     if let Some(rest) = text.strip_prefix("---") {
         if let Some(end) = rest.find("\n---") {
@@ -75,6 +120,7 @@ fn parse_agent(name: &str, text: &str) -> ProjectAgent {
                     match key.trim() {
                         "description" => description = value,
                         "model" if !value.is_empty() => model = Some(value),
+                        "tools" => tools = tool_names(&value),
                         _ => {}
                     }
                 }
@@ -86,6 +132,7 @@ fn parse_agent(name: &str, text: &str) -> ProjectAgent {
         name: name.to_string(),
         description,
         model,
+        tools,
         prompt: body.trim().to_string(),
     }
 }
@@ -216,11 +263,12 @@ async fn run_explore(
         .definitions_for(auth)
         .into_iter()
         .filter(|d| explorer_tool(&d.name))
+        .filter(|d| agent.is_none_or(|a| a.allows(&d.name)))
         .collect();
     let llm = crate::llm::create_provider(config);
     let model = agent
         .and_then(|a| a.model.clone())
-        .unwrap_or_else(|| config.model.clone());
+        .unwrap_or_else(|| config.aux_models.subagent_model(&config.model).to_string());
     let system = match agent {
         Some(agent) => format!(
             "{}\n\nYou are working for another agent and cannot change anything; only read and search. End with a concise report including file paths and line numbers.",
@@ -312,6 +360,11 @@ async fn run_explore(
                         "`{name}` is not available to the explorer (read-only tools only)"
                     ));
                 }
+                if agent.is_some_and(|a| !a.allows(&name)) {
+                    return ToolResult::error(format!(
+                        "`{name}` is not in this agent's `tools` list"
+                    ));
+                }
                 tools.execute_with_auth(&name, input, auth).await
             }
         }))
@@ -365,6 +418,44 @@ mod tests {
         let agents = load_project_agents(dir.path());
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].name, "a");
+    }
+
+    #[test]
+    fn agent_tools_narrow_the_tool_set_and_accept_short_names() {
+        let agent = parse_agent(
+            "reviewer",
+            "---\ndescription: Reviews\ntools: [read, grep, \"web\"]\n---\nReview the code.\n",
+        );
+        assert_eq!(
+            agent.tools,
+            vec!["grep", "read_file", "web_fetch", "web_search"]
+        );
+        assert!(agent.allows("read_file"));
+        assert!(!agent.allows("bash"));
+        let all = parse_agent("all", "Do anything.");
+        assert!(all.tools.is_empty());
+        assert!(all.allows("bash"));
+        assert_eq!(
+            tool_names("shell, edit"),
+            vec![
+                "apply_patch",
+                "bash",
+                "bash_input",
+                "bash_kill",
+                "bash_output",
+                "edit_file"
+            ]
+        );
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("reviewer.md"),
+            "---\ntools: read\n---\nReview.",
+        )
+        .unwrap();
+        let found = find_project_agent(dir.path().to_str(), "reviewer").unwrap();
+        assert_eq!(found.tools, vec!["read_file"]);
+        assert!(find_project_agent(dir.path().to_str(), "missing").is_none());
+        assert!(find_project_agent(None, "reviewer").is_none());
     }
 
     #[test]

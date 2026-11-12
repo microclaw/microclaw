@@ -97,9 +97,16 @@ pub struct ToolRegistry {
     /// Consulted before the name-derived `tool_risk` at the policy and
     /// approval choke points.
     risk_overrides: std::collections::HashMap<String, ToolRisk>,
+    /// Background shell processes of this registry's `bash` tools.
+    processes: Option<Arc<background_process::ProcessRegistry>>,
 }
 
 impl ToolRegistry {
+    /// Background shell processes started through this registry.
+    pub fn processes(&self) -> Option<Arc<background_process::ProcessRegistry>> {
+        self.processes.clone()
+    }
+
     fn should_inject_default_chat_id(tool_name: &str) -> bool {
         matches!(
             tool_name,
@@ -182,7 +189,8 @@ impl ToolRegistry {
                 .with_sandbox_router(sandbox_router.clone())
                 .with_dangerous_patterns(&config.bash_dangerous_patterns)
                 .with_rtk(&config.rtk)
-                .with_process_registry(processes.clone()),
+                .with_process_registry(processes.clone())
+                .with_detachable_foreground(config.detachable_foreground_commands),
             ),
             Box::new(background_process::BashOutputTool(processes.clone())),
             Box::new(background_process::BashKillTool(processes.clone())),
@@ -433,6 +441,7 @@ impl ToolRegistry {
             cached_static_definitions: OnceLock::new(),
             audit_db,
             risk_overrides: std::collections::HashMap::new(),
+            processes: Some(processes),
         }
     }
 
@@ -606,6 +615,7 @@ impl ToolRegistry {
             cached_static_definitions: OnceLock::new(),
             audit_db,
             risk_overrides: std::collections::HashMap::new(),
+            processes: Some(processes),
         }
     }
 
@@ -1299,6 +1309,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1326,6 +1337,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1347,6 +1359,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![
                 Box::new(DummyTool {
                     tool_name: "write_file".into(),
@@ -1386,6 +1399,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![
                 Box::new(DummyTool {
                     tool_name: "write_file".into(),
@@ -1432,6 +1446,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1472,6 +1487,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1510,6 +1526,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1539,6 +1556,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "bash".into(),
             })],
@@ -1565,6 +1583,7 @@ mod tests {
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(DummyTool {
                 tool_name: "write_file".into(),
             })],
@@ -1622,6 +1641,7 @@ tools:
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
         };
         let auth = ToolAuthContext {
             caller_channel: "web".into(),
@@ -1663,6 +1683,7 @@ tools:
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools,
         };
         let auth = ToolAuthContext {
@@ -1703,6 +1724,7 @@ tools:
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![
                 Box::new(CaptureInputTool {
                     tool_name: "write_file".into(),
@@ -1741,6 +1763,7 @@ tools:
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "write_memory".into(),
             })],
@@ -1774,6 +1797,7 @@ tools:
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "write_memory".into(),
             })],
@@ -1807,6 +1831,7 @@ tools:
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![Box::new(CaptureInputTool {
                 tool_name: "send_message".into(),
             })],
@@ -1877,6 +1902,7 @@ tools:
             cached_static_definitions: OnceLock::new(),
             audit_db: None,
             risk_overrides: std::collections::HashMap::new(),
+            processes: None,
             tools: vec![tool],
         }
     }

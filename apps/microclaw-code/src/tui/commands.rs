@@ -5,7 +5,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
 use microclaw_code_core::allow;
-use microclaw_code_core::driver::{CodeSession, TurnReport, Update};
+use microclaw_code_core::driver::{CodeSession, RewindScope, TurnReport, Update};
 use microclaw_code_core::project::{self, Mode, Project};
 use microclaw_code_core::settings;
 use microclaw_code_core::verify;
@@ -45,7 +45,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "/rewind",
-        "pick an earlier turn and restore its files (also Esc Esc)",
+        "go back to before an earlier turn: files and conversation (also Esc Esc)",
     ),
     (
         "/model",
@@ -84,6 +84,10 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "start a new session"),
     ("/sessions", "pick a session of this project to resume"),
     ("/queue", "show or clear queued messages (/queue clear)"),
+    (
+        "/jobs",
+        "background commands and sub-agents: /jobs [<id> | kill <id>] (Ctrl+B backgrounds a running command)",
+    ),
     ("/export", "write the transcript as Markdown"),
     ("/import", "import settings from claude, codex or opencode"),
     (
@@ -98,7 +102,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
 /// Session commands that need the engine (run like a short turn).
 pub(super) enum SessionOp {
     Undo,
-    Rewind(String),
+    Rewind(String, RewindScope),
     Cost,
     Model(Option<String>),
     Compact(Option<String>),
@@ -171,10 +175,18 @@ async fn run_session_op(
             Ok(None) => notice("nothing to undo in this session".into()),
             Err(e) => notice(format!("undo failed: {e}")),
         },
-        SessionOp::Rewind(commit) => match session.rewind(&commit).await {
-            Ok(()) => notice(format!("restored files to checkpoint {commit}")),
-            Err(e) => notice(format!("rewind failed: {e}")),
-        },
+        SessionOp::Rewind(commit, scope) => {
+            let turn = session
+                .turn_checkpoints()
+                .iter()
+                .find(|(c, _)| c.commit == commit)
+                .map(|(_, prompt)| format::truncate(prompt, 60))
+                .unwrap_or_else(|| format!("checkpoint {commit}"));
+            match session.rewind_to(&commit, scope).await {
+                Ok(rewound) => notice(rewound.summary(&turn)),
+                Err(e) => notice(format!("rewind failed: {e}")),
+            }
+        }
         SessionOp::Cost => match session.usage().await {
             Ok(usage) if usage.requests == 0 => {
                 notice("no model requests in this session yet".into())
@@ -265,6 +277,52 @@ async fn run_session_op(
 impl App {
     /// Run a session command in the background (the session is busy until
     /// it finishes, like a turn).
+    /// `/jobs`, `/jobs <id>`, `/jobs kill <id>`: works while a turn runs.
+    fn jobs_command(&mut self, args: &[String]) {
+        let Some(handle) = self.jobs.clone() else {
+            self.hint = Some("no session yet".into());
+            return;
+        };
+        match args {
+            [] => {
+                let jobs = handle.jobs();
+                if jobs.is_empty() {
+                    self.transcript.notice(
+                        "no background work · Ctrl+B moves a running command to the background",
+                        Tone::Info,
+                    );
+                } else {
+                    let mut text = String::from("background work:\n");
+                    for line in jobs.lines() {
+                        text.push_str(&format!("  {line}\n"));
+                    }
+                    text.push_str("/jobs <id> shows output · /jobs kill <id> stops it");
+                    self.transcript.notice(text, Tone::Info);
+                }
+            }
+            [kill, id] if kill == "kill" || kill == "stop" => {
+                let jobs = handle;
+                let updates = self.updates_tx.clone();
+                let id = id.clone();
+                tokio::spawn(async move {
+                    let text = match jobs.kill_job(&id).await {
+                        Ok(status) => status,
+                        Err(e) => format!("could not stop {id}: {e}"),
+                    };
+                    let _ = updates.send(Update::Notice(text));
+                });
+            }
+            [id] => match handle.job_output(id) {
+                Ok(text) if text.trim().is_empty() => self
+                    .transcript
+                    .notice(format!("{id}: no output yet"), Tone::Info),
+                Ok(text) => self.transcript.notice(format!("{id}:\n{text}"), Tone::Info),
+                Err(e) => self.transcript.notice(e.to_string(), Tone::Error),
+            },
+            _ => self.hint = Some("usage: /jobs [<id> | kill <id>]".into()),
+        }
+    }
+
     pub(super) fn start_session_op(&mut self, op: SessionOp) {
         let Some(mut session) = self.session.take() else {
             self.hint = Some("wait for the current turn to finish".into());
@@ -544,9 +602,18 @@ impl App {
                 self.busy_hint()
             }
             "/undo" => self.start_session_op(SessionOp::Undo),
-            "/rewind" => match args.first() {
-                Some(commit) => self.start_session_op(SessionOp::Rewind(commit.clone())),
-                None => self.open_timeline(),
+            "/rewind" => match args.as_slice() {
+                [] => self.open_timeline(),
+                [commit] => {
+                    self.start_session_op(SessionOp::Rewind(commit.clone(), RewindScope::Both))
+                }
+                [commit, scope] => match RewindScope::parse(scope) {
+                    Some(scope) => self.start_session_op(SessionOp::Rewind(commit.clone(), scope)),
+                    None => {
+                        self.hint = Some("usage: /rewind [<checkpoint> [files|chat|both]]".into())
+                    }
+                },
+                _ => self.hint = Some("usage: /rewind [<checkpoint> [files|chat|both]]".into()),
             },
             "/cost" | "/usage" => self.start_session_op(SessionOp::Cost),
             "/model" if args.is_empty() => self.open_model_picker(),
@@ -659,6 +726,7 @@ impl App {
                 }
             }
             "/sessions" | "/resume" => self.open_session_picker(),
+            "/jobs" => self.jobs_command(&args),
             "/status" => self.status_command(),
             "/init" => {
                 let Some(project) = self.project() else {
@@ -1180,9 +1248,9 @@ impl App {
         )));
     }
 
-    /// A picker entry was chosen (`alt`: secondary action, e.g. timeline
-    /// "edit prompt only").
-    pub(super) fn picker_chosen(&mut self, kind: PickerKind, entry: &Entry, alt: bool) {
+    /// A picker entry was chosen with Enter (`key: None`) or with a
+    /// letter (the timeline's `e` / `f` / `c`).
+    pub(super) fn picker_chosen(&mut self, kind: PickerKind, entry: &Entry, key: Option<char>) {
         match kind {
             PickerKind::Palette => {
                 if let Some(action) = entry.insert.strip_prefix("action:") {
@@ -1239,11 +1307,20 @@ impl App {
                         .find(|(c, _)| c.commit == commit)
                         .map(|(_, p)| p.clone())
                 });
-                if let Some(prompt) = prompt {
+                let scope = match key {
+                    None => Some(RewindScope::Both),
+                    Some('f') => Some(RewindScope::Files),
+                    Some('c') => Some(RewindScope::Conversation),
+                    _ => None,
+                };
+                // The prompt comes back unless only the files were restored.
+                if let Some(prompt) = prompt
+                    && scope != Some(RewindScope::Files)
+                {
                     self.input.set_text(&prompt);
                 }
-                if !alt {
-                    self.start_session_op(SessionOp::Rewind(commit));
+                if let Some(scope) = scope {
+                    self.start_session_op(SessionOp::Rewind(commit, scope));
                 }
             }
         }
