@@ -12,7 +12,7 @@
 //! `model` and `tools`; the body is the system prompt), selected with
 //! `agent` here and in `sessions_spawn`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -87,6 +87,25 @@ pub fn find_project_agent(dir: Option<&str>, name: &str) -> Option<ProjectAgent>
         .find(|agent| agent.name == name)
 }
 
+/// The project agents and those of `extra_agents_dirs` (plugins); the first
+/// definition of a name wins.
+pub fn config_agents(config: &Config) -> Vec<ProjectAgent> {
+    let mut agents: Vec<ProjectAgent> = Vec::new();
+    for dir in config
+        .project_agents_dir
+        .iter()
+        .chain(config.extra_agents_dirs.iter())
+    {
+        for agent in load_project_agents(Path::new(dir)) {
+            if !agents.iter().any(|a| a.name == agent.name) {
+                agents.push(agent);
+            }
+        }
+    }
+    agents.sort_by(|a, b| a.name.cmp(&b.name));
+    agents
+}
+
 /// Agents defined in `dir` (`<name>.md` with optional front matter).
 pub fn load_project_agents(dir: &Path) -> Vec<ProjectAgent> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -145,11 +164,7 @@ pub struct ExploreTool {
 
 impl ExploreTool {
     pub fn new(config: &Config, db: Arc<Database>) -> Self {
-        let agents = config
-            .project_agents_dir
-            .as_deref()
-            .map(|dir| load_project_agents(&PathBuf::from(dir)))
-            .unwrap_or_default();
+        let agents = config_agents(config);
         Self {
             config: config.clone(),
             db,
@@ -456,6 +471,24 @@ mod tests {
         assert_eq!(found.tools, vec!["read_file"]);
         assert!(find_project_agent(dir.path().to_str(), "missing").is_none());
         assert!(find_project_agent(None, "reviewer").is_none());
+    }
+
+    #[test]
+    fn plugin_agent_dirs_follow_the_project_dir() {
+        let project = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("reviewer.md"), "Project reviewer.").unwrap();
+        std::fs::write(plugin.path().join("reviewer.md"), "Plugin reviewer.").unwrap();
+        std::fs::write(plugin.path().join("tester.md"), "Plugin tester.").unwrap();
+        let mut config = Config::test_defaults();
+        config.project_agents_dir = Some(project.path().to_string_lossy().into_owned());
+        config.extra_agents_dirs = vec![plugin.path().to_string_lossy().into_owned()];
+        let agents = config_agents(&config);
+        let names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["reviewer", "tester"]);
+        assert_eq!(agents[0].prompt.trim(), "Project reviewer.");
+        config.project_agents_dir = None;
+        assert_eq!(config_agents(&config).len(), 2);
     }
 
     #[test]

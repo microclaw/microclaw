@@ -88,6 +88,14 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
         "/jobs",
         "background commands and sub-agents: /jobs [<id> | kill <id>] (Ctrl+B backgrounds a running command)",
     ),
+    (
+        "/plugins",
+        "plugins in use (manage them with `mccode plugin`)",
+    ),
+    (
+        "/memory",
+        "edit project memory: shared (.microclaw/memory.md) and private; /memory shared|private|show",
+    ),
     ("/export", "write the transcript as Markdown"),
     ("/import", "import settings from claude, codex or opencode"),
     (
@@ -106,6 +114,8 @@ pub(super) enum SessionOp {
     Cost,
     Model(Option<String>),
     Compact(Option<String>),
+    /// Compaction of an idle session before its prompt cache expires.
+    IdleCompact,
     Context,
     Fork(String),
     Handoff(String, String),
@@ -246,6 +256,16 @@ async fn run_session_op(
             Ok(_) => notice("the conversation is already short; nothing to compact".into()),
             Err(e) => notice(format!("compact failed: {e}")),
         },
+        SessionOp::IdleCompact => match session.compact_idle().await {
+            Ok(c) if c.method != "none" => notice(format!(
+                "compacted the idle conversation ({}): ~{} → ~{} tokens",
+                c.method,
+                format::tokens(c.tokens_before as i64),
+                format::tokens(c.tokens_after as i64),
+            )),
+            Ok(_) => {}
+            Err(e) => notice(format!("idle compaction failed: {e}")),
+        },
         SessionOp::Context => match session.context_usage().await {
             Ok(u) => notice(context_report(&u)),
             Err(e) => notice(format!("could not read the context: {e}")),
@@ -328,6 +348,11 @@ impl App {
             self.hint = Some("wait for the current turn to finish".into());
             return;
         };
+        if matches!(op, SessionOp::Compact(_) | SessionOp::IdleCompact) {
+            // The compacted prefix is written fresh by the next turn.
+            self.last_request_end = None;
+            self.idle_plan = None;
+        }
         let (controls_tx, _controls_rx) = mpsc::unbounded_channel();
         let updates = self.updates_tx.clone();
         let handle = tokio::spawn(async move {
@@ -727,6 +752,8 @@ impl App {
             }
             "/sessions" | "/resume" => self.open_session_picker(),
             "/jobs" => self.jobs_command(&args),
+            "/memory" => self.memory_command(&args),
+            "/plugins" => self.plugins_command(),
             "/status" => self.status_command(),
             "/init" => {
                 let Some(project) = self.project() else {
@@ -823,6 +850,104 @@ impl App {
             ),
         };
         self.transcript.notice(text, tone);
+    }
+
+    /// `/plugins`: what the active plugins bring.
+    fn plugins_command(&mut self) {
+        let Some(project) = self.project() else {
+            if self.running.is_some() {
+                self.busy_hint();
+            }
+            return;
+        };
+        let (plugins, warnings) = microclaw_code_core::plugins::active(project);
+        let mut text = String::new();
+        if plugins.is_empty() {
+            text.push_str("No plugins in use.");
+        }
+        for plugin in &plugins {
+            let lines = plugin.describe();
+            text.push_str(&format!(
+                "{} ({})\n",
+                lines[0].trim_start_matches("plugin").trim(),
+                plugin.scope.as_str()
+            ));
+            for line in lines.iter().skip(1) {
+                text.push_str(&format!("  {line}\n"));
+            }
+        }
+        for warning in warnings {
+            text.push_str(&format!("\n{warning}"));
+        }
+        text.push_str(
+            "\nInstall, update or remove with `mccode plugin add|update|remove`; new sessions pick changes up.",
+        );
+        self.transcript
+            .notice(text.trim_end().to_string(), Tone::Info);
+    }
+
+    /// `/memory [shared | private | show]`: open the memory files in
+    /// `$EDITOR` (both by default) or describe them.
+    fn memory_command(&mut self, args: &[String]) {
+        let Some(project) = self.project() else {
+            if self.running.is_some() {
+                self.busy_hint();
+            }
+            return;
+        };
+        let shared = project.root.join(microclaw_code_core::memory::SHARED_FILE);
+        let private = project.private_memory.clone();
+        let trusted = project.trusted;
+        let files = match args.first().map(String::as_str) {
+            None => vec![shared, private.clone()],
+            Some("shared") => vec![shared],
+            Some("private") => vec![private.clone()],
+            Some("show" | "path" | "paths") => {
+                let describe = |path: &std::path::Path| match std::fs::read_to_string(path) {
+                    Ok(text) => {
+                        let bullets = text
+                            .lines()
+                            .filter(|l| l.trim_start().starts_with("- "))
+                            .count();
+                        format!("{bullets} bullets")
+                    }
+                    Err(_) => "not created yet".to_string(),
+                };
+                let mut text = format!(
+                    "shared   {}  ({}) — in the repository, for every contributor\nprivate  {}  ({}) — only yours, outside the repository",
+                    shared.display(),
+                    describe(&shared),
+                    private.display(),
+                    describe(&private)
+                );
+                if !trusted {
+                    text.push_str(
+                        "\nThis project is not trusted, so neither file is loaded into the prompt (/trust).",
+                    );
+                }
+                self.transcript.notice(text, Tone::Info);
+                return;
+            }
+            Some(_) => {
+                self.transcript
+                    .notice("usage: /memory [shared | private | show]", Tone::Error);
+                return;
+            }
+        };
+        for file in &files {
+            if let Some(dir) = file.parent()
+                && let Err(e) = std::fs::create_dir_all(dir)
+            {
+                self.transcript
+                    .notice(format!("cannot create {}: {e}", dir.display()), Tone::Error);
+                return;
+            }
+        }
+        self.pending_editor = Some(super::keys::EditorRequest {
+            text: String::new(),
+            view_only: false,
+            files,
+        });
     }
 
     fn status_command(&mut self) {
@@ -1057,6 +1182,13 @@ impl App {
                 );
                 if let Some(path) = &report.settings_path {
                     text.push_str(&format!("\nsettings: {}", path.display()));
+                }
+                if let Some(path) = &report.memory_path {
+                    text.push_str(&format!(
+                        "\nprivate memory: {} (+{} bullet(s))",
+                        path.display(),
+                        report.memories_added
+                    ));
                 }
                 for skipped in &report.skipped {
                     text.push_str(&format!("\nskipped: {skipped}"));

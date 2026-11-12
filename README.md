@@ -108,7 +108,7 @@ microclaw start
 
 Then open [http://127.0.0.1:10961](http://127.0.0.1:10961).
 
-The latest release is **v0.30.2**. In MicroClaw Code, Ctrl+B moves a running command to the background and `/jobs` manages background work; `/rewind` takes the conversation back along with the files; sub-agents get their own model (`model.roles.subagent`) and can run as project agents with a `tools` list; and `permissions.reviewer: approve` lets the approval reviewer approve calls it rates SAFE. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.30.2).
+The latest release is **v0.31.0**. MicroClaw Code keeps a private memory per repository (`~/.mccode/projects/…/memory.md`, next to the shared `.microclaw/memory.md`) and can import Claude Code and Codex memories; `mccode plugin add` installs plugins in the Claude Code layout (commands, agents, skills, hooks and MCP servers, also from marketplace repositories); the terminal UI compacts a large idle session before the Anthropic prompt cache expires; and the macOS desktop app preview (`apps/microclaw-code-desktop`) builds from source. See the [release notes](CHANGELOG.md) and [downloads](https://github.com/microclaw/microclaw/releases/tag/v0.31.0).
 
 For Homebrew, Docker, source builds, Linux compatibility, upgrades, and service installation, see the [getting-started guide](docs/getting-started.md).
 
@@ -157,7 +157,7 @@ Worker support without pulling in the Server, Web console, or concrete channel a
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.30.2", features = ["full"] }
+microclaw-sdk = { version = "0.31.0", features = ["full"] }
 ```
 
 ```rust

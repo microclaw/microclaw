@@ -460,7 +460,8 @@ impl UserHooks {
                 Some(f) => command.replace("{file}", &shell_quote(&f.to_string_lossy())),
                 None => command.clone(),
             };
-            self.run_command(&command, body, timeout).await
+            self.run_command(&command, &handler.spec.env, body, timeout)
+                .await
         } else if let Some(url) = &handler.spec.url {
             run_http(url, body, timeout).await
         } else {
@@ -483,6 +484,7 @@ impl UserHooks {
     async fn run_command(
         &self,
         command: &str,
+        env: &[(String, String)],
         body: &str,
         timeout: Duration,
     ) -> Result<RawResult, String> {
@@ -501,6 +503,7 @@ impl UserHooks {
         cmd.current_dir(&self.root)
             .env("MICROCLAW_PROJECT_DIR", &self.root)
             .env("CLAUDE_PROJECT_DIR", &self.root)
+            .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

@@ -100,7 +100,7 @@ microclaw start
 
 然后打开 [http://127.0.0.1:10961](http://127.0.0.1:10961)。
 
-最新版本为 **v0.30.2**：MicroClaw Code 里按 Ctrl+B 可以把正在跑的命令放到后台，`/jobs` 管理后台任务；`/rewind` 回退文件时连对话一起回退；子代理可以用自己的模型（`model.roles.subagent`），也能以带 `tools` 列表的项目 agent 运行；`permissions.reviewer: approve` 让审批复核模型直接放行它判为 SAFE 的调用。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.30.2)。
+最新版本为 **v0.31.0**：MicroClaw Code 为每个仓库保留一份私有记忆（`~/.mccode/projects/…/memory.md`，与共享的 `.microclaw/memory.md` 并存），可导入 Claude Code 和 Codex 的记忆；`mccode plugin add` 安装 Claude Code 格式的插件（命令、agent、skill、hook 与 MCP 服务器，也支持 marketplace 仓库）；终端界面会在 Anthropic 提示缓存过期前压缩长时间空闲的大会话；macOS 桌面版预览（`apps/microclaw-code-desktop`）可从源码构建。详情见[更新日志](CHANGELOG.md)与[版本下载](https://github.com/microclaw/microclaw/releases/tag/v0.31.0)。
 
 Homebrew、Docker、源码构建、Linux 兼容性、升级和常驻服务安装请查看[快速上手指南](docs/getting-started.md)。
 
@@ -149,7 +149,7 @@ Web 控制台或具体渠道适配器。
 
 ```toml
 [dependencies]
-microclaw-sdk = { version = "0.30.2", features = ["full"] }
+microclaw-sdk = { version = "0.31.0", features = ["full"] }
 ```
 
 ```rust

@@ -298,6 +298,7 @@ impl Printer {
             Update::SteerAccepted(_)
             | Update::SteerRejected(_)
             | Update::ContextPercent(_)
+            | Update::IdleCompact(_)
             | Update::TurnUsage { .. } => {}
             Update::Notice(text) => {
                 let _ = writeln!(err, "{}", style.dim(text));

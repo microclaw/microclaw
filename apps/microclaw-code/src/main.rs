@@ -11,6 +11,7 @@ mod clipboard;
 mod eval;
 mod format;
 mod mcp_server;
+mod plugin_cli;
 mod print;
 mod setup;
 mod tui;
@@ -246,6 +247,11 @@ enum Command {
         #[command(subcommand)]
         action: Option<AllowAction>,
     },
+    /// Install, list, update or remove plugins (Claude Code plugin layout).
+    Plugin {
+        #[command(subcommand)]
+        action: plugin_cli::PluginAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -429,6 +435,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         return import_command(source, *apply, target, &project);
     }
 
+    if let Some(Command::Plugin { action }) = &cli.command {
+        return plugin_cli::run(action, &project);
+    }
+
     if let Some(Command::Worktree { action }) = &cli.command {
         match action {
             WorktreeAction::List => {
@@ -547,6 +557,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
         Some(Command::Worktree { .. })
         | Some(Command::Config { .. })
+        | Some(Command::Plugin { .. })
         | Some(Command::Import { .. }) => unreachable!("handled above"),
         Some(Command::Export { .. })
         | Some(Command::Review { .. })
@@ -822,6 +833,14 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         .compact_instructions(project.config.compact_instructions.clone())
         .context_tools(cli.context_tools || project.config.context_tools == Some(true))
         .project_agents_dir(project.agents_dir());
+    let (plugin_sources, plugin_warnings) = launch::plugin_sources(&project);
+    for warning in plugin_warnings {
+        if !interactive && !cli.json {
+            eprintln!("{}", style.yellow(&warning));
+        }
+        notices.push(warning);
+    }
+    builder = builder.plugin_sources(plugin_sources);
     let reviewer = microclaw_code_core::settings::ReviewerMode::effective(
         settings_doc.permissions.reviewer,
         cli.review_commands,
@@ -890,8 +909,17 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         &session.project,
                         &microclaw_code_core::commands::personal_dir(),
                     );
-                    let prompt =
-                        microclaw_code_core::commands::expand(&commands, &prompt).unwrap_or(prompt);
+                    let prompt = match microclaw_code_core::commands::expand(&commands, &prompt) {
+                        Some(expanded) => expanded,
+                        None => {
+                            if let Some(name) = unknown_slash_command(&prompt) {
+                                anyhow::bail!(
+                                    "unknown command {name}; custom commands come from .microclaw/commands/, ~/.mccode/commands/ and plugins"
+                                );
+                            }
+                            prompt
+                        }
+                    };
                     match goal_args(&prompt) {
                         Some(args) => PrintTask::Goal(
                             microclaw_code_core::goal::GoalSpec::parse(
@@ -1163,6 +1191,18 @@ struct GoalResult {
 }
 
 /// The arguments of a `/goal …` prompt.
+/// `/name …` that is not a known command (`/goal` is handled separately).
+/// Paths such as `/tmp/x` are not commands.
+fn unknown_slash_command(prompt: &str) -> Option<&str> {
+    let token = prompt.split_whitespace().next()?;
+    let name = token.strip_prefix('/')?;
+    let is_command = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'));
+    (is_command && goal_args(prompt).is_none()).then_some(token)
+}
+
 fn goal_args(prompt: &str) -> Option<&str> {
     let rest = prompt.trim_start().strip_prefix("/goal")?;
     (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim())
@@ -1695,6 +1735,13 @@ fn import_command(
         report.files_written.len(),
         report.mcp_added.len()
     );
+    if let Some(path) = &report.memory_path {
+        println!(
+            "Added {} memory bullet(s) to {}.",
+            report.memories_added,
+            path.display()
+        );
+    }
     for s in report.skipped {
         println!("skipped: {s}");
     }
@@ -1806,6 +1853,16 @@ async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<Ex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_slash_commands_are_reported_not_sent() {
+        assert_eq!(unknown_slash_command("/greet Carol"), Some("/greet"));
+        assert_eq!(unknown_slash_command("  /kit:greet"), Some("/kit:greet"));
+        assert_eq!(unknown_slash_command("/goal ship it"), None);
+        assert_eq!(unknown_slash_command("/tmp/x.rs explain this"), None);
+        assert_eq!(unknown_slash_command("explain /greet"), None);
+        assert_eq!(unknown_slash_command("/"), None);
+    }
 
     #[test]
     fn server_environment_does_not_reach_the_engine() {

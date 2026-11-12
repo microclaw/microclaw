@@ -165,6 +165,18 @@ pub struct HeadlessContextUsage {
     pub last_request_tokens: Option<usize>,
     /// Estimated tokens of the stored conversation, by kind.
     pub conversation: crate::context_window::ContextBreakdown,
+    /// How long the provider keeps this session's prompt cache, when it is
+    /// one whose cache the engine marks (Anthropic: `anthropic_prompt_cache_ttl`).
+    pub prompt_cache_ttl: Option<std::time::Duration>,
+}
+
+/// Lifetime of an Anthropic prompt cache written with `ttl` (`"5m"` or `"1h"`).
+pub fn anthropic_cache_ttl(ttl: &str) -> std::time::Duration {
+    if ttl.trim() == "1h" {
+        std::time::Duration::from_secs(3600)
+    } else {
+        std::time::Duration::from_secs(300)
+    }
 }
 
 impl HeadlessContextUsage {
@@ -791,8 +803,19 @@ impl HeadlessRuntime {
         channel: &str,
         session: &str,
     ) -> anyhow::Result<HeadlessContextUsage> {
-        let model = self.session_model(channel, session).await?;
+        let chat_id = self.resolve_session_chat_id(session).await?;
+        let (profile, model, _) = crate::agent_engine::resolve_effective_provider_and_model(
+            &self.state,
+            channel,
+            chat_id,
+        )
+        .await;
         let budget = crate::context_window::ContextBudget::for_model(&self.state.config, &model);
+        let prompt_cache_ttl = profile
+            .provider
+            .trim()
+            .eq_ignore_ascii_case("anthropic")
+            .then(|| anthropic_cache_ttl(&self.state.config.anthropic_prompt_cache_ttl));
         let mut usage = HeadlessContextUsage {
             model: model.clone(),
             window: budget.window,
@@ -800,6 +823,7 @@ impl HeadlessRuntime {
             auto_compact_threshold: budget.threshold,
             last_request_tokens: None,
             conversation: Default::default(),
+            prompt_cache_ttl,
         };
         let Some(chat_id) = self.existing_session_chat_id(session).await? else {
             return Ok(usage);
@@ -1054,8 +1078,15 @@ impl HeadlessRuntime {
         let memory = MemoryManager::new(&runtime_data_dir);
         let skills = SkillManager::from_skills_and_runtime(&skills_data_dir, &runtime_data_dir)
             .with_config_verification(&config);
+        let mut mcp_paths = crate::mcp::collect_config_paths(&data_root);
+        mcp_paths.extend(
+            config
+                .extra_mcp_configs
+                .iter()
+                .map(std::path::PathBuf::from),
+        );
         let mcp_manager = crate::mcp::McpManager::from_config_paths(
-            &crate::mcp::collect_config_paths(&data_root),
+            &mcp_paths,
             config.mcp_request_timeout_secs(),
         )
         .await;
@@ -2195,6 +2226,13 @@ mod tests {
         serde_json::from_str(&json).unwrap()
     }
 
+    #[test]
+    fn anthropic_cache_lifetimes() {
+        assert_eq!(anthropic_cache_ttl("5m").as_secs(), 300);
+        assert_eq!(anthropic_cache_ttl("1h").as_secs(), 3600);
+        assert_eq!(anthropic_cache_ttl("weird").as_secs(), 300);
+    }
+
     #[tokio::test]
     async fn manual_compaction_summarizes_with_focus_and_keeps_user_words() {
         let _guard = RUNTIME_TEST_LOCK.lock().await;
@@ -2214,6 +2252,11 @@ mod tests {
         let usage = runtime.context_usage(CODE_CHANNEL, "long").await.unwrap();
         assert_eq!(usage.conversation.messages, 12);
         assert!(usage.window > 0 && usage.auto_compact_threshold > 0);
+        // Anthropic (the test default) reports the prompt cache lifetime.
+        assert_eq!(
+            usage.prompt_cache_ttl,
+            Some(std::time::Duration::from_secs(300))
+        );
 
         let compaction = runtime
             .compact_session(CODE_CHANNEL, "long", 2, Some("the package manager"))

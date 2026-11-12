@@ -7,6 +7,8 @@
 //! - [`verify`] / [`git`]: running project checks and detecting changes;
 //! - [`goal`]: the `/goal` loop shared by every front end;
 //! - [`sessions`]: the per-project session index;
+//! - [`memory`]: shared (`.microclaw/memory.md`) and private project memory;
+//! - [`plugins`]: plugins in the Claude Code layout (`mccode plugin …`);
 //! - [`remote`]: handing a task to a paired MicroClaw Server;
 //! - [`driver`]: one user turn — agent run, approvals, verification and the
 //!   fix loop — exchanged with front ends as [`driver::Control`] /
@@ -26,6 +28,8 @@ pub mod images;
 pub mod import;
 pub mod launch;
 pub mod lsp;
+pub mod memory;
+pub mod plugins;
 pub mod presets;
 pub mod project;
 pub mod prompt;

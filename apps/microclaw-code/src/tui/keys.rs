@@ -21,6 +21,8 @@ pub struct EditorRequest {
     pub text: String,
     /// Read-only view (pager): the result is discarded.
     pub view_only: bool,
+    /// Open these files in place instead of `text` (`/memory`).
+    pub files: Vec<std::path::PathBuf>,
 }
 
 const DOUBLE_ESC: Duration = Duration::from_millis(600);
@@ -211,6 +213,7 @@ impl App {
                 return Some(EditorRequest {
                     text: self.input.expanded_text(),
                     view_only: false,
+                    files: Vec::new(),
                 });
             }
             Action::HistorySearch => self.open_history_search(),
@@ -698,6 +701,7 @@ impl App {
                             return Some(EditorRequest {
                                 text,
                                 view_only: true,
+                                files: Vec::new(),
                             });
                         }
                         KeyCode::Char('q') | KeyCode::Esc => Some(PagerKey::Close),
@@ -748,9 +752,17 @@ impl App {
                     "vi".into()
                 }
             });
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("mccode-{}.md", std::process::id()));
-        std::fs::write(&path, &request.text)?;
+        let temp = request
+            .files
+            .is_empty()
+            .then(|| std::env::temp_dir().join(format!("mccode-{}.md", std::process::id())));
+        if let Some(path) = &temp {
+            std::fs::write(path, &request.text)?;
+        }
+        let paths: Vec<std::path::PathBuf> = match &temp {
+            Some(path) => vec![path.clone()],
+            None => request.files.clone(),
+        };
         crossterm::terminal::disable_raw_mode()?;
         if !self.inline {
             crossterm::execute!(
@@ -764,7 +776,7 @@ impl App {
             let program = parts.next().unwrap_or("vi");
             std::process::Command::new(program)
                 .args(parts)
-                .arg(&path)
+                .args(&paths)
                 .status()
         };
         crossterm::terminal::enable_raw_mode()?;
@@ -778,6 +790,14 @@ impl App {
             }
         }
         terminal.clear()?;
+        let Some(path) = temp else {
+            self.hint = Some(match status {
+                Ok(s) if s.success() => "saved; the next turn sees the change".to_string(),
+                Ok(s) => format!("{editor} exited with {s}"),
+                Err(e) => format!("could not start {editor}: {e}"),
+            });
+            return Ok(());
+        };
         match status {
             Ok(s) if s.success() && !request.view_only => {
                 let text = std::fs::read_to_string(&path).unwrap_or_default();

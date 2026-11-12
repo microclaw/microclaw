@@ -311,6 +311,9 @@ pub struct PermissionRules {
     /// Effect for web requests no `net(...)` rule matched
     /// (`sandbox.network: ask` → Ask, `off` → Deny).
     network_default: Option<Effect>,
+    /// Files outside the project the agent may edit without the implicit
+    /// outside-the-project ask (the private project memory).
+    private_files: Vec<PathBuf>,
 }
 
 fn glob(pattern: &str) -> Option<GlobMatcher> {
@@ -772,7 +775,15 @@ impl PermissionRules {
             canonical_root,
             warnings,
             network_default: None,
+            private_files: Vec::new(),
         }
+    }
+
+    /// Let edits to `files` (outside the project) skip the implicit
+    /// outside-the-project ask; explicit deny and ask rules still apply.
+    pub fn with_private_files(mut self, files: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.private_files = files.into_iter().map(|f| normalize_path(&f)).collect();
+        self
     }
 
     pub fn root(&self) -> &Path {
@@ -909,7 +920,9 @@ impl PermissionRules {
         }
         if kind == RuleKind::Edit
             && !all
-            && let Some(outside) = paths.iter().find(|p| !self.is_inside(p))
+            && let Some(outside) = paths
+                .iter()
+                .find(|p| !self.is_inside(p) && !self.private_files.contains(p))
         {
             return Some(Match {
                 effect: Effect::Ask,
@@ -1079,6 +1092,35 @@ mod tests {
         assert!(parse_rule("frob(x)", Effect::Allow).is_err());
         assert!(parse_rule("bash()", Effect::Allow).is_err());
         assert!(parse_rule("", Effect::Allow).is_err());
+    }
+
+    #[test]
+    fn private_files_skip_the_outside_project_ask() {
+        let memory = PathBuf::from("/home/me/.mccode/projects/repo-1/memory.md");
+        let input = json!({"path": memory.to_str().unwrap(), "content": "- x"});
+        let plain = PermissionRules::from_config(&PermissionsConfig::default(), Path::new("/repo"));
+        assert_eq!(
+            plain
+                .evaluate_call("write_file", &input)
+                .map(|m| m.rule_source),
+            Some(OUTSIDE_PROJECT.to_string())
+        );
+        let rules = PermissionRules::from_config(&PermissionsConfig::default(), Path::new("/repo"))
+            .with_private_files([memory.clone()]);
+        assert!(rules.evaluate_call("write_file", &input).is_none());
+        let other = json!({"path": "/home/me/other.md", "content": "x"});
+        assert!(rules.evaluate_call("write_file", &other).is_some());
+        // Explicit rules still win.
+        let config = PermissionsConfig {
+            deny: vec!["edit(//home/me/.mccode/**)".into()],
+            ..Default::default()
+        };
+        let denied =
+            PermissionRules::from_config(&config, Path::new("/repo")).with_private_files([memory]);
+        assert_eq!(
+            denied.evaluate_call("write_file", &input).map(|m| m.effect),
+            Some(Effect::Deny)
+        );
     }
 
     #[test]

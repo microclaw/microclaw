@@ -82,35 +82,39 @@ impl Tool for GlobTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let mut matches = if include_ignored || pattern.starts_with('/') {
-            None
-        } else {
-            match workspace_matches(&resolved_base, pattern) {
-                Ok(found) => Some(found),
-                Err(e) => return ToolResult::error(format!("Invalid glob pattern: {e}")),
-            }
+        let pattern = pattern.to_string();
+        let search = tokio::task::spawn_blocking(move || {
+            find_matches(&resolved_base, &pattern, include_ignored)
+        })
+        .await;
+        let (mut matches, truncated) = match search {
+            Ok(Ok(found)) => found,
+            Ok(Err(e)) => return ToolResult::error(format!("Invalid glob pattern: {e}")),
+            Err(e) => return ToolResult::error(format!("Glob search failed: {e}")),
         };
-        // Nothing visible matched: fall back to a literal filesystem glob so
-        // explicitly targeted hidden or ignored paths (".github/**", "dist/*")
-        // keep working.
-        if matches.as_ref().is_none_or(|found| found.is_empty()) {
-            matches = match literal_matches(&resolved_base, pattern) {
-                Ok(found) => Some(found),
-                Err(e) => return ToolResult::error(format!("Invalid glob pattern: {e}")),
-            };
-        }
-        let mut matches =
-            crate::internal::tool_runtime::path_guard::filter_paths(matches.unwrap_or_default());
         matches.sort();
         matches.dedup();
+        let stopped = truncated.then(|| {
+            format!(
+                "Search stopped after visiting {MAX_LITERAL_ENTRIES} entries; narrow `path` or the pattern."
+            )
+        });
 
         if matches.is_empty() {
-            ToolResult::success("No files found matching pattern.".into())
+            let mut text = "No files found matching pattern.".to_string();
+            if let Some(note) = stopped {
+                text.push(' ');
+                text.push_str(&note);
+            }
+            ToolResult::success(text)
         } else {
             let count = matches.len();
             if count > 500 {
                 matches.truncate(500);
                 matches.push(format!("... and {} more files", count - 500));
+            }
+            if let Some(note) = stopped {
+                matches.push(note);
             }
             ToolResult::success(matches.join("\n"))
         }
@@ -139,16 +143,102 @@ fn workspace_matches(base: &Path, pattern: &str) -> Result<Vec<String>, glob::Pa
         .collect())
 }
 
-fn literal_matches(base: &Path, pattern: &str) -> Result<Vec<String>, glob::PatternError> {
-    let full_pattern = if pattern.starts_with('/') {
-        pattern.to_string()
+/// Visible matches first; when nothing visible matches, a literal walk so
+/// explicitly targeted hidden or ignored paths (".github/**", "dist/*") and
+/// absolute patterns keep working. Returns the path-guard filtered matches
+/// and whether the literal walk stopped early.
+fn find_matches(
+    base: &Path,
+    pattern: &str,
+    include_ignored: bool,
+) -> Result<(Vec<String>, bool), glob::PatternError> {
+    if !include_ignored && !pattern.starts_with('/') {
+        let found = workspace_matches(base, pattern)?;
+        if !found.is_empty() {
+            return Ok((
+                crate::internal::tool_runtime::path_guard::filter_paths(found),
+                false,
+            ));
+        }
+    }
+    let (found, truncated) = literal_matches(base, pattern, MAX_LITERAL_ENTRIES)?;
+    Ok((
+        crate::internal::tool_runtime::path_guard::filter_paths(found),
+        truncated,
+    ))
+}
+
+/// Upper bound on entries (files and directories) one literal walk visits,
+/// so a broad pattern over a large tree (`**/x` from a home directory)
+/// answers in about a second instead of scanning the disk.
+const MAX_LITERAL_ENTRIES: usize = 50_000;
+
+fn has_glob_meta(component: &str) -> bool {
+    component.contains(['*', '?', '['])
+}
+
+/// Walk from the literal prefix of `pattern` (everything before the first
+/// component with a wildcard) and match full paths. Hidden and ignored
+/// entries are included; the walk stops after `limit` visited entries.
+fn literal_matches(
+    base: &Path,
+    pattern: &str,
+    limit: usize,
+) -> Result<(Vec<String>, bool), glob::PatternError> {
+    let (mut root, rest) = if pattern.starts_with('/') {
+        (PathBuf::from("/"), pattern.trim_start_matches('/'))
     } else {
-        format!("{}/{}", base.display(), pattern)
+        (base.to_path_buf(), pattern.trim_start_matches("./"))
     };
-    Ok(glob::glob(&full_pattern)?
-        .filter_map(|p| p.ok())
-        .map(|p| p.display().to_string())
-        .collect())
+    let mut wild: Vec<&str> = Vec::new();
+    for component in rest.split('/').filter(|c| !c.is_empty() && *c != ".") {
+        if wild.is_empty() && !has_glob_meta(component) {
+            root.push(component);
+        } else {
+            wild.push(component);
+        }
+    }
+    if wild.is_empty() {
+        // No wildcard at all: the pattern names one path.
+        return Ok((
+            if root.exists() {
+                vec![root.display().to_string()]
+            } else {
+                Vec::new()
+            },
+            false,
+        ));
+    }
+    let compiled = glob::Pattern::new(&format!(
+        "{}/{}",
+        glob::Pattern::escape(&root.to_string_lossy()).trim_end_matches('/'),
+        wild.join("/")
+    ))?;
+    let options = glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let mut builder = ignore::WalkBuilder::new(&root);
+    builder.standard_filters(false).follow_links(false);
+    if !wild.contains(&"**") {
+        builder.max_depth(Some(wild.len()));
+    }
+    let mut out = Vec::new();
+    let mut visited = 0usize;
+    for entry in builder.build().flatten() {
+        if entry.depth() == 0 {
+            continue;
+        }
+        visited += 1;
+        if visited > limit {
+            return Ok((out, true));
+        }
+        if compiled.matches_path_with(entry.path(), options) {
+            out.push(entry.path().display().to_string());
+        }
+    }
+    Ok((out, false))
 }
 
 #[cfg(test)]
@@ -244,5 +334,43 @@ mod tests {
             .execute(json!({"pattern": "dist/*.js", "path": root.to_str().unwrap()}))
             .await;
         assert!(explicit.content.contains("app.js"));
+    }
+
+    #[tokio::test]
+    async fn literal_fallback_finds_hidden_and_absolute_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+        std::fs::write(root.join(".github/workflows/ci.yml"), "").unwrap();
+        std::fs::write(root.join("README.md"), "").unwrap();
+
+        let tool = GlobTool::new(".");
+        let hidden = tool
+            .execute(json!({"pattern": ".github/workflows/*.yml", "path": root.to_str().unwrap()}))
+            .await;
+        assert!(hidden.content.contains("ci.yml"), "{}", hidden.content);
+
+        let absolute = format!("{}/**/*.yml", root.display());
+        let found = tool.execute(json!({"pattern": absolute})).await;
+        assert!(found.content.contains("ci.yml"), "{}", found.content);
+        assert!(!found.content.contains("README.md"));
+
+        let exact = tool
+            .execute(json!({"pattern": "README.md", "path": root.to_str().unwrap(), "include_ignored": true}))
+            .await;
+        assert!(exact.content.contains("README.md"), "{}", exact.content);
+    }
+
+    #[test]
+    fn literal_walk_stops_after_the_entry_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::create_dir_all(dir.path().join(format!("d{i}/inner"))).unwrap();
+        }
+        let (found, truncated) = literal_matches(dir.path(), "**/missing*", 20).unwrap();
+        assert!(found.is_empty());
+        assert!(truncated);
+        let (_, truncated) = literal_matches(dir.path(), "**/missing*", 1_000).unwrap();
+        assert!(!truncated);
     }
 }

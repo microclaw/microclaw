@@ -1204,11 +1204,7 @@ pub struct SessionsSpawnTool {
 
 impl SessionsSpawnTool {
     pub fn new(config: &Config, db: Arc<Database>, channel_registry: Arc<ChannelRegistry>) -> Self {
-        let agents = config
-            .project_agents_dir
-            .as_deref()
-            .map(|dir| crate::tools::explore::load_project_agents(std::path::Path::new(dir)))
-            .unwrap_or_default();
+        let agents = crate::tools::explore::config_agents(config);
         Self {
             config: config.clone(),
             db,

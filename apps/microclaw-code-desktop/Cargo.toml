@@ -1,6 +1,6 @@
 [package]
 name = "microclaw-code-desktop"
-version = "0.30.0"
+version = "0.31.0"
 edition = "2024"
 license = "MIT"
 description = "MicroClaw Code desktop app (macOS, GPUI): a front end of MicroClaw Code next to the mccode TUI"
@@ -16,8 +16,8 @@ name = "microclaw-code-desktop"
 path = "src/main.rs"
 
 [dependencies]
-microclaw-code-core = { version = "0.30.0", path = "../../crates/microclaw-code-core" }
-microclaw-sdk = { version = "0.30.0", path = "../../crates/microclaw-sdk", features = ["full"] }
+microclaw-code-core = { version = "0.31.0", path = "../../crates/microclaw-code-core" }
+microclaw-sdk = { version = "0.31.0", path = "../../crates/microclaw-sdk", features = ["full"] }
 gpui-kit = "=0.9.1"
 anyhow = "1"
 chrono = "0.4"

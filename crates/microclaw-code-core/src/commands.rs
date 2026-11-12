@@ -16,7 +16,7 @@ pub struct CustomCommand {
     pub name: String,
     pub description: String,
     pub body: String,
-    /// `project` or `personal`.
+    /// `project`, `personal` or `plugin`.
     pub scope: &'static str,
 }
 
@@ -34,7 +34,8 @@ impl CustomCommand {
     }
 }
 
-fn load_dir(dir: &Path, scope: &'static str) -> Vec<CustomCommand> {
+/// Commands in `dir` (`<name>.md`, optional `description` front matter).
+pub(crate) fn load_dir(dir: &Path, scope: &'static str) -> Vec<CustomCommand> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -95,6 +96,16 @@ pub fn load(project: &Project, personal_dir: &Path) -> Vec<CustomCommand> {
         for command in load_dir(&project.root.join(".microclaw").join("commands"), "project") {
             commands.retain(|c| c.name != command.name);
             commands.push(command);
+        }
+    }
+    // Plugin commands (`<plugins>` next to the personal directory) never
+    // replace personal or project ones.
+    if let Some(home) = personal_dir.parent() {
+        let (plugins, _) = crate::plugins::active_in(&home.join("plugins"), project);
+        for command in crate::plugins::commands(&plugins) {
+            if !commands.iter().any(|c| c.name == command.name) {
+                commands.push(command);
+            }
         }
     }
     commands.sort_by(|a, b| a.name.cmp(&b.name));

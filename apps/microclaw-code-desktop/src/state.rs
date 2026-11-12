@@ -253,6 +253,8 @@ impl Transcript {
         match update {
             Update::Runtime(envelope) => self.apply_runtime(&envelope.event),
             Update::SteerAccepted(_) => {}
+            // Idle compaction is a terminal UI feature for now.
+            Update::IdleCompact(_) => {}
             Update::SteerRejected(text) => self.push(Item::Notice(
                 format!("guidance not delivered: {text}"),
                 Tone::Warning,
