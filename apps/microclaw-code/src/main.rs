@@ -909,8 +909,17 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         &session.project,
                         &microclaw_code_core::commands::personal_dir(),
                     );
-                    let prompt =
-                        microclaw_code_core::commands::expand(&commands, &prompt).unwrap_or(prompt);
+                    let prompt = match microclaw_code_core::commands::expand(&commands, &prompt) {
+                        Some(expanded) => expanded,
+                        None => {
+                            if let Some(name) = unknown_slash_command(&prompt) {
+                                anyhow::bail!(
+                                    "unknown command {name}; custom commands come from .microclaw/commands/, ~/.mccode/commands/ and plugins"
+                                );
+                            }
+                            prompt
+                        }
+                    };
                     match goal_args(&prompt) {
                         Some(args) => PrintTask::Goal(
                             microclaw_code_core::goal::GoalSpec::parse(
@@ -1182,6 +1191,18 @@ struct GoalResult {
 }
 
 /// The arguments of a `/goal …` prompt.
+/// `/name …` that is not a known command (`/goal` is handled separately).
+/// Paths such as `/tmp/x` are not commands.
+fn unknown_slash_command(prompt: &str) -> Option<&str> {
+    let token = prompt.trim_start().split_whitespace().next()?;
+    let name = token.strip_prefix('/')?;
+    let is_command = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'));
+    (is_command && goal_args(prompt).is_none()).then_some(token)
+}
+
 fn goal_args(prompt: &str) -> Option<&str> {
     let rest = prompt.trim_start().strip_prefix("/goal")?;
     (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim())
@@ -1832,6 +1853,16 @@ async fn doctor(cli: &Cli, project: &Project, style: Style) -> anyhow::Result<Ex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_slash_commands_are_reported_not_sent() {
+        assert_eq!(unknown_slash_command("/greet Carol"), Some("/greet"));
+        assert_eq!(unknown_slash_command("  /kit:greet"), Some("/kit:greet"));
+        assert_eq!(unknown_slash_command("/goal ship it"), None);
+        assert_eq!(unknown_slash_command("/tmp/x.rs explain this"), None);
+        assert_eq!(unknown_slash_command("explain /greet"), None);
+        assert_eq!(unknown_slash_command("/"), None);
+    }
 
     #[test]
     fn server_environment_does_not_reach_the_engine() {

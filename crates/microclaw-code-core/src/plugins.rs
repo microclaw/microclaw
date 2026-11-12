@@ -906,6 +906,9 @@ pub fn remove(name: &str, registry: &mut Registry) -> anyhow::Result<bool> {
             }
         }
     }
+    // Leave no empty directories behind (remove_dir fails when not empty).
+    let _ = std::fs::remove_dir(generated_dir());
+    let _ = std::fs::remove_dir(&registry.dir);
     Ok(true)
 }
 

@@ -75,6 +75,9 @@ complete and consistent (no leftover placeholders, no broken references, validat
 cheap). Fix anything you find, then give your final answer. Draft reply was: {{RESULT}}";
 
 /// System-prompt suffix injected while a chat is in plan mode (`/plan`).
+/// Explains the `<context_budget>` line the loop appends to each request.
+const CONTEXT_BUDGET_SYSTEM_NOTE: &str = "\n# Context budget\n\nMicroClaw appends one `<context_budget>…</context_budget>` line to the newest message of each request, sometimes right after tool results. It comes from MicroClaw itself and reports how much of the context window is in use; it is not tool output or user text, so use it to pace your reads and do not mention it.\n";
+
 const PLAN_MODE_SYSTEM_SUFFIX: &str = "\n\n<plan_mode>\nYou are in PLAN MODE. Research the \
 request using the read-only tools available, then present a concise, numbered implementation \
 plan. Do NOT modify files, run state-changing commands, send messages, or schedule anything — \
@@ -2144,6 +2147,11 @@ async fn process_with_agent_logic(
 
     if plan_mode_active {
         system_prompt.push_str(PLAN_MODE_SYSTEM_SUFFIX);
+    }
+    if state.config.context_tools || state.config.context_budget_hint {
+        // The budget line can land right after tool results; without this,
+        // models read it as text injected into tool output.
+        system_prompt.push_str(CONTEXT_BUDGET_SYSTEM_NOTE);
     }
 
     let learning_foundry_mode = context.caller_channel == "learning_foundry";
