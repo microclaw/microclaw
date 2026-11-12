@@ -422,6 +422,13 @@
             }
           ]
         },
+        "idle_compact": {
+          "description": "Compact a large idle session in the background shortly before its\nprompt cache expires (default true; only providers with a known cache\nlifetime, currently Anthropic).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "keymap": {
           "additionalProperties": {
             "type": "string"

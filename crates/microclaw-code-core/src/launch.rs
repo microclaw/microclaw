@@ -81,9 +81,20 @@ pub fn gate_parts(
         _ => None,
     };
     let rules = PermissionRules::from_config(&settings.permissions, root)
-        .with_network(network_default, &settings.sandbox.allow_domains);
+        .with_network(network_default, &settings.sandbox.allow_domains)
+        .with_private_files([crate::memory::private_memory_path(root)]);
+    // Plugins add their hooks after the configured ones.
+    let mut hooks_config = settings.hooks.clone();
+    if let Ok(project) = trusted_project(root) {
+        let (plugins, _) = crate::plugins::active(&project);
+        for plugin in &plugins {
+            for (event, spec) in &plugin.hooks {
+                crate::plugins::hooks_for(&mut hooks_config, *event).push(spec.clone());
+            }
+        }
+    }
     let hooks = Arc::new(UserHooks::new(
-        settings.hooks.clone(),
+        hooks_config,
         root.to_path_buf(),
         session_id.to_string(),
     ));
@@ -103,6 +114,16 @@ pub fn tool_gate(
         Some(tx) => gate.with_events(tx),
         None => gate,
     }
+}
+
+/// Agents, skills and MCP servers of the plugins active in `project`, and
+/// problems worth showing (untrusted project plugins, broken manifests).
+pub fn plugin_sources(project: &Project) -> (microclaw_sdk::PluginSources, Vec<String>) {
+    let (plugins, mut warnings) = crate::plugins::active(project);
+    let (sources, more) =
+        crate::plugins::engine_sources(&plugins, &project.root, &crate::plugins::generated_dir());
+    warnings.extend(more);
+    (sources, warnings)
 }
 
 /// Per-role models resolved for a session on `active_profile` (`None`: the
@@ -272,7 +293,10 @@ pub async fn project_engine(
         .max_concurrent_runs(options.max_concurrent_runs)
         .shell_sandbox(options.sandbox.clone());
     if let Some(project) = &project {
+        let (sources, plugin_warnings) = plugin_sources(project);
+        warnings.extend(plugin_warnings);
         builder = builder
+            .plugin_sources(sources)
             .project_agents_dir(project.agents_dir())
             .compact_instructions(project.config.compact_instructions.clone())
             .context_tools(project.config.context_tools == Some(true));

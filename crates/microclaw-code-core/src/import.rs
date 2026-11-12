@@ -114,6 +114,9 @@ pub struct ImportPlan {
     pub files: Vec<ImportFile>,
     /// MCP servers in the engine's `mcp.json` format, by name.
     pub mcp_servers: BTreeMap<String, Value>,
+    /// Memories for this user's private project memory (always written to
+    /// `~/.mccode/projects/…/memory.md`, whatever the target layer).
+    pub memories: Vec<crate::memory::ImportedMemory>,
     /// Things worth telling the user (mode mapping, files read anyway, …).
     pub notes: Vec<String>,
     /// Things that cannot be imported, with the reason.
@@ -130,6 +133,7 @@ impl ImportPlan {
             hooks: HooksConfig::default(),
             files: Vec::new(),
             mcp_servers: BTreeMap::new(),
+            memories: Vec::new(),
             notes: Vec::new(),
             skipped: Vec::new(),
         }
@@ -141,6 +145,7 @@ impl ImportPlan {
             && self.hooks.is_empty()
             && self.files.is_empty()
             && self.mcp_servers.is_empty()
+            && self.memories.is_empty()
     }
 
     /// Number of hook handlers in the plan.
@@ -191,6 +196,10 @@ impl ImportPlan {
         }
         for name in self.mcp_servers.keys() {
             lines.push(format!("mcp     {name}"));
+        }
+        for memory in &self.memories {
+            let short: String = memory.text.chars().take(80).collect();
+            lines.push(format!("memory  {short} (private, from {})", memory.origin));
         }
         lines.extend(self.notes.iter().map(|n| format!("note    {n}")));
         lines.extend(self.skipped.iter().map(|s| format!("skipped {s}")));
@@ -395,6 +404,71 @@ fn claude_mode(mode: &str) -> Option<&'static str> {
     }
 }
 
+/// Claude Code hooks (`{"PreToolUse": [{"matcher": …, "hooks": [{"type":
+/// "command", …}]}]}`) as ours; what has no equivalent goes to `skipped`.
+pub(crate) fn claude_hooks(
+    hooks: &serde_json::Map<String, Value>,
+    origin: &str,
+    found: &mut Vec<(HookEvent, HookSpec)>,
+    skipped: &mut Vec<String>,
+) {
+    for (event_name, groups) in hooks {
+        let Some(event) = HookEvent::from_claude_name(event_name) else {
+            skipped.push(format!(
+                "{origin}: {event_name} hooks (no MicroClaw equivalent)"
+            ));
+            continue;
+        };
+        for group in groups.as_array().into_iter().flatten() {
+            let matcher = group
+                .get("matcher")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|m| !m.is_empty() && *m != "*")
+                .map(str::to_string);
+            for handler in group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let kind = handler
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("command");
+                let timeout = handler.get("timeout").and_then(Value::as_u64);
+                let spec = match kind {
+                    "command" => handler
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .map(|c| HookSpec {
+                            matcher: matcher.clone(),
+                            command: Some(c.to_string()),
+                            timeout,
+                            ..Default::default()
+                        }),
+                    "http" => handler
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .map(|u| HookSpec {
+                            matcher: matcher.clone(),
+                            url: Some(u.to_string()),
+                            timeout,
+                            ..Default::default()
+                        }),
+                    _ => None,
+                };
+                match spec {
+                    Some(spec) => found.push((event, spec)),
+                    None => skipped.push(format!(
+                        "{origin}: {event_name} hook of type `{kind}` (only command and http hooks)"
+                    )),
+                }
+            }
+        }
+    }
+}
+
 fn claude_settings(plan: &mut ImportPlan, path: &Path, base: &str) {
     let Some(doc) = plan.read_json(path, false) else {
         return;
@@ -439,62 +513,10 @@ fn claude_settings(plan: &mut ImportPlan, path: &Path, base: &str) {
         }
     }
     if let Some(hooks) = doc.get("hooks").and_then(Value::as_object) {
-        for (event_name, groups) in hooks {
-            let Some(event) = HookEvent::from_claude_name(event_name) else {
-                plan.skipped.push(format!(
-                    "{origin}: {event_name} hooks (no MicroClaw equivalent)"
-                ));
-                continue;
-            };
-            for group in groups.as_array().into_iter().flatten() {
-                let matcher = group
-                    .get("matcher")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|m| !m.is_empty() && *m != "*")
-                    .map(str::to_string);
-                for handler in group
-                    .get("hooks")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    let kind = handler
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("command");
-                    let timeout = handler.get("timeout").and_then(Value::as_u64);
-                    let spec = match kind {
-                        "command" => {
-                            handler
-                                .get("command")
-                                .and_then(Value::as_str)
-                                .map(|c| HookSpec {
-                                    matcher: matcher.clone(),
-                                    command: Some(c.to_string()),
-                                    url: None,
-                                    timeout,
-                                })
-                        }
-                        "http" => handler
-                            .get("url")
-                            .and_then(Value::as_str)
-                            .map(|u| HookSpec {
-                                matcher: matcher.clone(),
-                                command: None,
-                                url: Some(u.to_string()),
-                                timeout,
-                            }),
-                        _ => None,
-                    };
-                    match spec {
-                        Some(spec) => plan.add_hook(event, spec),
-                        None => plan.skipped.push(format!(
-                            "{origin}: {event_name} hook of type `{kind}` (only command and http hooks)"
-                        )),
-                    }
-                }
-            }
+        let mut found = Vec::new();
+        claude_hooks(hooks, &origin, &mut found, &mut plan.skipped);
+        for (event, spec) in found {
+            plan.add_hook(event, spec);
         }
     }
     if let Some(env) = doc.get("env").and_then(Value::as_object)
@@ -513,7 +535,7 @@ fn claude_settings(plan: &mut ImportPlan, path: &Path, base: &str) {
 }
 
 /// Claude / generic `mcpServers` entry → engine format.
-fn claude_mcp(server: &Value) -> Result<Value, String> {
+pub(crate) fn claude_mcp(server: &Value) -> Result<Value, String> {
     let obj = server.as_object().ok_or("not an object")?;
     let kind = obj.get("type").and_then(Value::as_str).unwrap_or("stdio");
     let mut out = Map::new();
@@ -566,6 +588,9 @@ fn add_mcp_servers(plan: &mut ImportPlan, servers: Option<&Value>, origin: &str)
 }
 
 fn plan_claude(plan: &mut ImportPlan, root: &Path, home: &Path) {
+    let (memories, read) = crate::memory::claude_memories(home, root);
+    plan.read.extend(read);
+    plan.memories.extend(memories);
     claude_settings(plan, &home.join(".claude/settings.json"), "~/.claude/");
     claude_settings(plan, &root.join(".claude/settings.json"), "");
     claude_settings(plan, &root.join(".claude/settings.local.json"), "");
@@ -609,6 +634,14 @@ fn plan_claude(plan: &mut ImportPlan, root: &Path, home: &Path) {
 // ----------------------------------------------------------------- Codex
 
 fn plan_codex(plan: &mut ImportPlan, root: &Path, home: &Path) {
+    let (memories, read) = crate::memory::codex_memories(home);
+    if !memories.is_empty() {
+        plan.notes.push(
+            "Codex memories are per machine, not per project: review the imported bullets with /memory private".into(),
+        );
+    }
+    plan.read.extend(read);
+    plan.memories.extend(memories);
     for path in [
         home.join(".codex/config.toml"),
         root.join(".codex/config.toml"),
@@ -1135,6 +1168,9 @@ pub struct ImportReport {
     /// The engine MCP config written.
     pub mcp_path: Option<PathBuf>,
     pub mcp_added: Vec<String>,
+    /// The private memory file written and how many bullets were added.
+    pub memory_path: Option<PathBuf>,
+    pub memories_added: usize,
     /// Plan items that were skipped plus what was skipped while writing.
     pub skipped: Vec<String>,
 }
@@ -1272,6 +1308,28 @@ pub fn apply_import_in(
             report.mcp_path = Some(path);
         }
     }
+
+    // Memories: this user's private memory of the project.
+    if !plan.memories.is_empty() {
+        let (memories, secret): (Vec<_>, Vec<_>) = plan
+            .memories
+            .iter()
+            .cloned()
+            .partition(|m| !looks_secret(&m.text));
+        for m in secret {
+            report.skipped.push(format!(
+                "memory from {}: looks like it contains a credential",
+                m.origin
+            ));
+        }
+        let path = crate::memory::private_memory_path_in(code_home, &plan.project_root);
+        let added = crate::memory::append_bullets(&path, &memories)
+            .with_context(|| format!("writing {}", path.display()))?;
+        if added > 0 {
+            report.memory_path = Some(path);
+            report.memories_added = added;
+        }
+    }
     Ok(report)
 }
 
@@ -1378,6 +1436,44 @@ mod tests {
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn claude_memories_go_to_the_private_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (home, root, code) = (
+            tmp.path().join("home"),
+            tmp.path().join("repo"),
+            tmp.path().join("code"),
+        );
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = home
+            .join(".claude/projects")
+            .join(crate::memory::claude_project_dir_name(&root))
+            .join("memory");
+        write(
+            &dir.join("nextest.md"),
+            "---\nname: nextest\ndescription: Uses nextest\n---\nRun cargo nextest.",
+        );
+        write(&dir.join("key.md"), "token = sk-ant-abcdefghijklmnop1234");
+        let plan = plan_import(ImportSource::Claude, &root, &home);
+        assert_eq!(plan.memories.len(), 2);
+        assert!(
+            plan.summary()
+                .iter()
+                .any(|l| l.starts_with("memory  Uses nextest"))
+        );
+        let report = apply_import_in(&plan, ImportTarget::Project, &code).unwrap();
+        assert_eq!(report.memories_added, 1);
+        let path = report.memory_path.unwrap();
+        assert!(path.starts_with(code.join("projects")));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "- Uses nextest: Run cargo nextest.\n"
+        );
+        assert!(report.skipped.iter().any(|s| s.contains("credential")));
+        // Nothing lands in the repository.
+        assert!(!root.join(".microclaw/memory.md").exists());
     }
 
     #[test]

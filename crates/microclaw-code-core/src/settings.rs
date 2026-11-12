@@ -232,6 +232,11 @@ pub struct HookSpec {
     /// Seconds (default 60).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+    /// Extra environment for the command (plugin hooks get
+    /// `CLAUDE_PLUGIN_ROOT`). Set by MicroClaw Code, never read from a file.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub env: Vec<(String, String)>,
 }
 
 /// Hooks by event. Commands follow the Claude Code hook protocol: JSON on
@@ -330,6 +335,11 @@ pub struct TuiConfig {
     pub status_line: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notifications: Option<TerminalNotifications>,
+    /// Compact a large idle session in the background shortly before its
+    /// prompt cache expires (default true; only providers with a known cache
+    /// lifetime, currently Anthropic).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_compact: Option<bool>,
     /// Key bindings: action → key (e.g. `chat.steer: ctrl+s`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub keymap: BTreeMap<String, String>,

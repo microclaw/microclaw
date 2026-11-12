@@ -2183,6 +2183,8 @@ async fn process_with_agent_logic(
             .cloned()
             .collect()
     } else if profile_read_only {
+        // Reading a skill's instructions changes nothing, so read-only
+        // profiles keep `activate_skill`.
         available_tools
             .iter()
             .filter(|definition| {
@@ -2191,7 +2193,7 @@ async fn process_with_agent_logic(
                         &definition.name
                     ),
                     crate::internal::tool_runtime::runtime::ToolConcurrencyClass::ReadOnly
-                )
+                ) || definition.name == "activate_skill"
             })
             .cloned()
             .collect()
@@ -2205,7 +2207,10 @@ async fn process_with_agent_logic(
                         &definition.name
                     ),
                     crate::internal::tool_runtime::runtime::ToolConcurrencyClass::ReadOnly
-                ) || matches!(definition.name.as_str(), "todo_write" | "clarify")
+                ) || matches!(
+                    definition.name.as_str(),
+                    "todo_write" | "clarify" | "activate_skill"
+                )
             })
             .cloned()
             .collect()

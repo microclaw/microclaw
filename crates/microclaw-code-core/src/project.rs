@@ -146,6 +146,9 @@ pub struct Project {
     pub has_config_file: bool,
     /// SHA-256 of the project file, which trust decisions are bound to.
     pub config_sha256: Option<String>,
+    /// This user's private memory for the repository (outside it, in the
+    /// Code home; shared by its worktrees).
+    pub private_memory: PathBuf,
     file_config: ProjectConfig,
     detected_checks: Vec<Check>,
 }
@@ -171,8 +174,10 @@ impl Project {
         });
         let file_config = load_config(&root)?;
         let (detected_checks, kinds) = detect_checks(&root);
+        let private_memory = crate::memory::private_memory_path(&root);
         let mut project = Self {
             trusted: trusted(&root, config_sha256.as_deref()),
+            private_memory,
             config_sha256,
             root,
             config: ProjectConfig::default(),

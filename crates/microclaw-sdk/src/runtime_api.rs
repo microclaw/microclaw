@@ -73,7 +73,7 @@ pub struct SessionCompaction {
 }
 
 /// How full a session's context is (estimates; see `MicroClaw::context_usage`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContextUsage {
     pub model: String,
     /// The model's context window (tokens).
@@ -93,6 +93,9 @@ pub struct ContextUsage {
     pub tool_result_tokens: usize,
     pub image_tokens: usize,
     pub messages: usize,
+    /// How long the provider keeps this session's prompt cache, when the
+    /// engine marks cache breakpoints for it (Anthropic); `None` otherwise.
+    pub prompt_cache_ttl: Option<std::time::Duration>,
 }
 
 impl ContextUsage {
@@ -756,6 +759,7 @@ impl MicroClaw {
                 tool_result_tokens: u.conversation.tool_results,
                 image_tokens: u.conversation.images,
                 messages: u.conversation.messages,
+                prompt_cache_ttl: u.prompt_cache_ttl,
             })
             .map_err(|error| SdkError::Runtime(error.to_string()))
     }
@@ -989,9 +993,21 @@ pub struct MicroClawBuilder {
     context_window: Option<usize>,
     context_tools: bool,
     project_agents_dir: Option<PathBuf>,
+    plugin_sources: PluginSources,
     tool_gate: Option<Arc<dyn ToolGate>>,
     summary_model: Option<String>,
     subagent_model: Option<String>,
+}
+
+/// What embedder plugins add to an engine: agent and skill directories and
+/// MCP configuration files (engine `mcp.json` format). Earlier sources win
+/// on a name clash, and the engine's own agents and skills win over all.
+#[cfg(feature = "full")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginSources {
+    pub agents_dirs: Vec<PathBuf>,
+    pub skills_dirs: Vec<PathBuf>,
+    pub mcp_configs: Vec<PathBuf>,
 }
 
 #[cfg(feature = "full")]
@@ -1011,6 +1027,7 @@ impl MicroClawBuilder {
             context_window: None,
             context_tools: false,
             project_agents_dir: None,
+            plugin_sources: PluginSources::default(),
             tool_gate: None,
             summary_model: None,
             subagent_model: None,
@@ -1032,6 +1049,7 @@ impl MicroClawBuilder {
             context_window: None,
             context_tools: false,
             project_agents_dir: None,
+            plugin_sources: PluginSources::default(),
             tool_gate: None,
             summary_model: None,
             subagent_model: None,
@@ -1053,6 +1071,7 @@ impl MicroClawBuilder {
             context_window: None,
             context_tools: false,
             project_agents_dir: None,
+            plugin_sources: PluginSources::default(),
             tool_gate: None,
             summary_model: None,
             subagent_model: None,
@@ -1130,6 +1149,13 @@ impl MicroClawBuilder {
         self
     }
 
+    /// Agents, skills and MCP servers from embedder plugins. Only pass
+    /// sources you trust: their MCP servers run as commands.
+    pub fn plugin_sources(mut self, sources: PluginSources) -> Self {
+        self.plugin_sources = sources;
+        self
+    }
+
     /// Consult `gate` before and after every tool call (main agent and
     /// sub-agents): permission rules, user hooks. See [`ToolGate`].
     pub fn tool_gate(mut self, gate: Arc<dyn ToolGate>) -> Self {
@@ -1188,6 +1214,15 @@ impl MicroClawBuilder {
         if let Some(dir) = self.project_agents_dir {
             config.project_agents_dir = Some(dir.to_string_lossy().into_owned());
         }
+        let lossy = |paths: Vec<PathBuf>| -> Vec<String> {
+            paths
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
+        };
+        config.extra_agents_dirs = lossy(self.plugin_sources.agents_dirs);
+        config.extra_skills_dirs = lossy(self.plugin_sources.skills_dirs);
+        config.extra_mcp_configs = lossy(self.plugin_sources.mcp_configs);
         if let Some(model) = self.subagent_model {
             config.aux_models.subagent = Some(model);
         }

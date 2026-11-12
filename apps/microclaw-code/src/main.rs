@@ -11,6 +11,7 @@ mod clipboard;
 mod eval;
 mod format;
 mod mcp_server;
+mod plugin_cli;
 mod print;
 mod setup;
 mod tui;
@@ -246,6 +247,11 @@ enum Command {
         #[command(subcommand)]
         action: Option<AllowAction>,
     },
+    /// Install, list, update or remove plugins (Claude Code plugin layout).
+    Plugin {
+        #[command(subcommand)]
+        action: plugin_cli::PluginAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -429,6 +435,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         return import_command(source, *apply, target, &project);
     }
 
+    if let Some(Command::Plugin { action }) = &cli.command {
+        return plugin_cli::run(action, &project);
+    }
+
     if let Some(Command::Worktree { action }) = &cli.command {
         match action {
             WorktreeAction::List => {
@@ -547,6 +557,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Doctor) => return doctor(&cli, &project, style).await,
         Some(Command::Worktree { .. })
         | Some(Command::Config { .. })
+        | Some(Command::Plugin { .. })
         | Some(Command::Import { .. }) => unreachable!("handled above"),
         Some(Command::Export { .. })
         | Some(Command::Review { .. })
@@ -822,6 +833,14 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         .compact_instructions(project.config.compact_instructions.clone())
         .context_tools(cli.context_tools || project.config.context_tools == Some(true))
         .project_agents_dir(project.agents_dir());
+    let (plugin_sources, plugin_warnings) = launch::plugin_sources(&project);
+    for warning in plugin_warnings {
+        if !interactive && !cli.json {
+            eprintln!("{}", style.yellow(&warning));
+        }
+        notices.push(warning);
+    }
+    builder = builder.plugin_sources(plugin_sources);
     let reviewer = microclaw_code_core::settings::ReviewerMode::effective(
         settings_doc.permissions.reviewer,
         cli.review_commands,
@@ -1695,6 +1714,13 @@ fn import_command(
         report.files_written.len(),
         report.mcp_added.len()
     );
+    if let Some(path) = &report.memory_path {
+        println!(
+            "Added {} memory bullet(s) to {}.",
+            report.memories_added,
+            path.display()
+        );
+    }
     for s in report.skipped {
         println!("skipped: {s}");
     }

@@ -370,7 +370,7 @@ impl Transcript {
                 );
             }
             Update::Notice(text) => self.notice(text.clone(), Tone::Info),
-            Update::ContextPercent(_) | Update::TurnUsage { .. } => {}
+            Update::ContextPercent(_) | Update::IdleCompact(_) | Update::TurnUsage { .. } => {}
         }
     }
 

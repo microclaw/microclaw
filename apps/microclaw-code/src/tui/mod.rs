@@ -135,6 +135,12 @@ pub struct App {
     pub model: String,
     pub scroll: usize,
     pub hint: Option<String>,
+    /// Files a command asked to open in `$EDITOR` (`/memory`).
+    pub(crate) pending_editor: Option<keys::EditorRequest>,
+    /// When the last agent turn ended (`None` after a compaction).
+    last_request_end: Option<Instant>,
+    /// Idle compaction schedule measured after the last turn.
+    idle_plan: Option<microclaw_code_core::driver::IdleCompactPlan>,
     /// Context window in use after the last turn (status bar).
     pub context_pct: Option<u8>,
     /// Tokens and estimated cost of this session (status bar).
@@ -348,6 +354,9 @@ pub async fn run(
         popup: None,
         scroll: 0,
         hint: None,
+        pending_editor: None,
+        last_request_end: None,
+        idle_plan: None,
         context_pct: None,
         session_tokens: (0, 0),
         session_cost: None,
@@ -497,7 +506,8 @@ impl App {
                     match event {
                         Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => {
                             self.last_input = Instant::now();
-                            if let Some(editor) = self.on_key(key) {
+                            let editor = self.on_key(key).or_else(|| self.pending_editor.take());
+                            if let Some(editor) = editor {
                                 self.run_editor(terminal, editor)?;
                             }
                         }
@@ -545,9 +555,42 @@ impl App {
                         dirty = true;
                     }
                     self.maybe_send_remote_approval();
+                    if self.maybe_idle_compact() {
+                        dirty = true;
+                    }
                 }
             }
         }
+    }
+
+    /// Compact the session in the background when it has been idle for
+    /// most of its prompt cache lifetime (`tui.idle_compact`). Returns true
+    /// when it started.
+    fn maybe_idle_compact(&mut self) -> bool {
+        if self.running.is_some()
+            || self.session.is_none()
+            || self.dialog.is_some()
+            || self.settings.tui.idle_compact == Some(false)
+        {
+            return false;
+        }
+        let (Some(end), Some(plan)) = (self.last_request_end, self.idle_plan) else {
+            return false;
+        };
+        if !plan.due(end.elapsed()) {
+            return false;
+        }
+        self.idle_plan = None;
+        self.transcript.notice(
+            format!(
+                "idle for {}s with ~{} tokens of context: compacting before the prompt cache expires (tui.idle_compact)",
+                end.elapsed().as_secs(),
+                crate::format::tokens(plan.used_tokens as i64)
+            ),
+            Tone::Info,
+        );
+        self.start_session_op(commands::SessionOp::IdleCompact);
+        true
     }
 
     /// Something on screen animates (spinners).
@@ -637,6 +680,10 @@ impl App {
         match &update {
             Update::ContextPercent(pct) => {
                 self.context_pct = Some(*pct);
+                return;
+            }
+            Update::IdleCompact(plan) => {
+                self.idle_plan = *plan;
                 return;
             }
             Update::TurnUsage {
@@ -973,6 +1020,7 @@ impl App {
                 match report {
                     Ok(report) => {
                         if running.agent_turn {
+                            self.last_request_end = Some(Instant::now());
                             self.finish_receipt(&session, &report);
                         }
                         if report.cancelled {

@@ -259,6 +259,8 @@ Zellij and fullscreen otherwise. If a terminal cannot run inline mode,
 - `animations: false`: stops the shimmer effects.
 - `status_line`: picks and orders the idle status line from `mode`, `model`,
   `context`, `tokens`, `cost`, `branch`, `sandbox`, `session` and `checks`.
+- `idle_compact: false`: stops compacting a large idle session shortly
+  before its prompt cache expires (on by default; Anthropic models only).
 
 ## Key bindings
 

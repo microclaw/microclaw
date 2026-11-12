@@ -134,6 +134,9 @@ pub struct SkillManager {
     /// trees are hashed once per process instead of on every catalog
     /// build. Invalidated by `reload()`.
     clawhub_verdicts: Mutex<Option<HashMap<String, String>>>,
+    /// Read-only skill directories searched after `skills_dir` (plugins);
+    /// a name already found earlier wins.
+    extra_dirs: Vec<PathBuf>,
 }
 
 const MAX_SKILLS_CATALOG_ITEMS: usize = 40;
@@ -155,7 +158,15 @@ impl SkillManager {
             clawhub_lock: None,
             clawhub_block: true,
             clawhub_verdicts: Mutex::new(None),
+            extra_dirs: Vec::new(),
         }
+    }
+
+    /// Also offer the skills in `dirs` (read-only; `skills_dir` wins on a
+    /// name clash).
+    pub fn with_extra_dirs(mut self, dirs: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.extra_dirs.extend(dirs);
+        self
     }
 
     pub fn from_skills_dir(skills_dir: &str) -> Self {
@@ -186,9 +197,10 @@ impl SkillManager {
 
     /// Apply the configured ClawHub load-time verification policy.
     pub fn with_config_verification(self, config: &crate::config::Config) -> Self {
+        let this = self.with_extra_dirs(config.extra_skills_dirs.iter().map(PathBuf::from));
         match config.clawhub_load_verification() {
-            Some((lockfile, block)) => self.with_clawhub_verification(lockfile, block),
-            None => self,
+            Some((lockfile, block)) => this.with_clawhub_verification(lockfile, block),
+            None => this,
         }
     }
 
@@ -301,13 +313,20 @@ impl SkillManager {
         let mut statuses = Vec::new();
         let state = self.read_state_file();
         let clawhub_blocked = self.clawhub_unavailable_reasons();
-        let entries = match std::fs::read_dir(&self.skills_dir) {
-            Ok(e) => e,
-            Err(_) => return statuses,
-        };
+        let mut seen = std::collections::HashSet::new();
+        let dirs = std::iter::once((&self.skills_dir, true))
+            .chain(self.extra_dirs.iter().map(|d| (d, false)));
+        let mut paths: Vec<(PathBuf, bool)> = Vec::new();
+        for (dir, primary) in dirs {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            let mut found: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            found.sort();
+            paths.extend(found.into_iter().map(|p| (p, primary)));
+        }
 
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for (path, primary) in paths {
             if !path.is_dir() {
                 continue;
             }
@@ -317,6 +336,9 @@ impl SkillManager {
             }
             if let Ok(content) = std::fs::read_to_string(&skill_md) {
                 if let Some((meta, _body)) = parse_skill_md(&content, &path) {
+                    if !seen.insert(meta.name.clone()) {
+                        continue;
+                    }
                     warn_once_if_legacy_name(&meta.name);
                     if matches!(state.get(&meta.name), Some(false)) {
                         statuses.push(SkillAvailability {
@@ -332,7 +354,7 @@ impl SkillManager {
                         .file_name()
                         .and_then(|s| s.to_str())
                         .unwrap_or_default();
-                    if let Some(reason) = clawhub_blocked.get(dir_slug) {
+                    if let Some(reason) = clawhub_blocked.get(dir_slug).filter(|_| primary) {
                         statuses.push(SkillAvailability {
                             meta,
                             available: false,
@@ -1265,6 +1287,23 @@ Instructions.
         assert!(listed.contains("allowed-tools: Bash(git:*) Read"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extra_dirs_add_skills_without_overriding_the_main_dir() {
+        let main = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        write_skill(main.path(), "deploy", "Main deploy", "main body");
+        write_skill(plugin.path(), "deploy", "Plugin deploy", "plugin body");
+        write_skill(plugin.path(), "lint", "Plugin lint", "lint body");
+        let sm = SkillManager::from_skills_dir(main.path().to_str().unwrap())
+            .with_extra_dirs([plugin.path().to_path_buf()]);
+        let names: Vec<String> = sm.discover_skills().into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["deploy", "lint"]);
+        let (meta, body) = sm.load_skill("deploy").unwrap();
+        assert_eq!(meta.description, "Main deploy");
+        assert!(body.contains("main body"));
+        assert!(sm.load_skill("lint").unwrap().1.contains("lint body"));
     }
 
     #[test]

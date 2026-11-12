@@ -260,6 +260,9 @@ pub enum Update {
     Notice(String),
     /// Share of the usable context window in use after a turn.
     ContextPercent(u8),
+    /// When to compact this session if it stays idle (`None`: never), sent
+    /// with [`Update::ContextPercent`].
+    IdleCompact(Option<IdleCompactPlan>),
     /// Tokens the turn (or review) used, and the model that ran it.
     TurnUsage {
         input_tokens: i64,
@@ -505,6 +508,54 @@ pub struct SessionSettings {
     pub max_session_tokens: Option<u64>,
     /// What the approval reviewer may do (`permissions.reviewer`).
     pub reviewer: crate::settings::ReviewerMode,
+}
+
+/// Idle compaction: a large conversation left idle is compacted shortly
+/// before the provider's prompt cache expires. The summary request still
+/// reads the warm cache, and the next prompt writes a small prefix instead
+/// of the whole conversation again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IdleCompactPlan {
+    /// The provider's prompt cache lifetime.
+    pub cache_ttl: std::time::Duration,
+    /// Tokens the next request would carry.
+    pub used_tokens: usize,
+    /// The compaction budget (auto-compact threshold, or the usable window).
+    pub budget: usize,
+}
+
+impl IdleCompactPlan {
+    /// Share of the cache lifetime after which the session counts as idle.
+    pub const IDLE_SHARE: f64 = 0.9;
+
+    /// A plan when the provider has a known cache lifetime and the context
+    /// is at least half the budget.
+    pub fn from_usage(usage: &microclaw_sdk::ContextUsage) -> Option<Self> {
+        let cache_ttl = usage.prompt_cache_ttl?;
+        let budget = if usage.auto_compact_threshold > 0 {
+            usage.auto_compact_threshold
+        } else {
+            usage.window.saturating_sub(usage.reserved_output)
+        };
+        (budget > 0 && usage.messages > 0 && usage.used_tokens.saturating_mul(2) >= budget)
+            .then_some(Self {
+                cache_ttl,
+                used_tokens: usage.used_tokens,
+                budget,
+            })
+    }
+
+    /// Idle time after which compaction starts.
+    pub fn starts_after(&self) -> std::time::Duration {
+        self.cache_ttl.mul_f64(Self::IDLE_SHARE)
+    }
+
+    /// Whether to compact after `idle` since the last request: past 90% of
+    /// the cache lifetime but before it ends (afterwards the cache is gone
+    /// and compacting saves nothing).
+    pub fn due(&self, idle: std::time::Duration) -> bool {
+        idle >= self.starts_after() && idle < self.cache_ttl
+    }
 }
 
 /// An active shell sandbox (shown to the user and the agent).
@@ -968,6 +1019,20 @@ impl CodeSession {
         &self,
         focus: Option<&str>,
     ) -> anyhow::Result<microclaw_sdk::SessionCompaction> {
+        self.compact_with_trigger(focus, "manual").await
+    }
+
+    /// Compact an idle session before its prompt cache expires
+    /// (`pre_compact` hooks see trigger `auto`).
+    pub async fn compact_idle(&self) -> anyhow::Result<microclaw_sdk::SessionCompaction> {
+        self.compact_with_trigger(None, "auto").await
+    }
+
+    async fn compact_with_trigger(
+        &self,
+        focus: Option<&str>,
+        trigger: &str,
+    ) -> anyhow::Result<microclaw_sdk::SessionCompaction> {
         if let Some(hooks) = self
             .hooks()
             .filter(|h| h.has(crate::user_hooks::HookEvent::PreCompact))
@@ -976,7 +1041,7 @@ impl CodeSession {
                 .run(
                     crate::user_hooks::HookEvent::PreCompact,
                     crate::user_hooks::HookPayload::default()
-                        .with("trigger", "manual")
+                        .with("trigger", trigger)
                         .with("custom_instructions", focus.unwrap_or_default()),
                 )
                 .await;
@@ -1001,6 +1066,7 @@ impl CodeSession {
         tokio::spawn(async move {
             if let Ok(usage) = microclaw.context_usage(&session).await {
                 let _ = updates.send(Update::ContextPercent(usage.percent_used()));
+                let _ = updates.send(Update::IdleCompact(IdleCompactPlan::from_usage(&usage)));
             }
         });
     }
@@ -1928,6 +1994,43 @@ impl CodeSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_compaction_runs_late_in_the_cache_lifetime_of_large_sessions() {
+        use std::time::Duration;
+        let usage = |used: usize, ttl: Option<u64>| microclaw_sdk::ContextUsage {
+            window: 200_000,
+            reserved_output: 20_000,
+            auto_compact_threshold: 160_000,
+            used_tokens: used,
+            messages: 40,
+            prompt_cache_ttl: ttl.map(Duration::from_secs),
+            ..Default::default()
+        };
+        // Providers without a known cache lifetime, and small contexts, never.
+        assert_eq!(IdleCompactPlan::from_usage(&usage(150_000, None)), None);
+        assert_eq!(IdleCompactPlan::from_usage(&usage(79_999, Some(300))), None);
+        // At least half of the auto-compact threshold: a plan.
+        let plan = IdleCompactPlan::from_usage(&usage(80_000, Some(300))).unwrap();
+        assert_eq!(plan.budget, 160_000);
+        assert_eq!(plan.starts_after(), Duration::from_secs(270));
+        // A simulated clock: seconds since the last request.
+        let due: Vec<u64> = (0..=400)
+            .step_by(10)
+            .filter(|s| plan.due(Duration::from_secs(*s)))
+            .collect();
+        assert_eq!(due, [270, 280, 290]);
+        // A one-hour cache waits 54 minutes.
+        let hour = IdleCompactPlan::from_usage(&usage(100_000, Some(3600))).unwrap();
+        assert!(!hour.due(Duration::from_secs(53 * 60)));
+        assert!(hour.due(Duration::from_secs(55 * 60)));
+        // No auto-compact threshold: the usable window is the budget.
+        let mut open = usage(90_000, Some(300));
+        open.auto_compact_threshold = 0;
+        assert_eq!(IdleCompactPlan::from_usage(&open).unwrap().budget, 180_000);
+        open.used_tokens = 89_999;
+        assert_eq!(IdleCompactPlan::from_usage(&open), None);
+    }
 
     #[test]
     fn rewind_scope_parses_words_and_summaries_say_what_happened() {

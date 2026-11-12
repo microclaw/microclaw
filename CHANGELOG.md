@@ -4,6 +4,44 @@ All notable changes to this project should be recorded in this file.
 
 The format is loosely based on Keep a Changelog. Dates use UTC.
 
+## 0.31.0 - 2026-11-12
+
+MicroClaw Code 0.31: private project memory, Claude Code plugins and idle
+compaction (`docs/roadmap/mccode-competitive-plan-2026-11-cn.md`, N5–N7).
+
+### Added
+
+- **Private project memory.** Besides the shared `.microclaw/memory.md`
+  (in the repository), trusted projects now have a private memory in
+  `~/.mccode/projects/<repo>-<hash>/memory.md` for your preferences and this
+  machine's setup. Both are in the prompt of every turn; the agent is told
+  which kind of fact goes where (a stated preference never goes to the
+  shared file), and writing the private file does not ask for the
+  outside-the-project approval. Worktrees share the main checkout's private
+  memory. `/memory` opens both files in `$EDITOR` (`shared`, `private`,
+  `show`). `mccode import claude` adds Claude Code's auto memory of the same
+  repository, `mccode import codex` the items of Codex's memories.
+- **Plugins in the Claude Code layout.** `mccode plugin add <owner/repo |
+  git URL | path> [--plugin <name>] [--project]`, `list`, `update`,
+  `enable`, `disable` and `remove`. A plugin's commands (`/name` and
+  `/plugin:name`), agents (for `explore` and `sessions_spawn`), skills,
+  hooks and MCP servers work as in Claude Code, with `${CLAUDE_PLUGIN_ROOT}`
+  resolved; marketplace repositories are followed to the plugin's own
+  repository. Installing lists every hook and MCP command and asks first
+  (`--yes` without a terminal); updating asks again when new commands
+  appear. Unsupported parts (output styles, LSP servers, …) are listed as
+  skipped. User plugins are copied to `~/.mccode/plugins/`, project plugins
+  to `.microclaw/plugins/` and load only in trusted projects. `/plugins`
+  shows what is in use. Engine: `extra_agents_dirs`, `extra_skills_dirs`,
+  `extra_mcp_configs`; SDK: `MicroClawBuilder::plugin_sources`.
+- **Idle compaction.** The terminal UI compacts a large session (at least
+  half of the compaction budget) that has been idle for 90% of the
+  provider's prompt cache lifetime, while the cache is still warm, so the
+  next prompt does not write the whole conversation to the cache again.
+  Anthropic only (the engine reports `prompt_cache_ttl` in
+  `ContextUsage`); `tui.idle_compact: false` turns it off. `pre_compact`
+  hooks see trigger `auto`.
+
 ## [0.30.2] - 2026-11-12
 
 ### Changed

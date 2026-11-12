@@ -246,6 +246,16 @@ notice in the transcript (and on stderr with `-p`) says when it happened.
 `compact_instructions` in `.microclaw/project.yaml` does the same for every
 compaction in the project.
 
+With Anthropic models the terminal UI also compacts a large session that you
+leave idle: when the context is at least half of the compaction budget and
+nothing has been sent for 90% of the prompt cache lifetime (4.5 minutes with
+the default 5-minute cache, 54 minutes with `anthropic_prompt_cache_ttl:
+1h`), it compacts in the background while the cache is still warm. Your next
+prompt then sends a short prefix instead of writing the whole conversation
+to the cache again. A notice says when it happened; a message you type
+meanwhile waits for it. `tui.idle_compact: false` turns it off; other
+providers are left alone because their caches work differently.
+
 ## Exploring with helpers
 
 The agent can hand wide investigations ("where is the retry policy set and who
@@ -278,10 +288,26 @@ itself (`rewind_context`), dropping failed attempts. Files are not reverted.
 
 ## Project memory
 
-In trusted projects the agent keeps durable lessons about the repository in
-`.microclaw/memory.md` (how to build and test it, slow tests, pitfalls),
-edits it with the normal file tools (so you see every change as a diff), and
-reads it at the start of every session. Edit or delete it like any file.
+In trusted projects the agent keeps two memory files and reads both into
+every turn (they survive compaction):
+
+- **shared** `.microclaw/memory.md`, in the repository and meant to be
+  committed: facts about the code that help every contributor (how to build
+  and test it, slow tests, conventions, pitfalls);
+- **private** `~/.mccode/projects/<repo>-<hash>/memory.md`, outside the
+  repository: your preferences and this machine's setup ("I use cargo
+  nextest", "Docker is not installed here"). Worktrees of the repository
+  share it.
+
+The agent edits them with the normal file tools, so every change shows as a
+diff; writing the private file does not trigger the "outside the project"
+approval. When you state a preference it goes to the private file, never to
+the shared one. `/memory` opens both in `$EDITOR` (`/memory shared`,
+`/memory private` one of them; `/memory show` says where they are and how
+long they are). `mccode import claude --apply` adds Claude Code's auto memory
+of the same repository to the private file, and `mccode import codex
+--apply` adds the items of Codex's memories (per machine, so check them with
+`/memory private`).
 
 ## Custom commands
 
@@ -300,6 +326,45 @@ Put personal commands in `~/.mccode/commands/` and project commands in
 `.microclaw/commands/` (trusted projects only; they win on a name clash).
 `/help` lists them, Tab completes them, and `mccode -p "/fix-issue 42"` runs
 one non-interactively.
+
+## Plugins
+
+MicroClaw Code installs plugins written for Claude Code: a directory with
+`.claude-plugin/plugin.json` and any of `commands/`, `agents/`, `skills/`,
+`hooks/hooks.json` and `.mcp.json`.
+
+```sh
+mccode plugin add owner/repo                 # a GitHub repository
+mccode plugin add https://example.com/x.git  # any git URL, or a local path
+mccode plugin add anthropics/claude-code --plugin commit-commands
+mccode plugin list
+mccode plugin update [name]
+mccode plugin disable|enable <name>
+mccode plugin remove <name>
+```
+
+A repository with `.claude-plugin/marketplace.json` lists several plugins;
+`--plugin <name>` picks one, following entries that point at other
+repositories. There is no marketplace service.
+
+Before a plugin is enabled, `plugin add` lists everything it brings,
+including every hook command and MCP server command, and asks; without a
+terminal it needs `--yes` when the plugin runs commands. `plugin update`
+asks again when a new version adds hooks or MCP servers. Plugin commands are
+available as `/name` (unless a personal or project command has that name)
+and `/plugin:name`; agents work with `explore` and `sessions_spawn`; skills,
+hooks and MCP servers work like your own. `${CLAUDE_PLUGIN_ROOT}` in hook
+commands, command prompts and MCP servers is the plugin's directory, and
+hook commands also get it as an environment variable. Parts MicroClaw Code
+does not support (output styles, LSP servers and other manifest keys) are
+listed as skipped.
+
+User plugins are copied to `~/.mccode/plugins/<name>/`, so a change at the
+source only arrives with `plugin update`; `plugin remove` deletes the copy
+and leaves nothing behind. `plugin add --project` copies a plugin into
+`.microclaw/plugins/<name>/` to share it through the repository; project
+plugins load only in trusted projects. `/plugins` shows what is in use; new
+sessions pick up changes.
 
 ## Language servers and hooks
 

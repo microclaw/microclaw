@@ -287,6 +287,18 @@ pub struct Config {
     /// `explore` tool. Set by embedders for trusted workspaces.
     #[serde(default)]
     pub project_agents_dir: Option<String>,
+    /// More agent directories (embedder plugins), searched after
+    /// `project_agents_dir`; the first definition of a name wins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_agents_dirs: Vec<String>,
+    /// Read-only skill directories (embedder plugins) offered after the
+    /// skills directory; a skill there with an existing name is ignored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_skills_dirs: Vec<String>,
+    /// More MCP configuration files (embedder plugins), loaded after
+    /// `mcp.json` and `mcp.d/*.json`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_mcp_configs: Vec<String>,
     /// Embedder-supplied gate consulted before every tool call (permission
     /// rules, user hooks). Never read from or written to the file.
     #[serde(skip)]
@@ -1085,6 +1097,9 @@ impl Config {
             compact_keep_recent_tokens: 0,
             compact_instructions: None,
             project_agents_dir: None,
+            extra_agents_dirs: Vec::new(),
+            extra_skills_dirs: Vec::new(),
+            extra_mcp_configs: Vec::new(),
             tool_gate: Default::default(),
             context_tools: false,
             detachable_foreground_commands: false,
