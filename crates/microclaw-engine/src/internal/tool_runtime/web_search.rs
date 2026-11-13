@@ -40,6 +40,8 @@ pub enum SearchBackend {
     /// Keenable web search (`POST /v1/search`). Works without an API key on
     /// the rate-limited public endpoint; `keenable_api_key` raises limits.
     Keenable,
+    /// SpecStream Search API (`GET /v1/web-search`, Bearer key).
+    Specstream,
 }
 
 fn default_search_max_results() -> usize {
@@ -63,6 +65,8 @@ pub struct SearchProviderConfig {
     /// Optional: Keenable works key-free; a key switches to the keyed endpoint.
     #[serde(default)]
     pub keenable_api_key: String,
+    #[serde(default)]
+    pub specstream_api_key: String,
     #[serde(default = "default_search_max_results")]
     pub max_results: usize,
 }
@@ -75,6 +79,7 @@ impl Default for SearchProviderConfig {
             brave_api_key: String::new(),
             tavily_api_key: String::new(),
             keenable_api_key: String::new(),
+            specstream_api_key: String::new(),
             max_results: default_search_max_results(),
         }
     }
@@ -90,6 +95,7 @@ impl SearchProviderConfig {
         self.brave_api_key = self.brave_api_key.trim().to_string();
         self.tavily_api_key = self.tavily_api_key.trim().to_string();
         self.keenable_api_key = self.keenable_api_key.trim().to_string();
+        self.specstream_api_key = self.specstream_api_key.trim().to_string();
         if self.max_results == 0 {
             self.max_results = default_search_max_results();
         }
@@ -108,6 +114,9 @@ impl SearchProviderConfig {
                 SearchBackend::Duckduckgo
             }
             SearchBackend::Tavily if self.tavily_api_key.trim().is_empty() => {
+                SearchBackend::Duckduckgo
+            }
+            SearchBackend::Specstream if self.specstream_api_key.trim().is_empty() => {
                 SearchBackend::Duckduckgo
             }
             other => other,
@@ -145,6 +154,9 @@ pub async fn search_with_provider(
         SearchBackend::Brave => brave_hits(query, &config.brave_api_key, t, max).await,
         SearchBackend::Tavily => tavily_hits(query, &config.tavily_api_key, t, max).await,
         SearchBackend::Keenable => keenable_hits(query, &config.keenable_api_key, t, max).await,
+        SearchBackend::Specstream => {
+            specstream_hits(query, &config.specstream_api_key, t, max).await
+        }
     }
 }
 
@@ -395,6 +407,67 @@ async fn keenable_hits(
         .collect())
 }
 
+#[derive(Deserialize)]
+struct SpecstreamResponse {
+    data: SpecstreamData,
+}
+
+#[derive(Deserialize)]
+struct SpecstreamData {
+    #[serde(default)]
+    sources: Vec<SpecstreamSource>,
+}
+
+#[derive(Deserialize)]
+struct SpecstreamSource {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    snippet: String,
+}
+
+fn specstream_request(
+    client: &reqwest::Client,
+    query: &str,
+    api_key: &str,
+    max: usize,
+) -> reqwest::RequestBuilder {
+    let encoded = urlencoding::encode(query);
+    let url = format!("https://api.specstream.ai/v1/web-search?q={encoded}&num={max}&speed=fast");
+    client.get(&url).bearer_auth(api_key.trim())
+}
+
+async fn specstream_hits(
+    query: &str,
+    api_key: &str,
+    timeout_secs: u64,
+    max: usize,
+) -> Result<Vec<SearchItem>, String> {
+    let client = http_client(timeout_secs);
+    let resp = specstream_request(&client, query, api_key, max)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let parsed: SpecstreamResponse = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed
+        .data
+        .sources
+        .into_iter()
+        .filter(|r| !r.url.is_empty())
+        .take(max)
+        .map(|r| SearchItem {
+            title: r.title,
+            url: r.url,
+            snippet: r.snippet,
+        })
+        .collect())
+}
+
 pub async fn search_ddg_with_timeout(query: &str, timeout_secs: u64) -> Result<String, String> {
     let hits = ddg_hits(query, timeout_secs.max(1), 8).await?;
     Ok(format_search_hits(&hits))
@@ -459,6 +532,51 @@ mod tests {
             .unwrap();
         assert_eq!(req.url().as_str(), "https://api.keenable.ai/v1/search");
         assert_eq!(req.headers().get("X-API-Key").unwrap(), "kn-test");
+    }
+
+    #[test]
+    fn specstream_needs_a_key() {
+        let cfg = SearchProviderConfig {
+            backend: SearchBackend::Specstream,
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_backend(), SearchBackend::Duckduckgo);
+
+        let cfg = SearchProviderConfig {
+            backend: SearchBackend::Specstream,
+            specstream_api_key: "ss-test".into(),
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_backend(), SearchBackend::Specstream);
+
+        let client = reqwest::Client::new();
+        let req = specstream_request(&client, "rust async", " ss-test ", 5)
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.specstream.ai/v1/web-search?q=rust%20async&num=5&speed=fast"
+        );
+        assert_eq!(
+            req.headers().get("Authorization").unwrap(),
+            "Bearer ss-test"
+        );
+    }
+
+    #[test]
+    fn specstream_reply_reads_data_sources() {
+        let body = r#"{"data": {"query": "rust", "sources": [
+            {"url": "https://www.rust-lang.org/", "title": "Rust", "site": "rust-lang.org",
+             "snippet": "A language empowering everyone.", "cited": false,
+             "published": "2026-10-30"},
+            {"url": "", "title": "no url", "site": "", "snippet": "", "cited": false}
+        ]}}"#;
+        let parsed: SpecstreamResponse = serde_json::from_str(body).unwrap();
+        let sources = parsed.data.sources;
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].url, "https://www.rust-lang.org/");
+        assert_eq!(sources[0].title, "Rust");
+        assert_eq!(sources[0].snippet, "A language empowering everyone.");
     }
 
     #[test]

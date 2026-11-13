@@ -85,10 +85,11 @@ timezone: "UTC"
 # Web-search backend used by the `web_search` and `deep_research` tools.
 # Defaults to DuckDuckGo (no API key). A backend selected without its
 # credentials/endpoint transparently degrades to DuckDuckGo instead of failing.
-#   backend: duckduckgo | searxng | brave | tavily | keenable
+#   backend: duckduckgo | searxng | brave | tavily | keenable | specstream
 #   searxng_base_url: self-hosted SearXNG instance (great on a $5 VPS; no key)
 #   brave_api_key / tavily_api_key: API keys for the hosted providers
 #   keenable_api_key: optional; Keenable also works key-free (rate-limited)
+#   specstream_api_key: SpecStream Search API key
 #   max_results: results per query (default 8, capped at 20)
 # web_search:
 #   backend: searxng
@@ -96,6 +97,7 @@ timezone: "UTC"
 #   brave_api_key: ""
 #   tavily_api_key: ""
 #   keenable_api_key: ""
+#   specstream_api_key: ""
 #   max_results: 8
 
 # Outbound guardrail — scans delivered bot messages for credential-like strings

@@ -37,7 +37,7 @@ impl Tool for WebSearchTool {
         ToolDefinition {
             name: "web_search".into(),
             description:
-                "Search the web (DuckDuckGo by default; SearXNG/Brave/Tavily/Keenable when configured). \
+                "Search the web (DuckDuckGo by default; SearXNG/Brave/Tavily/Keenable/SpecStream when configured). \
                  Returns titles, URLs, and snippets."
                     .into(),
             input_schema: schema_object(
